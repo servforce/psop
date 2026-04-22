@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    background:
+      radial-gradient(circle at top left, rgba(14, 165, 233, 0.12), transparent 22rem),
+      radial-gradient(circle at top right, rgba(245, 158, 11, 0.1), transparent 24rem),
+      linear-gradient(180deg, #fffdf7, #f8fafc 52%, #eef2ff);
+    color: #0f172a;
+    font-family:
+      "Segoe UI",
+      "PingFang SC",
+      "Microsoft YaHei",
+      sans-serif;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+}
+
+@layer components {
+  .hero-panel {
+    @apply flex flex-col gap-6 rounded-[2rem] border border-slate-200/80 bg-white/80 p-8 shadow-[0_24px_70px_rgba(15,23,42,0.08)] backdrop-blur md:flex-row md:items-start md:justify-between;
+  }
+
+  .eyebrow {
+    @apply text-sm font-semibold uppercase tracking-[0.22em] text-sky-700;
+  }
+
+  .hero-title {
+    @apply mt-3 max-w-4xl text-4xl font-semibold tracking-tight text-slate-950;
+  }
+
+  .hero-copy {
+    @apply mt-4 max-w-3xl text-base leading-7 text-slate-600;
+  }
+
+  .theme-switch {
+    @apply inline-flex h-11 items-center justify-center rounded-full border border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950;
+  }
+
+  .surface-card {
+    @apply rounded-[1.6rem] border border-slate-200/80 bg-white/82 p-6 shadow-[0_18px_45px_rgba(15,23,42,0.05)] backdrop-blur;
+  }
+
+  .card-kicker {
+    @apply text-xs font-semibold uppercase tracking-[0.22em] text-amber-600;
+  }
+
+  .card-title {
+    @apply mt-3 text-xl font-semibold text-slate-950;
+  }
+
+  .card-copy {
+    @apply mt-3 text-sm leading-7 text-slate-600;
+  }
+
+  .section-label {
+    @apply text-sm font-semibold uppercase tracking-[0.2em] text-slate-500;
+  }
+
+  .list-stack {
+    @apply mt-4 space-y-3 text-sm leading-7 text-slate-700;
+  }
+
+  .doc-chip {
+    @apply inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700 transition hover:border-slate-300 hover:bg-white hover:text-slate-950;
+  }
+}
+
+@layer utilities {
+  body.theme-dark {
+    background:
+      radial-gradient(circle at top left, rgba(14, 165, 233, 0.18), transparent 24rem),
+      radial-gradient(circle at top right, rgba(251, 191, 36, 0.14), transparent 24rem),
+      linear-gradient(180deg, #020617, #0f172a 48%, #111827);
+    color: #e2e8f0;
+  }
+
+  body.theme-dark .hero-panel,
+  body.theme-dark .surface-card {
+    background: rgba(15, 23, 42, 0.82);
+    border-color: rgba(71, 85, 105, 0.9);
+  }
+
+  body.theme-dark .hero-title,
+  body.theme-dark .card-title {
+    color: #f8fafc;
+  }
+
+  body.theme-dark .hero-copy,
+  body.theme-dark .card-copy,
+  body.theme-dark .list-stack,
+  body.theme-dark .doc-chip,
+  body.theme-dark .theme-switch {
+    color: #cbd5e1;
+  }
+
+  body.theme-dark .theme-switch,
+  body.theme-dark .doc-chip {
+    background: rgba(30, 41, 59, 0.9);
+    border-color: rgba(71, 85, 105, 0.9);
+  }
+
+  body.theme-dark .section-label {
+    color: #94a3b8;
+  }
+}

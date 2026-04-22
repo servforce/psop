@@ -1,0 +1,19 @@
+/*
+ * 当前仓库尚未引入 Material Symbols 的真实字体文件。
+ * 这里先保留样式入口与类名约定，后续补齐 woff2 资源后即可切换为真实图标字体。
+ */
+
+.material-symbols-outlined,
+.material-symbols-rounded,
+.material-symbols-sharp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  letter-spacing: 0;
+  text-transform: none;
+  user-select: none;
+}

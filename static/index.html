@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PSOP Admin Scaffold</title>
+    <link rel="stylesheet" href="/assets/css/style.compiled.css" />
+    <script defer src="/assets/js/app.js"></script>
+    <script defer src="/node_modules/alpinejs/dist/cdn.min.js"></script>
+  </head>
+  <body class="min-h-screen antialiased">
+    <main x-data="appShell()" x-init="boot()" class="mx-auto flex min-h-screen max-w-7xl flex-col px-6 py-8">
+      <header class="hero-panel">
+        <div>
+          <p class="eyebrow">PSOP Workspace</p>
+          <h1 class="hero-title">Admin scaffold kept, legacy business code removed.</h1>
+          <p class="hero-copy">
+            This shell preserves the project's frontend build chain, local preview flow, and Alpine/Tailwind base
+            while the next PSOP implementation is rebuilt around the new design docs.
+          </p>
+        </div>
+        <button type="button" class="theme-switch" @click="toggleTheme()" x-text="themeLabel"></button>
+      </header>
+
+      <section class="mt-8 grid gap-4 lg:grid-cols-3">
+        <template x-for="item in preservedAreas" :key="item.title">
+          <article class="surface-card">
+            <p class="card-kicker" x-text="item.kicker"></p>
+            <h2 class="card-title" x-text="item.title"></h2>
+            <p class="card-copy" x-text="item.summary"></p>
+          </article>
+        </template>
+      </section>
+
+      <section class="mt-8 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+        <article class="surface-card">
+          <p class="section-label">What stays</p>
+          <ul class="list-stack">
+            <template x-for="item in scaffoldItems" :key="item">
+              <li x-text="item"></li>
+            </template>
+          </ul>
+        </article>
+
+        <article class="surface-card">
+          <p class="section-label">Next build targets</p>
+          <ul class="list-stack">
+            <template x-for="item in nextSteps" :key="item">
+              <li x-text="item"></li>
+            </template>
+          </ul>
+        </article>
+      </section>
+
+      <section class="mt-8">
+        <article class="surface-card">
+          <p class="section-label">Design fact sources</p>
+          <div class="grid gap-3 md:grid-cols-3">
+            <template x-for="doc in sourceDocs" :key="doc.path">
+              <div class="doc-chip">
+                <p class="font-medium" x-text="doc.label"></p>
+                <p class="mt-1 text-xs opacity-75" x-text="doc.path"></p>
+              </div>
+            </template>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,63 @@
+skill:
+  name: 技能创建器
+  code: skill-creator
+  version: 0.1.0
+  purpose: 通过多轮需求澄清生成一个完整可审阅的 Skill 草稿目录。
+  target_user:
+    - 希望创建新 Skill 的 Codex 用户
+    - 希望先得到标准化 Skill 草稿再继续实现的维护者
+  inputs:
+    required:
+      - 名称
+      - skill_code
+      - 目标用途
+      - 输入定义
+      - 输出定义
+      - 工作流程
+      - 约束条件
+    optional:
+      - 目标用户
+      - 典型场景
+      - 参考资料需求
+      - 示例需求
+      - 验收检查项
+  outputs:
+    primary:
+      - 目录树
+      - SKILL.md 草稿
+      - skill.yaml 草稿
+      - system prompt 草稿
+      - references 目录说明
+      - 示例输入
+      - 示例期望输出
+      - 测试清单
+    delivery_mode:
+      - 可审阅草稿
+  workflow_steps:
+    - id: clarify_goal
+      title: 澄清目标与身份
+      objective: 收集新 Skill 的核心身份与目标结果。
+    - id: clarify_execution
+      title: 澄清执行方式
+      objective: 明确该 Skill 如何工作，包括输入、输出、工作流与约束。
+    - id: clarify_validation
+      title: 澄清验证资产
+      objective: 明确完整草稿所需的 references、examples 与验收检查项。
+    - id: generate_draft
+      title: 生成审阅草稿
+      objective: 生成一套完整且可审阅的 Skill 草稿目录。
+  artifacts:
+    required_files:
+      - SKILL.md
+      - skill.yaml
+      - prompts/system.md
+      - references/README.md
+      - examples/input.md
+      - examples/expected-output.md
+      - tests/checklist.md
+  constraints:
+    - 关键字段缺失时，不要跳过补充澄清环节。
+    - 不要只输出自然语言概述。
+    - 使用 SKILL.md，而不是 Skill.md。
+    - 使用 references/，而不是 knowledge/。
+    - 默认输出模式是可审阅草稿，而不是立即写文件。
