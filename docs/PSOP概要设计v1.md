@@ -92,9 +92,9 @@ flowchart TB
         ObsUI["Observability"]
     end
 
-    subgraph Authoring["Skill / Compile Layer"]
-        SkillRepo["Skill Definition / Version"]
-        PublishSvc["Publish Service"]
+    subgraph Authoring["Skills / Compile Layer"]
+        SkillRepo["Skills Module"]
+        GitLabRepo["GitLab Skill Repository"]
         Compiler["Skill Compiler"]
         EGArtifact["EG Compile Artifact"]
     end
@@ -104,8 +104,8 @@ flowchart TB
         Scheduler["Sync / Enabled / Sel / Actor / Merge / Trace"]
     end
 
-    subgraph Harness["Agent Harness Layer"]
-        DeerAdapter["DeerFlow Adapter"]
+    subgraph Agents["Agent Layer"]
+        AgentModule["Agent Module"]
         CapabilityHost["Capability Host"]
     end
 
@@ -124,8 +124,9 @@ flowchart TB
     Web --> Authoring
     Authoring --> Runtime
     Web --> Runtime
-    Runtime --> Harness
-    Harness --> Exec
+    Web --> GitLabRepo
+    Runtime --> Agents
+    Agents --> Exec
     Runtime --> Store
     Exec --> Store
     Web --> OTel
@@ -135,14 +136,15 @@ flowchart TB
 
 ### 6.1 运行时环境
 
-`PSOP v1` 的运行时环境不是单个 agent 进程，而是一个分层的 `Harness Runtime`：
+`PSOP v1` 的运行时环境不是单个 agent 进程，而是一个分层的 `Agent Runtime`：
 
 - `Run` 是逻辑事务实例，其本体是 `Session Token` 演化链
 - `Runtime Kernel` 是正式执行器，负责推进符合形式定义的 `EG`
 - `Worker Pool` 承载普通节点执行
 - `Sandbox Manager` 按需为高风险节点提供隔离环境
 - `State Store + Trace Store + Object Store` 负责恢复、回放与对象证据存储
-- `DeerFlow Adapter` 尽量复用 DeerFlow 的 harness 能力，但不拥有正式状态主权
+- `Agent Module` 是 PSOP 的智能体能力层，负责 sub-agent、memory、planning 与 tool-use orchestration
+- `DeerFlow` 可以作为可借鉴或可复用的 harness 参考实现，但不是产品级模块边界，也不是正式状态主权者
 
 ### 6.2 Gateway / 输入输出模拟器
 
@@ -180,6 +182,8 @@ flowchart TB
 ### 7.1 当前阶段方案
 
 - `Web IDE` 同时承担 Skill Studio 与运行观测控制台职责
+- `Skills Module` 负责 skill 定义、GitLab 绑定、版本与发布；`Compiler` 只负责编译
+- `GitLab` 是 `skill source` 的正式事实源
 - `Skills` 发布后自动编译出 `EG`
 - `Runtime Kernel` 只加载 compile artifact，不直接解释 skill 源码
 - `Gateway` 统一承接 invocation、模拟 I/O 和外部能力接入
@@ -196,10 +200,12 @@ flowchart TB
 
 - `Skill Definition`
   - 用户在 Web IDE 中定义的 skill 对象
-- `Skill Publish Service`
-  - 把已发布 skill 版本转换为正式编译输入
+- `Skills Module`
+  - 负责 skill 定义、版本、GitLab 绑定与发布
 - `EG Compile Artifact`
   - 符合 `PSOP-EG` 形式定义的运行时输入对象
+- `Agent Module`
+  - 负责智能体相关的运行时组织与 harness 抽象
 - `Runtime Kernel`
   - 唯一正式执行与状态提交边界
 - `Session Token`
@@ -215,8 +221,8 @@ flowchart TB
 
 一条典型主链路如下：
 
-1. 用户在 `Web IDE` 中创建并发布一个 `Skill`
-2. 系统自动编译该 skill，生成符合形式定义的 `EG Compile Artifact`
+1. 用户在 `Web IDE` 中创建一个 `Skill`，并将其绑定到 GitLab 仓库
+2. 用户发布某个 skill version 时，系统冻结对应 Git revision 并自动编译，生成符合形式定义的 `EG Compile Artifact`
 3. 用户通过 `Gateway` 发起某次 `Skill Invocation`
 4. `Runtime Kernel` 加载该 artifact 并创建 `Run + Session Token`
 5. `Runtime Kernel` 推进 `EG` 执行，必要时调用 `MCP / LLM / Worker / Sandbox`

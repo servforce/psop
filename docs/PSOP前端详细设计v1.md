@@ -61,93 +61,23 @@
 | 通信 | `fetch` + `WebSocket` | REST 承载控制面，WS 承载实时流 |
 | 测试 | `Jest` + DOM 测试 | 覆盖路由、store、service、关键组件 |
 
-## 5. 前端工程结构
+## 5. 信息架构与导航原则
 
-```text
-static/
-  admin/
-    index.html
-  assets/
-    css/
-      tailwind.css
-      admin.css
-    js/
-      bootstrap.js
-      router/
-        index.js
-        routes.js
-      shell/
-        app-shell.js
-        sidebar.js
-        topbar.js
-      pages/
-        overview/
-        skills/
-        compiler/
-        invocations/
-        replay/
-        observability/
-        gateway/
-      components/
-        tables/
-        forms/
-        drawers/
-        timelines/
-        inspectors/
-      stores/
-        app-store.js
-        skills-store.js
-        compiler-store.js
-        invocation-store.js
-        run-store.js
-        replay-store.js
-        observability-store.js
-        gateway-store.js
-      services/
-        http-client.js
-        ws-client.js
-        skills-service.js
-        compiler-service.js
-        invocation-service.js
-        run-service.js
-        replay-service.js
-        gateway-service.js
-      schemas/
-        dto.js
-      utils/
-        formatters.js
-        guards.js
-        polling.js
-        url-state.js
-  tests/
-    ui/
-```
-
-### 5.1 结构原则
-
-- `pages/` 只组织页面编排，不直接发请求。
-- `services/` 封装 HTTP 与 WS 协议细节。
-- `stores/` 承担客户端状态协调与事件归并。
-- `components/` 只承载复用组件，不直接拥有跨页面状态。
-- `shell/` 单独管理导航、布局和全局交互，防止页面逻辑污染整体框架。
-
-## 6. 信息架构与导航原则
-
-### 6.1 信息架构原则
+### 5.1 信息架构原则
 
 - 以 `Skill 生命周期` 组织主导航，而不是以底层技术模块组织页面。
 - 页面默认先展示业务对象，再展开技术细节；例如先看 skill 发布状态，再深入到 compile diagnostics。
 - 每个对象都必须支持深链访问，便于排障和协作。
 - 运行中的页面强调实时性，已完成页面强调可回放和可检索。
 
-### 6.2 布局原则
+### 5.2 布局原则
 
 - 左侧固定主菜单。
 - 顶部固定全局搜索、对象跳转和环境状态。
 - 主工作区承载列表、详情、运行态和图形化信息。
 - 右侧使用抽屉承载上下文详情，例如 `trace event inspector`、`node details`、`gateway policy details`。
 
-## 7. 菜单与页面树
+## 6. 菜单与页面树
 
 | 菜单 | 主路由 | 主要对象 | 主要用途 |
 | --- | --- | --- | --- |
@@ -159,7 +89,7 @@ static/
 | `Observability` | `/admin/observability` | `trace_id`, `run_id` | 查看 OTel trace、metrics、logs、慢调用 |
 | `Gateway Console` | `/admin/gateway` | `mcp_server_id`, `provider_id` | 管理 terminal、MCP、LLM gateway 配置 |
 
-### 7.1 详情页与子路由
+### 6.1 详情页与子路由
 
 ```text
 /admin
@@ -182,9 +112,9 @@ static/
 /admin/gateway/terminal
 ```
 
-## 8. 页面详细设计
+## 7. 页面详细设计
 
-### 8.1 `Overview`
+### 7.1 `Overview`
 
 - 页面目标：在一个页面内看到“最近有哪些 skills 被发布、哪些 runs 正在执行、哪里正在失败”。
 - 核心区块：
@@ -209,9 +139,9 @@ static/
   - 加载态使用 skeleton
   - 异常态显示可重试卡片和 `trace_id`
 
-### 8.2 `Skills`
+### 7.2 `Skills`
 
-#### 8.2.1 `Skills List` `/admin/skills`
+#### 7.2.1 `Skills List` `/admin/skills`
 
 - 页面目标：管理 skill 列表并进入具体 skill。
 - 核心区块：
@@ -227,7 +157,7 @@ static/
   - `GET /api/skills`
   - `POST /api/skills`
 
-#### 8.2.2 `Skill Editor` `/admin/skills/:skillId`
+#### 7.2.2 `Skill Editor` `/admin/skills/:skillId`
 
 - 页面目标：编辑 skill 草稿，并准备发布。
 - 核心区块：
@@ -250,7 +180,7 @@ static/
   - 编辑区必须提示“当前运行时不会执行未发布草稿”
   - 发布按钮只针对明确版本生效
 
-#### 8.2.3 `Skill Version Detail` `/admin/skills/:skillId/versions/:skillVersionId`
+#### 7.2.3 `Skill Version Detail` `/admin/skills/:skillId/versions/:skillVersionId`
 
 - 页面目标：查看一个已冻结版本的结构、发布记录与 artifact 关系。
 - 核心区块：
@@ -263,9 +193,9 @@ static/
   - 打开 artifact
   - 查看被哪些 invocations / runs 使用
 
-### 8.3 `Publish & Diagnostics`
+### 7.3 `Publish & Diagnostics`
 
-#### 8.3.1 `Compiler Queue` `/admin/compiler`
+#### 7.3.1 `Compiler Queue` `/admin/compiler`
 
 - 页面目标：统一查看所有 publish 和 compile 任务。
 - 核心区块：
@@ -278,7 +208,7 @@ static/
   - 重新触发 compile
   - 按 skill/version 跳转
 
-#### 8.3.2 `Compile Request Detail` `/admin/compiler/requests/:compileRequestId`
+#### 7.3.2 `Compile Request Detail` `/admin/compiler/requests/:compileRequestId`
 
 - 页面目标：定位某次 publish / compile 的成功或失败原因。
 - 核心区块：
@@ -294,7 +224,7 @@ static/
   - `GET /api/compiler/requests/{compile_request_id}`
   - `GET /api/compiler/requests/{compile_request_id}/diagnostics`
 
-#### 8.3.3 `Compile Artifact Detail` `/admin/compiler/artifacts/:compileArtifactId`
+#### 7.3.3 `Compile Artifact Detail` `/admin/compiler/artifacts/:compileArtifactId`
 
 - 页面目标：查看最终可执行 `EG Artifact` 的结构与元数据。
 - 核心区块：
@@ -307,9 +237,9 @@ static/
   - 发起 invocation
   - 对比同一 skill 的上一版 artifact
 
-### 8.4 `Invocations / Runs`
+### 7.4 `Invocations / Runs`
 
-#### 8.4.1 `Invocation List` `/admin/invocations`
+#### 7.4.1 `Invocation List` `/admin/invocations`
 
 - 页面目标：从 gateway 视角看“谁调用了哪个 skill，现在执行到哪里”。
 - 核心区块：
@@ -324,7 +254,7 @@ static/
   - `GET /api/gateway/invocations`
   - `POST /api/gateway/invocations`
 
-#### 8.4.2 `Invocation Detail` `/admin/invocations/:invocationId`
+#### 7.4.2 `Invocation Detail` `/admin/invocations/:invocationId`
 
 - 页面目标：查看一次调用是如何映射成 run 的。
 - 核心区块：
@@ -337,7 +267,7 @@ static/
   - 查看 terminal 输入输出
   - 复制 invocation payload
 
-#### 8.4.3 `Run Live` `/admin/runs/:runId/live`
+#### 7.4.3 `Run Live` `/admin/runs/:runId/live`
 
 - 页面目标：实时观察运行中的 skill，并在需要时通过 gateway 注入输入。
 - 核心区块：
@@ -357,9 +287,9 @@ static/
   - WS 断开时自动回退轮询
   - 结束后自动提示进入 replay
 
-### 8.5 `Replay`
+### 7.5 `Replay`
 
-#### 8.5.1 `Replay Index` `/admin/replay`
+#### 7.5.1 `Replay Index` `/admin/replay`
 
 - 页面目标：按 skill、时间、状态检索历史运行。
 - 核心区块：
@@ -367,7 +297,7 @@ static/
   - 最近完成 runs 列表
   - 失败 runs 快速入口
 
-#### 8.5.2 `Run Replay` `/admin/replay/runs/:runId`
+#### 7.5.2 `Run Replay` `/admin/replay/runs/:runId`
 
 - 页面目标：按时间线回放一个 run 的完整执行过程。
 - 核心区块：
@@ -381,7 +311,7 @@ static/
   - 导出 replay URL
   - 打开对应 compile artifact
 
-#### 8.5.3 `Trace Detail` `/admin/replay/traces/:traceId`
+#### 7.5.3 `Trace Detail` `/admin/replay/traces/:traceId`
 
 - 页面目标：对某一条 trace 进行精细排障。
 - 核心区块：
@@ -390,7 +320,7 @@ static/
   - 对应 node / actor
   - 相关 metrics / logs
 
-### 8.6 `Observability`
+### 7.6 `Observability`
 
 - 页面目标：从运行平台视角看系统健康，而不是从单个 run 视角看细节。
 - 核心区块：
@@ -405,7 +335,7 @@ static/
   - 由异常 trace 跳转到 replay
   - 按 skill key 过滤
 
-### 8.7 `Gateway Console`
+### 7.7 `Gateway Console`
 
 - 页面目标：集中查看 terminal、MCP、LLM inference 三类 gateway 的配置与健康状态。
 - 子页：
@@ -422,15 +352,15 @@ static/
   - 查看 discover 出来的 tools
   - 配置模型路由与 fallback
 
-## 9. 路由组织与布局壳
+## 8. 路由组织与布局壳
 
-### 9.1 路由组织
+### 8.1 路由组织
 
 - 路由基线固定为 `/admin/*`。
 - 使用 `History API`，由服务端或静态宿主将 `/admin/*` 回退到 `static/admin/index.html`。
 - 一切详情页必须以对象 ID 作为 URL 参数，确保支持复制链接和跨人协作。
 
-### 9.2 布局壳
+### 8.2 布局壳
 
 ```text
 AppShell
@@ -441,16 +371,16 @@ AppShell
   BottomEventConsole
 ```
 
-### 9.3 跳转规则
+### 8.3 跳转规则
 
 - `Skills -> Publish & Diagnostics`：从 skill 或 version 跳到 compile request / artifact。
 - `Publish & Diagnostics -> Invocations / Runs`：从 artifact 跳到以该 artifact 为基础的 run。
 - `Invocations / Runs -> Replay`：运行结束后进入 replay。
 - `Replay -> Observability`：从 trace 跳到平台侧观测。
 
-## 10. 前端状态模型、轮询与 WebSocket 策略
+## 9. 前端状态模型、轮询与 WebSocket 策略
 
-### 10.1 状态域划分
+### 9.1 状态域划分
 
 | Store | 责任 |
 | --- | --- |
@@ -463,7 +393,7 @@ AppShell
 | `observabilityStore` | 聚合指标、异常 trace、趋势图数据 |
 | `gatewayStore` | terminal / MCP / inference gateway 配置与健康 |
 
-### 10.2 同步策略
+### 9.2 同步策略
 
 | 场景 | 默认方式 | 退化方式 |
 | --- | --- | --- |
@@ -473,15 +403,15 @@ AppShell
 | replay 页面 | 一次性拉取 | 手动刷新 |
 | observability 聚合指标 | 轮询 10 秒 | 手动刷新 |
 
-### 10.3 事件归并原则
+### 9.3 事件归并原则
 
 - `WS event` 先落到对应 store，再由 store 驱动视图更新。
 - `trace_event` 与 `terminal_event` 需要按 `seq_no` 排序并去重。
 - 页面内不得直接拼接实时事件逻辑，所有事件归并都在 store 层完成。
 
-## 11. 服务层组织与后端对象映射
+## 10. 服务层组织与后端对象映射
 
-### 11.1 页面与对象映射
+### 10.1 页面与对象映射
 
 | 页面 | 主对象 | 关键后端接口 |
 | --- | --- | --- |
@@ -495,35 +425,35 @@ AppShell
 | `Observability` | `trace_id`, `run_id` | `/api/system/*`, `/api/runtime/*` |
 | `Gateway Console` | `mcp_server_id`, `provider_id` | `/api/gateway/mcp/*`, `/api/gateway/inference/*` |
 
-### 11.2 DTO 使用边界
+### 10.2 DTO 使用边界
 
 - 前端只消费服务端定义的 DTO，不自行拼装临时协议。
 - `RunDetailDTO`、`SessionTokenSnapshotDTO`、`TraceEventDTO`、`ReplayTimelineDTO` 直接驱动运行态与回放态页面。
 - gateway 相关页面直接映射 `McpServerDTO`、`McpToolDTO`、`InferenceProviderDTO`、`ModelRouteDTO`。
 
-## 12. 其它非功能设计
+## 11. 其它非功能设计
 
-### 12.1 可用性
+### 11.1 可用性
 
 - 所有对象详情页都必须提供 ID 复制与返回上一级能力。
 - 实时页面必须支持“暂停滚动”“筛选事件”“复制 trace id”。
 - 关键错误必须带 `trace_id` 与重试入口。
 
-### 12.2 响应式
+### 11.2 响应式
 
 - v1 主要面向桌面宽屏。
 - 窄屏下保留可访问性，但不追求移动端高密度操作体验。
 
-### 12.3 测试策略
+### 11.3 测试策略
 
 - 路由测试：覆盖 `/admin/*` 主要跳转。
 - store 测试：覆盖 live run 事件归并、compile diagnostics 排序、replay timeline 构建。
 - service 测试：覆盖 DTO 映射、错误模型、WS reconnect。
 - 页面测试：覆盖 `Skills`、`Compile Request Detail`、`Run Live` 三个核心页面。
 
-## 13. 开发切片、实现顺序与完成定义
+## 12. 开发切片、实现顺序与完成定义
 
-### 13.1 开发切片
+### 12.1 开发切片
 
 1. `Slice A`：`AppShell + Router + http/ws service + appStore`
 2. `Slice B`：`Skills` 页面与草稿编辑流
@@ -531,14 +461,14 @@ AppShell
 4. `Slice D`：`Invocations / Runs` 与 `Run Live`
 5. `Slice E`：`Replay`、`Observability`、`Gateway Console`
 
-### 13.2 实现顺序
+### 12.2 实现顺序
 
 1. 先落布局壳、路由和 service 层，使后续页面能平行开发。
 2. 再落 `Skills -> Publish -> Compile` 的运行前链路。
 3. 随后落 `Invocation -> Run Live -> Terminal I/O` 的运行时链路。
 4. 最后补 `Replay / OTel / Gateway Console` 的运行后与平台视角。
 
-### 13.3 完成定义
+### 12.3 完成定义
 
 - `/admin/*` 路由树完整可访问。
 - `Skills`、`Publish & Diagnostics`、`Invocations / Runs`、`Replay` 四大主链路页面可联通。
