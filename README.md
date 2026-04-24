@@ -29,3 +29,30 @@ scripts/dev/start.sh
 
 - `backend/` 使用独立 Python 虚拟环境 `backend/.venv`
 - `static/` 使用本地 Node.js 依赖
+
+## 本地联调
+
+推荐先准备根目录 `.env`：
+
+```bash
+cp .env.example .env
+```
+
+联调时最关键的变量有：
+
+- `PSOP_DATABASE_*` 或 `PSOP_DATABASE_URL`
+- `PSOP_GITLAB_TOKEN`
+- `PSOP_GITLAB_SKILLS_GROUP_PATH`
+- `PSOP_SERVER_HOST` / `PSOP_SERVER_PORT`
+- `PSOP_WEB_HOST` / `PSOP_WEB_PORT`
+- `PSOP_WEB_API_BASE_URL`
+
+开发脚本会自动读取根目录 `.env` 与 `backend/.env`，并为本地联调补齐默认值。
+
+常用方式：
+
+```bash
+scripts/dev/start.sh
+```
+
+这会同时启动后端和前端，并让前端自动指向 `PSOP_WEB_API_BASE_URL`。

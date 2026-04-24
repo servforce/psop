@@ -2,13 +2,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-PYTHON_BIN="${REPO_ROOT}/backend/.venv/bin/python"
+# shellcheck source=scripts/dev/common.sh
+source "${SCRIPT_DIR}/common.sh"
+REPO_ROOT="$(resolve_repo_root)"
 
-if [[ ! -x "${PYTHON_BIN}" ]]; then
-  echo "backend/.venv is missing. Initialize the backend virtual environment first." >&2
-  exit 1
-fi
+load_psop_env "${REPO_ROOT}"
+derive_local_integration_defaults
+PYTHON_BIN="$(require_backend_python "${REPO_ROOT}")"
 
 cd "${REPO_ROOT}"
 "${PYTHON_BIN}" -m pytest tests -q

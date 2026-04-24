@@ -3,8 +3,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const rootDir = path.resolve(__dirname, "..");
-const host = "127.0.0.1";
-const port = Number(process.env.PORT || 4173);
+const host = process.env.HOST || process.env.PSOP_WEB_HOST || "127.0.0.1";
+const port = Number(process.env.PORT || process.env.PSOP_WEB_PORT || 4173);
+const apiBaseUrl = process.env.PSOP_WEB_API_BASE_URL || "/api/v1";
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -40,6 +41,14 @@ function resolveFilePath(requestPath) {
 }
 
 const server = http.createServer((req, res) => {
+  const requestPath = decodeURIComponent((req.url || "/").split("?")[0]);
+
+  if (requestPath === "/assets/js/runtime-config.js") {
+    res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+    res.end(`window.__PSOP_API_BASE_URL = ${JSON.stringify(apiBaseUrl)};\n`);
+    return;
+  }
+
   const filePath = resolveFilePath(req.url || "/");
 
   if (!filePath) {
@@ -55,4 +64,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, host, () => {
   console.log(`[dev] static scaffold available at http://${host}:${port}`);
+  console.log(`[dev] API base URL injected as ${apiBaseUrl}`);
 });
