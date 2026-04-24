@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class SkillVersionSummaryResponse(BaseModel):
+    id: str
+    version_no: int
+    status: str
+    source_ref: str
+    source_commit_sha: str | None = None
+    manifest_snapshot: dict[str, Any] | None = None
+    runtime_policy_snapshot: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillPublishRecordResponse(BaseModel):
+    id: str
+    skill_version_id: str
+    publish_reason: str
+    publish_status: str
+    published_commit_sha: str
+    release_ref: str
+    published_at: datetime
+    created_at: datetime
+
+
+class SkillSummaryResponse(BaseModel):
+    id: str
+    key: str
+    name: str
+    description: str
+    status: str
+    gitlab_group_path: str
+    gitlab_project_id: str
+    repository_url: str
+    default_branch: str
+    manifest_path: str
+    latest_draft_head_sha: str | None = None
+    latest_published_commit_sha: str | None = None
+    updated_at: datetime
+
+
+class SkillDetailResponse(SkillSummaryResponse):
+    current_draft_version: SkillVersionSummaryResponse | None = None
+    latest_published_version: SkillVersionSummaryResponse | None = None
+    recent_publish_records: list[SkillPublishRecordResponse] = Field(default_factory=list)
+    created_at: datetime
+
+
+class SkillSourceResponse(BaseModel):
+    readme_content: str
+    skill_md_content: str
+    skill_yaml_content: str
+    source_ref: str
+    head_commit_sha: str
+
+
+class CreateSkillRequest(BaseModel):
+    key: str = Field(min_length=2, max_length=120, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(min_length=2, max_length=255)
+    description: str = Field(default="", max_length=5000)
+
+
+class UpdateSkillRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    description: str | None = Field(default=None, max_length=5000)
+
+
+class SaveSkillSourceRequest(BaseModel):
+    base_commit_sha: str = Field(min_length=1)
+    readme_content: str
+    skill_md_content: str
+    skill_yaml_content: str
+
+
+class PublishSkillRequest(BaseModel):
+    publish_reason: str = Field(min_length=1, max_length=5000)
+
+
+class PublishSkillResponse(BaseModel):
+    publish_record: SkillPublishRecordResponse
+    published_version: SkillVersionSummaryResponse
+    published_commit_sha: str

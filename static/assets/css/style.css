@@ -2,15 +2,12 @@
 
 @layer base {
   html {
-    color-scheme: light;
+    color-scheme: dark;
   }
 
   body {
-    background:
-      radial-gradient(circle at top left, rgba(14, 165, 233, 0.12), transparent 22rem),
-      radial-gradient(circle at top right, rgba(245, 158, 11, 0.1), transparent 24rem),
-      linear-gradient(180deg, #fffdf7, #f8fafc 52%, #eef2ff);
-    color: #0f172a;
+    background: #020617;
+    color: #e2e8f0;
     font-family:
       "Segoe UI",
       "PingFang SC",
@@ -21,93 +18,103 @@
   * {
     box-sizing: border-box;
   }
+
+  [x-cloak] {
+    display: none !important;
+  }
 }
 
 @layer components {
-  .hero-panel {
-    @apply flex flex-col gap-6 rounded-[2rem] border border-slate-200/80 bg-white/80 p-8 shadow-[0_24px_70px_rgba(15,23,42,0.08)] backdrop-blur md:flex-row md:items-start md:justify-between;
+  .panel {
+    @apply overflow-hidden rounded-[1.6rem] border border-slate-800 bg-slate-900/70 shadow-[0_24px_60px_rgba(2,6,23,0.28)];
   }
 
-  .eyebrow {
-    @apply text-sm font-semibold uppercase tracking-[0.22em] text-sky-700;
+  .panel-header {
+    @apply flex flex-col gap-3 border-b border-slate-800 px-5 py-5;
   }
 
-  .hero-title {
-    @apply mt-3 max-w-4xl text-4xl font-semibold tracking-tight text-slate-950;
+  .panel-kicker {
+    @apply text-xs font-semibold uppercase tracking-[0.22em] text-emerald-300;
   }
 
-  .hero-copy {
-    @apply mt-4 max-w-3xl text-base leading-7 text-slate-600;
+  .panel-title {
+    @apply mt-1 text-xl font-semibold tracking-tight text-white;
   }
 
-  .theme-switch {
-    @apply inline-flex h-11 items-center justify-center rounded-full border border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950;
+  .panel-copy {
+    @apply text-sm leading-6 text-slate-400;
   }
 
-  .surface-card {
-    @apply rounded-[1.6rem] border border-slate-200/80 bg-white/82 p-6 shadow-[0_18px_45px_rgba(15,23,42,0.05)] backdrop-blur;
+  .panel-body {
+    @apply px-5 py-5;
   }
 
-  .card-kicker {
-    @apply text-xs font-semibold uppercase tracking-[0.22em] text-amber-600;
+  .field-block {
+    @apply flex flex-col gap-2;
   }
 
-  .card-title {
-    @apply mt-3 text-xl font-semibold text-slate-950;
+  .field-label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500;
   }
 
-  .card-copy {
-    @apply mt-3 text-sm leading-7 text-slate-600;
+  .input-field {
+    @apply block w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/40 focus:ring-2 focus:ring-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-70;
   }
 
-  .section-label {
-    @apply text-sm font-semibold uppercase tracking-[0.2em] text-slate-500;
+  .textarea-field {
+    @apply block w-full rounded-xl border border-slate-700 bg-slate-950/55 px-4 py-3 text-sm leading-6 text-slate-200 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/40 focus:ring-2 focus:ring-emerald-400/20;
   }
 
-  .list-stack {
-    @apply mt-4 space-y-3 text-sm leading-7 text-slate-700;
+  .editor-area {
+    @apply block min-h-[28rem] w-full flex-1 rounded-2xl border border-slate-800 bg-slate-950/75 px-4 py-4 font-mono text-[12px] leading-6 text-slate-200 outline-none transition focus:border-sky-400/40 focus:ring-2 focus:ring-sky-400/20;
+    resize: vertical;
   }
 
-  .doc-chip {
-    @apply inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700 transition hover:border-slate-300 hover:bg-white hover:text-slate-950;
-  }
-}
-
-@layer utilities {
-  body.theme-dark {
-    background:
-      radial-gradient(circle at top left, rgba(14, 165, 233, 0.18), transparent 24rem),
-      radial-gradient(circle at top right, rgba(251, 191, 36, 0.14), transparent 24rem),
-      linear-gradient(180deg, #020617, #0f172a 48%, #111827);
-    color: #e2e8f0;
+  .mono-field {
+    @apply font-mono text-[12px] text-slate-300;
   }
 
-  body.theme-dark .hero-panel,
-  body.theme-dark .surface-card {
-    background: rgba(15, 23, 42, 0.82);
-    border-color: rgba(71, 85, 105, 0.9);
+  .button-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-70;
   }
 
-  body.theme-dark .hero-title,
-  body.theme-dark .card-title {
-    color: #f8fafc;
+  .button-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-slate-700 bg-slate-950/50 px-5 py-3 text-sm font-medium text-slate-200 transition hover:border-slate-500 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-70;
   }
 
-  body.theme-dark .hero-copy,
-  body.theme-dark .card-copy,
-  body.theme-dark .list-stack,
-  body.theme-dark .doc-chip,
-  body.theme-dark .theme-switch {
-    color: #cbd5e1;
+  .sidebar-link {
+    @apply flex w-full items-center gap-3 rounded-2xl border border-transparent px-4 py-3 text-left text-sm font-medium text-slate-300 transition hover:border-slate-700 hover:bg-slate-900/80 hover:text-white;
   }
 
-  body.theme-dark .theme-switch,
-  body.theme-dark .doc-chip {
-    background: rgba(30, 41, 59, 0.9);
-    border-color: rgba(71, 85, 105, 0.9);
+  .sidebar-link-active {
+    @apply border-emerald-400/25 bg-emerald-400/10 text-emerald-100;
   }
 
-  body.theme-dark .section-label {
-    color: #94a3b8;
+  .status-badge {
+    @apply inline-flex items-center rounded-full border border-sky-400/25 bg-sky-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-200;
+  }
+
+  .skill-row {
+    @apply bg-slate-900/40 px-5 py-5 transition hover:bg-slate-900/75;
+  }
+
+  .info-chip {
+    @apply flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3;
+  }
+
+  .icon-button {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-700 bg-slate-950/60 text-slate-300 transition hover:border-slate-500 hover:text-white;
+  }
+
+  .editor-tab {
+    @apply rounded-full border border-slate-700 bg-slate-950/55 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-500 hover:text-white;
+  }
+
+  .editor-tab-active {
+    @apply border-emerald-400/30 bg-emerald-400/15 text-emerald-100;
+  }
+
+  .empty-state {
+    @apply flex flex-col items-center justify-center px-6 py-12 text-center;
   }
 }

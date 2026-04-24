@@ -10,11 +10,23 @@ export function normalizePath(pathname) {
   return pathname;
 }
 
-export function isKnownScaffoldRoute(pathname) {
-  return ["/", "/backend", "/docs", "/static"].includes(normalizePath(pathname));
+export function resolveAdminRoute(pathname) {
+  const normalized = normalizePath(pathname);
+  if (normalized === "/" || normalized === "/admin" || normalized === "/admin/skills") {
+    return { name: "skills-list", params: {} };
+  }
+
+  const detailMatch = normalized.match(/^\/admin\/skills\/([^/]+)$/);
+  if (detailMatch) {
+    return {
+      name: "skill-detail",
+      params: { skillId: detailMatch[1] }
+    };
+  }
+
+  return { name: "skills-list", params: {} };
 }
 
-export function resolveScaffoldRoute(pathname) {
-  const normalized = normalizePath(pathname);
-  return isKnownScaffoldRoute(normalized) ? normalized : "/";
+export function buildSkillDetailPath(skillId) {
+  return `/admin/skills/${skillId}`;
 }

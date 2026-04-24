@@ -3,68 +3,455 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PSOP Admin Scaffold</title>
+    <title>PSOP Skills Console</title>
+    <link rel="stylesheet" href="/assets/css/material-symbols.css" />
     <link rel="stylesheet" href="/assets/css/style.compiled.css" />
     <script defer src="/assets/js/app.js"></script>
     <script defer src="/node_modules/alpinejs/dist/cdn.min.js"></script>
   </head>
-  <body class="min-h-screen antialiased">
-    <main x-data="appShell()" x-init="boot()" class="mx-auto flex min-h-screen max-w-7xl flex-col px-6 py-8">
-      <header class="hero-panel">
-        <div>
-          <p class="eyebrow">PSOP Workspace</p>
-          <h1 class="hero-title">Admin scaffold kept, legacy business code removed.</h1>
-          <p class="hero-copy">
-            This shell preserves the project's frontend build chain, local preview flow, and Alpine/Tailwind base
-            while the next PSOP implementation is rebuilt around the new design docs.
-          </p>
-        </div>
-        <button type="button" class="theme-switch" @click="toggleTheme()" x-text="themeLabel"></button>
-      </header>
+  <body class="min-h-screen bg-slate-950 text-slate-200">
+    <div x-data="skillsConsole()" x-init="boot()" class="min-h-screen" x-cloak>
+      <div class="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.14),transparent_24rem),radial-gradient(circle_at_top_right,rgba(56,189,248,0.14),transparent_24rem),linear-gradient(180deg,#020617,#0f172a_45%,#020617)]">
+        <div class="flex min-h-screen">
+          <aside class="hidden w-72 shrink-0 border-r border-slate-800 bg-slate-950/75 backdrop-blur lg:flex lg:flex-col">
+            <div class="border-b border-slate-800 px-6 py-6">
+              <p class="text-xs font-semibold uppercase tracking-[0.28em] text-emerald-300">PSOP Web IDE</p>
+              <h1 class="mt-3 text-2xl font-semibold tracking-tight text-white">Skills Console</h1>
+              <p class="mt-3 text-sm leading-6 text-slate-400">
+                围绕 GitLab 与 PostgreSQL 的最小 Skills 管理闭环。
+              </p>
+            </div>
 
-      <section class="mt-8 grid gap-4 lg:grid-cols-3">
-        <template x-for="item in preservedAreas" :key="item.title">
-          <article class="surface-card">
-            <p class="card-kicker" x-text="item.kicker"></p>
-            <h2 class="card-title" x-text="item.title"></h2>
-            <p class="card-copy" x-text="item.summary"></p>
-          </article>
-        </template>
-      </section>
+            <nav class="flex-1 space-y-2 px-4 py-4">
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="route.name === 'skills-list' ? 'sidebar-link-active' : ''"
+                @click="navigate('/admin/skills')"
+              >
+                <span class="material-symbols-outlined text-[20px]">construction</span>
+                <span>Skills</span>
+              </button>
+            </nav>
 
-      <section class="mt-8 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-        <article class="surface-card">
-          <p class="section-label">What stays</p>
-          <ul class="list-stack">
-            <template x-for="item in scaffoldItems" :key="item">
-              <li x-text="item"></li>
-            </template>
-          </ul>
-        </article>
-
-        <article class="surface-card">
-          <p class="section-label">Next build targets</p>
-          <ul class="list-stack">
-            <template x-for="item in nextSteps" :key="item">
-              <li x-text="item"></li>
-            </template>
-          </ul>
-        </article>
-      </section>
-
-      <section class="mt-8">
-        <article class="surface-card">
-          <p class="section-label">Design fact sources</p>
-          <div class="grid gap-3 md:grid-cols-3">
-            <template x-for="doc in sourceDocs" :key="doc.path">
-              <div class="doc-chip">
-                <p class="font-medium" x-text="doc.label"></p>
-                <p class="mt-1 text-xs opacity-75" x-text="doc.path"></p>
+            <div class="border-t border-slate-800 px-4 py-4">
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Runtime Binding</p>
+                <dl class="mt-4 space-y-3 text-sm text-slate-300">
+                  <div>
+                    <dt class="text-slate-500">API</dt>
+                    <dd class="mt-1 break-all font-mono text-[11px]" x-text="apiBaseUrl"></dd>
+                  </div>
+                  <div>
+                    <dt class="text-slate-500">Current Route</dt>
+                    <dd class="mt-1 font-medium text-white" x-text="routeTitle()"></dd>
+                  </div>
+                </dl>
               </div>
-            </template>
-          </div>
-        </article>
-      </section>
-    </main>
+            </div>
+          </aside>
+
+          <main class="flex min-h-screen flex-1 flex-col">
+            <header class="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/70 backdrop-blur">
+              <div class="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-[0.24em] text-sky-300">Skills Management MVP</p>
+                  <h2 class="mt-2 text-2xl font-semibold tracking-tight text-white" x-text="routeTitle()"></h2>
+                </div>
+                <div class="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    class="button-secondary"
+                    @click="navigate('/admin/skills')"
+                  >
+                    <span class="material-symbols-outlined text-[18px]">arrow_back</span>
+                    <span>返回列表</span>
+                  </button>
+                  <template x-if="route.name === 'skill-detail'">
+                    <button type="button" class="button-secondary" @click="refreshCurrentSkill()">
+                      <span class="material-symbols-outlined text-[18px]">refresh</span>
+                      <span>刷新</span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+            </header>
+
+            <section class="flex-1 min-h-0 overflow-auto px-6 py-6">
+              <template x-if="notice">
+                <div class="mb-6 rounded-2xl border px-4 py-3 text-sm shadow-lg" :class="noticeClass()">
+                  <p x-text="notice.text"></p>
+                </div>
+              </template>
+
+              <template x-if="loadingPage">
+                <div class="grid gap-4 xl:grid-cols-[1.05fr_1.35fr]">
+                  <div class="panel h-60 animate-pulse"></div>
+                  <div class="panel h-60 animate-pulse"></div>
+                </div>
+              </template>
+
+              <template x-if="!loadingPage && route.name === 'skills-list'">
+                <div class="space-y-6">
+                  <div class="grid gap-6 xl:grid-cols-[1.1fr_1.4fr]">
+                    <section class="panel">
+                      <div class="panel-header">
+                        <div>
+                          <p class="panel-kicker">Create</p>
+                          <h3 class="panel-title">新建 Skill</h3>
+                        </div>
+                        <p class="panel-copy">创建正式 Skill，并自动在 GitLab `skills` group 下初始化 project 与基础 source 文件。</p>
+                      </div>
+
+                      <form class="panel-body space-y-4" @submit.prevent="createSkill()">
+                        <label class="field-block">
+                          <span class="field-label">Skill Key</span>
+                          <input x-model="createForm.key" class="input-field mono-field" placeholder="equipment-diagnosis" required />
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">Skill Name</span>
+                          <input x-model="createForm.name" class="input-field" placeholder="Equipment Diagnosis" required />
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">Description</span>
+                          <textarea x-model="createForm.description" class="textarea-field h-28" placeholder="Describe what this skill should accomplish."></textarea>
+                        </label>
+                        <div class="flex flex-wrap gap-3">
+                          <button type="submit" class="button-primary" :disabled="busy.create">
+                            <span class="material-symbols-outlined text-[18px]">add_circle</span>
+                            <span x-text="busy.create ? 'Creating...' : 'Create Skill'"></span>
+                          </button>
+                        </div>
+                      </form>
+                    </section>
+
+                    <section class="panel">
+                      <div class="panel-header">
+                        <div>
+                          <p class="panel-kicker">Browse</p>
+                          <h3 class="panel-title">Skills Registry</h3>
+                        </div>
+                        <p class="panel-copy">查看当前已入库 Skills，并快速跳转到详情页继续编辑或发布。</p>
+                      </div>
+
+                      <div class="panel-body space-y-4">
+                        <div class="grid gap-3 md:grid-cols-[1fr_180px_auto]">
+                          <label class="field-block">
+                            <span class="field-label">Search</span>
+                            <input x-model="filters.search" class="input-field" placeholder="按 key / name 搜索" />
+                          </label>
+                          <label class="field-block">
+                            <span class="field-label">Status</span>
+                            <select x-model="filters.status" class="input-field">
+                              <option value="">全部</option>
+                              <option value="active">active</option>
+                              <option value="archived">archived</option>
+                            </select>
+                          </label>
+                          <div class="flex items-end">
+                            <button type="button" class="button-secondary w-full md:w-auto" @click="loadSkills()">
+                              <span class="material-symbols-outlined text-[18px]">search</span>
+                              <span>Refresh</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        <div class="overflow-hidden rounded-2xl border border-slate-800">
+                          <template x-if="skills.length === 0">
+                            <div class="empty-state">
+                              <span class="material-symbols-outlined text-[32px] text-slate-600">inventory_2</span>
+                              <p class="mt-3 text-base font-medium text-white">还没有 Skill</p>
+                              <p class="mt-2 text-sm text-slate-400">先在左侧创建第一个 Skill，系统会自动初始化 GitLab 项目和基础 source。</p>
+                            </div>
+                          </template>
+
+                          <template x-if="skills.length > 0">
+                            <div class="divide-y divide-slate-800">
+                              <template x-for="skill in skills" :key="skill.id">
+                                <article class="skill-row">
+                                  <div class="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                                    <div class="space-y-3">
+                                      <div class="flex flex-wrap items-center gap-3">
+                                        <h4 class="text-lg font-semibold text-white" x-text="skill.name"></h4>
+                                        <span class="status-badge" x-text="skill.status"></span>
+                                      </div>
+                                      <p class="text-sm leading-6 text-slate-400" x-text="skill.description || '暂无描述。'"></p>
+                                      <dl class="grid gap-3 text-sm text-slate-300 md:grid-cols-2">
+                                        <div>
+                                          <dt class="field-label">Key</dt>
+                                          <dd class="mono-field mt-1" x-text="skill.key"></dd>
+                                        </div>
+                                        <div>
+                                          <dt class="field-label">GitLab Project</dt>
+                                          <dd class="mono-field mt-1" x-text="skill.gitlab_project_id"></dd>
+                                        </div>
+                                        <div>
+                                          <dt class="field-label">Draft Head</dt>
+                                          <dd class="mono-field mt-1" x-text="formatShortId(skill.latest_draft_head_sha)"></dd>
+                                        </div>
+                                        <div>
+                                          <dt class="field-label">Published</dt>
+                                          <dd class="mono-field mt-1" x-text="formatShortId(skill.latest_published_commit_sha)"></dd>
+                                        </div>
+                                      </dl>
+                                    </div>
+                                    <div class="flex shrink-0 flex-wrap gap-3">
+                                      <button type="button" class="button-primary" @click="openSkill(skill.id)">
+                                        <span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+                                        <span>打开</span>
+                                      </button>
+                                      <button type="button" class="button-secondary" @click="copyText(skill.repository_url)">
+                                        <span class="material-symbols-outlined text-[18px]">content_copy</span>
+                                        <span>复制仓库 URL</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                </article>
+                              </template>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </template>
+
+              <template x-if="!loadingPage && route.name === 'skill-detail' && currentSkill">
+                <div class="space-y-6">
+                  <div class="grid gap-6 xl:grid-cols-[0.95fr_1.35fr]">
+                    <section class="panel">
+                      <div class="panel-header">
+                        <div>
+                          <p class="panel-kicker">Metadata</p>
+                          <h3 class="panel-title">Skill 基本信息</h3>
+                        </div>
+                        <p class="panel-copy">`identity.name / identity.description` 会同步写回 `skill.yaml` 与 GitLab project 显示名。</p>
+                      </div>
+
+                      <form class="panel-body space-y-4" @submit.prevent="saveMetadata()">
+                        <label class="field-block">
+                          <span class="field-label">Skill ID</span>
+                          <div class="info-chip">
+                            <span class="mono-field text-[11px]" x-text="currentSkill.id"></span>
+                            <button type="button" class="icon-button" @click="copyText(currentSkill.id)">
+                              <span class="material-symbols-outlined text-[16px]">content_copy</span>
+                            </button>
+                          </div>
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">Skill Key</span>
+                          <input :value="currentSkill.key" class="input-field mono-field opacity-80" disabled />
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">Skill Name</span>
+                          <input x-model="metadataForm.name" class="input-field" required />
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">Description</span>
+                          <textarea x-model="metadataForm.description" class="textarea-field h-32"></textarea>
+                        </label>
+                        <div class="flex flex-wrap gap-3">
+                          <button type="submit" class="button-primary" :disabled="busy.metadata">
+                            <span class="material-symbols-outlined text-[18px]">save</span>
+                            <span x-text="busy.metadata ? 'Saving...' : 'Save Metadata'"></span>
+                          </button>
+                        </div>
+                      </form>
+                    </section>
+
+                    <section class="panel">
+                      <div class="panel-header">
+                        <div>
+                          <p class="panel-kicker">Binding</p>
+                          <h3 class="panel-title">GitLab 与版本信息</h3>
+                        </div>
+                        <p class="panel-copy">当前 MVP 采用 `一个 skill = 一个 GitLab project`，并固定托管在 `skills` group 下。</p>
+                      </div>
+
+                      <div class="panel-body space-y-5">
+                        <dl class="grid gap-4 text-sm text-slate-300 md:grid-cols-2">
+                          <div>
+                            <dt class="field-label">Group Path</dt>
+                            <dd class="mono-field mt-1" x-text="currentSkill.gitlab_group_path"></dd>
+                          </div>
+                          <div>
+                            <dt class="field-label">Project ID</dt>
+                            <dd class="mono-field mt-1" x-text="currentSkill.gitlab_project_id"></dd>
+                          </div>
+                          <div>
+                            <dt class="field-label">Repository URL</dt>
+                            <dd class="mt-1 break-all text-sky-200" x-text="currentSkill.repository_url"></dd>
+                          </div>
+                          <div>
+                            <dt class="field-label">Default Branch</dt>
+                            <dd class="mono-field mt-1" x-text="currentSkill.default_branch"></dd>
+                          </div>
+                          <div>
+                            <dt class="field-label">Manifest Path</dt>
+                            <dd class="mono-field mt-1" x-text="currentSkill.manifest_path"></dd>
+                          </div>
+                          <div>
+                            <dt class="field-label">Updated At</dt>
+                            <dd class="mono-field mt-1" x-text="formatDateTime(currentSkill.updated_at)"></dd>
+                          </div>
+                        </dl>
+
+                        <div class="grid gap-4 md:grid-cols-2">
+                          <div class="rounded-2xl border border-slate-800 bg-slate-950/35 p-4">
+                            <p class="field-label">Draft Version</p>
+                            <template x-if="currentSkill.current_draft_version">
+                              <div class="mt-3 space-y-2">
+                                <p class="text-sm font-medium text-white">Version <span x-text="currentSkill.current_draft_version.version_no"></span></p>
+                                <p class="mono-field text-[11px]" x-text="currentSkill.current_draft_version.source_ref"></p>
+                                <p class="mono-field text-[11px]" x-text="formatShortId(currentSkill.current_draft_version.source_commit_sha)"></p>
+                              </div>
+                            </template>
+                          </div>
+
+                          <div class="rounded-2xl border border-slate-800 bg-slate-950/35 p-4">
+                            <p class="field-label">Latest Published</p>
+                            <template x-if="currentSkill.latest_published_version">
+                              <div class="mt-3 space-y-2">
+                                <p class="text-sm font-medium text-white">Version <span x-text="currentSkill.latest_published_version.version_no"></span></p>
+                                <p class="mono-field text-[11px]" x-text="currentSkill.latest_published_version.source_ref"></p>
+                                <p class="mono-field text-[11px]" x-text="formatShortId(currentSkill.latest_published_version.source_commit_sha)"></p>
+                              </div>
+                            </template>
+                            <template x-if="!currentSkill.latest_published_version">
+                              <p class="mt-3 text-sm text-slate-500">尚未发布。</p>
+                            </template>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+
+                  <div class="grid gap-6 xl:grid-cols-[1.35fr_0.95fr]">
+                    <section class="panel min-h-[44rem]">
+                      <div class="panel-header">
+                        <div>
+                          <p class="panel-kicker">Source</p>
+                          <h3 class="panel-title">Skill Source Editor</h3>
+                        </div>
+                        <p class="panel-copy">当前运行时不会执行未发布 draft。保存时会直接把变更提交到 GitLab 默认分支。</p>
+                      </div>
+
+                      <div class="panel-body flex min-h-0 flex-1 flex-col gap-4">
+                        <div class="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            class="editor-tab"
+                            :class="activeSourceTab === 'README.md' ? 'editor-tab-active' : ''"
+                            @click="selectSourceTab('README.md')"
+                          >
+                            README.md
+                          </button>
+                          <button
+                            type="button"
+                            class="editor-tab"
+                            :class="activeSourceTab === 'SKILL.md' ? 'editor-tab-active' : ''"
+                            @click="selectSourceTab('SKILL.md')"
+                          >
+                            SKILL.md
+                          </button>
+                          <button
+                            type="button"
+                            class="editor-tab"
+                            :class="activeSourceTab === 'skill.yaml' ? 'editor-tab-active' : ''"
+                            @click="selectSourceTab('skill.yaml')"
+                          >
+                            skill.yaml
+                          </button>
+                        </div>
+
+                        <div class="rounded-2xl border border-slate-800 bg-slate-950/35 px-4 py-3">
+                          <p class="field-label">Current Head Commit</p>
+                          <div class="mt-2 flex flex-wrap items-center gap-3">
+                            <span class="mono-field text-[11px]" x-text="sourceForm.base_commit_sha || 'N/A'"></span>
+                            <button type="button" class="button-secondary" @click="copyText(sourceForm.base_commit_sha)">
+                              <span class="material-symbols-outlined text-[18px]">content_copy</span>
+                              <span>复制 SHA</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        <label class="field-block min-h-0 flex-1">
+                          <span class="field-label">Editor</span>
+                          <textarea
+                            class="editor-area"
+                            :value="currentSourceValue()"
+                            @input="updateSourceValue($event)"
+                          ></textarea>
+                        </label>
+
+                        <div class="flex flex-wrap gap-3">
+                          <button type="button" class="button-primary" :disabled="busy.source" @click="saveSource()">
+                            <span class="material-symbols-outlined text-[18px]">save</span>
+                            <span x-text="busy.source ? 'Saving...' : 'Save Source To GitLab'"></span>
+                          </button>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section class="panel">
+                      <div class="panel-header">
+                        <div>
+                          <p class="panel-kicker">Publish</p>
+                          <h3 class="panel-title">冻结发布与记录</h3>
+                        </div>
+                        <p class="panel-copy">发布只冻结当前 draft head，不会再次修改 source 文件。</p>
+                      </div>
+
+                      <div class="panel-body space-y-5">
+                        <label class="field-block">
+                          <span class="field-label">Publish Reason</span>
+                          <textarea x-model="publishForm.publish_reason" class="textarea-field h-32" placeholder="Describe why this publish should be recorded."></textarea>
+                        </label>
+
+                        <div class="flex flex-wrap gap-3">
+                          <button type="button" class="button-primary" :disabled="busy.publish" @click="publishSkill()">
+                            <span class="material-symbols-outlined text-[18px]">rocket_launch</span>
+                            <span x-text="busy.publish ? 'Publishing...' : 'Publish Current Draft'"></span>
+                          </button>
+                        </div>
+
+                        <div class="rounded-2xl border border-slate-800 bg-slate-950/35">
+                          <div class="border-b border-slate-800 px-4 py-3">
+                            <p class="field-label">Recent Publish Records</p>
+                          </div>
+                          <template x-if="currentSkill.recent_publish_records.length === 0">
+                            <div class="empty-state py-10">
+                              <span class="material-symbols-outlined text-[30px] text-slate-600">history</span>
+                              <p class="mt-3 text-sm text-slate-400">尚无发布记录。</p>
+                            </div>
+                          </template>
+                          <template x-if="currentSkill.recent_publish_records.length > 0">
+                            <div class="divide-y divide-slate-800">
+                              <template x-for="record in currentSkill.recent_publish_records" :key="record.id">
+                                <article class="px-4 py-4 text-sm">
+                                  <div class="flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                      <p class="font-medium text-white" x-text="record.publish_reason"></p>
+                                      <p class="mt-2 mono-field text-[11px]" x-text="formatShortId(record.published_commit_sha)"></p>
+                                    </div>
+                                    <span class="status-badge" x-text="record.publish_status"></span>
+                                  </div>
+                                  <p class="mt-3 text-[11px] text-slate-500" x-text="formatDateTime(record.published_at)"></p>
+                                </article>
+                              </template>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </template>
+            </section>
+          </main>
+        </div>
+      </div>
+    </div>
   </body>
 </html>

@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     database_password: str = "postgres"
     database_check_on_startup: bool = False
     database_auto_create_schema: bool = False
+    gitlab_api_base_url: str = "https://gitlab.com/api/v4"
+    gitlab_token: str | None = None
+    gitlab_skills_group_path: str = "skills"
+    gitlab_default_branch: str = "main"
+    gitlab_timeout_seconds: float = 15.0
 
     @property
     def repo_root(self) -> Path:
