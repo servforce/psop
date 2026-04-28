@@ -2,12 +2,12 @@
 
 @layer base {
   html {
-    color-scheme: dark;
+    color-scheme: light;
   }
 
   body {
-    background: #020617;
-    color: #e2e8f0;
+    background: #f8fafc;
+    color: #1e293b;
     font-family:
       "Segoe UI",
       "PingFang SC",
@@ -26,27 +26,27 @@
 
 @layer components {
   .panel {
-    @apply overflow-hidden rounded-[1.6rem] border border-slate-800 bg-slate-900/70 shadow-[0_24px_60px_rgba(2,6,23,0.28)];
+    @apply flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white/90 shadow-none;
   }
 
   .panel-header {
-    @apply flex flex-col gap-3 border-b border-slate-800 px-5 py-5;
+    @apply flex flex-col gap-3 border-b border-slate-200 bg-slate-50/70 px-5 py-5;
   }
 
   .panel-kicker {
-    @apply text-xs font-semibold uppercase tracking-[0.22em] text-emerald-300;
+    @apply text-xs font-semibold uppercase tracking-[0.22em] text-sky-700;
   }
 
   .panel-title {
-    @apply mt-1 text-xl font-semibold tracking-tight text-white;
+    @apply mt-1 text-xl font-semibold tracking-tight text-slate-950;
   }
 
   .panel-copy {
-    @apply text-sm leading-6 text-slate-400;
+    @apply text-sm leading-6 text-slate-500;
   }
 
   .panel-body {
-    @apply px-5 py-5;
+    @apply min-h-0 flex-1 overflow-auto px-5 py-5;
   }
 
   .field-block {
@@ -58,63 +58,177 @@
   }
 
   .input-field {
-    @apply block w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/40 focus:ring-2 focus:ring-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-70;
+    @apply block w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500/70 focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500;
   }
 
   .textarea-field {
-    @apply block w-full rounded-xl border border-slate-700 bg-slate-950/55 px-4 py-3 text-sm leading-6 text-slate-200 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/40 focus:ring-2 focus:ring-emerald-400/20;
+    @apply block w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500/70 focus:ring-2 focus:ring-sky-200;
   }
 
   .editor-area {
-    @apply block min-h-[28rem] w-full flex-1 rounded-2xl border border-slate-800 bg-slate-950/75 px-4 py-4 font-mono text-[12px] leading-6 text-slate-200 outline-none transition focus:border-sky-400/40 focus:ring-2 focus:ring-sky-400/20;
+    @apply block min-h-[28rem] w-full flex-1 rounded-xl border border-slate-300 bg-white px-4 py-4 font-mono text-[12px] leading-6 text-slate-900 outline-none transition focus:border-sky-500/70 focus:ring-2 focus:ring-sky-200;
     resize: vertical;
   }
 
   .mono-field {
-    @apply font-mono text-[12px] text-slate-300;
+    @apply font-mono text-[12px] text-slate-700;
   }
 
   .button-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-70;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-sky-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-70;
   }
 
   .button-secondary {
-    @apply inline-flex items-center justify-center gap-2 rounded-full border border-slate-700 bg-slate-950/50 px-5 py-3 text-sm font-medium text-slate-200 transition hover:border-slate-500 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-70;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70;
+  }
+
+  .button-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .topbar-search {
+    @apply h-9 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-4 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500/70 focus:ring-2 focus:ring-sky-200;
+  }
+
+  .topbar-icon-button {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent bg-transparent text-slate-600 transition hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950;
+  }
+
+  .user-avatar {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-slate-950 text-sm font-semibold text-white;
   }
 
   .sidebar-link {
-    @apply flex w-full items-center gap-3 rounded-2xl border border-transparent px-4 py-3 text-left text-sm font-medium text-slate-300 transition hover:border-slate-700 hover:bg-slate-900/80 hover:text-white;
+    @apply flex w-full items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-950;
   }
 
   .sidebar-link-active {
-    @apply border-emerald-400/25 bg-emerald-400/10 text-emerald-100;
+    @apply border-sky-200 bg-sky-50 text-sky-800;
   }
 
   .status-badge {
-    @apply inline-flex items-center rounded-full border border-sky-400/25 bg-sky-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-200;
+    @apply inline-flex items-center rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-teal-700;
   }
 
   .skill-row {
-    @apply bg-slate-900/40 px-5 py-5 transition hover:bg-slate-900/75;
+    @apply bg-white px-5 py-5 transition hover:bg-slate-50;
+  }
+
+  .skill-table-row {
+    @apply grid min-w-[62rem] grid-cols-[1.6fr_120px_190px_190px_190px] items-center gap-4 bg-white px-5 py-4 transition hover:bg-slate-50;
+  }
+
+  .skill-table-header {
+    @apply grid min-w-[62rem] grid-cols-[1.6fr_120px_190px_190px_190px] gap-4 border-b border-slate-200 bg-white px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500;
   }
 
   .info-chip {
-    @apply flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3;
+    @apply flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3;
   }
 
   .icon-button {
-    @apply inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-700 bg-slate-950/60 text-slate-300 transition hover:border-slate-500 hover:text-white;
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-950;
+  }
+
+  .icon-button-danger {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800;
+  }
+
+  .table-action-button {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-600 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800;
   }
 
   .editor-tab {
-    @apply rounded-full border border-slate-700 bg-slate-950/55 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-500 hover:text-white;
+    @apply rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-950;
   }
 
   .editor-tab-active {
-    @apply border-emerald-400/30 bg-emerald-400/15 text-emerald-100;
+    @apply border-sky-200 bg-sky-50 text-sky-800;
+  }
+
+  .detail-tab {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-transparent px-4 text-sm font-medium text-slate-600 transition hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950;
+  }
+
+  .detail-tab-active {
+    @apply border-sky-200 bg-sky-50 text-sky-800 shadow-sm;
+  }
+
+  .detail-section {
+    @apply min-h-0 bg-transparent p-5;
   }
 
   .empty-state {
     @apply flex flex-col items-center justify-center px-6 py-12 text-center;
+  }
+
+  .breadcrumb-bar {
+    @apply flex min-h-9 flex-wrap items-center gap-2 border-b border-slate-200 pb-3 text-sm text-slate-500;
+  }
+
+  .breadcrumb-link {
+    @apply text-slate-600 transition hover:text-sky-700;
+  }
+
+  .modal-panel {
+    @apply w-full max-w-xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.22)];
+  }
+
+  .markdown-preview {
+    @apply text-sm leading-7 text-slate-700;
+  }
+
+  .markdown-preview h1 {
+    @apply mb-4 border-b border-slate-200 pb-3 text-2xl font-semibold tracking-tight text-slate-950;
+  }
+
+  .markdown-preview h2 {
+    @apply mb-3 mt-6 border-b border-slate-100 pb-2 text-xl font-semibold text-slate-950;
+  }
+
+  .markdown-preview h3 {
+    @apply mb-2 mt-5 text-lg font-semibold text-slate-950;
+  }
+
+  .markdown-preview h4,
+  .markdown-preview h5,
+  .markdown-preview h6 {
+    @apply mb-2 mt-4 text-base font-semibold text-slate-900;
+  }
+
+  .markdown-preview p {
+    @apply mb-3;
+  }
+
+  .markdown-preview ul {
+    @apply mb-4 list-disc space-y-1 pl-6;
+  }
+
+  .markdown-preview ol {
+    @apply mb-4 list-decimal space-y-1 pl-6;
+  }
+
+  .markdown-preview blockquote {
+    @apply mb-4 border-l-4 border-sky-200 bg-sky-50 px-4 py-2 text-slate-600;
+  }
+
+  .markdown-preview pre {
+    @apply mb-4 overflow-auto rounded-lg border border-slate-200 bg-slate-950 px-4 py-3 text-slate-100;
+  }
+
+  .markdown-preview code {
+    @apply rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[12px] text-slate-900;
+  }
+
+  .markdown-preview pre code {
+    @apply bg-transparent p-0 text-slate-100;
+  }
+
+  .markdown-preview strong {
+    @apply font-semibold text-slate-950;
+  }
+
+  .markdown-preview a {
+    @apply font-medium text-sky-700 underline decoration-sky-200 underline-offset-4 hover:text-sky-900;
   }
 }

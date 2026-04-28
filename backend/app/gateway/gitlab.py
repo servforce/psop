@@ -30,6 +30,24 @@ class SkillSourceBundle:
     head_commit_sha: str
 
 
+@dataclass(slots=True)
+class RepositoryTreeEntry:
+    id: str
+    name: str
+    path: str
+    type: str
+    mode: str | None = None
+
+
+@dataclass(slots=True)
+class RepositoryFile:
+    file_path: str
+    file_name: str
+    content: str
+    ref: str
+    head_commit_sha: str
+
+
 class GitLabSkillSourceGateway(Protocol):
     def create_skill_project(
         self,
@@ -50,6 +68,24 @@ class GitLabSkillSourceGateway(Protocol):
     def get_skill_source(self, project_id: str, ref: str) -> SkillSourceBundle:
         ...
 
+    def list_repository_tree(self, project_id: str, ref: str, path: str | None = None) -> list[RepositoryTreeEntry]:
+        ...
+
+    def get_repository_file(self, project_id: str, ref: str, file_path: str) -> RepositoryFile:
+        ...
+
+    def commit_repository_file(
+        self,
+        *,
+        project_id: str,
+        branch: str,
+        file_path: str,
+        content: str,
+        action: str,
+        commit_message: str,
+    ) -> str:
+        ...
+
     def commit_skill_source(
         self,
         *,
@@ -63,6 +99,9 @@ class GitLabSkillSourceGateway(Protocol):
         ...
 
     def update_project_name(self, project_id: str, name: str) -> None:
+        ...
+
+    def archive_project(self, project_id: str) -> None:
         ...
 
 
@@ -239,6 +278,71 @@ class HttpGitLabSkillSourceGateway:
             head_commit_sha=head_commit_sha,
         )
 
+    def list_repository_tree(self, project_id: str, ref: str, path: str | None = None) -> list[RepositoryTreeEntry]:
+        params: dict[str, object] = {"ref": ref, "per_page": 100}
+        if path:
+            params["path"] = path
+
+        payload = self._request(
+            "GET",
+            f"/projects/{quote(project_id, safe='')}/repository/tree",
+            params=params,
+        )
+        if not isinstance(payload, list):
+            raise SkillsGatewayError("GitLab repository tree 查询响应格式错误。")
+
+        entries: list[RepositoryTreeEntry] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            entries.append(
+                RepositoryTreeEntry(
+                    id=str(item.get("id") or item.get("path") or ""),
+                    name=str(item.get("name") or ""),
+                    path=str(item.get("path") or ""),
+                    type=str(item.get("type") or ""),
+                    mode=str(item["mode"]) if item.get("mode") is not None else None,
+                )
+            )
+        return entries
+
+    def get_repository_file(self, project_id: str, ref: str, file_path: str) -> RepositoryFile:
+        content = self._get_file_content(project_id, ref, file_path)
+        return RepositoryFile(
+            file_path=file_path,
+            file_name=file_path.rsplit("/", 1)[-1],
+            content=content,
+            ref=ref,
+            head_commit_sha=self.get_branch_head(project_id, ref),
+        )
+
+    def commit_repository_file(
+        self,
+        *,
+        project_id: str,
+        branch: str,
+        file_path: str,
+        content: str,
+        action: str,
+        commit_message: str,
+    ) -> str:
+        self._request(
+            "POST",
+            f"/projects/{quote(project_id, safe='')}/repository/commits",
+            json={
+                "branch": branch,
+                "commit_message": commit_message,
+                "actions": [
+                    {
+                        "action": action,
+                        "file_path": file_path,
+                        "content": content,
+                    },
+                ],
+            },
+        )
+        return self.get_branch_head(project_id, branch)
+
     def commit_skill_source(
         self,
         *,
@@ -270,3 +374,6 @@ class HttpGitLabSkillSourceGateway:
             f"/projects/{quote(project_id, safe='')}",
             json={"name": name},
         )
+
+    def archive_project(self, project_id: str) -> None:
+        self._request("POST", f"/projects/{quote(project_id, safe='')}/archive")

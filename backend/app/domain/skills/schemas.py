@@ -42,6 +42,8 @@ class SkillSummaryResponse(BaseModel):
     manifest_path: str
     latest_draft_head_sha: str | None = None
     latest_published_commit_sha: str | None = None
+    latest_published_at: datetime | None = None
+    created_at: datetime
     updated_at: datetime
 
 
@@ -49,7 +51,6 @@ class SkillDetailResponse(SkillSummaryResponse):
     current_draft_version: SkillVersionSummaryResponse | None = None
     latest_published_version: SkillVersionSummaryResponse | None = None
     recent_publish_records: list[SkillPublishRecordResponse] = Field(default_factory=list)
-    created_at: datetime
 
 
 class SkillSourceResponse(BaseModel):
@@ -57,6 +58,29 @@ class SkillSourceResponse(BaseModel):
     skill_md_content: str
     skill_yaml_content: str
     source_ref: str
+    head_commit_sha: str
+
+
+class SkillRepositoryTreeEntryResponse(BaseModel):
+    id: str
+    name: str
+    path: str
+    type: str
+    mode: str | None = None
+
+
+class SkillRepositoryTreeResponse(BaseModel):
+    path: str
+    ref: str
+    head_commit_sha: str
+    entries: list[SkillRepositoryTreeEntryResponse]
+
+
+class SkillRepositoryFileResponse(BaseModel):
+    file_path: str
+    file_name: str
+    content: str
+    ref: str
     head_commit_sha: str
 
 
@@ -71,11 +95,30 @@ class UpdateSkillRequest(BaseModel):
     description: str | None = Field(default=None, max_length=5000)
 
 
+class DeleteSkillRequest(BaseModel):
+    confirmation_name: str = Field(min_length=1, max_length=255)
+
+
 class SaveSkillSourceRequest(BaseModel):
     base_commit_sha: str = Field(min_length=1)
     readme_content: str
     skill_md_content: str
     skill_yaml_content: str
+
+
+class SaveSkillRepositoryFileRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+    content: str = ""
+    base_commit_sha: str = Field(min_length=1)
+
+
+class CreateSkillRepositoryFileRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+    content: str = ""
+
+
+class CreateSkillRepositoryFolderRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
 
 
 class PublishSkillRequest(BaseModel):

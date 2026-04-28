@@ -20,6 +20,8 @@ class SkillsRepository:
 
         if status:
             query = query.where(SkillDefinition.status == status)
+        else:
+            query = query.where(SkillDefinition.status != "archived")
         if search:
             pattern = f"%{search.strip()}%"
             query = query.where(

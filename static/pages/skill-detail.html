@@ -1,0 +1,393 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
+      <nav class="breadcrumb-bar border-0 pb-0" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
+        <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-950" @click="refreshCurrentSkill()" x-text="currentSkill.name"></button>
+      </nav>
+      <div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div class="space-y-4">
+          <h1 class="text-2xl font-semibold text-slate-950" x-text="currentSkill.name"></h1>
+          <div class="flex flex-wrap gap-2" role="tablist" aria-label="Skill 详情页签">
+            <button type="button" class="detail-tab" :class="activeDetailTab === 'overview' ? 'detail-tab-active' : ''" @click="selectDetailTab('overview')">
+              <span class="material-symbols-outlined text-[18px]">badge</span>
+              <span>基础信息</span>
+            </button>
+            <button type="button" class="detail-tab" :class="activeDetailTab === 'source' ? 'detail-tab-active' : ''" @click="selectDetailTab('source')">
+              <span class="material-symbols-outlined text-[18px]">code_blocks</span>
+              <span>源码编辑</span>
+            </button>
+            <button type="button" class="detail-tab" :class="activeDetailTab === 'publish' ? 'detail-tab-active' : ''" @click="selectDetailTab('publish')">
+              <span class="material-symbols-outlined text-[18px]">rocket_launch</span>
+              <span>发布记录</span>
+            </button>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center justify-end gap-3">
+          <button type="button" class="button-primary" :disabled="busy.publish" @click="publishSkill()">
+            <span class="material-symbols-outlined text-[18px]">rocket_launch</span>
+            <span x-text="busy.publish ? '发布中...' : '发布'"></span>
+          </button>
+          <button type="button" class="button-danger" @click="openDeleteModal(currentSkill)">
+            <span class="material-symbols-outlined text-[18px]">delete</span>
+            <span>删除</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <template x-if="activeDetailTab === 'overview'">
+      <div class="panel-body grid gap-6 xl:grid-cols-[0.95fr_1.35fr]">
+        <section class="detail-section">
+          <div>
+            <h3 class="panel-title">Skill 基本信息</h3>
+          </div>
+
+          <form class="mt-5 space-y-4" @submit.prevent="saveMetadata()">
+            <label class="field-block">
+              <span class="field-label">Skill ID</span>
+              <div class="info-chip">
+                <span class="mono-field text-[11px]" x-text="currentSkill.id"></span>
+                <button type="button" class="icon-button" @click="copyText(currentSkill.id, `skill-id-${currentSkill.id}`)">
+                  <span class="material-symbols-outlined text-[16px]" x-text="copyIcon(`skill-id-${currentSkill.id}`)"></span>
+                </button>
+              </div>
+            </label>
+            <label class="field-block">
+              <span class="field-label">Skill 名称</span>
+              <input x-model="metadataForm.name" class="input-field" required />
+            </label>
+            <label class="field-block">
+              <span class="field-label">描述</span>
+              <textarea x-model="metadataForm.description" class="textarea-field h-32"></textarea>
+            </label>
+            <div class="flex flex-wrap gap-3">
+              <button type="submit" class="button-primary" :disabled="busy.metadata">
+                <span class="material-symbols-outlined text-[18px]">save</span>
+                <span x-text="busy.metadata ? '保存中...' : '保存基础信息'"></span>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="detail-section">
+          <div>
+            <h3 class="panel-title">GitLab 与版本信息</h3>
+          </div>
+
+          <div class="mt-5 space-y-5">
+            <dl class="grid gap-4 text-sm md:grid-cols-2">
+              <div>
+                <dt class="field-label">GitLab Group</dt>
+                <dd class="mono-field mt-1" x-text="currentSkill.gitlab_group_path"></dd>
+              </div>
+              <div>
+                <dt class="field-label">Project ID</dt>
+                <dd class="mono-field mt-1" x-text="currentSkill.gitlab_project_id"></dd>
+              </div>
+              <div>
+                <dt class="field-label">仓库地址</dt>
+                <dd class="mt-1 flex items-start gap-2">
+                  <span class="break-all text-sky-700" x-text="currentSkill.repository_url"></span>
+                  <button type="button" class="icon-button shrink-0" title="复制仓库 URL" @click="copyText(currentSkill.repository_url, `skill-repo-${currentSkill.id}`)">
+                    <span class="material-symbols-outlined text-[18px]" x-text="copyIcon(`skill-repo-${currentSkill.id}`)"></span>
+                  </button>
+                </dd>
+              </div>
+              <div>
+                <dt class="field-label">默认分支</dt>
+                <dd class="mono-field mt-1" x-text="currentSkill.default_branch"></dd>
+              </div>
+              <div>
+                <dt class="field-label">Manifest 路径</dt>
+                <dd class="mono-field mt-1" x-text="currentSkill.manifest_path"></dd>
+              </div>
+              <div>
+                <dt class="field-label">更新时间</dt>
+                <dd class="mono-field mt-1" x-text="formatDateTime(currentSkill.updated_at)"></dd>
+              </div>
+            </dl>
+
+            <div class="grid gap-4 md:grid-cols-2">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p class="field-label">草稿版本</p>
+                <template x-if="currentSkill.current_draft_version">
+                  <div class="mt-3 space-y-2">
+                    <p class="text-sm font-medium text-slate-950">版本 <span x-text="currentSkill.current_draft_version.version_no"></span></p>
+                    <p class="mono-field text-[11px]" x-text="currentSkill.current_draft_version.source_ref"></p>
+                    <p class="mono-field text-[11px]" x-text="formatShortId(currentSkill.current_draft_version.source_commit_sha)"></p>
+                  </div>
+                </template>
+              </div>
+
+              <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p class="field-label">最近发布</p>
+                <template x-if="currentSkill.latest_published_version">
+                  <div class="mt-3 space-y-2">
+                    <p class="text-sm font-medium text-slate-950">版本 <span x-text="currentSkill.latest_published_version.version_no"></span></p>
+                    <p class="mono-field text-[11px]" x-text="currentSkill.latest_published_version.source_ref"></p>
+                    <p class="mono-field text-[11px]" x-text="formatShortId(currentSkill.latest_published_version.source_commit_sha)"></p>
+                  </div>
+                </template>
+                <template x-if="!currentSkill.latest_published_version">
+                  <p class="mt-3 text-sm text-slate-500">尚未发布。</p>
+                </template>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </template>
+
+    <template x-if="activeDetailTab === 'source'">
+      <div class="panel-body">
+        <div class="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <h3 class="panel-title">Skill 仓库文件</h3>
+          </div>
+          <div class="relative" @click.outside="closeSourceActionMenu()">
+            <button
+              type="button"
+              class="inline-flex h-11 items-center overflow-hidden rounded-lg border border-slate-300 bg-white text-slate-800 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+              :class="sourceActionMenuOpen ? 'border-sky-300 ring-2 ring-sky-100' : ''"
+              aria-label="新增源码内容"
+              :aria-expanded="sourceActionMenuOpen"
+              @click="toggleSourceActionMenu()"
+            >
+              <span class="flex h-full items-center border-r border-slate-200 px-3">
+                <span class="material-symbols-outlined text-[22px]">add</span>
+              </span>
+              <span class="flex h-full items-center px-2">
+                <span class="material-symbols-outlined text-[20px]">expand_more</span>
+              </span>
+            </button>
+
+            <template x-if="sourceActionMenuOpen">
+              <div class="absolute right-0 z-30 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-2 shadow-[0_18px_44px_rgba(15,23,42,0.16)]">
+                <p class="px-4 pb-2 text-xs font-semibold text-slate-500">当前目录</p>
+                <button type="button" class="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium text-slate-700 transition hover:bg-sky-50 hover:text-sky-800" @click="openSourceCreateModal('file')">
+                  <span class="material-symbols-outlined text-[18px]">note_add</span>
+                  <span>新增文件</span>
+                </button>
+                <button type="button" class="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium text-slate-700 transition hover:bg-sky-50 hover:text-sky-800" @click="openSourceCreateModal('folder')">
+                  <span class="material-symbols-outlined text-[18px]">create_new_folder</span>
+                  <span>新增文件夹</span>
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <template x-if="busy.repositoryTree && repositoryLoadedSkillId !== currentSkill.id">
+          <div class="empty-state py-16">
+            <span class="material-symbols-outlined text-[30px] text-slate-400">sync</span>
+            <p class="mt-3 text-sm text-slate-500">正在加载仓库文件...</p>
+          </div>
+        </template>
+
+        <template x-if="repositoryLoadedSkillId === currentSkill.id">
+          <div class="grid gap-5 xl:grid-cols-[minmax(0,1.08fr)_minmax(28rem,0.92fr)]">
+            <section class="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <div class="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+                <div class="flex min-w-0 flex-wrap items-center gap-2">
+                  <span class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+                    <span class="material-symbols-outlined text-[18px]">account_tree</span>
+                    <span x-text="currentSkill.default_branch"></span>
+                  </span>
+                  <div class="flex min-w-0 flex-wrap items-center gap-1 text-sm">
+                    <template x-for="crumb in repositoryBreadcrumbs()" :key="crumb.path || 'root'">
+                      <span class="inline-flex items-center gap-1">
+                        <button type="button" class="breadcrumb-link font-medium" @click="openRepositoryPath(crumb.path)" x-text="crumb.label"></button>
+                        <span class="material-symbols-outlined text-[15px] text-slate-400" x-show="crumb.path !== repositoryPath">chevron_right</span>
+                      </span>
+                    </template>
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-[minmax(0,1.4fr)_minmax(12rem,0.9fr)_10rem] border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <span>名称</span>
+                <span>最近提交</span>
+                <span>更新时间</span>
+              </div>
+
+              <div class="divide-y divide-slate-200">
+                <template x-if="repositoryPath">
+                  <button type="button" class="group relative grid w-full grid-cols-[minmax(0,1.4fr)_minmax(12rem,0.9fr)_10rem] items-center gap-4 px-4 py-4 text-left transition duration-150 hover:bg-sky-50/80 active:bg-sky-100/80 active:pl-5" @click="openRepositoryPath(parentRepositoryPath())">
+                    <span class="absolute inset-y-0 left-0 w-1 bg-transparent transition group-hover:bg-sky-400"></span>
+                    <span class="flex min-w-0 items-center gap-3 text-sm font-semibold text-slate-700">
+                      <span class="material-symbols-outlined text-[20px] text-slate-400 transition group-hover:text-sky-600">drive_folder_upload</span>
+                      <span class="transition group-hover:text-sky-800">返回上级</span>
+                    </span>
+                    <span class="text-sm text-slate-400">N/A</span>
+                    <span class="mono-field">N/A</span>
+                  </button>
+                </template>
+
+                <template x-if="!busy.repositoryTree && repositoryEntries.length === 0">
+                  <div class="empty-state py-14">
+                    <span class="material-symbols-outlined text-[30px] text-slate-400">folder_open</span>
+                    <p class="mt-3 text-sm text-slate-500">当前目录暂无文件。</p>
+                  </div>
+                </template>
+
+                <template x-for="entry in repositoryEntries" :key="entry.path">
+                  <button
+                    type="button"
+                    class="group relative grid w-full grid-cols-[minmax(0,1.4fr)_minmax(12rem,0.9fr)_10rem] items-center gap-4 px-4 py-4 text-left transition duration-150 hover:bg-sky-50/80 active:bg-sky-100/80 active:pl-5"
+                    :class="selectedRepositoryFile?.file_path === entry.path ? 'bg-sky-50 text-sky-900 shadow-[inset_4px_0_0_rgba(2,132,199,0.85)]' : ''"
+                    @click="entry.type === 'tree' ? openRepositoryFolder(entry) : openRepositoryFile(entry)"
+                  >
+                    <span class="absolute inset-y-0 left-0 w-1 bg-transparent transition group-hover:bg-sky-400"></span>
+                    <span class="flex min-w-0 items-center gap-3">
+                      <span class="material-symbols-outlined text-[20px]" :class="entry.type === 'tree' ? 'text-amber-500' : 'text-sky-600'" x-text="repositoryEntryIcon(entry)"></span>
+                      <span class="truncate text-sm font-semibold text-slate-800 transition group-hover:text-sky-800" x-text="entry.name"></span>
+                      <span class="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-500 transition group-hover:border-sky-200 group-hover:bg-white group-hover:text-sky-700" x-text="repositoryEntryLabel(entry)"></span>
+                    </span>
+                    <span class="truncate text-sm text-slate-500 transition group-hover:text-sky-700">通过 PSOP WEB IDE 更新</span>
+                    <span class="mono-field whitespace-nowrap" x-text="formatDateTime(currentSkill.updated_at)"></span>
+                  </button>
+                </template>
+              </div>
+            </section>
+
+            <section class="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <template x-if="!selectedRepositoryFile && !busy.repositoryFile">
+                <div class="empty-state min-h-[28rem]">
+                  <span class="material-symbols-outlined text-[34px] text-slate-400">edit_document</span>
+                  <p class="mt-3 text-sm font-medium text-slate-700">选择一个文件进行预览</p>
+                  <p class="mt-2 text-sm text-slate-500">默认会预览 README.md，文件夹点击后会进入目录。</p>
+                </div>
+              </template>
+
+              <template x-if="busy.repositoryFile">
+                <div class="empty-state min-h-[28rem]">
+                  <span class="material-symbols-outlined text-[30px] text-slate-400">sync</span>
+                  <p class="mt-3 text-sm text-slate-500">正在打开文件...</p>
+                </div>
+              </template>
+
+              <template x-if="selectedRepositoryFile && !busy.repositoryFile">
+                <div class="flex min-h-[34rem] flex-col">
+                  <div class="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 md:flex-row md:items-center md:justify-between">
+                    <div class="min-w-0">
+                      <p class="field-label" x-text="repositoryEditing ? '编辑文件' : '预览文件'"></p>
+                      <p class="mt-1 truncate text-sm font-semibold text-slate-950" x-text="repositoryFileForm.path"></p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <template x-if="!repositoryEditing">
+                        <button type="button" class="icon-button" title="编辑文件" @click="startRepositoryEdit()">
+                          <span class="material-symbols-outlined text-[18px]">edit</span>
+                        </button>
+                      </template>
+                      <button type="button" class="icon-button" title="关闭文件" @click="closeRepositoryFile()">
+                        <span class="material-symbols-outlined text-[18px]">close</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <template x-if="!repositoryEditing">
+                    <div class="markdown-preview min-h-[26rem] flex-1 overflow-auto bg-white px-5 py-5" x-html="repositoryPreviewHtml()"></div>
+                  </template>
+
+                  <template x-if="repositoryEditing">
+                    <textarea class="block min-h-[26rem] flex-1 resize-y border-0 bg-white px-4 py-4 font-mono text-[12px] leading-6 text-slate-900 outline-none focus:ring-0" x-model="repositoryFileForm.content"></textarea>
+                  </template>
+
+                  <template x-if="repositoryEditing">
+                    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3">
+                      <span class="mono-field" x-text="repositoryFileForm.base_commit_sha"></span>
+                      <div class="flex items-center gap-2">
+                        <button type="button" class="button-secondary" :disabled="busy.repositorySave" @click="cancelRepositoryEdit()">
+                          <span>取消</span>
+                        </button>
+                        <button type="button" class="button-primary" :disabled="busy.repositorySave" @click="saveRepositoryFile()">
+                          <span class="material-symbols-outlined text-[18px]">save</span>
+                          <span x-text="busy.repositorySave ? '保存中...' : '保存文件'"></span>
+                        </button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </section>
+
+            <template x-if="sourceCreateModalOpen">
+              <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-8 backdrop-blur-sm">
+                <section class="modal-panel">
+                  <div class="border-b border-slate-200 px-5 py-4">
+                    <p class="panel-kicker" x-text="sourceCreateMode === 'folder' ? '新建文件夹' : '新建文件'"></p>
+                    <h3 class="panel-title" x-text="sourceCreateMode === 'folder' ? '创建仓库文件夹' : '创建仓库文件'"></h3>
+                  </div>
+                  <form class="space-y-4 px-5 py-5" @submit.prevent="createRepositoryEntry()">
+                    <label class="field-block">
+                      <span class="field-label">仓库路径</span>
+                      <input x-model="sourceCreateForm.path" class="input-field" placeholder="例如：docs/usage.md 或 examples" required />
+                    </label>
+                    <template x-if="sourceCreateMode === 'file'">
+                      <label class="field-block">
+                        <span class="field-label">初始内容</span>
+                        <textarea x-model="sourceCreateForm.content" class="editor-area min-h-[16rem]" placeholder="可以先留空，创建后继续编辑。"></textarea>
+                      </label>
+                    </template>
+                    <div class="flex flex-wrap justify-end gap-3 border-t border-slate-200 pt-4">
+                      <button type="button" class="button-secondary" @click="closeSourceCreateModal()">取消</button>
+                      <button type="submit" class="button-primary" :disabled="busy.repositoryCreate">
+                        <span class="material-symbols-outlined text-[18px]" x-text="sourceCreateMode === 'folder' ? 'create_new_folder' : 'note_add'"></span>
+                        <span x-text="busy.repositoryCreate ? '创建中...' : '确认创建'"></span>
+                      </button>
+                    </div>
+                  </form>
+                </section>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <template x-if="activeDetailTab === 'publish'">
+      <div class="panel-body">
+        <section class="detail-section">
+          <div>
+            <h3 class="panel-title">最近发布记录</h3>
+          </div>
+
+          <div class="mt-5 rounded-xl border border-slate-200 bg-slate-50">
+            <template x-if="busy.publishRecords && publishRecordsLoadedSkillId !== currentSkill.id">
+              <div class="empty-state py-10">
+                <span class="material-symbols-outlined text-[30px] text-slate-400">sync</span>
+                <p class="mt-3 text-sm text-slate-500">正在加载发布记录...</p>
+              </div>
+            </template>
+            <template x-if="!busy.publishRecords && publishRecords.length === 0">
+              <div class="empty-state py-10">
+                <span class="material-symbols-outlined text-[30px] text-slate-400">history</span>
+                <p class="mt-3 text-sm text-slate-500">尚无发布记录。</p>
+              </div>
+            </template>
+            <template x-if="publishRecords.length > 0">
+              <div class="divide-y divide-slate-200">
+                <template x-for="record in publishRecords" :key="record.id">
+                  <article class="px-4 py-4 text-sm">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p class="font-medium text-slate-950" x-text="record.publish_reason"></p>
+                        <p class="mt-2 mono-field text-[11px]" x-text="formatShortId(record.published_commit_sha)"></p>
+                      </div>
+                      <span class="status-badge" x-text="formatStatus(record.publish_status)"></span>
+                    </div>
+                    <p class="mt-3 text-[11px] text-slate-500" x-text="formatDateTime(record.published_at)"></p>
+                  </article>
+                </template>
+              </div>
+            </template>
+          </div>
+        </section>
+      </div>
+    </template>
+  </section>
+</div>

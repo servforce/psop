@@ -1,0 +1,41 @@
+<template x-if="deleteModalOpen && deleteTargetSkill">
+  <div class="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/40 px-4 py-6 backdrop-blur-sm" @click.self="closeDeleteModal()" @keydown.escape.window="closeDeleteModal()">
+    <section class="modal-panel">
+      <div class="flex items-start justify-between gap-4 border-b border-rose-200 bg-rose-50 px-5 py-4">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.22em] text-rose-700">危险操作</p>
+          <h2 class="mt-1 text-xl font-semibold text-rose-950">删除 Skill</h2>
+        </div>
+        <button type="button" class="icon-button" title="关闭" @click="closeDeleteModal()">
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+
+      <form class="space-y-5 px-5 py-5" @submit.prevent="deleteSkill()">
+        <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-900">
+          <p>
+            删除后，PSOP 会将该 Skill 标记为已归档，并同步归档对应的 GitLab 仓库项目。
+          </p>
+          <p class="mt-2">
+            请输入 Skill 名称
+            <strong class="font-semibold" x-text="deleteTargetSkill.name"></strong>
+            以确认删除。
+          </p>
+        </div>
+
+        <label class="field-block">
+          <span class="field-label">确认 Skill 名称</span>
+          <input x-model="deleteForm.confirmation_name" class="input-field" :placeholder="deleteTargetSkill.name" required />
+        </label>
+
+        <div class="flex justify-end gap-3 pt-2">
+          <button type="button" class="button-secondary" @click="closeDeleteModal()">取消</button>
+          <button type="submit" class="button-danger" :disabled="busy.delete || !isDeleteConfirmationValid()">
+            <span class="material-symbols-outlined text-[18px]">archive</span>
+            <span x-text="busy.delete ? '删除中...' : '确认删除并归档'"></span>
+          </button>
+        </div>
+      </form>
+    </section>
+  </div>
+</template>

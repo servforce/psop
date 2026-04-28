@@ -29,10 +29,7 @@ class Settings(BaseSettings):
     debug: bool = True
     api_prefix: str = "/api/v1"
     log_level: str = "INFO"
-    cors_allow_origins: list[str] = [
-        "http://127.0.0.1:4173",
-        "http://localhost:4173",
-    ]
+    cors_allow_origins: list[str] = ["*"]
 
     database_url: str | None = None
     database_host: str = "127.0.0.1"

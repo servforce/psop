@@ -5,12 +5,18 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_skills_service
 from app.domain.skills.schemas import (
+    CreateSkillRepositoryFileRequest,
+    CreateSkillRepositoryFolderRequest,
     CreateSkillRequest,
+    DeleteSkillRequest,
     PublishSkillRequest,
     PublishSkillResponse,
+    SaveSkillRepositoryFileRequest,
     SaveSkillSourceRequest,
     SkillDetailResponse,
     SkillPublishRecordResponse,
+    SkillRepositoryFileResponse,
+    SkillRepositoryTreeResponse,
     SkillSourceResponse,
     SkillSummaryResponse,
     UpdateSkillRequest,
@@ -59,6 +65,16 @@ def update_skill_metadata(
     return service.update_skill_metadata(session, skill_id=skill_id, payload=payload)
 
 
+@router.delete("/{skill_id}", response_model=SkillSummaryResponse)
+def delete_skill(
+    skill_id: str,
+    payload: DeleteSkillRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> SkillSummaryResponse:
+    return service.delete_skill(session, skill_id=skill_id, payload=payload)
+
+
 @router.get("/{skill_id}/source", response_model=SkillSourceResponse)
 def get_skill_source(
     skill_id: str,
@@ -76,6 +92,56 @@ def save_skill_source(
     service: SkillsService = Depends(get_skills_service),
 ) -> SkillSourceResponse:
     return service.save_skill_source(session, skill_id=skill_id, payload=payload)
+
+
+@router.get("/{skill_id}/repository/tree", response_model=SkillRepositoryTreeResponse)
+def list_repository_tree(
+    skill_id: str,
+    path: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> SkillRepositoryTreeResponse:
+    return service.list_repository_tree(session, skill_id=skill_id, path=path)
+
+
+@router.get("/{skill_id}/repository/files", response_model=SkillRepositoryFileResponse)
+def get_repository_file(
+    skill_id: str,
+    path: str = Query(min_length=1),
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> SkillRepositoryFileResponse:
+    return service.get_repository_file(session, skill_id=skill_id, path=path)
+
+
+@router.put("/{skill_id}/repository/files", response_model=SkillRepositoryFileResponse)
+def save_repository_file(
+    skill_id: str,
+    payload: SaveSkillRepositoryFileRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> SkillRepositoryFileResponse:
+    return service.save_repository_file(session, skill_id=skill_id, payload=payload)
+
+
+@router.post("/{skill_id}/repository/files", response_model=SkillRepositoryFileResponse, status_code=201)
+def create_repository_file(
+    skill_id: str,
+    payload: CreateSkillRepositoryFileRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> SkillRepositoryFileResponse:
+    return service.create_repository_file(session, skill_id=skill_id, payload=payload)
+
+
+@router.post("/{skill_id}/repository/folders", response_model=SkillRepositoryFileResponse, status_code=201)
+def create_repository_folder(
+    skill_id: str,
+    payload: CreateSkillRepositoryFolderRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> SkillRepositoryFileResponse:
+    return service.create_repository_folder(session, skill_id=skill_id, payload=payload)
 
 
 @router.post("/{skill_id}/publish", response_model=PublishSkillResponse)

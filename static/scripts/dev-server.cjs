@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const rootDir = path.resolve(__dirname, "..");
-const host = process.env.HOST || process.env.PSOP_WEB_HOST || "127.0.0.1";
+const host = process.env.HOST || process.env.PSOP_WEB_HOST || "0.0.0.0";
 const port = Number(process.env.PORT || process.env.PSOP_WEB_PORT || 4173);
 const apiBaseUrl = process.env.PSOP_WEB_API_BASE_URL || "/api/v1";
 
