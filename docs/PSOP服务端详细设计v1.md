@@ -43,6 +43,9 @@
 - `Runtime Kernel` 是唯一正式状态主权者，负责 `Sync -> Enabled -> Sel -> Actor -> Merge -> Trace` 推进。
 - `Run != OS 进程`。一个 run 是数据库对象，由 worker 承载执行，只有高风险节点才向 sandbox 借用隔离环境。
 - `Gateway` 负责 invocation 接入与 I/O 模拟，不直接写正式状态。
+- `Terminal Gateway` 不是普通命令行终端，而是 Web、模拟器、IoT、AR 与真实设备输入输出的统一运行时交互入口。
+- 所有终端输入输出最终归一为 append-only `terminal_event`；WebSocket、MQTT、OPC-UA、设备 adapter 与内部 bus 都不是状态源。
+- 内部 bus / queue 只用于唤醒 worker 或通知 run 有新事件；Runtime 恢复时必须能按 `run_id + seq_no` 从 `terminal_event` 补读。
 - `Replay + OpenTelemetry` 是默认可观测与审计闭环。
 
 ## 4. 技术栈
@@ -197,11 +200,13 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 每次小步推进必须在同一事务边界内完成：读取当前 snapshot、计算 enabled set、选择节点、执行 actor、merge observation、追加 snapshot 与 trace event。
 - 终止条件包括：`final` 节点完成、actor 失败且不可重试、预算耗尽、run 超时、用户取消、或进入 `waiting_input`。
 - RuntimeKernel 不直接调用模型、MCP 或外部 tool；所有能力调用都经 `CapabilityHost`，并将返回 observation 后再 merge。
+- RuntimeKernel 不直接监听 WebSocket、设备连接、MQTT、OPC-UA 或内部 bus；它只在 `Sync` 阶段按 run cursor 读取已持久化的 `terminal_event`。
+- `terminal_event` 只有经过 `Merge` 合入 `Session Token` 后才影响正式运行状态，Gateway、adapter 与前端都不能绕过 RuntimeKernel 写正式状态。
 - 运行态不能读取未发布草稿；只能加载与 `skill_invocation.compile_artifact_id` 绑定的 artifact。
 
 #### 6.5.1 小步推进细则
 
-1. `Sync`：把 gateway 输入、terminal event 或取消信号同步到当前 Token 的只读候选视图；无外部变化时保持空同步。
+1. `Sync`：把 gateway 输入、terminal event 或取消信号同步到当前 Token 的只读候选视图；terminal 输入按 `run_id + seq_no cursor` 从 `terminal_event` 补读，无外部变化时保持空同步。
 2. `Enabled`：根据 artifact guards 与当前 Token 计算 enabled nodes，并写入 snapshot 的 `enabled_set`。
 3. `Sel`：MVP 使用 artifact 中的 priority 与节点 id 稳定排序选择 enabled 节点；多候选时必须记录 `selection_summary`。
 4. `Actor`：根据节点类型调用本地 actor、AgentModule 或 CapabilityHost，并得到 observation，不直接改 Token。
@@ -214,13 +219,18 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 负责 capability binding、policy 检查、超时和预算控制。
 - 所有 LLM、MCP/tool、terminal、sandbox 能力调用都必须通过 CapabilityHost 进入，不允许 actor 绕过统一边界直连 provider。
 - CapabilityHost 读取 artifact 中的 `capability_binding` 与 runtime policy，执行目标解析、预算扣减、超时控制、错误归一化和 trace metadata 生成。
+- CapabilityHost 负责把 artifact 级抽象能力声明解析为本次 run 的 `run_capability_binding`，例如把 `terminal.text.input.v1` 绑定到 Web terminal，或把 `sensor.temperature.reading.v1` 绑定到具体设备、channel 与 schema。
 - issue #1 的内置 demo tool 也必须注册为受控 capability，便于未来平滑替换为 MCP tool。
 - CapabilityHost 返回的是 observation 和调用审计摘要；它不写 Session Token，不直接更新 run 终态。
 
 ### 6.7 `TerminalGateway`
 
-- 接收来自 Web IDE 的文本、图像、语音、视频等模拟输入输出。
-- 把外部输入封装成 terminal event，不直接改写运行时状态。
+- 接收来自 Web IDE、模拟器、IoT、AR 与真实设备的文本、图像、语音、视频、传感器读数、设备 ACK 等输入输出。
+- 把外部输入输出统一封装为 append-only `terminal_event`，不直接改写运行时状态。
+- 对 WebSocket、MQTT、OPC-UA、Modbus、设备 SDK 等外部协议只做 adapter 接入和 DTO 归一化；原始协议不得直接进入 RuntimeKernel。
+- 校验 `run_id`、`terminal_session_id`、`run_capability_binding_id`、`event_kind`、`mime_type`、schema、幂等键、大小限制、速率限制与 policy 后才允许追加事件。
+- 小文本、小 JSON 可写入 `payload_inline`；图片、音频、视频、大日志与大批量传感器数据必须写入对象存储并通过 `artifact_object_id` 引用。
+- 事件落库后可以通过内部 bus / queue 唤醒 worker 或通知前端，但 bus 不是状态源，丢失通知时 Runtime 必须能从 `terminal_event` 补读恢复。
 
 ### 6.8 `MCPGateway`
 
@@ -246,8 +256,9 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 ### 6.11 `ReplayService`
 
-- 基于 `run`、`session_token_snapshot`、`trace_event`、`terminal_event` 构建回放视图。
+- 基于 `run`、`session_token_snapshot`、`trace_event`、`terminal_event`、`run_capability_binding` 构建回放视图。
 - 向前端输出 timeline 与 trace detail。
+- Replay timeline 只重组已持久化事实，不自行推断未落库状态。
 
 ### 6.12 `JobSystem`
 
@@ -278,20 +289,38 @@ sandbox       -> 按需创建的进程或容器，不常驻
 1. `Gateway` 接收某个 skill 的调用请求，创建 `skill_invocation`。
 2. 系统解析该 skill 当前生效的 `skill_version` 与 `compile_artifact`。
 3. 创建 `run`、首个 `session_token_snapshot`、`terminal_session`。
-4. 写入 `runtime_job`，由 worker claim。
-5. `RuntimeKernel` 根据 formal v5 循环推进：
+4. 根据 artifact 的抽象能力声明与 invocation 的 `terminal_context / binding_preferences` 解析本次运行的 `run_capability_binding`；MVP 默认把文本输入输出绑定到 Web terminal。
+5. 写入 `runtime_job`，由 worker claim。
+6. `RuntimeKernel` 根据 formal v5 循环推进：
    - `Sync`
    - `Enabled`
    - `Sel`
    - `Actor`
    - `Merge`
    - `Trace`
-6. 如果 actor 需要 terminal、MCP 或 LLM 能力，则经 `CapabilityHost` 调用对应 gateway。
-7. 每次推进都生成新的 snapshot 与 trace event，直到 run 结束或进入等待输入状态。
+7. 如果 actor 需要 terminal、MCP 或 LLM 能力，则经 `CapabilityHost` 调用对应 gateway。
+8. 终端输入进入 `TerminalGateway` 后先追加为 `terminal_event`，再通过内部 bus / queue 唤醒 worker；bus 不是状态源。
+9. `RuntimeKernel` 在下一轮 `Sync` 按 `run_id + seq_no cursor` 消费 terminal events，并在 `Merge` 后更新正式 `Session Token`。
+10. 每次推进都生成新的 snapshot 与 trace event，直到 run 结束或进入等待输入状态。
+
+终端真实运行链路固定为：
+
+```text
+POST /api/gateway/invocations
+-> create skill_invocation / run / terminal_session / initial session_token_snapshot
+-> resolve run bindings
+-> enqueue runtime_job
+-> RuntimeKernel loop
+-> terminal input append terminal_event
+-> bus wakeup worker
+-> RuntimeKernel Sync consumes events
+-> Merge updates Session Token
+-> trace_event + terminal_event + snapshot support Replay
+```
 
 ### 7.3 运行后：Replay 与 Observability
 
-1. `ReplayService` 读取 run 相关 snapshot、trace、terminal transcript。
+1. `ReplayService` 读取 run 相关 snapshot、trace、terminal transcript 与 run binding。
 2. 对外提供 replay timeline 和 trace detail。
 3. `OpenTelemetry` 统一记录 compile、invocation、gateway、runtime、sandbox 相关 span。
 4. 前端可从 `run_id`、`trace_id` 双入口查看运行结果与平台观测。
@@ -380,7 +409,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 - 主键：`id UUID`
 - 外键：`skill_definition_id`、`skill_version_id`、`compile_artifact_id`
-- 关键字段：`gateway_type`、`input_envelope JSONB`、`status`、`idempotency_key`
+- 关键字段：`gateway_type`、`input_envelope JSONB`、`terminal_context JSONB`、`binding_preferences JSONB`、`status`、`idempotency_key`
 - 状态枚举：`accepted | queued | running | succeeded | failed | cancelled`
 - 唯一约束：`uk_skill_invocation_idempotency_key`
 - 索引：`idx_skill_invocation_status_created_at`
@@ -391,7 +420,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 - 主键：`id UUID`
 - 外键：`invocation_id`、`skill_definition_id`、`skill_version_id`、`compile_artifact_id`、`terminal_session_id`
-- 关键字段：`status`、`runtime_phase`、`latest_snapshot_seq`、`exit_reason`
+- 关键字段：`status`、`runtime_phase`、`latest_snapshot_seq`、`latest_terminal_seq`、`latest_trace_seq`、`exit_reason`
 - 状态枚举：`queued | running | waiting_input | succeeded | failed | cancelled`
 - 唯一约束：`uk_run_invocation`
 - 索引：`idx_run_status_updated_at`、`idx_run_skill_definition_created_at`
@@ -434,13 +463,16 @@ sandbox       -> 按需创建的进程或容器，不常驻
 #### 8.2.12 `terminal_event`
 
 - 主键：`id UUID`
-- 外键：`terminal_session_id`、`run_id`、`trace_event_id`、`artifact_object_id`
-- 关键字段：`direction`、`event_kind`、`mime_type`、`payload_inline`、`seq_no`
+- 外键：`terminal_session_id`、`run_id`、`trace_event_id`、`artifact_object_id`、`run_capability_binding_id`
+- 关键字段：`direction`、`event_kind`、`mime_type`、`payload_inline`、`seq_no`、`external_event_id`、`source_ref`
 - 状态枚举：无独立状态
 - 唯一约束：`uk_terminal_event_session_seq`
-- 索引：`idx_terminal_event_run_seq`
-- 审计字段：`created_at`
+- 索引：`idx_terminal_event_run_seq`、`idx_terminal_event_binding_seq`
+- 审计字段：`created_at`、`occurred_at`
 - 主链路关联：terminal transcript 与输入输出审计
+- 约束：`seq_no` 由服务端分配；`external_event_id` 或 `Idempotency-Key` 用于输入幂等。
+- 约束：小文本、小 JSON 使用 `payload_inline`；图片、音频、视频、大日志、大批量传感器数据使用 `artifact_object_id`。
+- 约束：IoT、MQTT、OPC-UA、Modbus 等原始协议不直接进入 Runtime，必须先由 adapter 转为内部 terminal event DTO。
 
 #### 8.2.13 `mcp_server`
 
@@ -506,9 +538,21 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 唯一约束：`uk_capability_binding_artifact_binding_key`
 - 索引：`idx_capability_binding_artifact_type`
 - 审计字段：`created_at`、`updated_at`
-- 主链路关联：artifact 中节点与能力入口的正式绑定
+- 主链路关联：artifact 级静态能力声明或编译期绑定，不代表某次 run 的具体设备或终端实例
 
-#### 8.2.19 `runtime_job`
+#### 8.2.19 `run_capability_binding`
+
+- 主键：`id UUID`
+- 外键：`run_id`、`compile_artifact_id`、`capability_binding_id`、`gateway_policy_id`
+- 关键字段：`requirement_key`、`binding_type`、`capability`、`target_kind`、`target_ref`、`channel`、`schema_ref`、`manifest_hash`、`policy_snapshot JSONB`
+- 状态枚举：`pending | active | rejected | disabled`
+- 唯一约束：`uk_run_capability_binding_run_requirement`
+- 索引：`idx_run_capability_binding_run_status`、`idx_run_capability_binding_target`
+- 审计字段：`created_at`、`updated_at`
+- 主链路关联：run 级具体能力解析结果，用于把本次运行的抽象能力绑定到具体 Web terminal、device、channel、schema 与 policy
+- 约束：MVP 默认把 `terminal.text.input.v1` 与 `terminal.text.output.v1` 绑定到 Web terminal；IoT / 真实设备绑定先作为 post-MVP reserved design。
+
+#### 8.2.20 `runtime_job`
 
 - 主键：`id UUID`
 - 外键：`run_id`、`compile_request_id`
@@ -520,7 +564,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：数据库驱动的异步任务系统
 
-#### 8.2.20 `worker_heartbeat`
+#### 8.2.21 `worker_heartbeat`
 
 - 主键：`id UUID`
 - 外键：无
@@ -531,7 +575,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：worker 健康检查与调度可见性
 
-#### 8.2.21 `sandbox_lease`
+#### 8.2.22 `sandbox_lease`
 
 - 主键：`id UUID`
 - 外键：`run_id`、`runtime_job_id`
@@ -542,7 +586,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：高风险 actor 的隔离执行租约
 
-#### 8.2.22 `artifact_object`
+#### 8.2.23 `artifact_object`
 
 - 主键：`id UUID`
 - 外键：无
@@ -553,7 +597,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 审计字段：`created_at`
 - 主链路关联：artifact 文件、terminal 二进制内容、大对象证据
 
-#### 8.2.23 `runtime_config`
+#### 8.2.24 `runtime_config`
 
 - 主键：`id UUID`
 - 外键：无
@@ -564,7 +608,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：运行时与 gateway 的可调配置
 
-#### 8.2.24 `operation_log`
+#### 8.2.25 `operation_log`
 
 - 主键：`id UUID`
 - 外键：`run_id`、`invocation_id`、`compile_request_id`
@@ -655,7 +699,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |
-| `POST` | `/api/gateway/invocations` | 发起 skill 调用 | `{ skill_key, version_selector, input_envelope, gateway_type }` | `invocation detail` |
+| `POST` | `/api/gateway/invocations` | 发起 skill 调用 | `{ skill_key, version_selector, input_envelope, gateway_type, terminal_context?, binding_preferences? }` | `{ invocation_id, run_id, terminal_session_id, status }` |
 | `GET` | `/api/gateway/invocations` | invocation 列表 | `query: skill_key,status,page` | `invocation summary list` |
 | `GET` | `/api/gateway/invocations/{invocation_id}` | invocation 详情 | 无 | `invocation detail + run summary` |
 
@@ -663,6 +707,35 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 - `POST` 必须按 `skill_key + version_selector` 解析到具体 `skill_version` 与 `compile_artifact`。
 - 同一个 `Idempotency-Key` 不得生成重复 invocation。
+- `POST` 只负责创建 invocation、run、terminal session、初始 snapshot 与 runtime job，不直接推进正式 Runtime 状态。
+- `terminal_context` 用于描述本次入口是 `web | device | simulator` 以及可选 `device_id`；`binding_preferences` 只表达偏好，最终绑定以 `run_capability_binding` 为准。
+
+`POST /api/gateway/invocations` 请求示例：
+
+```json
+{
+  "skill_key": "equipment.inspect",
+  "version_selector": "latest",
+  "gateway_type": "terminal",
+  "input_envelope": {},
+  "terminal_context": {
+    "terminal_kind": "web",
+    "device_id": null
+  },
+  "binding_preferences": []
+}
+```
+
+响应必须包含：
+
+```json
+{
+  "invocation_id": "uuid",
+  "run_id": "uuid",
+  "terminal_session_id": "uuid",
+  "status": "accepted"
+}
+```
 
 ### 9.7 `/api/runs/*`
 
@@ -673,16 +746,67 @@ sandbox       -> 按需创建的进程或容器，不常驻
 | `POST` | `/api/runs/{run_id}/cancel` | 取消 run | `{ reason }` | `run detail` |
 | `GET` | `/api/runs/{run_id}/snapshots` | snapshot 列表 | `query: from_seq,to_seq` | `session token snapshot list` |
 | `GET` | `/api/runs/{run_id}/trace-events` | trace 列表 | `query: from_seq,to_seq,type` | `trace event list` |
+| `GET` | `/api/runs/{run_id}/binding-requirements` | 查看 artifact 对运行环境的抽象能力需求 | 无 | `binding requirement list` |
+| `GET` | `/api/runs/{run_id}/bindings` | 查看本次 run 的能力绑定 | 无 | `run capability binding list` |
+| `POST` | `/api/runs/{run_id}/bindings/resolve` | 解析或补充本次 run 的能力绑定 | `{ bindings }` | `run capability binding list` |
+| `GET` | `/api/runs/{run_id}/bindings/{binding_id}` | 查看单个 run binding | 无 | `run capability binding detail` |
+
+状态要求：
+
+- `GET /api/runs/{run_id}` 必须暴露 `status`、`runtime_phase`、`terminal_session_id`、`latest_snapshot_seq`、`latest_terminal_seq`、`latest_trace_seq`、`binding_summary`。
+- `bindings/resolve` 只写 `run_capability_binding` 与 trace/audit 事实，不直接推进 `Session Token`。
 
 ### 9.8 `/api/terminal/*`
 
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/terminal/sessions/{run_id}` | 获取 run 的 terminal session | 无 | `{ terminal_session, transcript_summary }` |
-| `POST` | `/api/terminal/sessions/{run_id}/events` | 注入 terminal input 或记录 output | `{ direction, event_kind, mime_type, payload_inline, artifact_object_id }` | `{ accepted, event_id }` |
+| `POST` | `/api/terminal/sessions/{run_id}/events` | 注入 terminal input 或记录 output | `{ direction, event_kind, mime_type, payload_inline, artifact_object_id?, binding_id?, source?, external_event_id?, occurred_at? }` | `{ accepted, event_id, seq_no }` |
 | `GET` | `/api/terminal/sessions/{run_id}/events` | transcript 列表 | `query: from_seq,to_seq` | `terminal events` |
 
-### 9.9 `/api/replay/*`
+状态要求：
+
+- `POST events` 必须先校验 terminal session、run binding、event kind、mime type、schema、幂等键与 policy，再追加 append-only `terminal_event`。
+- `binding_id` 指向 `run_capability_binding.id`，缺省时只允许使用该 run 的默认 Web terminal binding。
+- `direction=input` 的事件只在 RuntimeKernel 后续 `Sync -> Merge` 后影响正式状态；`direction=output` 的事件用于 terminal transcript、前端展示与设备下发审计。
+- WebSocket 可承载低延迟输入命令，但服务端仍必须先落库为 `terminal_event`，再广播 `terminal.event.appended`。
+
+`POST /api/terminal/sessions/{run_id}/events` 请求示例：
+
+```json
+{
+  "direction": "input",
+  "event_kind": "terminal.text.input.v1",
+  "mime_type": "text/plain",
+  "payload_inline": "继续执行",
+  "artifact_object_id": null,
+  "binding_id": "uuid",
+  "source": {
+    "kind": "web",
+    "device_id": null,
+    "connection_id": "uuid"
+  },
+  "external_event_id": "client-msg-001",
+  "occurred_at": "2026-05-06T10:00:00Z"
+}
+```
+
+### 9.9 `/api/terminal/devices/*` post-MVP reserved
+
+该组接口用于未来 IoT / 真实设备接入，不纳入 issue #1 最小完成定义。设备注册只说明“设备能做什么”，真正进入某次 run 必须通过 `run_capability_binding`。
+
+| Method | Path | 用途 | Request | Response |
+| --- | --- | --- | --- | --- |
+| `POST` | `/api/terminal/devices/register` | 注册终端设备及能力 manifest | `{ device_key, device_kind, display_name, transports, capability_manifest }` | `terminal device detail` |
+| `GET` | `/api/terminal/devices` | 设备列表 | `query: status,kind` | `terminal device list` |
+| `GET` | `/api/terminal/devices/{device_id}` | 设备详情 | 无 | `terminal device detail` |
+| `PATCH` | `/api/terminal/devices/{device_id}/manifest` | 更新设备 capability manifest | `{ capability_manifest }` | `terminal device detail` |
+| `POST` | `/api/terminal/devices/{device_id}/heartbeat` | 设备心跳 | `{ status, connection_info? }` | `{ accepted }` |
+| `POST` | `/api/terminal/devices/{device_id}/events` | 设备事件入口，由 adapter 归一为 terminal event | `{ run_id, terminal_session_id, binding_id, event_kind, mime_type, payload_inline?, artifact_object_id?, external_event_id?, occurred_at? }` | `{ accepted, event_id, seq_no }` |
+
+`capability_manifest` 至少表达 `inputs`、`outputs`、`event_kind`、`mime_type`、`schema_ref`、`streaming`、`ack_required`、`requires_approval`。MQTT、OPC-UA、Modbus 等协议由 adapter 转换为内部 DTO 后再进入 `TerminalGateway`。
+
+### 9.10 `/api/replay/*`
 
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |
@@ -690,7 +814,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 | `GET` | `/api/replay/runs/{run_id}` | 完整回放 | 无 | `replay timeline detail` |
 | `GET` | `/api/replay/traces/{trace_id}` | trace 详情 | 无 | `trace detail payload` |
 
-### 9.10 `/api/gateway/mcp/*`
+### 9.11 `/api/gateway/mcp/*`
 
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |
@@ -699,7 +823,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 | `POST` | `/api/gateway/mcp/servers/{server_id}/discover` | 触发 tool discovery | 无 | `{ tools_count }` |
 | `GET` | `/api/gateway/mcp/servers/{server_id}/tools` | tool 列表 | 无 | `mcp tool list` |
 
-### 9.11 `/api/gateway/inference/*`
+### 9.12 `/api/gateway/inference/*`
 
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |
@@ -708,7 +832,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 | `GET` | `/api/gateway/inference/models` | model catalog | `query: provider_id` | `model list` |
 | `POST` | `/api/gateway/inference/routes` | 更新模型路由 | `{ provider_id, model_id, route_key, status }` | `model route detail` |
 
-### 9.12 `/api/runtime/*`
+### 9.13 `/api/runtime/*`
 
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |
@@ -726,10 +850,14 @@ sandbox       -> 按需创建的进程或容器，不常驻
   - 事件类型：
     - `run.started`
     - `run.phase.changed`
+    - `binding.resolved`
+    - `binding.updated`
     - `session_token.snapshot.appended`
     - `trace.event.appended`
     - `terminal.event.appended`
     - `run.completed`
+    - `run.failed`
+    - `run.cancelled`
 
 统一事件包结构：
 
@@ -743,6 +871,13 @@ sandbox       -> 按需创建的进程或容器，不常驻
   "payload": {}
 }
 ```
+
+WS 策略：
+
+- `GET /ws/runs/{run_id}` 是实时传输通道，不是状态源。
+- WS 可承载 `terminal.input.append` 等低延迟输入命令，但服务端处理后必须先写入 `terminal_event`，再广播 `terminal.event.appended`。
+- 前端断线重连后必须按 REST 拉取缺失的 terminal / trace / snapshot seq，并在 store 层排序去重。
+- Replay timeline 由 `session_token_snapshot`、`trace_event`、`terminal_event`、`run_capability_binding` 共同重组，不自行推断未持久化状态。
 
 ### 10.2 `/mcp`
 
@@ -768,6 +903,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - `compile_artifact_id`
 - `invocation_id`
 - `run_id`
+- `run_capability_binding_id`
 - `trace_id`
 - `span_id`
 - `tool_call_id`
@@ -813,16 +949,16 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 1. `Slice A`：数据库骨架、基础 FastAPI、接口契约骨架、健康检查、对象存储、GitLab 接线与 OTel 接线
 2. `Slice B`：`SkillsModule + GitLab binding + Publish flow + SkillCompiler`
-3. `Slice C`：`Invocation + Run + RuntimeKernel` 主循环
-4. `Slice D`：`TerminalGateway + MCPGateway + LLMInferenceGateway + CapabilityHost + AgentModule`
+3. `Slice C`：`Invocation + Run + Run Binding + RuntimeKernel` 主循环
+4. `Slice D`：`TerminalGateway + terminal_event + MCPGateway + LLMInferenceGateway + CapabilityHost + AgentModule`
 5. `Slice E`：`ReplayService + WebSocket + runtime admin endpoints`
 
 ### 12.2 实现顺序
 
 1. 先落核心数据模型和迁移，确保服务端对象稳定。
 2. 再落 `skills -> publish -> compile -> artifact`，让运行前链路可闭环。
-3. 随后落 `invocation -> run -> snapshot -> trace`，让运行时链路可闭环。
-4. 再接入 terminal、MCP、LLM gateway 与 `AgentModule`，并按需复用 DeerFlow 的参考实现。
+3. 随后落 `invocation -> run -> run binding -> snapshot -> trace`，让运行时链路可闭环。
+4. 再接入 terminal event、MCP、LLM gateway 与 `AgentModule`，并按需复用 DeerFlow 的参考实现。
 5. 最后补 replay、WS、OTel 与 runtime 运维接口。
 
 ### 12.3 完成定义
@@ -830,6 +966,6 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 技能发布后能够冻结 GitLab revision、自动生成 compile request，并得到成功或失败结果。
 - 成功发布的 skill 能被 gateway 调用，并创建 run。
 - `RuntimeKernel` 能围绕 formal v5 约束推进至少一条完整 run。
-- 运行中能写出 snapshot、trace、terminal transcript，并通过 API / WS 对外提供。
+- 运行中能写出 snapshot、trace、terminal transcript、run binding，并通过 API / WS 对外提供。
 - 运行完成后能通过 replay 和 OTel 进行排障。
 - 读完本文档后，后端、运行时与基础设施团队无需再补关键架构决策即可开工。

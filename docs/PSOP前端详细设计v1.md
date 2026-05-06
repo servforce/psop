@@ -292,20 +292,23 @@
 
 - 页面目标：实时观察运行中的 skill，并在需要时通过 gateway 注入输入。
 - 核心区块：
-  - run 状态头
+  - run 状态头，展示 `status`、`runtime_phase`、`terminal_session_id`
+  - binding summary
   - node execution timeline
   - session token 摘要
-  - terminal I/O 面板
+  - terminal transcript / I/O 面板
   - trace event stream
   - node / actor inspector
 - 关键动作：
-  - 注入 terminal input
+  - 通过 `/api/terminal/sessions/{run_id}/events` 注入 terminal input
   - 暂停自动滚动
   - 按 event type 过滤 trace
   - 打开 OTel trace
 - 状态要求：
   - 主数据流优先来自 `/ws/runs/{run_id}`
   - WS 断开时自动回退轮询
+  - 前端重连后按 REST 拉取缺失的 terminal / trace / snapshot seq，并在 store 层排序去重
+  - WS 发送 terminal input 只作为后续低延迟优化；服务端仍必须先落成 `terminal_event` 后再广播
   - 结束后自动提示进入 replay
 
 ### 7.5 `Replay`
@@ -323,6 +326,7 @@
 - 页面目标：按时间线回放一个 run 的完整执行过程。
 - 核心区块：
   - 时间轴
+  - binding resolved / updated 记录
   - session token snapshot 轨迹
   - trace 事件序列
   - terminal transcript
@@ -384,8 +388,8 @@ Skills Detail -> 编译 table -> 运行 table -> Run Live -> Run Replay
 - `Skills Detail`：发布动作启动后展示 `publish_record`、`compile_request` 与阶段时间线；编译中通过 SSE 接收 `publish.progress / publish.terminal`，断线后轮询 `/progress`，成功后在 `编译` table 页展示 request/artifact，在 `运行` table 页提供“发起运行”入口；用户主要编辑 `SKILL.md` 与结构化配置表单，`skill.yaml` 仅作为系统生成快照预览。
 - `编译 table`：展示当前 skill 的 compile request 列表、diagnostics 摘要和 artifact 入口；artifact 详情继续支持 EG JSON 与 BPMN 静态结构预览。
 - `运行 table`：提供一个最小运行表单，默认绑定当前 skill，输入文本 payload 后创建 invocation。
-- `Run Live`：展示 run 状态、当前 phase、最新输出、trace event stream；WebSocket 未完成前允许以 2 秒轮询 `/api/runs/{run_id}` 与 trace events。
-- `Run Replay`：运行完成后展示 timeline，至少包含 user input、LLM request/response 摘要、内置 tool call/result、final response。
+- `Run Live`：展示 run 状态、当前 phase、binding summary、terminal transcript、最新输出、trace event stream；WebSocket 未完成前允许以 2 秒轮询 `/api/runs/{run_id}`、terminal events 与 trace events。
+- `Run Replay`：运行完成后展示 timeline，至少包含 invocation、binding resolved、terminal input/output、LLM request/response 摘要、内置 tool call/result、final response。
 - 顶部和面包屑必须始终暴露 `skill_id`、`compile_request_id`、`compile_artifact_id`、`invocation_id`、`run_id` 中的关键跳转关系，方便排障。
 
 ## 8. 路由组织与布局壳
@@ -425,8 +429,8 @@ AppShell
 | `skillsStore` | skill 列表、详情、版本与草稿编辑状态 |
 | `compilerStore` | publish request、compile request、diagnostics、artifact |
 | `invocationStore` | invocation 列表、详情、创建表单 |
-| `runStore` | live run、terminal I/O、session token 摘要 |
-| `replayStore` | replay timeline、snapshot、trace detail |
+| `runStore` | live run、run binding、terminal transcript、session token 摘要 |
+| `replayStore` | replay timeline、snapshot、trace detail、terminal transcript |
 | `observabilityStore` | 聚合指标、异常 trace、趋势图数据 |
 | `gatewayStore` | terminal / MCP / inference gateway 配置与健康 |
 
@@ -443,8 +447,10 @@ AppShell
 ### 9.3 事件归并原则
 
 - `WS event` 先落到对应 store，再由 store 驱动视图更新。
-- `trace_event` 与 `terminal_event` 需要按 `seq_no` 排序并去重。
+- `trace_event`、`terminal_event` 与 `session_token.snapshot.appended` 需要按 `seq_no` 排序并去重。
+- `binding.resolved` 与 `binding.updated` 先更新 run binding summary，再驱动 Run Live / Replay 时间线。
 - 页面内不得直接拼接实时事件逻辑，所有事件归并都在 store 层完成。
+- WS 不是状态源；断线重连后通过 `/api/runs/*` 与 `/api/terminal/*` 拉取缺失事件并补齐 store。
 
 ## 10. 服务层组织与后端对象映射
 
@@ -457,7 +463,7 @@ AppShell
 | `Compile Request Detail` | `compile_request_id` | `/api/compiler/*` |
 | `Compile Artifact Detail` | `compile_artifact_id` | `/api/compiler/*`, `/api/runs/*` |
 | `Invocation Detail` | `invocation_id` | `/api/gateway/invocations/*` |
-| `Run Live` | `run_id` | `/api/runs/*`, `/api/terminal/*`, `/ws/runs/{run_id}` |
+| `Run Live` | `run_id` | `/api/runs/*`, `/api/runs/{run_id}/binding-requirements`, `/api/runs/{run_id}/bindings`, `/api/terminal/*`, `/ws/runs/{run_id}` |
 | `Run Replay` | `run_id`, `trace_id` | `/api/replay/*` |
 | `Observability` | `trace_id`, `run_id` | `/api/system/*`, `/api/runtime/*` |
 | `Gateway Console` | `mcp_server_id`, `provider_id` | `/api/gateway/mcp/*`, `/api/gateway/inference/*` |
@@ -465,7 +471,7 @@ AppShell
 ### 10.2 DTO 使用边界
 
 - 前端只消费服务端定义的 DTO，不自行拼装临时协议。
-- `RunDetailDTO`、`SessionTokenSnapshotDTO`、`TraceEventDTO`、`ReplayTimelineDTO` 直接驱动运行态与回放态页面。
+- `RunDetailDTO`、`RunCapabilityBindingDTO`、`SessionTokenSnapshotDTO`、`TerminalEventDTO`、`TraceEventDTO`、`ReplayTimelineDTO` 直接驱动运行态与回放态页面。
 - gateway 相关页面直接映射 `McpServerDTO`、`McpToolDTO`、`InferenceProviderDTO`、`ModelRouteDTO`。
 
 ## 11. 其它非功能设计
@@ -484,7 +490,7 @@ AppShell
 ### 11.3 测试策略
 
 - 路由测试：覆盖 `/admin/*` 主要跳转。
-- store 测试：覆盖 live run 事件归并、compile diagnostics 排序、replay timeline 构建。
+- store 测试：覆盖 live run 的 terminal / trace / snapshot / binding 事件归并、compile diagnostics 排序、replay timeline 构建。
 - service 测试：覆盖 DTO 映射、错误模型、WS reconnect。
 - 页面测试：覆盖 `Skills`、`Compile Request Detail`、`Run Live` 三个核心页面。
 
@@ -502,14 +508,14 @@ AppShell
 
 1. 先落布局壳、路由和 service 层，使后续页面能平行开发。
 2. 再落 `Skills -> Publish -> Compile` 的运行前链路。
-3. 随后落 `Invocation -> Run Live -> Terminal I/O` 的运行时链路。
+3. 随后落 `Invocation -> Run Binding -> Run Live -> Terminal I/O` 的运行时链路。
 4. 最后补 `Replay / OTel / Gateway Console` 的运行后与平台视角。
 
 ### 12.3 完成定义
 
 - `/admin/*` 路由树完整可访问。
 - `Skills`、`Skill Detail / 编译`、`Skill Detail / 运行`、`Replay` 主链路页面可联通。
-- 用户能从一个已发布 skill 发起运行，并在运行完成后跳到 Replay 查看 input、LLM、tool、final output 时间线。
-- 实时页面能通过 `WS` 更新，断线后能自动退化到轮询。
+- 用户能从一个已发布 skill 发起运行，并在运行完成后跳到 Replay 查看 invocation、binding、terminal input/output、LLM、tool、final output 时间线。
+- 实时页面能通过 `WS` 更新，断线后能自动退化到轮询并补齐缺失 seq。
 - 前端对象和服务端对象一一对齐，不存在前端专属的隐式状态机。
 - 读完本文档后，前端团队无需再补关键页面、路由或状态管理决策即可开工。

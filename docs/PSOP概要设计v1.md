@@ -164,6 +164,8 @@ flowchart TB
 
 - `Terminal Gateway`
   - 当前阶段承接文本、图像、语音、视频等输入输出模拟，供 `Web IDE` 驱动 skill 运行
+  - 不是普通命令行终端，而是 Web、模拟器、IoT、AR 与真实设备输入输出的统一运行时交互入口
+  - 所有终端输入输出最终归一为 append-only `terminal_event`，由 RuntimeKernel 在 `Sync -> Merge` 中决定是否进入正式 `Session Token`
 - `MCP Gateway`
   - discovery、policy、allowlist、budget、结果归一化、调用审计
 - `LLM Inference Gateway`
@@ -195,6 +197,8 @@ flowchart TB
 - `Skills` 发布后自动编译出 `EG`
 - `Runtime Kernel` 只加载 compile artifact，不直接解释 skill 源码
 - `Gateway` 统一承接 invocation、模拟 I/O 和外部能力接入
+- `terminal_event` 是终端交互事实源；WebSocket、MQTT、OPC-UA、设备 adapter 与内部 bus 只负责传输、接入或唤醒，不拥有正式状态
+- `binding` 把 artifact 中的抽象能力需求解析为本次 run 的具体终端、设备、channel、schema 与 policy；skill 不应写死具体设备实例
 - `OpenTelemetry` 在 v1 就接入，至少建立 `skill -> compile -> invocation -> run -> trace` 的关联链路
 
 ### 7.2 演进目标
@@ -224,6 +228,10 @@ flowchart TB
   - 唯一正式状态快照对象
 - `Terminal Gateway`
   - 统一 Web 模拟 I/O 与未来真实设备输入协议
+- `Terminal Event`
+  - run 内 append-only 的终端输入输出事件，是 terminal transcript、Replay 与 Runtime `Sync` 的事实源
+- `Run Capability Binding`
+  - 本次 run 的能力解析结果，把 `terminal`、设备、MCP、LLM、sandbox 等抽象需求绑定到具体受控目标
 - `MCP Gateway`
   - 统一 MCP server/tool 受控接入
 - `LLM Inference Gateway`
