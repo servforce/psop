@@ -46,6 +46,9 @@ class DatabaseManager:
 
     def create_schema(self) -> None:
         from app.domain.skills import models  # noqa: F401
+        from app.domain.compiler import models as compiler_models  # noqa: F401
+        from app.domain.jobs import models as job_models  # noqa: F401
+        from app.domain.runtime import models as runtime_models  # noqa: F401
 
         Base.metadata.create_all(self.engine)
 

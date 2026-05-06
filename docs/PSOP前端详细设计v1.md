@@ -56,6 +56,7 @@
 | 运行形态 | `static/admin/` 单页控制台 | 与当前项目脚手架一致，部署简单 |
 | 视图层 | `Alpine.js v3` | 轻量、学习成本低，适合控制台场景 |
 | 样式层 | `Tailwind CSS v4` | 统一设计 token 与布局能力 |
+| EG 可视化 | `bpmn-js Viewer` | 将 formal-v5 EG artifact 在前端转换为只读 BPMN 2.0 XML 后渲染静态结构预览 |
 | 脚本组织 | `ES Modules` | 保持浏览器原生模块边界，避免过早复杂化 |
 | 构建工具 | 本地 `Node.js 20+` | 仅用于 CSS 与静态资源构建 |
 | 通信 | `fetch` + `WebSocket` | REST 承载控制面，WS 承载实时流 |
@@ -76,18 +77,18 @@
 - 顶部固定全局搜索、对象跳转和环境状态。
 - 主工作区承载列表、详情、运行态和图形化信息。
 - 右侧使用抽屉承载上下文详情，例如 `trace event inspector`、`node details`、`gateway policy details`。
+- `WEB IDE` 默认采用 dark-first 的 `PSOP Studio` 工作台视觉，参考 VSCode 的固定分区和高信息密度布局。
+- 主色采用无青绿色调的 neutral gray 深色背景、细分割线和 orange 主操作色；`Skills / Publish / Runtime / Replay` 等工作域通过语义图标、sky 信息色、orange 行动色和局部高亮区分。
+- 页面主体应保持单层全高面板，避免卡片套卡片；列表、详情、图预览和 JSON 文本均在同一工作区内通过细线分隔。
 
 ## 6. 菜单与页面树
 
 | 菜单 | 主路由 | 主要对象 | 主要用途 |
 | --- | --- | --- | --- |
-| `Overview` | `/admin` | `skill_id`, `run_id` | 查看系统总览、最近发布、最近运行、异常摘要 |
-| `Skills` | `/admin/skills` | `skill_id`, `skill_version_id` | 创建、编辑、查看 skill 与版本 |
-| `Publish & Diagnostics` | `/admin/compiler` | `compile_request_id`, `compile_artifact_id` | 查看发布记录、编译任务、诊断与 artifact |
-| `Invocations / Runs` | `/admin/invocations` | `invocation_id`, `run_id` | 发起调用、跟踪运行中的 skill |
+| `Skills` | `/admin/skills` | `skill_id`, `skill_version_id`, `compile_request_id`, `invocation_id` | 创建、编辑、发布、编译并运行 skill |
 | `Replay` | `/admin/replay` | `run_id`, `trace_id` | 回放已运行完成的 skill |
-| `Observability` | `/admin/observability` | `trace_id`, `run_id` | 查看 OTel trace、metrics、logs、慢调用 |
-| `Gateway Console` | `/admin/gateway` | `mcp_server_id`, `provider_id` | 管理 terminal、MCP、LLM gateway 配置 |
+
+`编译` 与 `运行` 不再作为左侧一级菜单暴露。二者属于具体 Skill 的生命周期能力，必须收敛到 `Skill Detail` 的 table 页中；`/admin/compiler`、`/admin/invocations` 等路径仅保留为深链、兼容与排障入口。
 
 ### 6.1 详情页与子路由
 
@@ -162,23 +163,33 @@
 - 页面目标：编辑 skill 草稿，并准备发布。
 - 核心区块：
   - 基本信息面板
-  - skill source 编辑区
+  - skill source 编辑区，默认聚焦用户可维护的 `SKILL.md`、`README.md`、示例、脚本和引用资料
+  - 结构化运行配置表单，用于维护输入输出、能力声明、预算、超时、重试等 manifest draft 字段
   - 草稿校验结果
   - 版本侧栏
   - 最近发布记录
+  - 编译 table 页：展示当前 skill 的 compile request、状态、冻结 commit、artifact 与诊断入口
+  - 运行 table 页：基于当前 skill 发起 invocation，并展示该 skill 的运行记录
 - 关键动作：
   - 保存草稿
+  - 保存结构化配置
   - 克隆为新草稿版本
   - 触发发布
-  - 查看当前 skill 对应的最新 `run`
+  - 在发布抽屉内查看服务端真实阶段进度
+  - 查看当前 skill 的编译历史与 EG artifact
+  - 基于当前 skill 发起运行并进入 live run
 - 依赖数据：
   - `GET /api/skills/{skill_id}`
   - `PATCH /api/skills/{skill_id}`
   - `POST /api/skills/{skill_id}/versions`
-  - `POST /api/compiler/publish`
+  - `POST /api/skills/{skill_id}/publish`
+  - `GET /api/compiler/requests`
 - 状态要求：
   - 编辑区必须提示“当前运行时不会执行未发布草稿”
+  - `skill.yaml` 如存在，只作为系统生成的只读 manifest snapshot 预览，不作为普通编辑入口
+  - 前端不能要求用户通过手写 YAML 来完成机器契约配置；必须优先提供表单化字段和系统默认值
   - 发布按钮只针对明确版本生效
+  - 发布启动后必须展示关联的 `compile_request` 阶段时间线，直到 `published / failed` 终态；发布后的编译任务和 artifact 继续在当前 Skill 的 `编译` table 页呈现
 
 #### 7.2.3 `Skill Version Detail` `/admin/skills/:skillId/versions/:skillVersionId`
 
@@ -193,7 +204,9 @@
   - 打开 artifact
   - 查看被哪些 invocations / runs 使用
 
-### 7.3 `Publish & Diagnostics`
+### 7.3 `Compile / Artifact`
+
+该能力在导航上归属于 `Skill Detail -> 编译` table 页。`/admin/compiler` 与 artifact 详情页保留用于深链、排障和从日志/回放跳转。
 
 #### 7.3.1 `Compiler Queue` `/admin/compiler`
 
@@ -229,15 +242,23 @@
 - 页面目标：查看最终可执行 `EG Artifact` 的结构与元数据。
 - 核心区块：
   - artifact 摘要
-  - graph 结构视图
+  - graph 结构视图：前端将 formal-v5 EG JSON 转换为只读 BPMN 2.0 XML，并使用本地 `bpmn-js` Viewer 渲染
+  - JSON 文本视图：展示完整 EG artifact，支持复制
+  - 节点详情区：点击图中节点后展示该节点的 `kind / actor / guard / projection / merge`
   - capability binding 摘要
   - 静态分析摘要
 - 关键动作：
   - 打开对应 skill version
   - 发起 invocation
   - 对比同一 skill 的上一版 artifact
+- 语义约束：
+  - BPMN 图只是 artifact 的静态结构预览，不是 formal-v5 的运行时语义来源。
+  - 实际可执行性仍由 `Session Token`、节点 `guard`、`Runtime Kernel` 调度和 trace 决定。
+  - BPMN XML 只在前端运行时生成，不写回服务端，不替代 `EG Compile Artifact`。
 
 ### 7.4 `Invocations / Runs`
+
+该能力在导航上归属于 `Skill Detail -> 运行` table 页。`/admin/invocations` 保留为兼容入口，发起运行的默认入口应使用具体 Skill 详情页，避免用户在脱离 Skill 上下文的页面里选择错误对象。
 
 #### 7.4.1 `Invocation List` `/admin/invocations`
 
@@ -352,6 +373,21 @@
   - 查看 discover 出来的 tools
   - 配置模型路由与 fallback
 
+### 7.8 Issue #1 最小闭环页面要求
+
+issue #1 的前端最小可验收闭环必须优先打通以下页面路径：
+
+```text
+Skills Detail -> 编译 table -> 运行 table -> Run Live -> Run Replay
+```
+
+- `Skills Detail`：发布动作启动后展示 `publish_record`、`compile_request` 与阶段时间线；编译中通过 SSE 接收 `publish.progress / publish.terminal`，断线后轮询 `/progress`，成功后在 `编译` table 页展示 request/artifact，在 `运行` table 页提供“发起运行”入口；用户主要编辑 `SKILL.md` 与结构化配置表单，`skill.yaml` 仅作为系统生成快照预览。
+- `编译 table`：展示当前 skill 的 compile request 列表、diagnostics 摘要和 artifact 入口；artifact 详情继续支持 EG JSON 与 BPMN 静态结构预览。
+- `运行 table`：提供一个最小运行表单，默认绑定当前 skill，输入文本 payload 后创建 invocation。
+- `Run Live`：展示 run 状态、当前 phase、最新输出、trace event stream；WebSocket 未完成前允许以 2 秒轮询 `/api/runs/{run_id}` 与 trace events。
+- `Run Replay`：运行完成后展示 timeline，至少包含 user input、LLM request/response 摘要、内置 tool call/result、final response。
+- 顶部和面包屑必须始终暴露 `skill_id`、`compile_request_id`、`compile_artifact_id`、`invocation_id`、`run_id` 中的关键跳转关系，方便排障。
+
 ## 8. 路由组织与布局壳
 
 ### 8.1 路由组织
@@ -373,8 +409,9 @@ AppShell
 
 ### 8.3 跳转规则
 
-- `Skills -> Publish & Diagnostics`：从 skill 或 version 跳到 compile request / artifact。
-- `Publish & Diagnostics -> Invocations / Runs`：从 artifact 跳到以该 artifact 为基础的 run。
+- `Skill Detail -> 编译`：从当前 skill 查看 compile request / artifact。
+- `Skill Detail -> 运行`：从当前 skill 发起 invocation，并跳到对应 live run。
+- `Compile Artifact -> Run`：从 artifact 跳到以该 artifact 为基础的 run。
 - `Invocations / Runs -> Replay`：运行结束后进入 replay。
 - `Replay -> Observability`：从 trace 跳到平台侧观测。
 
@@ -397,7 +434,7 @@ AppShell
 
 | 场景 | 默认方式 | 退化方式 |
 | --- | --- | --- |
-| compile request 进行中 | 轮询 3 秒 | 手动刷新 |
+| compile request 进行中 | SSE 实时推送 | 轮询 `/progress` / 手动刷新 |
 | live run 页面 | `WS` 实时订阅 | 轮询 2 秒 |
 | invocation 列表 | 轮询 5 秒 | 手动刷新 |
 | replay 页面 | 一次性拉取 | 手动刷新 |
@@ -416,7 +453,7 @@ AppShell
 | 页面 | 主对象 | 关键后端接口 |
 | --- | --- | --- |
 | `Skills List` | `skill_id` | `/api/skills/*` |
-| `Skill Editor` | `skill_id`, `skill_version_id` | `/api/skills/*`, `/api/compiler/publish` |
+| `Skill Editor` | `skill_id`, `skill_version_id` | `/api/skills/*`, `/api/skills/{skill_id}/publish`, `/api/compiler/*` |
 | `Compile Request Detail` | `compile_request_id` | `/api/compiler/*` |
 | `Compile Artifact Detail` | `compile_artifact_id` | `/api/compiler/*`, `/api/runs/*` |
 | `Invocation Detail` | `invocation_id` | `/api/gateway/invocations/*` |
@@ -471,7 +508,8 @@ AppShell
 ### 12.3 完成定义
 
 - `/admin/*` 路由树完整可访问。
-- `Skills`、`Publish & Diagnostics`、`Invocations / Runs`、`Replay` 四大主链路页面可联通。
+- `Skills`、`Skill Detail / 编译`、`Skill Detail / 运行`、`Replay` 主链路页面可联通。
+- 用户能从一个已发布 skill 发起运行，并在运行完成后跳到 Replay 查看 input、LLM、tool、final output 时间线。
 - 实时页面能通过 `WS` 更新，断线后能自动退化到轮询。
 - 前端对象和服务端对象一一对齐，不存在前端专属的隐式状态机。
 - 读完本文档后，前端团队无需再补关键页面、路由或状态管理决策即可开工。

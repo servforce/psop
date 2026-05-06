@@ -1,0 +1,252 @@
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from app.agents.registry import (
+    AgentPromptPack,
+    DomainPack,
+    DomainPackRegistry,
+    DomainPackResolution,
+    PromptRegistry,
+)
+from app.domain.compiler.formal_v5 import FormalDiagnostic
+from app.domain.skills.manifest import SkillDocument
+from app.domain.skills.models import SkillDefinition, SkillVersion
+from app.gateway.inference import LlmInferenceGateway
+from app.gateway.gitlab import SkillSourceBundle
+
+
+@dataclass(slots=True)
+class CompileAgentCandidate:
+    artifact: dict[str, Any] | None
+    diagnostics: list[FormalDiagnostic]
+    context_diagnostics: list[FormalDiagnostic]
+    compiler_metadata: dict[str, Any]
+    raw_content: str
+
+
+class SkillCompileAgent:
+    """LLM-backed compiler agent for turning Skill source into formal-v5 EG candidates."""
+
+    def __init__(
+        self,
+        inference_gateway: LlmInferenceGateway,
+        *,
+        prompt_registry: PromptRegistry | None = None,
+        domain_pack_registry: DomainPackRegistry | None = None,
+    ) -> None:
+        self.inference_gateway = inference_gateway
+        self.prompt_registry = prompt_registry or PromptRegistry()
+        self.domain_pack_registry = domain_pack_registry or DomainPackRegistry()
+
+    def compile(
+        self,
+        *,
+        skill_definition: SkillDefinition,
+        skill_version: SkillVersion,
+        document: SkillDocument,
+        source: SkillSourceBundle,
+        repair_diagnostics: list[FormalDiagnostic] | None = None,
+    ) -> CompileAgentCandidate:
+        prompt_pack = self.prompt_registry.load_default_compile_agent()
+        domain_resolution = self.domain_pack_registry.resolve(_domain_pack_ref(document))
+        compiler_metadata = _compiler_metadata(prompt_pack, domain_resolution)
+        context_diagnostics = _context_diagnostics(compiler_metadata, domain_resolution)
+        completion = self.inference_gateway.complete(
+            system_prompt=prompt_pack.system_prompt,
+            user_prompt=self._user_prompt(
+                skill_definition=skill_definition,
+                skill_version=skill_version,
+                document=document,
+                source=source,
+                prompt_pack=prompt_pack,
+                domain_pack=domain_resolution.pack,
+                compiler_metadata=compiler_metadata,
+                repair_diagnostics=repair_diagnostics or [],
+            ),
+            route_key=prompt_pack.route_key,
+        )
+        candidate = self._parse_candidate(completion.content)
+        candidate.context_diagnostics = context_diagnostics
+        candidate.compiler_metadata = compiler_metadata
+        return candidate
+
+    @staticmethod
+    def _parse_candidate(content: str) -> CompileAgentCandidate:
+        json_text = _extract_json(content)
+        try:
+            artifact = json.loads(json_text)
+        except json.JSONDecodeError as exc:
+            return CompileAgentCandidate(
+                artifact=None,
+                diagnostics=[
+                    FormalDiagnostic(
+                        severity="error",
+                        code="compile.agent.invalid_json",
+                        message=f"编译智能体未返回合法 JSON：{exc.msg}",
+                        location={"line": exc.lineno, "column": exc.colno},
+                    )
+                ],
+                context_diagnostics=[],
+                compiler_metadata={},
+                raw_content=content,
+            )
+
+        if not isinstance(artifact, dict):
+            return CompileAgentCandidate(
+                artifact=None,
+                diagnostics=[
+                    FormalDiagnostic(
+                        severity="error",
+                        code="compile.agent.invalid_json",
+                        message="编译智能体 JSON 顶层必须是对象。",
+                        location={"path": "$"},
+                    )
+                ],
+                context_diagnostics=[],
+                compiler_metadata={},
+                raw_content=content,
+            )
+        return CompileAgentCandidate(
+            artifact=artifact,
+            diagnostics=[],
+            context_diagnostics=[],
+            compiler_metadata={},
+            raw_content=content,
+        )
+
+    @staticmethod
+    def _user_prompt(
+        *,
+        skill_definition: SkillDefinition,
+        skill_version: SkillVersion,
+        document: SkillDocument,
+        source: SkillSourceBundle,
+        prompt_pack: AgentPromptPack,
+        domain_pack: DomainPack,
+        compiler_metadata: dict[str, Any],
+        repair_diagnostics: list[FormalDiagnostic],
+    ) -> str:
+        payload = {
+            "task": "compile_skill_to_psop_execution_graph_formal_v5",
+            "skill": {
+                "id": skill_definition.id,
+                "key": skill_definition.key,
+                "name": skill_definition.name,
+                "description": skill_definition.description,
+                "version_id": skill_version.id,
+                "version_no": skill_version.version_no,
+                "source_commit_sha": skill_version.source_commit_sha,
+            },
+            "manifest_snapshot": document.skill.model_dump(mode="json"),
+            "source": {
+                "README.md": source.readme_content,
+                "SKILL.md": source.skill_md_content,
+            },
+            "agent_prompt": prompt_pack.metadata(),
+            "domain_pack": {
+                **domain_pack.metadata(),
+                "guidance": domain_pack.guidance,
+            },
+            "allowed_runtime": {
+                "node_kinds": ["start", "input", "llm", "tool", "terminal"],
+                "actors": [
+                    "runtime.start",
+                    "runtime.input",
+                    "agent.llm",
+                    "capability.demo_tool",
+                    "runtime.terminal",
+                ],
+                "tools": ["psop.demo.inspect_input"],
+                "guard_ops": ["always", "phase_is", "field_exists", "field_equals", "all", "any", "not"],
+                "merge_ops": ["set"],
+            },
+            "workflow_compilation_contract": {
+                "must_extract_workflow_from": ["SKILL.md", "README.md"],
+                "runtime_contract_required_fields": ["workflow_steps"],
+                "workflow_step_required_fields": ["id", "title", "goal", "source_evidence"],
+                "business_node_rule": (
+                    "每个 workflow step 必须有同名 node.id，节点 ID 必须语义化，"
+                    "禁止使用 llm/tool/step1 这类通用 ID。"
+                ),
+                "node_sequence_rule": "start -> input -> workflow steps -> terminal",
+                "llm_projection_rule": (
+                    "每个 llm 业务节点的 user_template 必须包含该步骤目标、source_evidence、"
+                    "用户输入和前序 observations。"
+                ),
+                "domain_pack_rule": (
+                    "domain_pack 只用于理解行业术语、常见步骤和质量标准；"
+                    "不得改变 formal v5、actor/tool 白名单、guard DSL、merge DSL 或状态主权边界。"
+                ),
+            },
+            "repair_diagnostics": [item.as_dict() for item in repair_diagnostics],
+            "output_hint": {
+                "final_output_path": "outputs.final_response",
+                "initial_phase": "start",
+                "success_status": "success",
+            },
+            "compiler_metadata": compiler_metadata,
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _domain_pack_ref(document: SkillDocument) -> str | None:
+    value = getattr(document.skill.compile_config, "domain_pack", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    extra = getattr(document.skill.compile_config, "__pydantic_extra__", None) or {}
+    extra_value = extra.get("domain_pack")
+    return extra_value.strip() if isinstance(extra_value, str) and extra_value.strip() else None
+
+
+def _compiler_metadata(prompt_pack: AgentPromptPack, domain_resolution: DomainPackResolution) -> dict[str, Any]:
+    return {
+        "agent_prompt": prompt_pack.metadata(),
+        "domain_pack": {
+            **domain_resolution.pack.metadata(),
+            "requested_ref": domain_resolution.requested_ref,
+            "used_default": domain_resolution.used_default,
+        },
+    }
+
+
+def _context_diagnostics(
+    compiler_metadata: dict[str, Any],
+    domain_resolution: DomainPackResolution,
+) -> list[FormalDiagnostic]:
+    diagnostics = [
+        FormalDiagnostic(
+            severity="info",
+            code="compile.agent.prompt_pack",
+            message="使用 repo 版本化 Agent Prompt Pack 与 Domain Pack 调用 SKILL 编译智能体。",
+            location=compiler_metadata,
+        )
+    ]
+    if domain_resolution.used_default:
+        diagnostics.append(
+            FormalDiagnostic(
+                severity="warning",
+                code="compile.agent.domain_pack_fallback",
+                message=(
+                    f"未找到 domain_pack `{domain_resolution.requested_ref}`，"
+                    f"已回退到 `{domain_resolution.pack.key}`。"
+                ),
+                location={
+                    "requested_ref": domain_resolution.requested_ref,
+                    "fallback_domain_pack": domain_resolution.pack.metadata(),
+                    "reason": domain_resolution.fallback_reason,
+                },
+            )
+        )
+    return diagnostics
+
+
+def _extract_json(content: str) -> str:
+    stripped = content.strip()
+    fence_match = re.search(r"```(?:json)?\s*(.*?)```", stripped, flags=re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        return fence_match.group(1).strip()
+    return stripped

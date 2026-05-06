@@ -29,8 +29,11 @@
         </label>
 
         <div class="flex justify-end gap-3 pt-2">
-          <button type="button" class="button-secondary" @click="closeDeleteModal()">取消</button>
-          <button type="submit" class="button-danger" :disabled="busy.delete || !isDeleteConfirmationValid()">
+          <button type="button" class="button-secondary" title="取消" aria-label="取消" @click="closeDeleteModal()">
+            <span class="material-symbols-outlined text-[18px]">close</span>
+            <span>取消</span>
+          </button>
+          <button type="submit" class="button-danger" title="确认删除并归档" aria-label="确认删除并归档" :disabled="busy.delete || !isDeleteConfirmationValid()">
             <span class="material-symbols-outlined text-[18px]">archive</span>
             <span x-text="busy.delete ? '删除中...' : '确认删除并归档'"></span>
           </button>

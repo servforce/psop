@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.logging import log_context
+from app.core.observability import record_span_exception, start_span
 from app.domain.skills.exceptions import (
     SkillConflictError,
     SkillNotFoundError,
@@ -13,10 +17,13 @@ from app.domain.skills.manifest import (
     build_default_readme,
     build_default_skill_document,
     build_default_skill_markdown,
+    document_with_prompt_material,
+    document_from_manifest_snapshot,
     manifest_snapshot,
     parse_skill_yaml,
     render_skill_yaml,
     runtime_policy_snapshot,
+    SkillDocument,
 )
 from app.domain.skills.models import SkillDefinition, SkillPublishRecord, SkillVersion
 from app.domain.skills.repository import SkillsRepository
@@ -39,7 +46,11 @@ from app.domain.skills.schemas import (
     SkillVersionSummaryResponse,
     UpdateSkillRequest,
 )
+from app.domain.compiler.service import CompilerService
+from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway
+
+LOGGER = logging.getLogger(__name__)
 
 
 class SkillsService:
@@ -50,10 +61,14 @@ class SkillsService:
         *,
         settings: Settings,
         gitlab_gateway: GitLabSkillSourceGateway,
+        compiler_service: CompilerService | None = None,
+        inference_gateway: LlmInferenceGateway | None = None,
         repository: SkillsRepository | None = None,
     ) -> None:
         self.settings = settings
         self.gitlab_gateway = gitlab_gateway
+        self.compiler_service = compiler_service
+        self.inference_gateway = inference_gateway
         self.repository = repository or SkillsRepository()
 
     def list_skills(
@@ -74,6 +89,11 @@ class SkillsService:
         default_document = build_default_skill_document(payload.key, payload.name, payload.description)
         default_readme = build_default_readme(payload.name, payload.description)
         default_skill_md = build_default_skill_markdown(payload.name, payload.description)
+        default_document = document_with_prompt_material(
+            default_document,
+            readme_content=default_readme,
+            skill_md_content=default_skill_md,
+        )
         default_skill_yaml = render_skill_yaml(default_document)
 
         project_info = self.gitlab_gateway.create_skill_project(
@@ -143,13 +163,18 @@ class SkillsService:
             return self.get_skill_detail(session, skill_id)
 
         source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, definition.default_branch)
-        document = parse_skill_yaml(source_bundle.skill_yaml_content)
+        document = self._document_from_version_snapshot(draft_version, source_bundle.skill_yaml_content)
 
         if payload.name is not None:
             document.skill.identity.name = payload.name
         if payload.description is not None:
             document.skill.identity.description = payload.description
 
+        document = document_with_prompt_material(
+            document,
+            readme_content=source_bundle.readme_content,
+            skill_md_content=source_bundle.skill_md_content,
+        )
         updated_skill_yaml = render_skill_yaml(document)
         new_commit_sha = self.gitlab_gateway.commit_skill_source(
             project_id=definition.gitlab_project_id,
@@ -199,24 +224,24 @@ class SkillsService:
         definition = self._require_definition(session, skill_id)
         draft_version = self._require_draft_version(session, definition)
         source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, draft_version.source_ref)
-        document = parse_skill_yaml(source_bundle.skill_yaml_content)
+        document = self._document_from_version_snapshot(draft_version, source_bundle.skill_yaml_content)
 
-        if document.skill.identity.key != definition.key:
-            raise SkillValidationError(
-                "`skill.yaml` 中的 identity.key 与平台注册 key 不一致。",
-                details={"expected": definition.key, "actual": document.skill.identity.key},
-            )
-
-        if draft_version.source_commit_sha != source_bundle.head_commit_sha:
+        document = document_with_prompt_material(
+            document,
+            readme_content=source_bundle.readme_content,
+            skill_md_content=source_bundle.skill_md_content,
+        )
+        current_manifest_snapshot = manifest_snapshot(document)
+        if draft_version.source_commit_sha != source_bundle.head_commit_sha or draft_version.manifest_snapshot != current_manifest_snapshot:
             draft_version.source_commit_sha = source_bundle.head_commit_sha
-            draft_version.manifest_snapshot = manifest_snapshot(document)
+            draft_version.manifest_snapshot = current_manifest_snapshot
             draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)
             session.commit()
 
         return SkillSourceResponse(
             readme_content=source_bundle.readme_content,
             skill_md_content=source_bundle.skill_md_content,
-            skill_yaml_content=source_bundle.skill_yaml_content,
+            skill_yaml_content=render_skill_yaml(document),
             source_ref=source_bundle.source_ref,
             head_commit_sha=source_bundle.head_commit_sha,
         )
@@ -238,29 +263,20 @@ class SkillsService:
                 details={"expected": payload.base_commit_sha, "actual": current_head},
             )
 
-        document = parse_skill_yaml(payload.skill_yaml_content)
-        if document.skill.identity.key != definition.key:
-            raise SkillValidationError(
-                "`skill.yaml` 中的 identity.key 不可修改。",
-                details={"expected": definition.key, "actual": document.skill.identity.key},
-            )
-        if document.skill.identity.name != definition.name:
-            raise SkillValidationError(
-                "`skill.yaml` 中的 identity.name 需与 Skill 基本信息一致，请先通过基本信息面板修改名称。",
-                details={"expected": definition.name, "actual": document.skill.identity.name},
-            )
-        if document.skill.identity.description != definition.description:
-            raise SkillValidationError(
-                "`skill.yaml` 中的 identity.description 需与 Skill 基本信息一致，请先通过基本信息面板修改描述。",
-                details={"expected": definition.description, "actual": document.skill.identity.description},
-            )
+        document = self._document_from_version_snapshot(draft_version)
+        document = document_with_prompt_material(
+            document,
+            readme_content=payload.readme_content,
+            skill_md_content=payload.skill_md_content,
+        )
+        generated_skill_yaml = render_skill_yaml(document)
 
         new_commit_sha = self.gitlab_gateway.commit_skill_source(
             project_id=definition.gitlab_project_id,
             branch=draft_version.source_ref,
             readme_content=payload.readme_content,
             skill_md_content=payload.skill_md_content,
-            skill_yaml_content=payload.skill_yaml_content,
+            skill_yaml_content=generated_skill_yaml,
             commit_message="Update skill source via PSOP WEB IDE",
         )
 
@@ -272,7 +288,7 @@ class SkillsService:
         return SkillSourceResponse(
             readme_content=payload.readme_content,
             skill_md_content=payload.skill_md_content,
-            skill_yaml_content=payload.skill_yaml_content,
+            skill_yaml_content=generated_skill_yaml,
             source_ref=draft_version.source_ref,
             head_commit_sha=new_commit_sha,
         )
@@ -325,6 +341,28 @@ class SkillsService:
         definition = self._require_definition(session, skill_id)
         draft_version = self._require_draft_version(session, definition)
         normalized_path = self._normalize_repository_path(path)
+        if normalized_path == definition.manifest_path:
+            head_commit_sha = self.gitlab_gateway.get_branch_head(definition.gitlab_project_id, draft_version.source_ref)
+            source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, draft_version.source_ref)
+            document = self._document_from_version_snapshot(draft_version)
+            document = document_with_prompt_material(
+                document,
+                readme_content=source_bundle.readme_content,
+                skill_md_content=source_bundle.skill_md_content,
+            )
+            if draft_version.source_commit_sha != head_commit_sha:
+                draft_version.source_commit_sha = head_commit_sha
+                draft_version.manifest_snapshot = manifest_snapshot(document)
+                draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)
+                session.commit()
+            return SkillRepositoryFileResponse(
+                file_path=definition.manifest_path,
+                file_name=definition.manifest_path.rsplit("/", 1)[-1],
+                content=render_skill_yaml(document),
+                ref=draft_version.source_ref,
+                head_commit_sha=head_commit_sha,
+            )
+
         repository_file = self.gitlab_gateway.get_repository_file(
             definition.gitlab_project_id,
             draft_version.source_ref,
@@ -370,7 +408,13 @@ class SkillsService:
             action="update",
             commit_message=f"Update {file_path} via PSOP WEB IDE",
         )
-        self._sync_draft_after_repository_commit(draft_version, new_commit_sha, document)
+        self._sync_draft_after_repository_commit(
+            draft_version,
+            new_commit_sha,
+            document=document,
+            readme_content=payload.content if file_path == "README.md" else None,
+            skill_md_content=payload.content if file_path == "SKILL.md" else None,
+        )
         session.commit()
 
         return SkillRepositoryFileResponse(
@@ -401,7 +445,13 @@ class SkillsService:
             action="create",
             commit_message=f"Create {file_path} via PSOP WEB IDE",
         )
-        self._sync_draft_after_repository_commit(draft_version, new_commit_sha, document)
+        self._sync_draft_after_repository_commit(
+            draft_version,
+            new_commit_sha,
+            document=document,
+            readme_content=payload.content if file_path == "README.md" else None,
+            skill_md_content=payload.content if file_path == "SKILL.md" else None,
+        )
         session.commit()
 
         return SkillRepositoryFileResponse(
@@ -452,48 +502,117 @@ class SkillsService:
     ) -> PublishSkillResponse:
         definition = self._require_definition(session, skill_id)
         draft_version = self._require_draft_version(session, definition)
-        source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, definition.default_branch)
-        document = parse_skill_yaml(source_bundle.skill_yaml_content)
-
-        if document.skill.identity.key != definition.key:
-            raise SkillValidationError(
-                "`skill.yaml` 中的 identity.key 与平台注册 key 不一致。",
-                details={"expected": definition.key, "actual": document.skill.identity.key},
-            )
-
-        draft_version.source_commit_sha = source_bundle.head_commit_sha
-        draft_version.manifest_snapshot = manifest_snapshot(document)
-        draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)
-
-        next_version_no = self.repository.next_published_version_no(session, definition.id)
-        published_version = SkillVersion(
-            skill_definition_id=definition.id,
-            version_no=next_version_no,
-            status="published",
-            source_ref=definition.default_branch,
-            source_commit_sha=source_bundle.head_commit_sha,
-            manifest_snapshot=manifest_snapshot(document),
-            runtime_policy_snapshot=runtime_policy_snapshot(document),
-        )
-        session.add(published_version)
-        session.flush()
 
         publish_record = SkillPublishRecord(
             skill_definition_id=definition.id,
-            skill_version_id=published_version.id,
+            skill_version_id=draft_version.id,
             publish_reason=payload.publish_reason,
-            publish_status="published",
-            published_commit_sha=source_bundle.head_commit_sha,
+            publish_status="compiling",
+            published_commit_sha=draft_version.source_commit_sha or "",
             release_ref=definition.default_branch,
         )
         session.add(publish_record)
-        definition.latest_published_version_id = published_version.id
         session.commit()
+        LOGGER.info(
+            "publish request accepted",
+            extra={
+                "skill_id": definition.id,
+                "skill_key": definition.key,
+                "skill_version_id": draft_version.id,
+                "publish_record_id": publish_record.id,
+            },
+        )
+
+        try:
+            with log_context(
+                skill_id=definition.id,
+                skill_key=definition.key,
+                skill_version_id=draft_version.id,
+                publish_record_id=publish_record.id,
+            ), start_span(
+                "publish.source_freeze",
+                skill_id=definition.id,
+                skill_key=definition.key,
+                skill_version_id=draft_version.id,
+                publish_record_id=publish_record.id,
+            ) as span:
+                try:
+                    source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, definition.default_branch)
+                except Exception as exc:
+                    record_span_exception(span, exc)
+                    raise
+            document = self._document_from_version_snapshot(draft_version, source_bundle.skill_yaml_content)
+            document = document_with_prompt_material(
+                document,
+                readme_content=source_bundle.readme_content,
+                skill_md_content=source_bundle.skill_md_content,
+            )
+            self._validate_manifest_identity(definition, document)
+
+            draft_version.source_commit_sha = source_bundle.head_commit_sha
+            draft_version.manifest_snapshot = manifest_snapshot(document)
+            draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)
+
+            next_version_no = self.repository.next_published_version_no(session, definition.id)
+            published_version = SkillVersion(
+                skill_definition_id=definition.id,
+                version_no=next_version_no,
+                status="published",
+                source_ref=definition.default_branch,
+                source_commit_sha=source_bundle.head_commit_sha,
+                manifest_snapshot=manifest_snapshot(document),
+                runtime_policy_snapshot=runtime_policy_snapshot(document),
+            )
+            session.add(published_version)
+            session.flush()
+
+            publish_record.skill_version_id = published_version.id
+            publish_record.published_commit_sha = source_bundle.head_commit_sha
+
+            compiler_service = self.compiler_service or CompilerService(
+                settings=self.settings,
+                gitlab_gateway=self.gitlab_gateway,
+                inference_gateway=self.inference_gateway or OpenAICompatibleInferenceGateway.from_settings(self.settings),
+            )
+            compile_request = compiler_service.create_compile_request_for_publish(
+                session,
+                skill_definition=definition,
+                skill_version=published_version,
+                publish_record_id=publish_record.id,
+            )
+            session.commit()
+            LOGGER.info(
+                "publish compile request queued",
+                extra={
+                    "skill_id": definition.id,
+                    "skill_key": definition.key,
+                    "skill_version_id": published_version.id,
+                    "publish_record_id": publish_record.id,
+                    "compile_request_id": compile_request.id,
+                },
+            )
+        except Exception:
+            session.rollback()
+            failed_record = session.get(SkillPublishRecord, publish_record.id)
+            if failed_record:
+                failed_record.publish_status = "failed"
+                session.commit()
+            LOGGER.exception(
+                "publish request failed before compile job was queued",
+                extra={
+                    "skill_id": definition.id,
+                    "skill_key": definition.key,
+                    "skill_version_id": draft_version.id,
+                    "publish_record_id": publish_record.id,
+                },
+            )
+            raise
 
         return PublishSkillResponse(
             publish_record=self._build_publish_record_summary(publish_record),
             published_version=self._build_skill_version_summary(published_version),
             published_commit_sha=source_bundle.head_commit_sha,
+            compile_request=compiler_service.get_compile_request(session, compile_request.id),
         )
 
     def list_publish_records(self, session: Session, *, skill_id: str) -> list[SkillPublishRecordResponse]:
@@ -539,34 +658,53 @@ class SkillsService:
         if file_path != definition.manifest_path:
             return None
 
-        document = parse_skill_yaml(content)
+        raise SkillValidationError("`skill.yaml` 是系统生成的 manifest 预览文件，请通过结构化配置表单修改。")
+
+    def _document_from_version_snapshot(
+        self,
+        version: SkillVersion,
+        source_skill_yaml_content: str | None = None,
+    ) -> SkillDocument:
+        if not version.manifest_snapshot and source_skill_yaml_content:
+            return parse_skill_yaml(source_skill_yaml_content)
+        return document_from_manifest_snapshot(version.manifest_snapshot)
+
+    @staticmethod
+    def _validate_manifest_identity(definition: SkillDefinition, document: SkillDocument) -> None:
         if document.skill.identity.key != definition.key:
             raise SkillValidationError(
-                "`skill.yaml` 中的 identity.key 不可修改。",
+                "manifest identity.key 与平台注册 key 不一致。",
                 details={"expected": definition.key, "actual": document.skill.identity.key},
             )
         if document.skill.identity.name != definition.name:
             raise SkillValidationError(
-                "`skill.yaml` 中的 identity.name 需与 Skill 基本信息一致，请先通过基本信息面板修改名称。",
+                "manifest identity.name 需与 Skill 基本信息一致，请先通过基本信息面板修改名称。",
                 details={"expected": definition.name, "actual": document.skill.identity.name},
             )
         if document.skill.identity.description != definition.description:
             raise SkillValidationError(
-                "`skill.yaml` 中的 identity.description 需与 Skill 基本信息一致，请先通过基本信息面板修改描述。",
+                "manifest identity.description 需与 Skill 基本信息一致，请先通过基本信息面板修改描述。",
                 details={"expected": definition.description, "actual": document.skill.identity.description},
             )
-        return document
 
-    @staticmethod
     def _sync_draft_after_repository_commit(
+        self,
         draft_version: SkillVersion,
         commit_sha: str,
         document=None,
+        readme_content: str | None = None,
+        skill_md_content: str | None = None,
     ) -> None:
         draft_version.source_commit_sha = commit_sha
-        if document is not None:
-            draft_version.manifest_snapshot = manifest_snapshot(document)
-            draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)
+        if document is not None or readme_content is not None or skill_md_content is not None:
+            resolved_document = document or self._document_from_version_snapshot(draft_version)
+            resolved_document = document_with_prompt_material(
+                resolved_document,
+                readme_content=readme_content,
+                skill_md_content=skill_md_content,
+            )
+            draft_version.manifest_snapshot = manifest_snapshot(resolved_document)
+            draft_version.runtime_policy_snapshot = runtime_policy_snapshot(resolved_document)
 
     def _require_definition(self, session: Session, skill_id: str) -> SkillDefinition:
         definition = self.repository.get_skill_definition(session, skill_id)

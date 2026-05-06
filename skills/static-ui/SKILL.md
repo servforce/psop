@@ -159,19 +159,24 @@ static/
   * 后续改色时，项目内优先修改 `docs/ui/theme.md`；不要把项目主题差异直接堆回本节默认值
   * 其它地方如出现颜色 class，应优先引用“Base / Primary / Danger / Warning / Info / Overlay”这些语义槽位，而不是分散定义
 
-  * Base（中性基底 / Slate）：
+  * Base（中性基底 / Neutral Gray）：
 
-    * 页面背景：bg-slate-950
-    * 面板背景：bg-slate-900/40（列表/面板主体），bg-slate-950/20（更弱的底）
-    * 顶栏背景：bg-slate-950/70（可 backdrop-blur）
+    * 页面背景：bg-slate-950（项目内重映射为 neutral gray，不带青绿色调）
+    * 面板背景：bg-slate-900/40（列表/面板主体），bg-slate-950/20（更弱的底；项目内重映射为 neutral gray）
+    * 顶栏背景：bg-slate-950/70（可 backdrop-blur；项目内重映射为 neutral gray）
     * 边框/分割线：border-slate-800、divide-slate-800
     * Hover：hover:bg-slate-900/50
     * 文字：主文 text-slate-200，次级 text-slate-300，弱化 text-slate-400 / text-slate-500，占位 placeholder-slate-500
-  * Primary（Emerald，主交互）：
+  * Primary（Orange，主交互）：
 
-    * 实心按钮：bg-emerald-500 text-slate-950 hover:bg-emerald-400
-    * 选中/强调（弱底）：bg-emerald-500/10 text-emerald-200 border-emerald-500/30
-    * Focus ring：focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/30
+    * 实心按钮：bg-orange-500 text-slate-950 hover:bg-orange-400
+    * 选中/强调（弱底）：bg-orange-500/10 text-orange-200 border-orange-500/30
+    * Focus ring：focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500/30
+    * 状态点：bg-orange-400
+  * Success（Emerald / Green，成功）：
+
+    * 成功/已发布/启用/已接受等代表成功含义的状态，必须使用绿色语义，不得使用 Primary Orange：bg-emerald-500/10 text-emerald-200 border-emerald-500/25
+    * 成功提示块：bg-emerald-500/10 text-emerald-100 border-emerald-500/25
     * 状态点：bg-emerald-400
   * Danger（Rose，危险/错误）：
 
@@ -216,8 +221,8 @@ static/
   * “小卡片/Tile”仅用于面板内部的局部信息块（如统计卡、视频卡、弹窗），圆角更小（优先 rounded-md，必要时 rounded-lg），不作为页面默认外框
 * 组件风格（保持一致即可）：
 
-  * 按钮：Primary（bg-emerald-500 text-slate-950）、Secondary（border border-slate-700 bg-slate-950/20）、Danger（bg-rose-500/20 text-rose-200）三类；hover/disabled/焦点 ring 一致（focus:ring-emerald-500/30）
-  * 表单：input/select 默认使用 rounded-md border border-slate-700 bg-slate-950/30；focus 使用 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/30；错误态用 rose 文案与边框
+  * 按钮：Primary（bg-orange-500 text-slate-950）、Secondary（border border-slate-700 bg-slate-950/20）、Danger（bg-rose-500/20 text-rose-200）三类；hover/disabled/焦点 ring 一致（focus:ring-orange-500/30）
+  * 表单：input/select 默认使用 rounded-md border border-slate-700 bg-slate-950/30；focus 使用 focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500/30；错误态用 rose 文案与边框
   * 列表页搜索栏：所有常驻搜索/筛选控件必须尽量在一行展示；不要堆叠多行筛选表单；不要提供独立“搜索”与“重置”按钮。控件值变化应立即驱动搜索状态并刷新列表，输入类控件使用防抖，筛选类控件直接触发。需要全量重置时可提供一个低优先级的“清空条件”文本动作或让用户逐项清空，但不要把它作为主按钮常驻
   * 多行文本输入：textarea、提示词编辑区、cookies 编辑区这类“大段文本编辑面板”不要直接沿用最深底色；优先使用更浅一层的 slate 背景，并把正文降到更柔和的 slate-300 左右，而不是高对比纯白，placeholder 保持 slate-400/500，caret 与 focus 反馈可以继续更亮，以减少长时间阅读/编辑的视觉疲劳
   * 贴边编辑器（Edge-to-edge editor）：适用于提示词、Markdown、JSON、cookies、长文本说明等“大段文本编辑”区域；外层面板负责边框、圆角、分割线，编辑器内容区默认与面板贴边，不再额外包一层 `p-*`
@@ -225,9 +230,11 @@ static/
   * 贴边编辑器禁忌：不要给编辑器外再套一层 `p-4`；不要同时保留“外层面板边框 + textarea 自身边框 + rounded-lg”；视觉目标是“面板即编辑器表面”，不是“面板里再嵌一张卡片”
   * 贴边编辑器优先级：当“无边距面板化”与“通用表单控件样式”冲突时，普通 input/select 保持 `rounded-md border`，大段文本编辑器优先使用贴边编辑器模式，不套用通用 textarea 卡片样式
   * 贴边编辑器推荐配方：外层 `rounded-lg border border-slate-800 bg-slate-950/20 overflow-hidden`；头部 `px-4 py-3 border-b border-slate-800`；错误行 `px-4 py-3 text-xs text-rose-200 border-b border-rose-900/60`；textarea `block w-full h-64 rounded-none border-0 px-4 py-3 text-xs font-mono leading-5 resize-none focus:outline-none`
+  * 可复制字段：所有支持复制的短文本/ID/URL/路径等字段，必须统一使用“不可编辑文本框 + 右侧复制按钮”的组合展示，不使用普通文本、pill、info-chip 或裸链接旁挂复制按钮。文本框使用 `readonly`，不可用 `disabled`（保留聚焦、选择与复制能力）；按钮紧贴文本框右侧，按钮高度必须与文本框一致，图标使用 Material Symbols 的 `content_copy` / `check`
+  * 可复制字段推荐结构：外层 `flex items-stretch min-w-0`；文本框 `h-11 flex-1 min-w-0 rounded-l-md rounded-r-none border border-r-0 ... font-mono select-all`；按钮 `h-11 w-11 shrink-0 rounded-l-none rounded-r-md ...`。长 URL/路径仍放入 readonly input 中，通过横向光标/全选处理，不改成多行正文
   * 多选：优先使用 tag select 控件（“已选标签 + 搜索输入 + 下拉选项”），而不是原生 multi-select；需支持 Enter 添加第一个匹配项、Backspace 删除最后一个 tag、Esc 关闭下拉；列表页搜索栏中的 tag select 默认保持单行紧凑展示，必要时在控件内部横向滚动或收纳，而不是撑高整条搜索栏
   * 列表/表格：优先用 divide-y divide-slate-800；行 p-4 hover:bg-slate-900/50；空状态/加载态需要占位（如 暂无数据、加载中…）
-  * 徽标/状态：pill badge 统一 rounded-full border bg-slate-950/30 text-[11px]；状态点用小圆点 + 文本
+  * 徽标/状态：pill badge 统一 `rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]`；状态标签必须按状态语义区分 tone，不使用单一主色覆盖所有状态。成功/已发布/启用/已接受等代表成功含义的状态必须用 Emerald / Green，不得用 Primary Orange；运行中/编译中用 Sky，待处理/排队/草稿用 Amber，失败/拒绝/取消/超时用 Rose，归档/跳过/未知用 Slate。状态点同样按语义用对应色
   * 弹窗：遮罩 bg-black/60；内容容器 rounded-lg border border-slate-800 bg-slate-900 shadow-lg p-4
 * 交互细节：
 
@@ -287,6 +294,7 @@ static/
 * 页面片段根容器必须优先使用 `h-full min-h-0 flex flex-col`，并让页级面板吃满可视区域
 * 页面应使用单层页级面板；内部区块通过细线、分割线、弱背景和紧凑 tile 组织信息，避免默认面板套面板
 * 列表页搜索/筛选栏必须单行展示常驻控件，去除“搜索/重置”主按钮，并在控件值变化时即时触发搜索
+* 所有支持复制的字段必须使用 readonly 文本框 + 右侧等高复制按钮；不得用普通文本/链接/徽标旁挂复制按钮替代
 * `pages/*.html` 必须是片段：不要包含 `<!doctype> / <html> / <head> / <body> / <script>`
 * 如页面需要交互：顶层容器使用 `x-data="xxxPage"` 并在 `assets/js/init-alpine.js` 注册对应组件
 * 新增/改动路由与菜单：更新 `assets/js/components/frame.js` 的 `menuItems` 与路由映射逻辑

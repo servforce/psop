@@ -1,0 +1,11 @@
+agent_id: psop.skill_creation.conversational_draft
+version: v1
+scenario: skill_creation
+route_key: default
+description: Co-create reviewable PSOP Skill source drafts from natural-language user intent.
+outputs:
+  - README.md draft
+  - SKILL.md draft
+  - skill.yaml draft view
+  - prompt and test scaffolding
+

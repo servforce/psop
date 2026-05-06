@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_skills_service
@@ -144,7 +144,7 @@ def create_repository_folder(
     return service.create_repository_folder(session, skill_id=skill_id, payload=payload)
 
 
-@router.post("/{skill_id}/publish", response_model=PublishSkillResponse)
+@router.post("/{skill_id}/publish", response_model=PublishSkillResponse, status_code=status.HTTP_202_ACCEPTED)
 def publish_skill(
     skill_id: str,
     payload: PublishSkillRequest,

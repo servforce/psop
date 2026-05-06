@@ -105,11 +105,19 @@ class RuntimePolicy(BaseModel):
     isolation: IsolationPolicy = Field(default_factory=IsolationPolicy)
 
 
+class SkillPromptMaterial(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    readme: str = ""
+    skill_md: str = ""
+
+
 class CompileConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     formal_revision: str = "psop-eg-formal/v5"
     target: str = "eg.compile.artifact"
+    domain_pack: str = "generic"
     validation_rules: list[str] = Field(default_factory=list)
 
 
@@ -121,6 +129,7 @@ class SkillManifest(BaseModel):
     capabilities: SkillCapabilities = Field(default_factory=SkillCapabilities)
     compile_config: CompileConfig = Field(default_factory=CompileConfig)
     runtime_policy: RuntimePolicy = Field(default_factory=RuntimePolicy)
+    prompt_material: SkillPromptMaterial = Field(default_factory=SkillPromptMaterial)
 
 
 class SkillDocument(BaseModel):
@@ -164,9 +173,26 @@ def parse_skill_yaml(skill_yaml_content: str) -> SkillDocument:
         raise SkillValidationError("`skill.yaml` 顶层必须是对象。")
 
     try:
-        return SkillDocument.model_validate(raw)
+        document = SkillDocument.model_validate(raw)
+        if document.skill.__pydantic_extra__:
+            document.skill.__pydantic_extra__.pop("source_digest", None)
+        return document
     except Exception as exc:  # pragma: no cover - pydantic error type is broad in runtime
         raise SkillValidationError("`skill.yaml` 不符合最小 Skill 结构定义。", details={"error": str(exc)}) from exc
+
+
+def document_from_manifest_snapshot(snapshot: dict[str, Any] | None) -> SkillDocument:
+    if not snapshot:
+        raise SkillValidationError("manifest snapshot 为空，无法生成 Skill 机器契约。")
+
+    raw = snapshot if "skill" in snapshot else {"skill": snapshot}
+    try:
+        document = SkillDocument.model_validate(raw)
+        if document.skill.__pydantic_extra__:
+            document.skill.__pydantic_extra__.pop("source_digest", None)
+        return document
+    except Exception as exc:  # pragma: no cover - pydantic error type is broad in runtime
+        raise SkillValidationError("manifest snapshot 不符合最小 Skill 结构定义。", details={"error": str(exc)}) from exc
 
 
 def render_skill_yaml(document: SkillDocument) -> str:
@@ -175,6 +201,22 @@ def render_skill_yaml(document: SkillDocument) -> str:
         sort_keys=False,
         allow_unicode=True,
     )
+
+
+def document_with_prompt_material(
+    document: SkillDocument,
+    *,
+    readme_content: str | None = None,
+    skill_md_content: str | None = None,
+) -> SkillDocument:
+    next_document = document.model_copy(deep=True)
+    if next_document.skill.__pydantic_extra__:
+        next_document.skill.__pydantic_extra__.pop("source_digest", None)
+    if readme_content is not None:
+        next_document.skill.prompt_material.readme = readme_content
+    if skill_md_content is not None:
+        next_document.skill.prompt_material.skill_md = skill_md_content
+    return next_document
 
 
 def build_default_readme(name: str, description: str) -> str:
@@ -197,8 +239,22 @@ def build_default_skill_markdown(name: str, description: str) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def manifest_snapshot(document: SkillDocument) -> dict[str, Any]:
-    return document.skill.model_dump(mode="json")
+def manifest_snapshot(
+    document: SkillDocument,
+    *,
+    readme_content: str | None = None,
+    skill_md_content: str | None = None,
+) -> dict[str, Any]:
+    synced_document = document_with_prompt_material(
+        document,
+        readme_content=readme_content,
+        skill_md_content=skill_md_content,
+    )
+    snapshot = synced_document.skill.model_dump(mode="json")
+    # `source_digest` existed in an earlier draft. Snapshots are now the
+    # draft/frozen compile view itself, so old audit-only fields are stripped.
+    snapshot.pop("source_digest", None)
+    return snapshot
 
 
 def runtime_policy_snapshot(document: SkillDocument) -> dict[str, Any]:

@@ -53,6 +53,7 @@ def test_api_service_info() -> None:
 
 def test_settings_build_database_url() -> None:
     settings = Settings(
+        database_url=None,
         database_host="db.example.local",
         database_port=5433,
         database_name="psop_test",

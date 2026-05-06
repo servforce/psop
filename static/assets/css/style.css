@@ -1,13 +1,27 @@
 @import "tailwindcss";
 
 @layer base {
+  :root {
+    --color-slate-50: #fafafa;
+    --color-slate-100: #f4f4f5;
+    --color-slate-200: #e4e4e7;
+    --color-slate-300: #d4d4d8;
+    --color-slate-400: #a1a1aa;
+    --color-slate-500: #71717a;
+    --color-slate-600: #52525b;
+    --color-slate-700: #3f3f46;
+    --color-slate-800: #27272a;
+    --color-slate-900: #18181b;
+    --color-slate-950: #09090b;
+  }
+
   html {
-    color-scheme: light;
+    color-scheme: dark;
   }
 
   body {
-    background: #f8fafc;
-    color: #1e293b;
+    background: #09090b;
+    color: #e2e8f0;
     font-family:
       "Segoe UI",
       "PingFang SC",
@@ -26,23 +40,23 @@
 
 @layer components {
   .panel {
-    @apply flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white/90 shadow-none;
+    @apply flex h-full min-h-0 flex-col overflow-hidden rounded-none border border-slate-800 bg-slate-900/40 shadow-none;
   }
 
   .panel-header {
-    @apply flex flex-col gap-3 border-b border-slate-200 bg-slate-50/70 px-5 py-5;
+    @apply flex flex-col gap-3 border-b border-slate-800 bg-slate-950/70 px-5 py-5;
   }
 
   .panel-kicker {
-    @apply text-xs font-semibold uppercase tracking-[0.22em] text-sky-700;
+    @apply text-xs font-semibold uppercase tracking-[0.22em] text-orange-300;
   }
 
   .panel-title {
-    @apply mt-1 text-xl font-semibold tracking-tight text-slate-950;
+    @apply mt-1 text-xl font-semibold tracking-tight text-slate-100;
   }
 
   .panel-copy {
-    @apply text-sm leading-6 text-slate-500;
+    @apply text-sm leading-6 text-slate-400;
   }
 
   .panel-body {
@@ -58,100 +72,192 @@
   }
 
   .input-field {
-    @apply block w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500/70 focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500;
+    @apply block w-full rounded-md border border-slate-700 bg-slate-950/40 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-orange-500/40 focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-slate-900/60 disabled:text-slate-500;
+  }
+
+  .select-field {
+    @apply block h-10 w-full rounded-md border border-slate-700 bg-slate-950/40 px-3 text-sm text-slate-100 outline-none transition focus:border-orange-500/40 focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-slate-900/60 disabled:text-slate-500;
   }
 
   .textarea-field {
-    @apply block w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500/70 focus:ring-2 focus:ring-sky-200;
+    @apply block w-full rounded-md border border-slate-700 bg-slate-950/40 px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-orange-500/40 focus:ring-2 focus:ring-orange-500/20;
   }
 
   .editor-area {
-    @apply block min-h-[28rem] w-full flex-1 rounded-xl border border-slate-300 bg-white px-4 py-4 font-mono text-[12px] leading-6 text-slate-900 outline-none transition focus:border-sky-500/70 focus:ring-2 focus:ring-sky-200;
+    @apply block min-h-[28rem] w-full flex-1 rounded-md border border-slate-700 bg-slate-950/60 px-4 py-4 font-mono text-[12px] leading-6 text-slate-100 outline-none transition focus:border-orange-500/40 focus:ring-2 focus:ring-orange-500/20;
     resize: vertical;
   }
 
+  .json-editor-shell {
+    @apply relative min-h-0 overflow-hidden rounded-md border border-slate-800 bg-slate-950;
+  }
+
+  .json-editor-shell-auto {
+    @apply relative overflow-visible rounded-md border border-slate-800 bg-slate-950;
+  }
+
+  .json-highlight-layer,
+  .json-editor-input {
+    @apply absolute inset-0 m-0 h-full w-full overflow-auto whitespace-pre-wrap break-words border-0 font-mono text-xs leading-5 outline-none;
+    tab-size: 2;
+  }
+
+  .json-editor-shell-auto .json-highlight-layer {
+    @apply static min-h-[28rem] overflow-visible;
+  }
+
+  .json-editor-shell-auto .json-editor-input {
+    @apply overflow-hidden;
+  }
+
+  .json-highlight-layer {
+    @apply pointer-events-none text-slate-300;
+  }
+
+  .json-editor-input {
+    @apply z-10 resize-none bg-transparent text-transparent caret-orange-300 focus:ring-0;
+  }
+
+  .json-editor-input::selection {
+    background: rgba(249, 115, 22, 0.24);
+    color: transparent;
+  }
+
+  .json-token-key {
+    @apply text-sky-300;
+  }
+
+  .json-token-string {
+    @apply text-orange-300;
+  }
+
+  .json-token-number {
+    @apply text-amber-300;
+  }
+
+  .json-token-boolean {
+    @apply text-violet-300;
+  }
+
+  .json-token-null {
+    @apply text-slate-500;
+  }
+
+  .node-drawer-tab {
+    @apply relative inline-flex h-8 items-center justify-center border-r border-slate-800 px-4 text-xs font-semibold text-slate-400 transition hover:bg-slate-900 hover:text-slate-100;
+  }
+
+  .node-drawer-tab-active {
+    @apply bg-slate-900 text-orange-200;
+    box-shadow: inset 0 2px 0 rgba(249, 115, 22, 0.9);
+  }
+
+  .auto-grow-field {
+    field-sizing: content;
+    @apply overflow-hidden;
+  }
+
   .mono-field {
-    @apply font-mono text-[12px] text-slate-700;
+    @apply font-mono text-[12px] text-slate-400;
   }
 
   .button-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-sky-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-70;
+    @apply inline-flex h-10 w-10 items-center justify-center rounded-md bg-orange-500 p-0 text-sm font-semibold text-slate-950 transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:opacity-70;
   }
 
   .button-secondary {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70;
+    @apply inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-950/30 p-0 text-sm font-medium text-slate-200 transition hover:border-slate-600 hover:bg-slate-900/70 hover:text-white disabled:cursor-not-allowed disabled:opacity-70;
   }
 
   .button-danger {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex h-10 w-10 items-center justify-center rounded-md border border-rose-500/30 bg-rose-500/20 p-0 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .topbar-search {
-    @apply h-9 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-4 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500/70 focus:ring-2 focus:ring-sky-200;
+    @apply h-9 w-full rounded-md border border-slate-700 bg-slate-950/40 py-2 pl-10 pr-4 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-orange-500/40 focus:ring-2 focus:ring-orange-500/20;
   }
 
   .topbar-icon-button {
-    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent bg-transparent text-slate-600 transition hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950;
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent bg-transparent text-slate-400 transition hover:border-slate-700 hover:bg-slate-900 hover:text-slate-100;
   }
 
   .user-avatar {
-    @apply inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-slate-950 text-sm font-semibold text-white;
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-sm font-semibold text-orange-200;
   }
 
   .sidebar-link {
-    @apply flex w-full items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-950;
+    @apply flex w-full items-center gap-3 rounded-md border border-transparent px-3 py-2.5 text-left text-sm font-medium text-slate-400 transition hover:bg-slate-900/70 hover:text-slate-100;
   }
 
   .sidebar-link-active {
-    @apply border-sky-200 bg-sky-50 text-sky-800;
+    @apply border-orange-500/30 bg-orange-500/10 text-orange-200;
   }
 
   .status-badge {
-    @apply inline-flex items-center rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-teal-700;
+    @apply inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em];
   }
 
   .skill-row {
-    @apply bg-white px-5 py-5 transition hover:bg-slate-50;
+    @apply bg-slate-950/20 px-5 py-5 transition hover:bg-slate-900/60;
   }
 
   .skill-table-row {
-    @apply grid min-w-[62rem] grid-cols-[1.6fr_120px_190px_190px_190px] items-center gap-4 bg-white px-5 py-4 transition hover:bg-slate-50;
+    @apply grid min-w-[62rem] grid-cols-[1.6fr_120px_190px_190px_190px] items-center gap-4 bg-slate-950/20 px-5 py-4 transition hover:bg-slate-900/60;
   }
 
   .skill-table-header {
-    @apply grid min-w-[62rem] grid-cols-[1.6fr_120px_190px_190px_190px] gap-4 border-b border-slate-200 bg-white px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500;
+    @apply grid min-w-[62rem] grid-cols-[1.6fr_120px_190px_190px_190px] gap-4 border-b border-slate-800 bg-slate-950/70 px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500;
   }
 
   .info-chip {
-    @apply flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3;
+    @apply flex items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950/40 px-4 py-3;
+  }
+
+  .copyable-field {
+    @apply flex min-w-0 items-stretch;
+  }
+
+  .copyable-input {
+    @apply h-11 min-w-0 flex-1 select-all rounded-l-md rounded-r-none border border-r-0 border-slate-700 bg-slate-950/40 px-4 py-0 font-mono text-xs text-slate-300 outline-none transition placeholder:text-slate-500 focus:border-orange-500/40 focus:ring-2 focus:ring-orange-500/20;
+  }
+
+  .copyable-button {
+    @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-l-none rounded-r-md border border-slate-700 bg-slate-950/30 text-slate-300 transition hover:border-slate-600 hover:bg-slate-900 hover:text-white focus:border-orange-500/40 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .icon-button {
-    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-950;
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-700 bg-slate-950/30 text-slate-300 transition hover:border-slate-600 hover:bg-slate-900 hover:text-white;
   }
 
   .icon-button-danger {
-    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800;
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 transition hover:border-rose-400/50 hover:bg-rose-500/20 hover:text-rose-100;
   }
 
   .table-action-button {
-    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-600 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800;
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-700 bg-slate-950/30 text-sm font-medium text-slate-300 transition hover:border-orange-500/40 hover:bg-orange-500/10 hover:text-orange-200;
   }
 
   .editor-tab {
-    @apply rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-950;
+    @apply rounded-md border border-slate-700 bg-slate-950/30 px-4 py-2 text-sm font-medium text-slate-400 transition hover:border-slate-600 hover:bg-slate-900 hover:text-slate-100;
   }
 
   .editor-tab-active {
-    @apply border-sky-200 bg-sky-50 text-sky-800;
+    @apply border-orange-500/30 bg-orange-500/10 text-orange-200;
   }
 
   .detail-tab {
-    @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-transparent px-4 text-sm font-medium text-slate-600 transition hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950;
+    @apply relative inline-flex h-8 shrink-0 items-center justify-center gap-2 border-0 border-r border-slate-800 bg-slate-950/40 px-4 text-xs font-medium text-slate-400 transition hover:bg-slate-900/80 hover:text-slate-100;
   }
 
   .detail-tab-active {
-    @apply border-sky-200 bg-sky-50 text-sky-800 shadow-sm;
+    @apply bg-slate-900 text-orange-200;
+    box-shadow: inset 0 2px 0 rgba(249, 115, 22, 0.9);
+  }
+
+  .button-primary > :not(.material-symbols-outlined),
+  .button-secondary > :not(.material-symbols-outlined),
+  .button-danger > :not(.material-symbols-outlined) {
+    @apply sr-only;
   }
 
   .detail-section {
@@ -163,37 +269,37 @@
   }
 
   .breadcrumb-bar {
-    @apply flex min-h-9 flex-wrap items-center gap-2 border-b border-slate-200 pb-3 text-sm text-slate-500;
+    @apply flex min-h-9 flex-wrap items-center gap-2 border-b border-slate-800 pb-3 text-sm text-slate-500;
   }
 
   .breadcrumb-link {
-    @apply text-slate-600 transition hover:text-sky-700;
+    @apply text-slate-400 transition hover:text-orange-200;
   }
 
   .modal-panel {
-    @apply w-full max-w-xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.22)];
+    @apply w-full max-w-xl overflow-hidden rounded-md border border-slate-800 bg-slate-950 shadow-[0_24px_70px_rgba(0,0,0,0.42)];
   }
 
   .markdown-preview {
-    @apply text-sm leading-7 text-slate-700;
+    @apply text-sm leading-7 text-slate-300;
   }
 
   .markdown-preview h1 {
-    @apply mb-4 border-b border-slate-200 pb-3 text-2xl font-semibold tracking-tight text-slate-950;
+    @apply mb-4 border-b border-slate-800 pb-3 text-2xl font-semibold tracking-tight text-slate-100;
   }
 
   .markdown-preview h2 {
-    @apply mb-3 mt-6 border-b border-slate-100 pb-2 text-xl font-semibold text-slate-950;
+    @apply mb-3 mt-6 border-b border-slate-800 pb-2 text-xl font-semibold text-slate-100;
   }
 
   .markdown-preview h3 {
-    @apply mb-2 mt-5 text-lg font-semibold text-slate-950;
+    @apply mb-2 mt-5 text-lg font-semibold text-slate-100;
   }
 
   .markdown-preview h4,
   .markdown-preview h5,
   .markdown-preview h6 {
-    @apply mb-2 mt-4 text-base font-semibold text-slate-900;
+    @apply mb-2 mt-4 text-base font-semibold text-slate-200;
   }
 
   .markdown-preview p {
@@ -209,15 +315,15 @@
   }
 
   .markdown-preview blockquote {
-    @apply mb-4 border-l-4 border-sky-200 bg-sky-50 px-4 py-2 text-slate-600;
+    @apply mb-4 border-l-4 border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sky-100;
   }
 
   .markdown-preview pre {
-    @apply mb-4 overflow-auto rounded-lg border border-slate-200 bg-slate-950 px-4 py-3 text-slate-100;
+    @apply mb-4 overflow-auto rounded-md border border-slate-800 bg-slate-950 px-4 py-3 text-slate-100;
   }
 
   .markdown-preview code {
-    @apply rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[12px] text-slate-900;
+    @apply rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[12px] text-slate-100;
   }
 
   .markdown-preview pre code {
@@ -225,10 +331,122 @@
   }
 
   .markdown-preview strong {
-    @apply font-semibold text-slate-950;
+    @apply font-semibold text-slate-100;
   }
 
   .markdown-preview a {
-    @apply font-medium text-sky-700 underline decoration-sky-200 underline-offset-4 hover:text-sky-900;
+    @apply font-medium text-sky-300 underline decoration-sky-500/40 underline-offset-4 hover:text-sky-200;
   }
+}
+
+.psop-dark .bg-white {
+  background-color: rgb(15 23 42 / 0.78) !important;
+}
+
+.psop-dark .bg-slate-50,
+.psop-dark .bg-slate-50\/70,
+.psop-dark .bg-slate-50\/80,
+.psop-dark .bg-slate-100 {
+  background-color: rgb(9 9 11 / 0.52) !important;
+}
+
+.psop-dark .bg-sky-50,
+.psop-dark .bg-sky-50\/80 {
+  background-color: rgb(14 165 233 / 0.12) !important;
+}
+
+.psop-dark .bg-rose-50 {
+  background-color: rgb(244 63 94 / 0.12) !important;
+}
+
+.psop-dark .bg-orange-50 {
+  background-color: rgb(249 115 22 / 0.12) !important;
+}
+
+.psop-dark .border-slate-200,
+.psop-dark .border-slate-300,
+.psop-dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgb(30 41 59) !important;
+}
+
+.psop-dark .text-slate-950,
+.psop-dark .text-slate-900,
+.psop-dark .text-slate-800 {
+  color: rgb(226 232 240) !important;
+}
+
+.psop-dark .text-slate-700,
+.psop-dark .text-slate-600 {
+  color: rgb(203 213 225) !important;
+}
+
+.psop-dark .text-sky-700,
+.psop-dark .text-sky-800,
+.psop-dark .text-sky-900 {
+  color: rgb(125 211 252) !important;
+}
+
+.psop-dark .text-rose-600,
+.psop-dark .text-rose-700,
+.psop-dark .text-rose-800 {
+  color: rgb(253 164 175) !important;
+}
+
+.psop-dark .text-orange-700,
+.psop-dark .text-orange-800,
+.psop-dark .text-orange-900 {
+  color: rgb(253 186 116) !important;
+}
+
+.eg-bpmn-viewer .djs-container,
+.eg-bpmn-viewer .djs-viewport {
+  background: #09090b !important;
+}
+
+.eg-bpmn-viewer .djs-shape .djs-visual > :first-child {
+  fill: #0f172a !important;
+  stroke: #64748b !important;
+  stroke-width: 2px !important;
+}
+
+.eg-bpmn-viewer .djs-connection .djs-visual path {
+  stroke: #64748b !important;
+  stroke-width: 2px !important;
+}
+
+.eg-bpmn-viewer .djs-label,
+.eg-bpmn-viewer .djs-label tspan {
+  fill: #e2e8f0 !important;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif !important;
+}
+
+.eg-bpmn-viewer .eg-kind-start .djs-visual > :first-child {
+  stroke: #fb923c !important;
+}
+
+.eg-bpmn-viewer .eg-kind-input .djs-visual > :first-child {
+  stroke: #a78bfa !important;
+}
+
+.eg-bpmn-viewer .eg-kind-llm .djs-visual > :first-child {
+  stroke: #38bdf8 !important;
+}
+
+.eg-bpmn-viewer .eg-kind-tool .djs-visual > :first-child {
+  stroke: #f59e0b !important;
+}
+
+.eg-bpmn-viewer .eg-kind-terminal .djs-visual > :first-child {
+  stroke: #fb7185 !important;
+}
+
+.eg-bpmn-viewer .eg-node-selected .djs-visual > :first-child {
+  stroke: #f8fafc !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 10px rgb(249 115 22 / 0.45));
+}
+
+.eg-bpmn-viewer .djs-minimap,
+.eg-bpmn-viewer .djs-search-container {
+  color: #e2e8f0;
 }

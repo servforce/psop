@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.domain.compiler.schemas import CompileRequestResponse
+
 
 class SkillVersionSummaryResponse(BaseModel):
     id: str
@@ -103,7 +105,7 @@ class SaveSkillSourceRequest(BaseModel):
     base_commit_sha: str = Field(min_length=1)
     readme_content: str
     skill_md_content: str
-    skill_yaml_content: str
+    skill_yaml_content: str = ""
 
 
 class SaveSkillRepositoryFileRequest(BaseModel):
@@ -129,3 +131,4 @@ class PublishSkillResponse(BaseModel):
     publish_record: SkillPublishRecordResponse
     published_version: SkillVersionSummaryResponse
     published_commit_sha: str
+    compile_request: CompileRequestResponse | None = None

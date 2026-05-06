@@ -87,12 +87,23 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 生产环境优先同镜像多进程部署，避免 v1 过早分裂过多服务。
 - `Sandbox Manager` 不作为常驻独立主进程；只在需要隔离时申请 lease。
 
+### 5.4 本地环境变量约定
+
+- PostgreSQL 与 GitLab 仍是基础必需配置，继续通过 `PSOP_DATABASE_*` 与 `PSOP_GITLAB_*` 注入。
+- 对象存储通过 `PSOP_OBJECT_STORE_*` 注入，用于保存 `EG Compile Artifact`、大对象证据与未来 terminal 二进制内容。
+- OpenTelemetry 通过 `PSOP_OTEL_*` 注入；本地默认使用 OTLP HTTP/protobuf `4318`，可关闭采集，但 trace 关联键和 `trace_event` 写入不能关闭。
+- LLM Inference Gateway 初始采用 OpenAI-compatible 配置：`PSOP_LLM_PROVIDER=openai-compatible`、`PSOP_LLM_API_BASE_URL`、`PSOP_LLM_API_KEY`、`PSOP_LLM_DEFAULT_MODEL`。
+- Runtime worker 通过 `PSOP_RUNTIME_*` 控制是否启用、job lease、最大尝试次数和单步超时。
+- v1 默认不要求 Redis、Celery 或独立消息队列；所有 compile/runtime job 以 PostgreSQL 表作为事实源。
+
 ## 6. 模块拆分与职责
 
 ### 6.1 `SkillsModule`
 
 - 负责 `skill_definition`、`skill_version`、`skill_publish_record` 以及 GitLab 仓库绑定管理。
-- 负责草稿版本、已发布版本、版本冻结、发布审计与对 `Web IDE` 的读写模型。
+- 负责草稿版本、已发布版本、版本冻结、发布记录与对 `Web IDE` 的读写模型。
+- 负责维护 PostgreSQL 中 draft `skill_version.manifest_snapshot`，它是用户可视化配置、系统默认规则与 Skill 基础信息合成后的结构化机器契约草稿。
+- 负责在保存、发布前根据 draft `manifest_snapshot` 生成或刷新发布版本的 frozen `manifest_snapshot`；用户不直接维护 `skill.yaml`。
 - 负责在发布完成后创建 `skill_compile_request`，但不直接承担编译执行。
 
 ### 6.2 `Skill` 形式定义
@@ -103,7 +114,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
   - `source revision`：用于草稿或发布的 `branch / tag / commit SHA`
   - `interface contract`：入口、输入输出语义、外部可见调用方式
   - `capability declarations`：所需 `terminal`、`MCP tool`、`LLM model`、`sandbox` 等能力声明
-  - `compile config`：formal revision、编译目标、校验规则
+  - `compile config`：formal revision、编译目标、可选 `domain_pack`、校验规则
   - `runtime policy`：超时、重试、预算、并发、隔离等级
   - `publish metadata`：版本号、发布说明、发布时间、来源 revision
 - `Skill` 是用户在 `Web IDE` 中定义与维护的正式对象，不是 `EG source`。
@@ -111,10 +122,21 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 ### 6.3 `GitLabSkillRepository`
 
-- `GitLab` 是 `skill source` 的正式事实源；PSOP 数据库只保存元数据、冻结引用、索引快照与运行时关联关系。
-- `skill_definition` 绑定到 `GitLab project` 与 `manifest_path`；`skill_version` 绑定到具体 `git ref`。
-- 发布动作必须冻结到明确的 `commit SHA`；编译只读取该 SHA 对应内容，确保可回放、可审计、可重放编译。
-- 数据库可以缓存 `manifest_snapshot`、诊断摘要和检索索引，但这些缓存不替代 GitLab 事实源。
+- `GitLab` 是用户可读 source 的事实源，默认承载 `SKILL.md`、`README.md`、示例、脚本、引用资料等用户维护内容。
+- `PostgreSQL` 是结构化机器契约的事实源，默认通过 draft `skill_version.manifest_snapshot` 承载当前草稿 manifest，通过 published `skill_version.manifest_snapshot` 承载发布冻结 manifest。
+- `skill_definition` 绑定到 `GitLab project`、默认分支与可选 `manifest_path`；`skill_version` 同时绑定具体 `git ref` 与冻结的 `manifest_snapshot`。
+- 发布动作必须冻结到明确的 `commit SHA`，并同时冻结当时的 `manifest_snapshot`；编译只读取冻结 commit 下的用户 source 与 frozen manifest snapshot，不读取草稿分支头或实时配置。
+- `skill.yaml` 不再是用户必须编辑的源文件；如写入 GitLab，只能作为 PSOP 根据当前草稿 `manifest_snapshot` 生成的只读编译视图，用于预览、离线复现、代码审查和跨系统迁移。
+
+#### 6.3.1 `manifest draft / snapshot` 生成规则
+
+- `SKILL.md` 是用户与 Agent 面向的执行说明正文，负责描述目标、步骤、约束、示例与注意事项。
+- draft `skill_version.manifest_snapshot` 是机器契约草稿和编译视图，来源于 Web IDE 表单、Skill 基础信息、系统默认规则、受控策略模板以及当前 `SKILL.md` / `README.md` 正文。
+- `manifest snapshot` 是发布时冻结的结构化契约，必须与 `skill_version.source_commit_sha` 一起被写入 `skill_version`。
+- `manifest_snapshot.prompt_material` 必须保存当前草稿的 `SKILL.md` 与 `README.md` 正文；`SKILL.md` 变更会重建 draft snapshot 的 prompt material，但不会自动改写输入输出、capability 或 runtime policy 等结构化机器契约字段。
+- draft snapshot 是随草稿变化的临时投影，不维护单独审计或变更记录；只有发布时复制出的 published snapshot 才会作为编译输入产生正式影响。
+- `skill.yaml` 是 `manifest snapshot` 的可选序列化视图；系统可以在创建或发布时写回 GitLab，但普通编辑页默认隐藏或标记为系统生成文件。
+- 准确性保障不依赖自然语言抽取，而依赖当前 source 到 snapshot 的确定性投影、结构化字段校验、默认值填充、编译 diagnostics 和运行时 artifact 绑定。
 
 ### 6.4 `SkillCompiler`
 
@@ -122,6 +144,48 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 输出 `eg_compile_artifact`、`compile_diagnostic` 和静态分析摘要。
 - 编译成功的前提是 artifact 能映射到 formal v5 定义。
 - 不负责 skill 发布、仓库绑定或版本冻结；`/api/compiler/*` 只承载编译相关接口。
+- 编译输入固定来自冻结 `source_commit_sha` 下的 `SKILL.md`、`README.md`、后续扩展目录，以及 `skill_version.manifest_snapshot`；不得读取草稿分支头或工作区临时内容。
+- 如果 GitLab 中存在系统生成的 `skill.yaml`，编译器只能把它作为只读编译视图校验是否与 `manifest_snapshot` 一致，不得以用户可修改文件覆盖数据库中的冻结机器契约。
+- `SkillCompileAgent` 的系统提示词、输入契约、修复契约与输出 schema 必须来自 repo-backed `Agent Prompt Pack`，当前默认包为 `skill_compilation/formal_v5_compile/v1`。
+- 行业差异不拆分编译器；编译器从 `skill.compile_config.domain_pack` 选择可选 `Domain Pack`，当前内置 `generic/v1`、`industrial_inspection/v1`、`equipment_maintenance/v1`，未知值回退到 `generic/v1` 并写入 warning diagnostic。
+- 编译流程分为四阶段：
+  - `parse`：读取 published `manifest_snapshot`，其中 `prompt_material.skill_md` 和 `prompt_material.readme` 是发布时冻结的 agent-facing 说明与用户说明；冻结 commit 下的文件可作为一致性校验和兜底读取。
+  - `normalize`：构造 `SkillCompileAgent` 的输入上下文，包括 Skill metadata、`SKILL.md`、`README.md`、manifest snapshot、Agent Prompt Pack metadata、Domain Pack guidance、允许的节点类型、actor、tool 与受控 DSL 约束。
+  - `infer`：通过 `LLM Inference Gateway` 调用 SKILL 编译智能体，要求其输出 formal v5 EG candidate；每次调用必须记录 agent id、prompt version、prompt hash、domain pack id 与 domain pack hash；如果输出不是合法 JSON 或不满足校验，服务端将 diagnostics 回传给智能体做一次修正。
+  - `validate`：由服务端先对常见 LLM 近似 DSL 做确定性规范化，例如 `op/value` guard、`token.user_input` 等路径别名，再校验 formal revision、必需字段、节点类型、guard DSL、merge DSL、actor/tool 白名单、启动节点和终止条件；所有错误写入 `compile_diagnostic`。
+  - `emit`：生成 formal v5 `EG Compile Artifact`，写入对象存储，并在 `eg_compile_artifact` 与 `artifact_object` 中建立索引。
+- 编译成功至少产生三个逻辑产物：
+  - `eg.compile.artifact.json`：RuntimeKernel 的正式执行输入，包含 graph、节点定义、guard、actor、merge、policy 与 metadata。
+  - `compile_summary.json`：供前端展示的图摘要、能力摘要、输入输出摘要与静态分析摘要。
+  - `diagnostics.json`：warnings、notes 与 source location，失败时作为定位依据。
+- 成功 artifact 顶层必须包含 `compiler_metadata`，记录 Agent Prompt Pack 与 Domain Pack 的版本和 hash，用于 Replay、OTel 与问题排查。
+- `skills/skill-compiler` 当前目录内的 step/transition v1 契约只能作为历史参考；服务端正式编译目标必须以 formal v5 和本文档为准。
+
+#### 6.4.1 SKILL 编译智能体
+
+- SKILL 编译智能体只负责把 Skill source 转换为 formal v5 EG candidate，不执行业务任务，不调用外部工具，不输出非 JSON 内容。
+- 智能体系统提示词必须固化 formal v5 的核心语义：Session Token、guarded rewrite、Prompt View、Actor、Merge、Halt 与 policy。
+- 智能体系统提示词不得硬编码在业务 service 中；应从 `backend/app/agents/skill_compilation/formal_v5_compile/v*/system.md` 读取，并通过 hash 追踪。
+- `Domain Pack` 只能提供行业术语、常见流程、质量标准和安全提醒，不能改变 formal v5、actor/tool 白名单、guard DSL、merge DSL 或 Runtime 状态主权。
+- 智能体输出只是一份候选产物；是否可运行由服务端 validator 决定，不能直接信任模型输出。
+- MVP 支持节点类型：`start`、`input`、`llm`、`tool`、`terminal`；`approval`、`timer`、`skill` 可作为 formal v5 已知类型保留，但当前 Runtime 不执行。
+- MVP 支持 actor：`runtime.start`、`runtime.input`、`agent.llm`、`capability.demo_tool`、`runtime.terminal`；tool 白名单仅包含 `psop.demo.inspect_input`。
+- MVP guard/merge 不允许生成或执行任意代码，只允许受控 JSON DSL：`always`、`phase_is`、`field_exists`、`field_equals`、`all`、`any`、`not` 和 `op=set`。
+
+#### 6.4.2 Formal v5 Artifact 最小结构
+
+编译产物至少包含：
+
+- `formal_revision`
+- `schema`
+- `nodes`
+- `init`
+- `halt`
+- `policies`
+- `dependency_graph_for_view`
+- `runtime_contract`
+
+`dependency_graph_for_view` 仅供前端展示和静态分析，不是运行时固定边；正式可执行性仍由 Session Token 和 guard 动态诱导。
 
 ### 6.5 `RuntimeKernel`
 
@@ -129,11 +193,29 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 驱动 `Sync -> Enabled -> Sel -> Actor -> Merge -> Trace` 循环。
 - 写入 `session_token_snapshot` 与 `trace_event`。
 - 管理 run 生命周期与 terminal waiting 状态。
+- RuntimeKernel 是唯一允许推进 `run.status`、`runtime_phase`、`latest_snapshot_seq` 和正式 Session Token 的模块。
+- 每次小步推进必须在同一事务边界内完成：读取当前 snapshot、计算 enabled set、选择节点、执行 actor、merge observation、追加 snapshot 与 trace event。
+- 终止条件包括：`final` 节点完成、actor 失败且不可重试、预算耗尽、run 超时、用户取消、或进入 `waiting_input`。
+- RuntimeKernel 不直接调用模型、MCP 或外部 tool；所有能力调用都经 `CapabilityHost`，并将返回 observation 后再 merge。
+- 运行态不能读取未发布草稿；只能加载与 `skill_invocation.compile_artifact_id` 绑定的 artifact。
+
+#### 6.5.1 小步推进细则
+
+1. `Sync`：把 gateway 输入、terminal event 或取消信号同步到当前 Token 的只读候选视图；无外部变化时保持空同步。
+2. `Enabled`：根据 artifact guards 与当前 Token 计算 enabled nodes，并写入 snapshot 的 `enabled_set`。
+3. `Sel`：MVP 使用 artifact 中的 priority 与节点 id 稳定排序选择 enabled 节点；多候选时必须记录 `selection_summary`。
+4. `Actor`：根据节点类型调用本地 actor、AgentModule 或 CapabilityHost，并得到 observation，不直接改 Token。
+5. `Merge`：由 RuntimeKernel 按 artifact merge rule 将 observation 合入 Token，生成新的 `token_payload` 与 `snapshot_hash`。
+6. `Trace`：追加 `trace_event`，并把 `run_id`、`compile_artifact_id`、`node_id`、`tool_call_id`、`span_id` 等关联键写入事件 payload。
 
 ### 6.6 `CapabilityHost`
 
 - 把运行时节点对能力的需求映射到 gateway 能力。
 - 负责 capability binding、policy 检查、超时和预算控制。
+- 所有 LLM、MCP/tool、terminal、sandbox 能力调用都必须通过 CapabilityHost 进入，不允许 actor 绕过统一边界直连 provider。
+- CapabilityHost 读取 artifact 中的 `capability_binding` 与 runtime policy，执行目标解析、预算扣减、超时控制、错误归一化和 trace metadata 生成。
+- issue #1 的内置 demo tool 也必须注册为受控 capability，便于未来平滑替换为 MCP tool。
+- CapabilityHost 返回的是 observation 和调用审计摘要；它不写 Session Token，不直接更新 run 终态。
 
 ### 6.7 `TerminalGateway`
 
@@ -153,8 +235,14 @@ sandbox       -> 按需创建的进程或容器，不常驻
 ### 6.10 `AgentModule`
 
 - `AgentModule` 是 PSOP 中与智能体相关的正式模块边界，负责 agent runtime、sub-agent、memory、planning、tool-use orchestration 与 harness 抽象。
+- `AgentModule` 负责消费 repo-backed `Agent Prompt Assets` 与可选 `Domain Packs`，但提示词资产本身不是正式运行时状态对象。
+- `Agent Prompt Assets` 第一层按 `skill_creation`、`skill_compilation`、`runtime_execution` 等职责/场景分类；行业知识只能作为 `domain_packs/*/v*` 注入，避免为每个行业复制一套智能体。
 - 可借鉴或复用 DeerFlow 的优秀设计与实现，但 `DeerFlow` 不是产品事实源，也不是需要原样照搬的正式模块。
 - `AgentModule` 只为 `Actor` 执行提供智能体能力，不拥有正式状态主权。
+- 在 issue #1 中，AgentModule 的最小职责是：构造 LLM Prompt View、调用 LLM Inference Gateway、解析模型输出、决定是否需要受控 tool，并把结果归一化为 actor observation。
+- AgentModule 可以维护短生命周期执行上下文，但该上下文不是正式状态；进程重启后必须能从 `session_token_snapshot` 与 artifact 重新构造所需视图。
+- AgentModule 不直接写 `run`、`session_token_snapshot`、`trace_event`，也不直接调用 provider SDK；这些分别由 RuntimeKernel、TraceBus/Repository、CapabilityHost/LLMInferenceGateway 负责。
+- DeerFlow、LangGraph 或其他 harness 只能作为适配层或参考实现接入 `harness/`，不得替代 RuntimeKernel 的状态主权。
 
 ### 6.11 `ReplayService`
 
@@ -175,13 +263,15 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 ### 7.1 运行前：Skill 构建、发布与编译
 
-1. `WEB IDE` 创建或更新 `skill_definition`，并绑定对应的 GitLab 仓库、默认分支与 manifest 路径。
-2. 草稿版本跟踪某个 GitLab 工作分支或引用；用户编辑的正式 skill source 保存在 GitLab 中。
+1. `WEB IDE` 创建或更新 `skill_definition`，并绑定对应的 GitLab 仓库、默认分支与系统管理的 draft manifest。
+2. 草稿版本跟踪某个 GitLab 工作分支或引用；用户编辑的正式 skill source 保存在 GitLab 中，结构化机器契约保存在 draft `skill_version.manifest_snapshot` 中。
 3. 用户对某个 draft version 或指定 git revision 发起 publish。
-4. `SkillsModule` 解析并冻结 `source_commit_sha`，写入 `skill_publish_record`，将待发布版本固化为正式编译输入。
-5. `SkillsModule` 创建 `skill_compile_request` 并投递 compile job。
-6. `SkillCompiler` 读取 GitLab 中该冻结 commit 对应的 skill source，执行 parse、normalize、validate、emit。
-7. 编译成功则写入 `eg_compile_artifact`，失败则写入 `compile_diagnostic`；最新已发布版本只指向最新成功 artifact。
+4. `SkillsModule` 先写入 `skill_publish_record`，初始状态为 `compiling`；随后解析并冻结 `source_commit_sha`，同时复制当前 draft `manifest_snapshot` 到 published version，将待发布版本固化为正式编译输入。若冻结源码阶段失败，该发布记录必须更新为 `failed`，用于前端与数据库回溯。
+5. `SkillsModule` 创建 `skill_compile_request` 并投递 compile job；`POST /skills/{skill_id}/publish` 必须快速返回 `202 Accepted`，不在 API 请求内同步等待 LLM 编译完成。
+6. `runtime_job.payload` 保存发布进度阶段，固定阶段为 `source_frozen -> compile_request_created -> source_loaded -> manifest_checked -> agent_compiling -> artifact_validating -> artifact_emitting -> publish_finalizing`，每个阶段状态为 `pending | running | succeeded | failed`。
+7. 前端通过 `/api/compiler/requests/{compile_request_id}/events` 订阅 `text/event-stream`；SSE 只读取数据库快照并推送 `publish.progress / publish.terminal / publish.error`，断线后可通过 `/progress` 恢复。
+8. Worker claim compile job 后，`SkillCompiler` 读取 GitLab 中该冻结 commit 对应的用户 source 与数据库中的 frozen manifest snapshot，经 SKILL 编译智能体生成 EG candidate，并执行 formal v5 validator。
+9. 编译成功则写入 `eg_compile_artifact`，将 `skill_publish_record.publish_status` 更新为 `published`，并推进 `skill_definition.latest_published_version_id`；失败则写入 `compile_diagnostic`，将发布记录更新为 `failed`，且最新已发布版本不前进。
 
 ### 7.2 运行时：Invocation 与 Runtime Execution
 
@@ -227,7 +317,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 唯一约束：`uk_skill_definition_key`
 - 索引：`idx_skill_definition_status_updated_at`
 - 审计字段：`created_at`、`updated_at`
-- 主链路关联：skill 总对象与 GitLab 仓库绑定，供发布、调用和检索使用
+- 主链路关联：skill 总对象与 GitLab 仓库绑定，供发布、调用和检索使用；当前草稿机器契约保存在 draft `skill_version.manifest_snapshot`
 
 #### 8.2.2 `skill_version`
 
@@ -238,7 +328,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 唯一约束：`uk_skill_version_definition_version_no`
 - 索引：`idx_skill_version_definition_status`
 - 审计字段：`created_at`、`updated_at`
-- 主链路关联：skill 的草稿或冻结版本；published version 必须绑定明确 `commit SHA`
+- 主链路关联：skill 的草稿或冻结版本；published version 必须绑定明确 `commit SHA` 与当时的 `manifest_snapshot`
 
 #### 8.2.3 `skill_publish_record`
 
@@ -272,6 +362,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 索引：`idx_eg_compile_artifact_version_status`
 - 审计字段：`created_at`
 - 主链路关联：runtime 的正式执行输入
+- v1 不为 prompt/domain 追溯新增独立列；`compiler_metadata` 写入 `artifact_object.content_json` 顶层，包含 agent id、prompt version、prompt hash、domain pack id 与 domain pack hash。
 
 #### 8.2.6 `compile_diagnostic`
 
@@ -283,6 +374,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 索引：`idx_compile_diagnostic_request_severity`
 - 审计字段：`created_at`
 - 主链路关联：publish / compile 失败与告警定位
+- `compile.agent.prompt_pack` 与 `compile.agent.domain_pack_fallback` 等诊断通过 `location JSONB` 保存 Agent Prompt Pack / Domain Pack 元数据，不新增数据库迁移。
 
 #### 8.2.7 `skill_invocation`
 
@@ -422,6 +514,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 外键：`run_id`、`compile_request_id`
 - 关键字段：`job_type`、`status`、`payload JSONB`、`lease_until`、`dedupe_key`、`attempt_no`
 - 状态枚举：`pending | claimed | running | succeeded | failed | cancelled | deadletter`
+- compile job 的 `payload.progress_stages` 是发布阶段进度事实源，供 `/progress` 与 SSE 读取；不新增独立进度表。
 - 唯一约束：`uk_runtime_job_dedupe_key`
 - 索引：`idx_runtime_job_status_available_at`、`idx_runtime_job_lease_until`
 - 审计字段：`created_at`、`updated_at`
@@ -522,12 +615,12 @@ sandbox       -> 按需创建的进程或容器，不常驻
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/skills` | 列表与筛选 | `query: key,status,page` | `skill summary list` |
-| `POST` | `/api/skills` | 创建 skill 与 GitLab 绑定 | `{ key, name, description, gitlab_project_id, default_branch, manifest_path }` | `skill detail` |
+| `POST` | `/api/skills` | 创建 skill、GitLab 绑定与 manifest draft | `{ key, name, description, gitlab_project_id?, default_branch?, manifest_config? }` | `skill detail` |
 | `GET` | `/api/skills/{skill_id}` | skill 详情 | 无 | `skill detail + versions summary` |
-| `PATCH` | `/api/skills/{skill_id}` | 更新 skill 元数据与仓库绑定 | `{ name, description, status, default_branch, manifest_path }` | `skill detail` |
+| `PATCH` | `/api/skills/{skill_id}` | 更新 skill 元数据、仓库绑定与 manifest draft 镜像字段 | `{ name, description, status, default_branch?, manifest_config? }` | `skill detail` |
 | `POST` | `/api/skills/{skill_id}/versions` | 创建草稿版本 | `{ base_version_id?, source_ref? }` | `skill version detail` |
 | `GET` | `/api/skills/{skill_id}/versions/{skill_version_id}` | 版本详情 | 无 | `skill version detail` |
-| `PATCH` | `/api/skills/{skill_id}/versions/{skill_version_id}` | 更新 draft 版本元数据或跟踪引用 | `{ source_ref, compile_config, runtime_policy }` | `skill version detail` |
+| `PATCH` | `/api/skills/{skill_id}/versions/{skill_version_id}` | 更新 draft 版本元数据、跟踪引用或结构化 manifest draft | `{ source_ref?, interface_contract?, capabilities?, compile_config?, runtime_policy? }` | `skill version detail` |
 | `POST` | `/api/skills/{skill_id}/publish` | 发布 skill 并触发自动编译 | `{ skill_version_id, publish_reason, expected_commit_sha? }` | `{ publish_record, compile_request }` |
 | `GET` | `/api/skills/{skill_id}/publishes` | 发布记录列表 | `query: status,page` | `publish record list` |
 
@@ -535,6 +628,8 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 - `PATCH skill version` 只允许 `draft`。
 - `publish` 必须冻结到明确的 `source_commit_sha`。
+- `publish` 必须同时冻结 `manifest_snapshot`，编译以该 snapshot 为机器契约事实源。
+- `domain_pack` 不新增 REST 入口；如需指定行业包，通过 draft `manifest_snapshot.skill.compile_config.domain_pack` 或对应 manifest 配置字段进入发布冻结视图。
 - 对已发布版本的变更必须通过创建新 draft 完成。
 
 ### 9.5 `/api/compiler/*`
@@ -544,6 +639,8 @@ sandbox       -> 按需创建的进程或容器，不常驻
 | `GET` | `/api/compiler/requests` | compile request 列表 | `query: skill_id,status,page` | `compile request summary list` |
 | `GET` | `/api/compiler/requests/{compile_request_id}` | request 详情 | 无 | `compile request detail` |
 | `POST` | `/api/compiler/requests/{compile_request_id}/retry` | 重试编译 | 无 | `compile request detail` |
+| `GET` | `/api/compiler/requests/{compile_request_id}/progress` | 发布/编译阶段进度快照 | 无 | `publish progress snapshot` |
+| `GET` | `/api/compiler/requests/{compile_request_id}/events` | 发布/编译阶段 SSE 事件流 | 无 | `text/event-stream` |
 | `GET` | `/api/compiler/requests/{compile_request_id}/diagnostics` | 诊断列表 | 无 | `compile diagnostic list` |
 | `GET` | `/api/compiler/artifacts/{compile_artifact_id}` | artifact 详情 | 无 | `compile artifact detail` |
 
@@ -551,6 +648,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 - `/api/compiler/*` 只处理编译对象，不承载 skill 发布动作。
 - 每个 compile request 都必须绑定冻结的 `skill_version` 与 `source_commit_sha`。
+- compiler response DTO 不新增单独 prompt 字段；prompt/domain 追溯通过 artifact payload 的 `compiler_metadata` 与 diagnostics 的 `location` 暴露。
 - `retry` 必须保留历史 request，不覆盖原记录。
 
 ### 9.6 `/api/gateway/invocations/*`
@@ -673,6 +771,10 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - `trace_id`
 - `span_id`
 - `tool_call_id`
+- `agent_id`
+- `agent_prompt_hash`
+- `domain_pack_id`
+- `domain_pack_hash`
 
 ### 11.2 Span 设计
 

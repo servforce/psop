@@ -1,0 +1,7 @@
+{
+  "format": "json",
+  "repair_field": "repair_diagnostics",
+  "max_attempts": 2,
+  "instruction": "When repair_diagnostics is non-empty, fix only the reported JSON or formal-v5 violations and return one complete JSON object."
+}
+

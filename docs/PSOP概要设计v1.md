@@ -69,9 +69,10 @@
 2. `Session Token` 是唯一正式状态对象
 3. `Runtime Kernel` 是唯一状态主权者
 4. `Lead Agent` 只做建议，不做正式状态提交
-5. `Run != OS 进程`，执行层采用 `Run -> Worker -> Sandbox` 分层
-6. `MCP` 是能力协议，不是状态协议
-7. `OpenTelemetry + Trace/Replay` 统一承载运行时观测闭环
+5. `Agent Prompt Assets` 按智能体职责和产品场景版本化管理，行业差异通过 `Domain Pack` 注入，不作为第一层模块边界
+6. `Run != OS 进程`，执行层采用 `Run -> Worker -> Sandbox` 分层
+7. `MCP` 是能力协议，不是状态协议
+8. `OpenTelemetry + Trace/Replay` 统一承载运行时观测闭环
 
 ## 5. 总体架构
 
@@ -107,6 +108,8 @@ flowchart TB
     subgraph Agents["Agent Layer"]
         AgentModule["Agent Module"]
         CapabilityHost["Capability Host"]
+        PromptAssets["Agent Prompt Assets"]
+        DomainPacks["Domain Packs"]
     end
 
     subgraph Exec["Worker / Sandbox Layer"]
@@ -126,6 +129,8 @@ flowchart TB
     Web --> Runtime
     Web --> GitLabRepo
     Runtime --> Agents
+    AgentModule --> PromptAssets
+    PromptAssets --> DomainPacks
     Agents --> Exec
     Runtime --> Store
     Exec --> Store
@@ -144,6 +149,8 @@ flowchart TB
 - `Sandbox Manager` 按需为高风险节点提供隔离环境
 - `State Store + Trace Store + Object Store` 负责恢复、回放与对象证据存储
 - `Agent Module` 是 PSOP 的智能体能力层，负责 sub-agent、memory、planning 与 tool-use orchestration
+- `Agent Prompt Assets` 是智能体提示词、输入模板、输出约束和测试样例的 repo-backed 版本化资产
+- `Domain Packs` 是行业术语、流程模式、质量标准和安全边界的可选增强包，不改变正式 `Skill -> EG -> Runtime` 主链路
 - `DeerFlow` 可以作为可借鉴或可复用的 harness 参考实现，但不是产品级模块边界，也不是正式状态主权者
 
 ### 6.2 Gateway / 输入输出模拟器
@@ -184,6 +191,7 @@ flowchart TB
 - `Web IDE` 同时承担 Skill Studio 与运行观测控制台职责
 - `Skills Module` 负责 skill 定义、GitLab 绑定、版本与发布；`Compiler` 只负责编译
 - `GitLab` 是 `skill source` 的正式事实源
+- Agent 提示词按 `skill_creation`、`skill_compilation`、`runtime_execution` 等职责分类保存；行业知识通过 `generic`、`industrial_inspection`、`equipment_maintenance` 等 `Domain Pack` 注入
 - `Skills` 发布后自动编译出 `EG`
 - `Runtime Kernel` 只加载 compile artifact，不直接解释 skill 源码
 - `Gateway` 统一承接 invocation、模拟 I/O 和外部能力接入
@@ -206,6 +214,10 @@ flowchart TB
   - 符合 `PSOP-EG` 形式定义的运行时输入对象
 - `Agent Module`
   - 负责智能体相关的运行时组织与 harness 抽象
+- `Agent Prompt Assets`
+  - 按职责/场景版本化保存智能体提示词、模板、schema、示例和测试
+- `Domain Pack`
+  - 为 Skill 创建、编译和运行时 LLM 节点提供行业上下文增强，不拥有状态主权
 - `Runtime Kernel`
   - 唯一正式执行与状态提交边界
 - `Session Token`

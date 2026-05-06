@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "required": [
+    "directory_tree",
+    "files",
+    "review_notes"
+  ],
+  "properties": {
+    "directory_tree": {
+      "type": "string"
+    },
+    "files": {
+      "type": "object"
+    },
+    "review_notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
+

@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     debug: bool = True
     api_prefix: str = "/api/v1"
     log_level: str = "INFO"
+    log_format: str = "plain"
     cors_allow_origins: list[str] = ["*"]
 
     database_url: str | None = None
@@ -44,6 +45,28 @@ class Settings(BaseSettings):
     gitlab_skills_group_path: str = "skills"
     gitlab_default_branch: str = "main"
     gitlab_timeout_seconds: float = 15.0
+    object_store_endpoint: str = "http://127.0.0.1:9000"
+    object_store_access_key: str = "minioadmin"
+    object_store_secret_key: str = "minioadmin"
+    object_store_bucket: str = "psop-artifacts"
+    object_store_region: str = "us-east-1"
+    object_store_secure: bool = False
+    otel_enabled: bool = True
+    otel_traces_enabled: bool = True
+    otel_logs_enabled: bool = True
+    otel_console_exporter: bool = False
+    otel_exporter_otlp_endpoint: str = "http://127.0.0.1:4318"
+    otel_exporter_otlp_protocol: str = "http/protobuf"
+    otel_service_name: str = "psop-backend"
+    llm_provider: str = "openai-compatible"
+    llm_api_base_url: str = "https://api.openai.com/v1"
+    llm_api_key: str | None = None
+    llm_default_model: str = "gpt-4.1-mini"
+    llm_timeout_seconds: float = 180.0
+    runtime_worker_enabled: bool = True
+    runtime_job_lease_seconds: int = 60
+    runtime_job_max_attempts: int = 3
+    runtime_step_timeout_seconds: int = 120
 
     @property
     def repo_root(self) -> Path:

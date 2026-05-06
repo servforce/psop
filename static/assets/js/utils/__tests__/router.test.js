@@ -1,4 +1,11 @@
-const { normalizePath, resolveAdminRoute, buildSkillDetailPath } = require("../router.node.cjs");
+const {
+  normalizePath,
+  resolveAdminRoute,
+  buildSkillDetailPath,
+  buildRunLivePath,
+  buildReplayPath,
+  buildCompilerArtifactPath
+} = require("../router.node.cjs");
 
 test("normalizePath handles root", () => {
   expect(normalizePath("/")).toBe("/");
@@ -21,4 +28,28 @@ test("resolveAdminRoute extracts skill detail params", () => {
 
 test("buildSkillDetailPath builds the detail location", () => {
   expect(buildSkillDetailPath("skill-123")).toBe("/admin/skills/skill-123");
+});
+
+test("resolveAdminRoute maps issue #1 runtime pages", () => {
+  expect(resolveAdminRoute("/admin/compiler")).toEqual({ name: "compiler-list", params: {} });
+  expect(resolveAdminRoute("/admin/compiler/artifacts/artifact-123")).toEqual({
+    name: "compiler-artifact",
+    params: { artifactId: "artifact-123" }
+  });
+  expect(resolveAdminRoute("/admin/invocations")).toEqual({ name: "invocations-list", params: {} });
+  expect(resolveAdminRoute("/admin/runs/run-123/live")).toEqual({
+    name: "run-live",
+    params: { runId: "run-123" }
+  });
+  expect(resolveAdminRoute("/admin/replay")).toEqual({ name: "replay-list", params: {} });
+  expect(resolveAdminRoute("/admin/replay/runs/run-123")).toEqual({
+    name: "replay-detail",
+    params: { runId: "run-123" }
+  });
+});
+
+test("runtime route builders create live and replay locations", () => {
+  expect(buildRunLivePath("run-123")).toBe("/admin/runs/run-123/live");
+  expect(buildReplayPath("run-123")).toBe("/admin/replay/runs/run-123");
+  expect(buildCompilerArtifactPath("artifact-123")).toBe("/admin/compiler/artifacts/artifact-123");
 });

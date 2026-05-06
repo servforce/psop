@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from contextlib import suppress
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -12,7 +14,10 @@ from app.api.router import api_router
 from app.api.routes.system import root_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
+from app.core.observability import configure_observability
 from app.domain.skills.exceptions import SkillsError
+from app.domain.jobs.worker import RuntimeJobWorker
+from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway, HttpGitLabSkillSourceGateway
 from app.infra.database import DatabaseManager
 
@@ -24,21 +29,45 @@ LOGGER = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     db_manager: DatabaseManager = app.state.db_manager
-    configure_logging(settings.log_level)
-    LOGGER.info("starting %s in %s mode", settings.app_name, settings.environment)
+    configure_logging(settings.log_level, log_format=settings.log_format)
+    observability = configure_observability(app=app, settings=settings, engine=db_manager.engine)
+    app.state.observability = observability
+    LOGGER.info(
+        "starting %s in %s mode",
+        settings.app_name,
+        settings.environment,
+        extra={"service_name": settings.otel_service_name, "otel_enabled": settings.otel_enabled},
+    )
     if settings.database_auto_create_schema:
         db_manager.create_schema()
     if settings.database_check_on_startup:
         db_manager.check_connection()
-    yield
-    db_manager.dispose()
-    LOGGER.info("stopping %s", settings.app_name)
+    worker_task: asyncio.Task[None] | None = None
+    if settings.runtime_worker_enabled:
+        worker = RuntimeJobWorker(
+            settings=settings,
+            database_manager=db_manager,
+            gitlab_gateway=app.state.gitlab_gateway,
+            inference_gateway=app.state.inference_gateway,
+        )
+        worker_task = asyncio.create_task(worker.run_forever())
+    try:
+        yield
+    finally:
+        if worker_task:
+            worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker_task
+        db_manager.dispose()
+        observability.shutdown()
+        LOGGER.info("stopping %s", settings.app_name)
 
 
 def create_app(
     settings: Settings | None = None,
     *,
     gitlab_gateway: GitLabSkillSourceGateway | None = None,
+    inference_gateway: LlmInferenceGateway | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
 
@@ -52,6 +81,7 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.db_manager = DatabaseManager(resolved_settings.sqlalchemy_database_url)
     app.state.gitlab_gateway = gitlab_gateway or HttpGitLabSkillSourceGateway.from_settings(resolved_settings)
+    app.state.inference_gateway = inference_gateway or OpenAICompatibleInferenceGateway.from_settings(resolved_settings)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=resolved_settings.cors_allow_origins,

@@ -6,7 +6,10 @@ from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.domain.compiler.service import CompilerService
+from app.domain.runtime.service import RuntimeService
 from app.domain.skills.service import SkillsService
+from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway
 from app.infra.database import DatabaseManager
 
@@ -23,6 +26,10 @@ def get_gitlab_gateway(request: Request) -> GitLabSkillSourceGateway:
     return request.app.state.gitlab_gateway  # type: ignore[return-value]
 
 
+def get_inference_gateway(request: Request) -> LlmInferenceGateway:
+    return request.app.state.inference_gateway  # type: ignore[return-value]
+
+
 def get_db_session(request: Request) -> Generator[Session, None, None]:
     database_manager: DatabaseManager = get_database_manager(request)
     with database_manager.session() as session:
@@ -30,7 +37,25 @@ def get_db_session(request: Request) -> Generator[Session, None, None]:
 
 
 def get_skills_service(request: Request) -> SkillsService:
+    compiler_service = get_compiler_service(request)
     return SkillsService(
         settings=get_app_settings(request),
         gitlab_gateway=get_gitlab_gateway(request),
+        compiler_service=compiler_service,
+        inference_gateway=get_inference_gateway(request),
+    )
+
+
+def get_compiler_service(request: Request) -> CompilerService:
+    return CompilerService(
+        settings=get_app_settings(request),
+        gitlab_gateway=get_gitlab_gateway(request),
+        inference_gateway=get_inference_gateway(request),
+    )
+
+
+def get_runtime_service(request: Request) -> RuntimeService:
+    return RuntimeService(
+        settings=get_app_settings(request),
+        inference_gateway=get_inference_gateway(request),
     )

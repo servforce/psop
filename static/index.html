@@ -5,23 +5,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PSOP Studio</title>
     <link rel="stylesheet" href="/assets/css/material-symbols.css" />
+    <link rel="stylesheet" href="/node_modules/bpmn-js/dist/assets/diagram-js.css" />
+    <link rel="stylesheet" href="/node_modules/bpmn-js/dist/assets/bpmn-js.css" />
+    <link rel="stylesheet" href="/node_modules/bpmn-js/dist/assets/bpmn-font/css/bpmn-embedded.css" />
     <link rel="stylesheet" href="/assets/css/style.compiled.css" />
     <script defer src="/assets/js/runtime-config.js"></script>
     <script defer src="/assets/js/utils/skill-key.js"></script>
+    <script defer src="/assets/js/utils/eg-bpmn.js"></script>
+    <script defer src="/node_modules/bpmn-js/dist/bpmn-navigated-viewer.production.min.js"></script>
     <script defer src="/assets/js/app.js"></script>
     <script defer src="/node_modules/alpinejs/dist/cdn.min.js"></script>
   </head>
-  <body class="h-dvh overflow-hidden bg-stone-50 text-slate-800">
+  <body class="psop-dark h-dvh overflow-hidden bg-slate-950 text-slate-200">
     <div x-data="skillsConsole()" x-init="boot()" class="h-dvh overflow-hidden" x-cloak>
-      <div class="flex h-dvh overflow-hidden bg-[linear-gradient(135deg,#f8fafc_0%,#ecfeff_44%,#f7f3ea_100%)]">
+      <div class="flex h-dvh overflow-hidden bg-[#09090b]">
         <aside
-            class="hidden h-full shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white shadow-sm transition-all duration-200 lg:flex"
+            class="hidden h-full shrink-0 flex-col overflow-hidden border-r border-slate-800 bg-slate-950/95 shadow-none transition-all duration-200 lg:flex"
             :class="sidebarCollapsed ? 'w-14' : 'w-48'"
           >
-            <div class="h-14 shrink-0 border-b border-slate-200 px-3">
+            <div class="h-14 shrink-0 border-b border-slate-800 px-3">
               <div class="flex h-full min-w-0 items-center gap-3" :class="sidebarCollapsed ? 'justify-center' : ''">
-                <span class="material-symbols-outlined flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-950 text-[20px] text-white">hub</span>
-                <p class="truncate text-sm font-semibold text-slate-950" x-show="!sidebarCollapsed" x-transition.opacity>
+                <button
+                  type="button"
+                  class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-orange-500/30 bg-orange-500/10 text-orange-200 transition hover:border-orange-400/50 hover:bg-orange-500/15 hover:text-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500/30"
+                  :title="sidebarCollapsed ? '展开菜单' : '收起菜单'"
+                  :aria-label="sidebarCollapsed ? '展开菜单' : '收起菜单'"
+                  @click="toggleSidebar()"
+                >
+                  <span class="material-symbols-outlined text-[20px]">hub</span>
+                </button>
+                <p class="truncate text-sm font-semibold text-slate-100" x-show="!sidebarCollapsed" x-transition.opacity>
                   PSOP Studio
                 </p>
               </div>
@@ -31,53 +44,20 @@
               <button
                 type="button"
                 class="sidebar-link"
-                :class="[route.name === 'skills-list' ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                :class="[['skills-list', 'skill-detail'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
                 title="Skills"
                 @click="navigate('/admin/skills')"
               >
                 <span class="material-symbols-outlined text-[20px]">handyman</span>
                 <span x-show="!sidebarCollapsed" x-transition.opacity>Skills</span>
               </button>
-              <button
-                type="button"
-                class="sidebar-link opacity-55"
-                :class="sidebarCollapsed ? 'justify-center px-0' : ''"
-                title="发布记录"
-                disabled
-              >
-                <span class="material-symbols-outlined text-[20px]">rocket_launch</span>
-                <span x-show="!sidebarCollapsed" x-transition.opacity>发布记录</span>
-              </button>
-              <button
-                type="button"
-                class="sidebar-link opacity-55"
-                :class="sidebarCollapsed ? 'justify-center px-0' : ''"
-                title="运行回放"
-                disabled
-              >
-                <span class="material-symbols-outlined text-[20px]">history</span>
-                <span x-show="!sidebarCollapsed" x-transition.opacity>运行回放</span>
-              </button>
             </nav>
-
-            <div class="shrink-0 border-t border-slate-200 px-2 py-2">
-              <button
-                type="button"
-                class="sidebar-link"
-                :class="sidebarCollapsed ? 'justify-center px-0' : ''"
-                :title="sidebarCollapsed ? '展开菜单' : '收起菜单'"
-                @click="toggleSidebar()"
-              >
-                <span class="material-symbols-outlined text-[20px]">menu_open</span>
-                <span x-show="!sidebarCollapsed" x-transition.opacity>收起菜单</span>
-              </button>
-            </div>
         </aside>
 
         <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            <header class="z-20 h-14 shrink-0 border-b border-slate-200 bg-white/90 backdrop-blur">
+            <header class="z-20 h-14 shrink-0 border-b border-slate-800 bg-slate-950/70 backdrop-blur">
               <div class="flex h-full items-center justify-between px-4">
-                <h1 class="truncate text-sm font-semibold text-slate-950" x-text="routeTitle()"></h1>
+                <h1 class="truncate text-sm font-semibold text-slate-100" x-text="routeTitle()"></h1>
               </div>
             </header>
 
@@ -113,16 +93,23 @@
 
               <template x-if="loadingPage">
                 <div class="h-full p-4">
-                  <div class="h-full animate-pulse rounded-xl border border-slate-200 bg-white/80"></div>
+                  <div class="h-full animate-pulse rounded-md border border-slate-800 bg-slate-900/40"></div>
                 </div>
               </template>
 
               <div id="skills-list-page" class="h-full" x-show="!loadingPage && route.name === 'skills-list'"></div>
               <div id="skill-detail-page" class="h-full" x-show="!loadingPage && route.name === 'skill-detail' && currentSkill"></div>
+              <div id="compiler-list-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-list'"></div>
+              <div id="compiler-artifact-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-artifact' && compilerArtifact"></div>
+              <div id="invocations-list-page" class="h-full" x-show="!loadingPage && route.name === 'invocations-list'"></div>
+              <div id="run-live-page" class="h-full" x-show="!loadingPage && route.name === 'run-live' && liveRun"></div>
+              <div id="replay-list-page" class="h-full" x-show="!loadingPage && route.name === 'replay-list'"></div>
+              <div id="replay-detail-page" class="h-full" x-show="!loadingPage && route.name === 'replay-detail' && replayDetail"></div>
             </section>
         </main>
 
         <div id="create-skill-modal-page"></div>
+        <div id="publish-skill-drawer-page"></div>
         <div id="delete-skill-modal-page"></div>
       </div>
     </div>

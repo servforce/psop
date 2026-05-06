@@ -1,0 +1,139 @@
+<template x-if="publishDrawerOpen && currentSkill">
+  <div class="fixed inset-0 z-50 flex justify-end bg-slate-950/35 backdrop-blur-[2px]" @click.self="closePublishDrawer()" @keydown.escape.window="closePublishDrawer()">
+    <section class="flex h-full w-full max-w-xl flex-col overflow-hidden border-l border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.24)]" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="translate-x-full opacity-80" x-transition:enter-end="translate-x-0 opacity-100" x-transition:leave="transition ease-in duration-150" x-transition:leave-start="translate-x-0 opacity-100" x-transition:leave-end="translate-x-full opacity-80">
+      <div class="flex items-start justify-between gap-4 border-b border-slate-200 bg-sky-50/80 px-6 py-5">
+        <div>
+          <p class="panel-kicker" x-text="publishProgress.active ? '发布进度' : '发布确认'"></p>
+          <h2 class="mt-1 text-xl font-semibold text-slate-950">发布 Skill</h2>
+          <p class="mt-2 text-sm leading-6 text-slate-600" x-text="publishProgress.active ? '系统正在冻结源码、调用编译智能体并写入 EG artifact。' : '本次发布会冻结当前草稿源码与 manifest snapshot，并触发自动编译。'"></p>
+        </div>
+        <button type="button" class="icon-button" title="关闭" :disabled="isPublishInProgress()" @click="closePublishDrawer()">
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+
+      <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="publishSkill()">
+        <div class="min-h-0 flex-1 overflow-auto px-6 py-6">
+          <template x-if="!publishProgress.active">
+            <div class="space-y-5">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                <p class="field-label">即将发布</p>
+                <p class="mt-2 text-lg font-semibold text-slate-950" x-text="currentSkill.name"></p>
+                <div class="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                  <div>
+                    <p class="field-label">当前草稿 Commit</p>
+                    <p class="mono-field mt-1" x-text="formatShortId(currentSkill.latest_draft_head_sha)"></p>
+                  </div>
+                  <div>
+                    <p class="field-label">默认分支</p>
+                    <p class="mono-field mt-1" x-text="currentSkill.default_branch"></p>
+                  </div>
+                </div>
+              </div>
+
+              <label class="field-block">
+                <span class="field-label">发布说明</span>
+                <textarea
+                  x-model.trim="publishForm.publish_reason"
+                  class="textarea-field h-40"
+                  placeholder="请说明本次发布的主要变更，例如：更新诊断步骤、调整提示词、补充示例。"
+                  required
+                ></textarea>
+                <span class="mt-2 block text-xs leading-5 text-slate-500">发布说明会写入发布记录，用于后续回溯和验收。</span>
+              </label>
+
+              <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+                <p class="font-semibold">确认后将立即触发后台编译。</p>
+                <p class="mt-1">如果编译失败，发布记录会显示为“失败”，且不会推进最新可运行版本。</p>
+              </div>
+            </div>
+          </template>
+
+          <template x-if="publishProgress.active">
+            <div class="space-y-5">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                <p class="field-label">发布对象</p>
+                <p class="mt-2 text-lg font-semibold text-slate-950" x-text="currentSkill.name"></p>
+                <div class="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                  <div>
+                    <p class="field-label">编译任务</p>
+                    <p class="mono-field mt-1" x-text="formatShortId(publishProgress.compile_request_id)"></p>
+                  </div>
+                  <div>
+                    <p class="field-label">当前状态</p>
+                    <p class="mt-1 font-semibold" :class="publishProgress.terminal_status === 'failed' ? 'text-rose-700' : publishProgress.terminal_status === 'succeeded' ? 'text-emerald-700' : 'text-sky-700'" x-text="publishProgress.terminal ? formatStatus(publishProgress.terminal_status) : '发布中'"></p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-xl border border-slate-200 bg-white">
+                <div class="border-b border-slate-200 px-4 py-3">
+                  <p class="text-sm font-semibold text-slate-950">执行阶段</p>
+                  <p class="mt-1 text-xs text-slate-500">阶段状态由服务端任务实时推送，连接中断时会自动降级轮询。</p>
+                </div>
+                <div class="divide-y divide-slate-100">
+                  <template x-for="stage in publishProgress.stages" :key="stage.key">
+                    <div class="flex gap-3 px-4 py-3">
+                      <div class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full border" :class="publishStageTone(stage)">
+                        <span class="material-symbols-outlined text-[18px]" :class="stage.status === 'running' ? 'animate-spin' : ''" x-text="publishStageIcon(stage)"></span>
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <div class="flex items-center justify-between gap-3">
+                          <p class="font-semibold text-slate-900" x-text="stage.label"></p>
+                          <span class="rounded-full border px-2 py-0.5 text-xs" :class="publishStageTone(stage)" x-text="formatStatus(stage.status)"></span>
+                        </div>
+                        <p class="mt-1 text-sm leading-6 text-slate-600" x-text="stage.message || '等待执行'"></p>
+                        <p class="mt-1 text-xs text-slate-400" x-show="stage.finished_at" x-text="formatDateTime(stage.finished_at)"></p>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <template x-if="publishProgress.terminal && publishProgress.terminal_status === 'failed'">
+                <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-800">
+                  <p class="font-semibold">发布失败</p>
+                  <p class="mt-1" x-text="publishProgress.error_message || '请查看编译页面中的诊断信息。'"></p>
+                </div>
+              </template>
+
+              <template x-if="publishProgress.terminal && publishProgress.terminal_status === 'succeeded'">
+                <div class="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-100">
+                  <p class="font-semibold">发布成功</p>
+                  <p class="mt-1">最新可运行版本已更新，可以进入运行入口进行验收。</p>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+
+        <div class="flex justify-end gap-3 border-t border-slate-200 bg-white px-6 py-4">
+          <template x-if="!publishProgress.active">
+            <div class="flex gap-3">
+              <button type="button" class="button-secondary" title="取消" aria-label="取消" @click="closePublishDrawer()">
+                <span class="material-symbols-outlined text-[18px]">close</span>
+                <span>取消</span>
+              </button>
+              <button type="submit" class="button-primary" title="确认发布" aria-label="确认发布" :disabled="busy.publish || !publishForm.publish_reason">
+                <span class="material-symbols-outlined text-[18px]">rocket_launch</span>
+                <span x-text="busy.publish ? '提交中...' : '确认发布'"></span>
+              </button>
+            </div>
+          </template>
+          <template x-if="publishProgress.active && !publishProgress.terminal">
+            <button type="button" class="button-secondary" title="发布推进中" aria-label="发布推进中" disabled>
+              <span class="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+              <span>发布推进中...</span>
+            </button>
+          </template>
+          <template x-if="publishProgress.active && publishProgress.terminal">
+            <button type="button" class="button-primary" title="完成" aria-label="完成" @click="publishDrawerOpen = false">
+              <span class="material-symbols-outlined text-[18px]">done</span>
+              <span>完成</span>
+            </button>
+          </template>
+        </div>
+      </form>
+    </section>
+  </div>
+</template>

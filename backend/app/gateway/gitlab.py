@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+import logging
+import time
 from typing import Protocol
 from urllib.parse import quote
 
 import httpx
 
 from app.core.config import Settings
+from app.core.observability import record_span_exception, set_span_attributes, start_span
 from app.domain.skills.exceptions import SkillsConfigurationError, SkillsGatewayError
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -143,13 +148,48 @@ class HttpGitLabSkillSourceGateway:
     ) -> dict | list:
         url = f"{self.api_base_url}{path}"
 
+        started_at = time.perf_counter()
         try:
-            with httpx.Client(timeout=self.timeout_seconds, headers=self._headers()) as client:
-                response = client.request(method, url, params=params, json=json)
+            with start_span("gateway.gitlab", http_method=method, gitlab_path=path, api_base_url=self.api_base_url) as span:
+                with httpx.Client(timeout=self.timeout_seconds, headers=self._headers()) as client:
+                    response = client.request(method, url, params=params, json=json)
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                set_span_attributes(span, {"http.status_code": response.status_code, "duration_ms": elapsed_ms})
+                LOGGER.info(
+                    "GitLab request completed",
+                    extra={
+                        "http_method": method,
+                        "gitlab_path": path,
+                        "status_code": response.status_code,
+                        "duration_ms": elapsed_ms,
+                    },
+                )
         except httpx.HTTPError as exc:
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            with start_span(
+                "gateway.gitlab.error",
+                http_method=method,
+                gitlab_path=path,
+                api_base_url=self.api_base_url,
+                duration_ms=elapsed_ms,
+            ) as span:
+                record_span_exception(span, exc)
+            LOGGER.warning(
+                "GitLab request failed",
+                extra={
+                    "http_method": method,
+                    "gitlab_path": path,
+                    "error_type": exc.__class__.__name__,
+                    "duration_ms": elapsed_ms,
+                },
+            )
             raise SkillsGatewayError("访问 GitLab 失败。", details={"error": str(exc)}) from exc
 
         if response.status_code >= 400:
+            LOGGER.warning(
+                "GitLab returned error response",
+                extra={"http_method": method, "gitlab_path": path, "status_code": response.status_code},
+            )
             raise SkillsGatewayError(
                 "GitLab 返回错误响应。",
                 details={
@@ -251,6 +291,22 @@ class HttpGitLabSkillSourceGateway:
 
         return str(commit["id"])
 
+    def _resolve_ref_head(self, project_id: str, ref: str) -> str:
+        try:
+            return self.get_branch_head(project_id, ref)
+        except SkillsGatewayError as branch_error:
+            if branch_error.details.get("status_code") != 404:
+                raise
+
+        payload = self._request(
+            "GET",
+            f"/projects/{quote(project_id, safe='')}/repository/commits/{quote(ref, safe='')}",
+        )
+        if not isinstance(payload, dict) or "id" not in payload:
+            raise SkillsGatewayError("GitLab commit 查询响应格式错误。", details={"ref": ref})
+
+        return str(payload["id"])
+
     def _get_file_content(self, project_id: str, ref: str, file_path: str) -> str:
         payload = self._request(
             "GET",
@@ -269,7 +325,7 @@ class HttpGitLabSkillSourceGateway:
             ) from exc
 
     def get_skill_source(self, project_id: str, ref: str) -> SkillSourceBundle:
-        head_commit_sha = self.get_branch_head(project_id, ref)
+        head_commit_sha = self._resolve_ref_head(project_id, ref)
         return SkillSourceBundle(
             readme_content=self._get_file_content(project_id, ref, "README.md"),
             skill_md_content=self._get_file_content(project_id, ref, "SKILL.md"),
