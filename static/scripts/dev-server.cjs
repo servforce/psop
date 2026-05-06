@@ -6,6 +6,7 @@ const rootDir = path.resolve(__dirname, "..");
 const host = process.env.HOST || process.env.PSOP_WEB_HOST || "0.0.0.0";
 const port = Number(process.env.PORT || process.env.PSOP_WEB_PORT || 4173);
 const apiBaseUrl = process.env.PSOP_WEB_API_BASE_URL || "/api/v1";
+const serverPort = String(process.env.PSOP_SERVER_PORT || 8001);
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -45,7 +46,24 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/assets/js/runtime-config.js") {
     res.setHeader("Content-Type", "text/javascript; charset=utf-8");
-    res.end(`window.__PSOP_API_BASE_URL = ${JSON.stringify(apiBaseUrl)};\n`);
+    res.end(`(function () {
+  const configuredApiBaseUrl = ${JSON.stringify(apiBaseUrl)};
+  const serverPort = ${JSON.stringify(serverPort)};
+  const privateHostPattern = /^(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|10\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[0-1])\\.)/;
+  const browserHostApiBaseUrl = window.location.protocol + "//" + window.location.hostname + ":" + serverPort + "/api/v1";
+  let apiBaseUrl = configuredApiBaseUrl || browserHostApiBaseUrl;
+
+  try {
+    const configuredUrl = new URL(configuredApiBaseUrl, window.location.origin);
+    if (privateHostPattern.test(configuredUrl.hostname) && configuredUrl.hostname !== window.location.hostname) {
+      apiBaseUrl = browserHostApiBaseUrl;
+    }
+  } catch {
+    apiBaseUrl = browserHostApiBaseUrl;
+  }
+
+  window.__PSOP_API_BASE_URL = apiBaseUrl;
+})();\n`);
     return;
   }
 

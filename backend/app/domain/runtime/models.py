@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.skills.models import generate_uuid, now_utc
@@ -28,8 +29,10 @@ class SkillInvocation(Base):
         ForeignKey("eg_compile_artifact.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    gateway_type: Mapped[str] = mapped_column(String(64), default="web", nullable=False)
+    gateway_type: Mapped[str] = mapped_column(String(64), default="terminal", nullable=False)
     input_envelope: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    terminal_context: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    binding_preferences: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="accepted", nullable=False)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
@@ -66,9 +69,15 @@ class Run(Base):
         ForeignKey("eg_compile_artifact.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    terminal_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("terminal_session.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
     runtime_phase: Mapped[str] = mapped_column(String(64), default="queued", nullable=False)
     latest_snapshot_seq: Mapped[int] = mapped_column(default=0, nullable=False)
+    latest_terminal_seq: Mapped[int] = mapped_column(default=0, nullable=False)
+    latest_trace_seq: Mapped[int] = mapped_column(default=0, nullable=False)
     final_output: Mapped[str] = mapped_column(Text, default="", nullable=False)
     exit_reason: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
@@ -114,3 +123,91 @@ class TraceEvent(Base):
     parent_span_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+
+
+class TerminalSession(Base):
+    __tablename__ = "terminal_session"
+    __table_args__ = (
+        Index("idx_terminal_session_status_opened_at", "status", "opened_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("run.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    mode: Mapped[str] = mapped_column(String(64), default="web", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="open", nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+
+
+class RunCapabilityBinding(Base):
+    __tablename__ = "run_capability_binding"
+    __table_args__ = (
+        UniqueConstraint("run_id", "requirement_key", name="uk_run_capability_binding_run_requirement"),
+        Index("idx_run_capability_binding_run_status", "run_id", "status"),
+        Index("idx_run_capability_binding_target", "target_kind", "target_ref"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    run_id: Mapped[str] = mapped_column(ForeignKey("run.id", ondelete="CASCADE"), nullable=False)
+    compile_artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("eg_compile_artifact.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_capability_binding_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    requirement_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    binding_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    capability: Mapped[str] = mapped_column(String(120), nullable=False)
+    target_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    channel: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    schema_ref: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    manifest_hash: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    policy_snapshot: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=now_utc,
+        onupdate=now_utc,
+        nullable=False,
+    )
+
+
+class TerminalEvent(Base):
+    __tablename__ = "terminal_event"
+    __table_args__ = (
+        UniqueConstraint("terminal_session_id", "seq_no", name="uk_terminal_event_session_seq"),
+        UniqueConstraint("run_id", "external_event_id", name="uk_terminal_event_run_external"),
+        Index("idx_terminal_event_run_seq", "run_id", "seq_no"),
+        Index("idx_terminal_event_binding_seq", "run_capability_binding_id", "seq_no"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    terminal_session_id: Mapped[str] = mapped_column(
+        ForeignKey("terminal_session.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(ForeignKey("run.id", ondelete="CASCADE"), nullable=False)
+    trace_event_id: Mapped[str | None] = mapped_column(ForeignKey("trace_event.id", ondelete="SET NULL"), nullable=True)
+    artifact_object_id: Mapped[str | None] = mapped_column(
+        ForeignKey("artifact_object.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    run_capability_binding_id: Mapped[str | None] = mapped_column(
+        ForeignKey("run_capability_binding.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    direction: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_kind: Mapped[str] = mapped_column(String(120), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), default="text/plain", nullable=False)
+    payload_inline: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    seq_no: Mapped[int] = mapped_column(nullable=False)
+    external_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_ref: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)

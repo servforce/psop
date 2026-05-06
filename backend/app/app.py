@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.api.routes.runtime import ws_router
 from app.api.routes.system import root_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
@@ -102,5 +103,6 @@ def create_app(
         )
 
     app.include_router(root_router)
+    app.include_router(ws_router)
     app.include_router(api_router, prefix=resolved_settings.api_prefix)
     return app

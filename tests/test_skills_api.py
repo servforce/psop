@@ -746,7 +746,22 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
 
         run_response = client.get(f"/api/v1/runs/{run_id}")
         trace_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
+        binding_requirements_response = client.get(f"/api/v1/runs/{run_id}/binding-requirements")
+        bindings_response = client.get(f"/api/v1/runs/{run_id}/bindings")
+        terminal_session_response = client.get(f"/api/v1/terminal/sessions/{run_id}")
+        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+        terminal_append_response = client.post(
+            f"/api/v1/terminal/sessions/{run_id}/events",
+            json={
+                "direction": "input",
+                "event_kind": "terminal.text.input.v1",
+                "mime_type": "text/plain",
+                "payload_inline": "追加现场确认",
+                "external_event_id": "issue-one-demo-extra-input",
+            },
+        )
+        terminal_events_after_append_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         jobs_response = client.get("/api/v1/runtime/jobs")
 
     assert publish_response.status_code == 202
@@ -777,12 +792,20 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
 
     assert invocation_response.status_code == 201
     assert invocation_payload["status"] == "succeeded"
-    assert run_response.json()["status"] == "succeeded"
-    assert "已处理输入" in run_response.json()["final_output"]
+    assert invocation_payload["gateway_type"] == "terminal"
+    assert invocation_payload["terminal_session_id"]
+    run_payload = run_response.json()
+    assert run_payload["status"] == "succeeded"
+    assert run_payload["terminal_session_id"] == invocation_payload["terminal_session_id"]
+    assert run_payload["latest_terminal_seq"] == 2
+    assert run_payload["latest_trace_seq"] == 7
+    assert len(run_payload["binding_summary"]) == 2
+    assert "已处理输入" in run_payload["final_output"]
     assert fake_inference.calls[-1]["user_prompt"].startswith("用户输入：请检查泵站压力异常？")
 
     event_types = [event["event_type"] for event in trace_response.json()]
     assert event_types == [
+        "binding.resolved",
         "runtime.start.completed",
         "runtime.input.accepted",
         "gateway.inference.completed",
@@ -791,20 +814,91 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         "runtime.final.completed",
     ]
 
+    assert binding_requirements_response.status_code == 200
+    assert {item["requirement_key"] for item in binding_requirements_response.json()} == {
+        "terminal.input",
+        "terminal.output",
+    }
+    assert bindings_response.status_code == 200
+    assert {item["target_kind"] for item in bindings_response.json()} == {"web_terminal"}
+    assert terminal_session_response.status_code == 200
+    assert terminal_session_response.json()["terminal_session"]["id"] == invocation_payload["terminal_session_id"]
+    assert terminal_events_response.status_code == 200
+    assert [item["direction"] for item in terminal_events_response.json()] == ["input", "output"]
+    assert terminal_append_response.status_code == 202
+    assert terminal_append_response.json()["seq_no"] == 3
+    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3]
+
     replay_payload = replay_response.json()
     assert [item["title"] for item in replay_payload["timeline"]] == [
+        "终端输入",
+        "绑定解析",
         "runtime.start.completed",
         "输入",
         "LLM 输出",
         "工具调用",
         "LLM 输出",
+        "终端输出",
         "最终结果",
     ]
-    assert replay_payload["run"]["final_output"] == run_response.json()["final_output"]
+    assert len(replay_payload["terminal_events"]) == 2
+    assert len(replay_payload["bindings"]) == 2
+    assert replay_payload["run"]["final_output"] == run_payload["final_output"]
 
     jobs = jobs_response.json()
     assert {job["job_type"] for job in jobs} >= {"compile", "runtime"}
     assert all(job["status"] == "succeeded" for job in jobs)
+
+
+def test_run_websocket_broadcasts_terminal_event_append() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "ws-terminal-demo",
+                "name": "WS Terminal Demo",
+                "description": "Validate terminal websocket broadcast.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "WS smoke publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/gateway/invocations",
+            json={
+                "skill_key": "ws-terminal-demo",
+                "input_envelope": {"user_input": "启动 WS 验证"},
+                "gateway_type": "terminal",
+                "terminal_context": {"terminal_kind": "web"},
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+
+        with client.websocket_connect(f"/ws/runs/{run_id}") as websocket:
+            connected = websocket.receive_json()
+            append_response = client.post(
+                f"/api/v1/terminal/sessions/{run_id}/events",
+                json={
+                    "direction": "input",
+                    "event_kind": "terminal.text.input.v1",
+                    "mime_type": "text/plain",
+                    "payload_inline": "WS 输入",
+                    "external_event_id": "ws-terminal-demo-input",
+                },
+            )
+            message = websocket.receive_json()
+
+    assert invocation_response.status_code == 201
+    assert connected["event_type"] == "ws.connected"
+    assert append_response.status_code == 202
+    assert message["event_type"] == "terminal.event.appended"
+    assert message["payload"]["payload_inline"] == "WS 输入"
+    assert message["seq_no"] == append_response.json()["seq_no"]
 
 
 def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -> None:

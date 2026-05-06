@@ -5,9 +5,12 @@ from sqlalchemy.orm import Session
 
 from app.domain.compiler.models import ArtifactObject, EgCompileArtifact
 from app.domain.runtime.models import (
+    RunCapabilityBinding,
     Run,
     SessionTokenSnapshot,
     SkillInvocation,
+    TerminalEvent,
+    TerminalSession,
     TraceEvent,
 )
 from app.domain.skills.models import SkillDefinition, SkillVersion
@@ -64,6 +67,65 @@ class RuntimeRepository:
 
     def get_run_for_invocation(self, session: Session, invocation_id: str) -> Run | None:
         return session.scalar(select(Run).where(Run.invocation_id == invocation_id))
+
+    def get_terminal_session_for_run(self, session: Session, run_id: str) -> TerminalSession | None:
+        return session.scalar(select(TerminalSession).where(TerminalSession.run_id == run_id))
+
+    def list_terminal_events(
+        self,
+        session: Session,
+        run_id: str,
+        *,
+        from_seq: int | None = None,
+        to_seq: int | None = None,
+    ) -> list[TerminalEvent]:
+        query = select(TerminalEvent).where(TerminalEvent.run_id == run_id)
+        if from_seq is not None:
+            query = query.where(TerminalEvent.seq_no >= from_seq)
+        if to_seq is not None:
+            query = query.where(TerminalEvent.seq_no <= to_seq)
+        query = query.order_by(TerminalEvent.seq_no.asc())
+        return list(session.scalars(query).all())
+
+    def get_terminal_event_by_external_id(
+        self,
+        session: Session,
+        *,
+        run_id: str,
+        external_event_id: str,
+    ) -> TerminalEvent | None:
+        return session.scalar(
+            select(TerminalEvent).where(
+                TerminalEvent.run_id == run_id,
+                TerminalEvent.external_event_id == external_event_id,
+            )
+        )
+
+    def get_run_capability_binding(self, session: Session, binding_id: str) -> RunCapabilityBinding | None:
+        return session.get(RunCapabilityBinding, binding_id)
+
+    def get_run_binding_by_requirement(
+        self,
+        session: Session,
+        *,
+        run_id: str,
+        requirement_key: str,
+    ) -> RunCapabilityBinding | None:
+        return session.scalar(
+            select(RunCapabilityBinding).where(
+                RunCapabilityBinding.run_id == run_id,
+                RunCapabilityBinding.requirement_key == requirement_key,
+            )
+        )
+
+    def list_run_bindings(self, session: Session, run_id: str) -> list[RunCapabilityBinding]:
+        return list(
+            session.scalars(
+                select(RunCapabilityBinding)
+                .where(RunCapabilityBinding.run_id == run_id)
+                .order_by(RunCapabilityBinding.created_at.asc(), RunCapabilityBinding.requirement_key.asc())
+            ).all()
+        )
 
     def list_runs(
         self,

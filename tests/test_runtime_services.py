@@ -9,8 +9,9 @@ from app.agents.registry import PromptRegistry
 from app.domain.compiler.service import CompilerService
 from app.domain.compiler.formal_v5 import validate_and_normalize_artifact
 from app.domain.jobs.repository import JobRepository
-from app.domain.runtime.schemas import CreateInvocationRequest
+from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest
 from app.domain.runtime.service import RuntimeService
+from app.domain.skills.exceptions import SkillValidationError
 from app.domain.skills.schemas import CreateSkillRequest, PublishSkillRequest
 from app.domain.skills.service import SkillsService
 from app.domain.skills.models import SkillVersion
@@ -455,21 +456,110 @@ def test_runtime_service_executes_llm_tool_and_builds_replay(runtime_stack) -> N
         run = runtime_service.get_run(session, invocation.run_id or "")
         replay = runtime_service.build_replay(session, invocation.run_id or "")
         snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
+        terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
+        terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        bindings = runtime_service.list_run_bindings(session, invocation.run_id or "")
 
     assert invocation.status == "succeeded"
+    assert invocation.terminal_session_id
     assert run.status == "succeeded"
     assert run.latest_snapshot_seq == 6
+    assert run.latest_terminal_seq == 2
+    assert run.latest_trace_seq == 7
+    assert run.terminal_session_id == invocation.terminal_session_id
+    assert len(run.binding_summary) == 2
     assert "已处理输入" in run.final_output
     assert inference_gateway.calls[-1]["user_prompt"].startswith("用户输入：请分析阀门异常？")
     assert [snapshot.seq_no for snapshot in snapshots] == [0, 1, 2, 3, 4, 5, 6]
+    assert terminal_session.terminal_session.id == invocation.terminal_session_id
+    assert [event.direction for event in terminal_events] == ["input", "output"]
+    assert terminal_events[0].payload_inline == "请分析阀门异常？"
+    assert {binding.requirement_key for binding in bindings} == {"terminal.input", "terminal.output"}
+    assert len(replay.terminal_events) == 2
+    assert len(replay.bindings) == 2
     assert [item.event_type for item in replay.timeline] == [
+        "terminal.event.appended",
+        "binding.resolved",
         "runtime.start.completed",
         "runtime.input.accepted",
         "gateway.inference.completed",
         "gateway.tool.completed",
         "gateway.inference.completed",
+        "terminal.event.appended",
         "runtime.final.completed",
     ]
+
+
+def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="terminal-event-unit",
+                name="Terminal Event Unit",
+                description="Validate terminal transcript append.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Terminal event unit publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="terminal-event-unit",
+                input_envelope={"user_input": "初始输入"},
+            ),
+        )
+        bindings = runtime_service.list_run_bindings(session, invocation.run_id or "")
+        input_binding = next(item for item in bindings if item.requirement_key == "terminal.input")
+
+        appended = runtime_service.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="追加输入",
+                binding_id=input_binding.id,
+                external_event_id="evt-001",
+            ),
+        )
+        duplicate = runtime_service.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="不会重复",
+                binding_id=input_binding.id,
+                external_event_id="evt-001",
+            ),
+        )
+        events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+
+        with pytest.raises(SkillValidationError):
+            runtime_service.append_terminal_event(
+                session,
+                invocation.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="sideways",
+                    event_kind="terminal.text.input.v1",
+                    payload_inline="bad",
+                ),
+            )
+
+    assert appended.seq_no == 3
+    assert duplicate.event_id == appended.event_id
+    assert duplicate.seq_no == appended.seq_no
+    assert [event.seq_no for event in events] == [1, 2, 3]
+    assert events[-1].payload_inline == "追加输入"
 
 
 def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> None:

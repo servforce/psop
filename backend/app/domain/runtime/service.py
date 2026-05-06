@@ -14,19 +14,31 @@ from app.domain.jobs.models import RuntimeJob
 from app.domain.jobs.repository import JobRepository
 from app.domain.jobs.schemas import RuntimeJobResponse
 from app.domain.runtime.models import (
+    RunCapabilityBinding,
     Run,
     SessionTokenSnapshot,
     SkillInvocation,
+    TerminalEvent,
+    TerminalSession,
     TraceEvent,
 )
 from app.domain.runtime.repository import RuntimeRepository
 from app.domain.runtime.schemas import (
+    AppendTerminalEventRequest,
+    BindingRequirementResponse,
     CreateInvocationRequest,
     InvocationResponse,
     ReplayDetailResponse,
     ReplayTimelineItem,
+    ResolveRunBindingsRequest,
+    RunCapabilityBindingResponse,
     RunResponse,
     SessionTokenSnapshotResponse,
+    TerminalEventAppendResponse,
+    TerminalEventResponse,
+    TerminalSessionDetailResponse,
+    TerminalSessionResponse,
+    TerminalTranscriptSummary,
     TraceEventResponse,
 )
 from app.domain.skills.exceptions import SkillNotFoundError, SkillValidationError
@@ -66,13 +78,19 @@ class RuntimeService:
             raise SkillValidationError("当前 Skill 尚无成功编译产物，无法发起运行。")
         artifact_object = self.repository.get_artifact_object(session, artifact.artifact_object_id)
         artifact_payload = artifact_object.content_json if artifact_object else {}
+        gateway_type = "terminal" if payload.gateway_type in {"web", "terminal"} else payload.gateway_type
+        terminal_context = payload.terminal_context or {
+            "terminal_kind": "web" if payload.gateway_type in {"web", "terminal"} else payload.gateway_type
+        }
 
         invocation = SkillInvocation(
             skill_definition_id=skill_definition.id,
             skill_version_id=skill_version.id,
             compile_artifact_id=artifact.id,
-            gateway_type=payload.gateway_type,
+            gateway_type=gateway_type,
             input_envelope=payload.input_envelope,
+            terminal_context=terminal_context,
+            binding_preferences=payload.binding_preferences,
             status="queued",
         )
         session.add(invocation)
@@ -89,6 +107,29 @@ class RuntimeService:
         session.add(run)
         session.flush()
 
+        terminal_session = TerminalSession(
+            run_id=run.id,
+            mode=str(terminal_context.get("terminal_kind") or "web"),
+            status="open",
+        )
+        session.add(terminal_session)
+        session.flush()
+        run.terminal_session_id = terminal_session.id
+        bindings = self._ensure_default_run_bindings(
+            session,
+            run=run,
+            terminal_session=terminal_session,
+            terminal_context=terminal_context,
+            binding_preferences=payload.binding_preferences,
+        )
+        self._append_trace_event(
+            session,
+            run=run,
+            phase="binding",
+            event_type="binding.resolved",
+            payload={"bindings": [self._binding_payload(item) for item in bindings]},
+        )
+
         initial_token = self._build_initial_token(payload.input_envelope, artifact_payload)
         session.add(
             SessionTokenSnapshot(
@@ -100,6 +141,20 @@ class RuntimeService:
                 snapshot_hash=self._hash_payload(initial_token),
             )
         )
+        initial_input = self._extract_initial_terminal_input(payload.input_envelope)
+        if initial_input is not None:
+            self._append_terminal_event(
+                session,
+                run=run,
+                terminal_session=terminal_session,
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline=initial_input,
+                binding_id=self._default_binding_id(bindings, "input"),
+                source_ref={"kind": "web", "connection_id": "invocation"},
+                external_event_id=f"invocation:{invocation.id}:initial-input",
+            )
         session.add(
             RuntimeJob(
                 job_type="runtime",
@@ -167,6 +222,7 @@ class RuntimeService:
 
         try:
             token = self.repository.list_snapshots(session, run.id)[-1].token_payload
+            token = self._sync_terminal_events(session, run=run, token=token)
             max_steps = int(artifact_payload.get("policies", {}).get("max_steps") or 16)
             with start_span(
                 "runtime.loop",
@@ -280,13 +336,16 @@ class RuntimeService:
         return self._build_invocation_response(session, invocation)
 
     def list_runs(self, session: Session, *, status: str | None = None, skill_id: str | None = None) -> list[RunResponse]:
-        return [self._build_run_response(item) for item in self.repository.list_runs(session, status=status, skill_id=skill_id)]
+        return [
+            self._build_run_response(session, item)
+            for item in self.repository.list_runs(session, status=status, skill_id=skill_id)
+        ]
 
     def get_run(self, session: Session, run_id: str) -> RunResponse:
         run = self.repository.get_run(session, run_id)
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
-        return self._build_run_response(run)
+        return self._build_run_response(session, run)
 
     def list_snapshots(self, session: Session, run_id: str) -> list[SessionTokenSnapshotResponse]:
         return [self._build_snapshot_response(item) for item in self.repository.list_snapshots(session, run_id)]
@@ -302,6 +361,171 @@ class RuntimeService:
             self._build_trace_event_response(item)
             for item in self.repository.list_trace_events(session, run_id, event_type=event_type)
         ]
+
+    def get_terminal_session(self, session: Session, run_id: str) -> TerminalSessionDetailResponse:
+        terminal_session = self.repository.get_terminal_session_for_run(session, run_id)
+        if not terminal_session:
+            raise SkillNotFoundError("未找到 Terminal Session。", details={"run_id": run_id})
+        events = self.repository.list_terminal_events(session, run_id)
+        return TerminalSessionDetailResponse(
+            terminal_session=self._build_terminal_session_response(terminal_session),
+            transcript_summary=TerminalTranscriptSummary(
+                latest_seq=events[-1].seq_no if events else 0,
+                event_count=len(events),
+            ),
+        )
+
+    def list_terminal_events(
+        self,
+        session: Session,
+        run_id: str,
+        *,
+        from_seq: int | None = None,
+        to_seq: int | None = None,
+    ) -> list[TerminalEventResponse]:
+        if not self.repository.get_run(session, run_id):
+            raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        return [
+            self._build_terminal_event_response(item)
+            for item in self.repository.list_terminal_events(session, run_id, from_seq=from_seq, to_seq=to_seq)
+        ]
+
+    def append_terminal_event(
+        self,
+        session: Session,
+        run_id: str,
+        payload: AppendTerminalEventRequest,
+        *,
+        idempotency_key: str | None = None,
+    ) -> TerminalEventAppendResponse:
+        run = self.repository.get_run(session, run_id)
+        if not run:
+            raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        terminal_session = self.repository.get_terminal_session_for_run(session, run_id)
+        if not terminal_session or terminal_session.status != "open":
+            raise SkillValidationError("当前 Run 没有可用的 Terminal Session。", details={"run_id": run_id})
+
+        external_event_id = payload.external_event_id or idempotency_key
+        if external_event_id:
+            existing = self.repository.get_terminal_event_by_external_id(
+                session,
+                run_id=run_id,
+                external_event_id=external_event_id,
+            )
+            if existing:
+                event_response = self._build_terminal_event_response(existing)
+                return TerminalEventAppendResponse(
+                    accepted=True,
+                    event_id=existing.id,
+                    seq_no=existing.seq_no,
+                    event=event_response,
+                )
+
+        event = self._append_terminal_event(
+            session,
+            run=run,
+            terminal_session=terminal_session,
+            direction=payload.direction,
+            event_kind=payload.event_kind,
+            mime_type=payload.mime_type,
+            payload_inline=payload.payload_inline,
+            artifact_object_id=payload.artifact_object_id,
+            binding_id=payload.binding_id,
+            source_ref=payload.source.model_dump(),
+            external_event_id=external_event_id,
+            occurred_at=payload.occurred_at,
+        )
+        if run.status == "waiting_input":
+            self._ensure_runtime_job_pending(session, run)
+            session.commit()
+            self.process_run(session, run.id)
+            event = session.get(TerminalEvent, event.id) or event
+        else:
+            session.commit()
+        event_response = self._build_terminal_event_response(event)
+        return TerminalEventAppendResponse(
+            accepted=True,
+            event_id=event.id,
+            seq_no=event.seq_no,
+            event=event_response,
+        )
+
+    def list_binding_requirements(self, session: Session, run_id: str) -> list[BindingRequirementResponse]:
+        if not self.repository.get_run(session, run_id):
+            raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        return [
+            BindingRequirementResponse(
+                requirement_key="terminal.input",
+                binding_type="terminal",
+                capability="terminal.text.input.v1",
+                direction="input",
+            ),
+            BindingRequirementResponse(
+                requirement_key="terminal.output",
+                binding_type="terminal",
+                capability="terminal.text.output.v1",
+                direction="output",
+            ),
+        ]
+
+    def list_run_bindings(self, session: Session, run_id: str) -> list[RunCapabilityBindingResponse]:
+        if not self.repository.get_run(session, run_id):
+            raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        return [self._build_run_binding_response(item) for item in self.repository.list_run_bindings(session, run_id)]
+
+    def get_run_binding(self, session: Session, run_id: str, binding_id: str) -> RunCapabilityBindingResponse:
+        binding = self.repository.get_run_capability_binding(session, binding_id)
+        if not binding or binding.run_id != run_id:
+            raise SkillNotFoundError("未找到 Run Binding。", details={"run_id": run_id, "binding_id": binding_id})
+        return self._build_run_binding_response(binding)
+
+    def resolve_run_bindings(
+        self,
+        session: Session,
+        run_id: str,
+        payload: ResolveRunBindingsRequest,
+    ) -> list[RunCapabilityBindingResponse]:
+        run = self.repository.get_run(session, run_id)
+        if not run:
+            raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        terminal_session = self.repository.get_terminal_session_for_run(session, run_id)
+        if not terminal_session:
+            raise SkillValidationError("当前 Run 没有 Terminal Session。", details={"run_id": run_id})
+
+        for item in payload.bindings:
+            existing = self.repository.get_run_binding_by_requirement(
+                session,
+                run_id=run_id,
+                requirement_key=item.requirement_key,
+            )
+            if not existing:
+                existing = RunCapabilityBinding(
+                    run_id=run.id,
+                    compile_artifact_id=run.compile_artifact_id,
+                    requirement_key=item.requirement_key,
+                    binding_type="terminal",
+                    capability=self._capability_for_requirement(item.requirement_key),
+                    target_kind=item.target_kind,
+                    target_ref=item.target_ref or terminal_session.id,
+                    channel=item.channel,
+                    status="active",
+                )
+                session.add(existing)
+            else:
+                existing.target_kind = item.target_kind
+                existing.target_ref = item.target_ref or terminal_session.id
+                existing.channel = item.channel
+                existing.status = "active"
+        bindings = self.repository.list_run_bindings(session, run_id)
+        self._append_trace_event(
+            session,
+            run=run,
+            phase="binding",
+            event_type="binding.updated",
+            payload={"bindings": [self._binding_payload(item) for item in bindings]},
+        )
+        session.commit()
+        return [self._build_run_binding_response(item) for item in bindings]
 
     def list_runtime_jobs(
         self,
@@ -322,12 +546,17 @@ class RuntimeService:
 
         snapshots = self.list_snapshots(session, run_id)
         trace_events = self.list_trace_events(session, run_id)
+        terminal_events = self.list_terminal_events(session, run_id)
         timeline = [self._build_timeline_item(event) for event in trace_events]
+        timeline.extend(self._build_terminal_timeline_item(event) for event in terminal_events)
+        timeline.sort(key=lambda item: (item.occurred_at, item.seq_no, item.event_type))
         return ReplayDetailResponse(
-            run=self._build_run_response(run),
+            run=self._build_run_response(session, run),
             timeline=timeline,
             snapshots=snapshots,
             trace_events=trace_events,
+            terminal_events=terminal_events,
+            bindings=self.list_run_bindings(session, run_id),
         )
 
     def _append_step(
@@ -403,6 +632,20 @@ class RuntimeService:
                 "summary": observation.get("summary") or observation.get("content") or observation.get("final_response") or "",
             },
         )
+        if node.get("kind") == "terminal" and observation.get("final_response"):
+            terminal_session = self.repository.get_terminal_session_for_run(session, run.id)
+            if terminal_session:
+                self._append_terminal_event(
+                    session,
+                    run=run,
+                    terminal_session=terminal_session,
+                    direction="output",
+                    event_kind="terminal.text.output.v1",
+                    mime_type="text/plain",
+                    payload_inline=str(observation["final_response"]),
+                    binding_id=None,
+                    source_ref={"kind": "runtime", "node_id": str(node.get("id"))},
+                )
         session.flush()
         return token
 
@@ -414,19 +657,228 @@ class RuntimeService:
         phase: str,
         event_type: str,
         payload: dict[str, Any],
-    ) -> None:
-        seq_no = len(self.repository.list_trace_events(session, run.id)) + 1
-        session.add(
-            TraceEvent(
-                run_id=run.id,
-                seq_no=seq_no,
-                phase=phase,
-                event_type=event_type,
-                span_id=f"{run.id[:8]}-{seq_no:04d}",
-                parent_span_id="",
-                payload=payload,
-            )
+    ) -> TraceEvent:
+        seq_no = run.latest_trace_seq + 1
+        run.latest_trace_seq = seq_no
+        event = TraceEvent(
+            run_id=run.id,
+            seq_no=seq_no,
+            phase=phase,
+            event_type=event_type,
+            span_id=f"{run.id[:8]}-{seq_no:04d}",
+            parent_span_id="",
+            payload=payload,
         )
+        session.add(event)
+        return event
+
+    def _append_terminal_event(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        terminal_session: TerminalSession,
+        direction: str,
+        event_kind: str,
+        mime_type: str,
+        payload_inline: Any | None,
+        binding_id: str | None = None,
+        artifact_object_id: str | None = None,
+        source_ref: dict[str, Any] | None = None,
+        external_event_id: str | None = None,
+        occurred_at=None,
+    ) -> TerminalEvent:
+        normalized_direction = direction.strip().lower()
+        if normalized_direction not in {"input", "output"}:
+            raise SkillValidationError("terminal event direction 只能是 input 或 output。", details={"direction": direction})
+        if not event_kind:
+            raise SkillValidationError("terminal event 必须包含 event_kind。")
+        if not mime_type:
+            raise SkillValidationError("terminal event 必须包含 mime_type。")
+        if terminal_session.run_id != run.id:
+            raise SkillValidationError("Terminal Session 与 Run 不匹配。")
+
+        resolved_binding_id = binding_id or self._default_binding_id(
+            self.repository.list_run_bindings(session, run.id),
+            normalized_direction,
+        )
+        if resolved_binding_id:
+            binding = self.repository.get_run_capability_binding(session, resolved_binding_id)
+            if not binding or binding.run_id != run.id or binding.status != "active":
+                raise SkillValidationError("terminal event binding 无效。", details={"binding_id": resolved_binding_id})
+
+        next_seq = run.latest_terminal_seq + 1
+        run.latest_terminal_seq = next_seq
+        event = TerminalEvent(
+            terminal_session_id=terminal_session.id,
+            run_id=run.id,
+            artifact_object_id=artifact_object_id,
+            run_capability_binding_id=resolved_binding_id,
+            direction=normalized_direction,
+            event_kind=event_kind,
+            mime_type=mime_type,
+            payload_inline=payload_inline,
+            seq_no=next_seq,
+            external_event_id=external_event_id,
+            source_ref=source_ref or {},
+            occurred_at=occurred_at or now_utc(),
+        )
+        session.add(event)
+        session.flush()
+        return event
+
+    def _sync_terminal_events(self, session: Session, *, run: Run, token: dict[str, Any]) -> dict[str, Any]:
+        cursor = int(_get_path(token, "metadata.terminal_cursor") or 0)
+        events = self.repository.list_terminal_events(session, run.id, from_seq=cursor + 1)
+        if not events:
+            return token
+
+        next_token = json.loads(json.dumps(token, ensure_ascii=False, default=str))
+        terminal = next_token.setdefault("terminal", {})
+        token_events = terminal.setdefault("events", [])
+        input_envelope = next_token.setdefault("input_envelope", {})
+        for event in events:
+            token_events.append(self._terminal_event_token_payload(event))
+            terminal["latest_seq"] = event.seq_no
+            next_token.setdefault("metadata", {})["terminal_cursor"] = event.seq_no
+            if event.direction == "input":
+                input_text = self._terminal_input_text(event)
+                if input_text:
+                    input_envelope["user_input"] = input_text
+                    input_envelope.setdefault("text", input_text)
+        return next_token
+
+    def _ensure_default_run_bindings(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        terminal_session: TerminalSession,
+        terminal_context: dict[str, Any],
+        binding_preferences: list[dict[str, Any]],
+    ) -> list[RunCapabilityBinding]:
+        existing = self.repository.list_run_bindings(session, run.id)
+        if existing:
+            return existing
+
+        policy_snapshot = {
+            "source": "mvp_default",
+            "terminal_context": terminal_context,
+            "binding_preferences": binding_preferences,
+        }
+        bindings = [
+            RunCapabilityBinding(
+                run_id=run.id,
+                compile_artifact_id=run.compile_artifact_id,
+                requirement_key="terminal.input",
+                binding_type="terminal",
+                capability="terminal.text.input.v1",
+                target_kind="web_terminal",
+                target_ref=terminal_session.id,
+                channel="input",
+                schema_ref="terminal.text.input.v1",
+                manifest_hash=self._hash_payload({"capability": "terminal.text.input.v1", "target": terminal_session.id}),
+                policy_snapshot=policy_snapshot,
+                status="active",
+            ),
+            RunCapabilityBinding(
+                run_id=run.id,
+                compile_artifact_id=run.compile_artifact_id,
+                requirement_key="terminal.output",
+                binding_type="terminal",
+                capability="terminal.text.output.v1",
+                target_kind="web_terminal",
+                target_ref=terminal_session.id,
+                channel="output",
+                schema_ref="terminal.text.output.v1",
+                manifest_hash=self._hash_payload({"capability": "terminal.text.output.v1", "target": terminal_session.id}),
+                policy_snapshot=policy_snapshot,
+                status="active",
+            ),
+        ]
+        session.add_all(bindings)
+        session.flush()
+        return bindings
+
+    def _ensure_runtime_job_pending(self, session: Session, run: Run) -> RuntimeJob:
+        job = self.job_repository.get_runtime_job_by_dedupe_key(session, f"job:runtime:{run.id}")
+        if job:
+            job.status = "pending"
+            job.available_at = now_utc()
+            job.last_error = ""
+            return job
+        job = RuntimeJob(
+            job_type="runtime",
+            status="pending",
+            payload={"run_id": run.id},
+            run_id=run.id,
+            dedupe_key=f"job:runtime:{run.id}",
+            max_attempts=self.settings.runtime_job_max_attempts,
+        )
+        session.add(job)
+        return job
+
+    @staticmethod
+    def _extract_initial_terminal_input(input_envelope: dict[str, Any]) -> Any | None:
+        if "user_input" in input_envelope:
+            return input_envelope["user_input"]
+        if "text" in input_envelope:
+            return input_envelope["text"]
+        if input_envelope:
+            return input_envelope
+        return None
+
+    @staticmethod
+    def _terminal_event_token_payload(event: TerminalEvent) -> dict[str, Any]:
+        return {
+            "id": event.id,
+            "seq_no": event.seq_no,
+            "direction": event.direction,
+            "event_kind": event.event_kind,
+            "mime_type": event.mime_type,
+            "payload_inline": event.payload_inline,
+            "binding_id": event.run_capability_binding_id,
+            "occurred_at": event.occurred_at.isoformat(),
+        }
+
+    @staticmethod
+    def _terminal_input_text(event: TerminalEvent) -> str:
+        value = event.payload_inline
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            for key in ("user_input", "text", "value", "content"):
+                if value.get(key):
+                    return str(value[key])
+        if value is None:
+            return ""
+        return json.dumps(value, ensure_ascii=False)
+
+    @staticmethod
+    def _capability_for_requirement(requirement_key: str) -> str:
+        if requirement_key.endswith("output"):
+            return "terminal.text.output.v1"
+        return "terminal.text.input.v1"
+
+    @staticmethod
+    def _default_binding_id(bindings: list[RunCapabilityBinding], direction: str) -> str | None:
+        suffix = "output" if direction == "output" else "input"
+        for binding in bindings:
+            if binding.requirement_key.endswith(suffix) and binding.status == "active":
+                return binding.id
+        return bindings[0].id if bindings else None
+
+    @staticmethod
+    def _binding_payload(binding: RunCapabilityBinding) -> dict[str, Any]:
+        return {
+            "binding_id": binding.id,
+            "requirement_key": binding.requirement_key,
+            "capability": binding.capability,
+            "target_kind": binding.target_kind,
+            "target_ref": binding.target_ref,
+            "channel": binding.channel,
+            "status": binding.status,
+        }
 
     @staticmethod
     def _extract_user_input(input_envelope: dict[str, Any], artifact_payload: dict[str, Any]) -> str:
@@ -447,7 +899,8 @@ class RuntimeService:
             "budgets": {"llm_calls": 0, "tool_calls": 0},
             "outputs": {},
             "control": {},
-            "metadata": {"artifact_version": artifact_payload.get("artifact_version")},
+            "metadata": {"artifact_version": artifact_payload.get("artifact_version"), "terminal_cursor": 0},
+            "terminal": {"events": [], "latest_seq": 0},
             "facts": {},
             "registers": {},
             "memory": {},
@@ -670,15 +1123,17 @@ class RuntimeService:
             compile_artifact_id=invocation.compile_artifact_id,
             gateway_type=invocation.gateway_type,
             input_envelope=invocation.input_envelope,
+            terminal_context=invocation.terminal_context,
+            binding_preferences=invocation.binding_preferences,
             status=invocation.status,
             idempotency_key=invocation.idempotency_key,
             run_id=run.id if run else None,
+            terminal_session_id=run.terminal_session_id if run else None,
             created_at=invocation.created_at,
             updated_at=invocation.updated_at,
         )
 
-    @staticmethod
-    def _build_run_response(run: Run) -> RunResponse:
+    def _build_run_response(self, session: Session, run: Run) -> RunResponse:
         return RunResponse(
             id=run.id,
             invocation_id=run.invocation_id,
@@ -688,12 +1143,69 @@ class RuntimeService:
             status=run.status,
             runtime_phase=run.runtime_phase,
             latest_snapshot_seq=run.latest_snapshot_seq,
+            latest_terminal_seq=run.latest_terminal_seq,
+            latest_trace_seq=run.latest_trace_seq,
+            terminal_session_id=run.terminal_session_id,
+            binding_summary=[self._binding_payload(item) for item in self.repository.list_run_bindings(session, run.id)],
             final_output=run.final_output,
             exit_reason=run.exit_reason,
             created_at=run.created_at,
             started_at=run.started_at,
             ended_at=run.ended_at,
             updated_at=run.updated_at,
+        )
+
+    @staticmethod
+    def _build_terminal_session_response(terminal_session: TerminalSession) -> TerminalSessionResponse:
+        return TerminalSessionResponse(
+            id=terminal_session.id,
+            run_id=terminal_session.run_id,
+            mode=terminal_session.mode,
+            status=terminal_session.status,
+            opened_at=terminal_session.opened_at,
+            closed_at=terminal_session.closed_at,
+            created_at=terminal_session.created_at,
+        )
+
+    @staticmethod
+    def _build_terminal_event_response(event: TerminalEvent) -> TerminalEventResponse:
+        return TerminalEventResponse(
+            id=event.id,
+            terminal_session_id=event.terminal_session_id,
+            run_id=event.run_id,
+            trace_event_id=event.trace_event_id,
+            artifact_object_id=event.artifact_object_id,
+            run_capability_binding_id=event.run_capability_binding_id,
+            direction=event.direction,
+            event_kind=event.event_kind,
+            mime_type=event.mime_type,
+            payload_inline=event.payload_inline,
+            seq_no=event.seq_no,
+            external_event_id=event.external_event_id,
+            source_ref=event.source_ref,
+            occurred_at=event.occurred_at,
+            created_at=event.created_at,
+        )
+
+    @staticmethod
+    def _build_run_binding_response(binding: RunCapabilityBinding) -> RunCapabilityBindingResponse:
+        return RunCapabilityBindingResponse(
+            id=binding.id,
+            run_id=binding.run_id,
+            compile_artifact_id=binding.compile_artifact_id,
+            source_capability_binding_id=binding.source_capability_binding_id,
+            requirement_key=binding.requirement_key,
+            binding_type=binding.binding_type,
+            capability=binding.capability,
+            target_kind=binding.target_kind,
+            target_ref=binding.target_ref,
+            channel=binding.channel,
+            schema_ref=binding.schema_ref,
+            manifest_hash=binding.manifest_hash,
+            policy_snapshot=binding.policy_snapshot,
+            status=binding.status,
+            created_at=binding.created_at,
+            updated_at=binding.updated_at,
         )
 
     @staticmethod
@@ -742,6 +1254,8 @@ class RuntimeService:
     @staticmethod
     def _build_timeline_item(event: TraceEventResponse) -> ReplayTimelineItem:
         titles = {
+            "binding.resolved": "绑定解析",
+            "binding.updated": "绑定更新",
             "runtime.input.accepted": "输入",
             "gateway.inference.completed": "LLM 输出",
             "gateway.tool.completed": "工具调用",
@@ -767,6 +1281,25 @@ class RuntimeService:
             title=titles.get(event.event_type, event.event_type),
             summary=str(summary),
             payload=event.payload,
+            occurred_at=event.occurred_at,
+        )
+
+    @staticmethod
+    def _build_terminal_timeline_item(event: TerminalEventResponse) -> ReplayTimelineItem:
+        title = "终端输入" if event.direction == "input" else "终端输出"
+        if isinstance(event.payload_inline, str):
+            summary = event.payload_inline
+        elif event.payload_inline is None:
+            summary = event.event_kind
+        else:
+            summary = json.dumps(event.payload_inline, ensure_ascii=False)
+        return ReplayTimelineItem(
+            seq_no=event.seq_no,
+            phase="terminal",
+            event_type="terminal.event.appended",
+            title=title,
+            summary=summary,
+            payload=event.model_dump(mode="json"),
             occurred_at=event.occurred_at,
         )
 

@@ -86,6 +86,12 @@
     return "/api/v1";
   }
 
+  function resolveWsUrl(apiBaseUrl, pathname) {
+    const apiUrl = new URL(apiBaseUrl, window.location.origin);
+    const protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${apiUrl.host}${pathname}`;
+  }
+
   function escapeHtml(value) {
     return String(value || "")
       .replace(/&/g, "&amp;")
@@ -314,11 +320,20 @@
       invocations: [],
       replayRuns: [],
       liveRun: null,
+      liveRunBindings: [],
+      liveRunTerminalSession: null,
+      liveRunTerminalEvents: [],
       liveRunTraceEvents: [],
+      liveRunWs: null,
+      liveRunWsRunId: "",
+      liveRunWsStatus: "idle",
       replayDetail: null,
       invocationForm: {
         skill_key: "",
         user_input: ""
+      },
+      terminalInputForm: {
+        payload: ""
       },
       copyFeedback: {},
       centerToast: null,
@@ -385,6 +400,7 @@
         invocations: false,
         createInvocation: false,
         liveRun: false,
+        terminalInput: false,
         replayRuns: false,
         replayDetail: false
       }
@@ -513,6 +529,9 @@
       async loadCurrentRoute() {
         this.loadingPage = true;
         this.clearNotice();
+        if (this.route.name !== "run-live") {
+          this.disconnectRunWebSocket();
+        }
         if (this.route.name !== "compiler-artifact") {
           this.destroyCompilerArtifactViewer();
           this.compilerArtifact = null;
@@ -1399,7 +1418,10 @@
             method: "POST",
             body: JSON.stringify({
               skill_key: this.invocationForm.skill_key,
-              gateway_type: "web",
+              gateway_type: "terminal",
+              terminal_context: {
+                terminal_kind: "web"
+              },
               input_envelope: {
                 user_input: this.invocationForm.user_input.trim()
               }
@@ -1420,14 +1442,113 @@
       async loadRunLive(runId) {
         this.busy.liveRun = true;
         try {
-          const [run, traceEvents] = await Promise.all([
+          const [run, bindings, terminalSession, terminalEvents, traceEvents] = await Promise.all([
             this.apiRequest(`/runs/${runId}`),
+            this.apiRequest(`/runs/${runId}/bindings`),
+            this.apiRequest(`/terminal/sessions/${runId}`),
+            this.apiRequest(`/terminal/sessions/${runId}/events`),
             this.apiRequest(`/runs/${runId}/trace-events`)
           ]);
           this.liveRun = run;
-          this.liveRunTraceEvents = traceEvents;
+          this.liveRunBindings = bindings;
+          this.liveRunTerminalSession = terminalSession.terminal_session;
+          this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq([], terminalEvents);
+          this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], traceEvents);
+          this.connectRunWebSocket(runId);
         } finally {
           this.busy.liveRun = false;
+        }
+      },
+
+      async sendTerminalInput() {
+        if (!this.liveRun || !this.terminalInputForm.payload.trim()) {
+          return;
+        }
+
+        this.busy.terminalInput = true;
+        try {
+          const response = await this.apiRequest(`/terminal/sessions/${this.liveRun.id}/events`, {
+            method: "POST",
+            body: JSON.stringify({
+              direction: "input",
+              event_kind: "terminal.text.input.v1",
+              mime_type: "text/plain",
+              payload_inline: this.terminalInputForm.payload.trim(),
+              source: {
+                kind: "web"
+              },
+              external_event_id: `web-${Date.now().toString(36)}`
+            })
+          });
+          this.terminalInputForm.payload = "";
+          this.mergeTerminalEvents([response.event]);
+          await this.loadRunLive(this.liveRun.id);
+        } catch (error) {
+          this.showNotice("error", error.message || "终端输入发送失败。");
+        } finally {
+          this.busy.terminalInput = false;
+        }
+      },
+
+      connectRunWebSocket(runId) {
+        if (this.liveRunWs && this.liveRunWsRunId === runId && this.liveRunWs.readyState === WebSocket.OPEN) {
+          return;
+        }
+        this.disconnectRunWebSocket();
+        this.liveRunWsRunId = runId;
+        this.liveRunWsStatus = "connecting";
+        const socket = new WebSocket(resolveWsUrl(this.apiBaseUrl, `/ws/runs/${runId}`));
+        this.liveRunWs = socket;
+        socket.addEventListener("open", () => {
+          this.liveRunWsStatus = "open";
+        });
+        socket.addEventListener("message", (event) => {
+          try {
+            this.handleRunWsEvent(JSON.parse(event.data));
+          } catch {
+            // Ignore malformed runtime stream payloads; REST remains the recovery path.
+          }
+        });
+        socket.addEventListener("close", () => {
+          if (this.liveRunWs === socket) {
+            this.liveRunWsStatus = "closed";
+          }
+        });
+        socket.addEventListener("error", () => {
+          if (this.liveRunWs === socket) {
+            this.liveRunWsStatus = "error";
+          }
+        });
+      },
+
+      disconnectRunWebSocket() {
+        if (this.liveRunWs) {
+          this.liveRunWs.close();
+        }
+        this.liveRunWs = null;
+        this.liveRunWsRunId = "";
+        this.liveRunWsStatus = "idle";
+      },
+
+      handleRunWsEvent(event) {
+        if (!event || event.event_type === "ws.connected") {
+          return;
+        }
+        if (event.event_type === "terminal.event.appended" && event.payload) {
+          this.mergeTerminalEvents([event.payload]);
+        }
+        if (event.event_type === "trace.event.appended" && event.payload) {
+          this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq(this.liveRunTraceEvents, [event.payload]);
+        }
+        if (["binding.resolved", "binding.updated"].includes(event.event_type) && event.payload?.bindings) {
+          this.liveRunBindings = window.PSOPRuntimeEvents.mergeById(this.liveRunBindings, event.payload.bindings);
+        }
+      },
+
+      mergeTerminalEvents(events) {
+        this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq(this.liveRunTerminalEvents, events);
+        if (this.liveRun && this.liveRunTerminalEvents.length > 0) {
+          this.liveRun.latest_terminal_seq = this.liveRunTerminalEvents[this.liveRunTerminalEvents.length - 1].seq_no;
         }
       },
 
@@ -2388,6 +2509,37 @@
           return "border-slate-700 bg-slate-950/40 text-slate-400";
         }
         return "border-slate-700 bg-slate-950/40 text-slate-400";
+      },
+
+      wsStatusLabel(value) {
+        const labels = {
+          idle: "未连接",
+          connecting: "连接中",
+          open: "已连接",
+          closed: "已断开",
+          error: "连接异常"
+        };
+        return labels[value] || "未知";
+      },
+
+      terminalDirectionLabel(value) {
+        return value === "output" ? "输出" : "输入";
+      },
+
+      terminalDirectionTone(value) {
+        return value === "output"
+          ? "border-sky-500/25 bg-sky-500/10 text-sky-200"
+          : "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
+      },
+
+      formatTerminalPayload(value) {
+        if (typeof value === "string") {
+          return value;
+        }
+        if (value === null || value === undefined) {
+          return "";
+        }
+        return JSON.stringify(value, null, 2);
       },
 
       routeTitle() {
