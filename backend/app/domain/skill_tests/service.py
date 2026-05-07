@@ -268,12 +268,16 @@ class SkillTestService:
 
     def list_runs(self, session: Session, skill_id: str, case_id: str) -> list[SkillTestRunResponse]:
         self._get_case(session, skill_id, case_id)
-        return [self._build_run_response(item) for item in self.repository.list_runs(session, case_id)]
+        runs = self.repository.list_runs(session, case_id)
+        for item in runs:
+            self._sync_test_run_status(session, item)
+        return [self._build_run_response(item) for item in runs]
 
     def get_run(self, session: Session, test_run_id: str) -> SkillTestRunResponse:
         test_run = self.repository.get_test_run(session, test_run_id)
         if not test_run:
             raise SkillNotFoundError("未找到测试运行。", details={"test_run_id": test_run_id})
+        self._sync_test_run_status(session, test_run)
         return self._build_run_response(test_run)
 
     def send_data(
@@ -420,6 +424,18 @@ class SkillTestService:
         result["status"] = "failed"
         result["message"] = f"unsupported assertion type: {assertion_type}"
         return result
+
+    def _sync_test_run_status(self, session: Session, test_run: SkillTestRun) -> None:
+        if not test_run.run_id:
+            return
+        run = self.runtime_service.get_run(session, test_run.run_id)
+        if run.status in {"queued", "running", "waiting_input"}:
+            if test_run.status != "running":
+                test_run.status = "running"
+                session.commit()
+            return
+        if test_run.status == "running":
+            self.evaluate_run(session, test_run.id)
 
     def _get_skill(self, session: Session, skill_id: str):
         skill = self.repository.get_skill(session, skill_id)

@@ -19,13 +19,13 @@
         </select>
       </label>
       <label class="field-block">
-        <span class="field-label">运行输入</span>
-        <input x-model="invocationForm.user_input" class="input-field" placeholder="请输入要交给 Skill 执行的内容" @keydown.enter.prevent="createInvocation()" />
+        <span class="field-label">连接说明（可选）</span>
+        <input x-model="invocationForm.user_input" class="input-field" placeholder="可选：补充终端环境或现场背景" @keydown.enter.prevent="createInvocation()" />
       </label>
       <div class="flex items-end">
-        <button type="button" class="button-primary" title="发起运行" aria-label="发起运行" :disabled="busy.createInvocation" @click="createInvocation()">
+        <button type="button" class="button-primary" title="建立真实运行连接" aria-label="建立真实运行连接" :disabled="busy.createInvocation" @click="createInvocation()">
           <span class="material-symbols-outlined text-[18px]">play_circle</span>
-          <span x-text="busy.createInvocation ? '运行中...' : '发起运行'"></span>
+          <span x-text="busy.createInvocation ? '连接中...' : '建立连接'"></span>
         </button>
       </div>
     </div>

@@ -961,6 +961,9 @@
       background-color: color-mix(in oklab, var(--color-slate-50) 80%, transparent);
     }
   }
+  .bg-slate-100 {
+    background-color: var(--color-slate-100);
+  }
   .bg-slate-600 {
     background-color: var(--color-slate-600);
   }

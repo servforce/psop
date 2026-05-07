@@ -166,16 +166,28 @@ class SkillCompileAgent:
             },
             "workflow_compilation_contract": {
                 "must_extract_workflow_from": ["SKILL.md", "README.md"],
-                "runtime_contract_required_fields": ["workflow_steps"],
+                "runtime_contract_required_fields": [
+                    "execution_goal",
+                    "applicability",
+                    "workflow_steps",
+                    "expected_evidence",
+                    "safety_constraints",
+                    "wait_checkpoints",
+                    "completion_criteria",
+                    "recovery_paths",
+                ],
                 "workflow_step_required_fields": ["id", "title", "goal", "source_evidence"],
                 "business_node_rule": (
-                    "每个 workflow step 必须有同名 node.id，节点 ID 必须语义化，"
-                    "禁止使用 llm/tool/step1 这类通用 ID。"
+                    "每个 workflow step 必须编译为 instruct_<step_id> 和 evaluate_<step_id> 两个节点。"
+                    "instruct 节点必须输出到终端并进入 wait checkpoint；evaluate 节点必须消费 terminal evidence 并输出 JSON decision。"
                 ),
-                "node_sequence_rule": "start -> input -> workflow steps -> terminal",
+                "node_sequence_rule": (
+                    "start -> instruct_<first_step> -> wait -> evaluate_<first_step> -> "
+                    "instruct_<next_step> / recover_or_retry -> final_verify -> terminal"
+                ),
                 "llm_projection_rule": (
-                    "每个 llm 业务节点的 user_template 必须包含该步骤目标、source_evidence、"
-                    "用户输入和前序 observations。"
+                    "指令型 llm 节点输出 terminal_message；评估型 llm 节点必须只输出 JSON object，"
+                    "包含 decision/proceed|retry|need_more_evidence|abort|complete、reason、next_phase、terminal_message。"
                 ),
                 "domain_pack_rule": (
                     "domain_pack 只用于理解行业术语、常见步骤和质量标准；"

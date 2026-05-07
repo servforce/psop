@@ -46,6 +46,12 @@ class RunResponse(BaseModel):
     latest_trace_seq: int
     terminal_session_id: str | None = None
     binding_summary: list[dict[str, Any]] = Field(default_factory=list)
+    current_step: str = ""
+    wait_reason: str = ""
+    expected_inputs: list[dict[str, Any]] = Field(default_factory=list)
+    checkpoint_id: str = ""
+    resume_phase: str = ""
+    latest_evaluation: dict[str, Any] = Field(default_factory=dict)
     final_output: str = ""
     exit_reason: str = ""
     created_at: datetime

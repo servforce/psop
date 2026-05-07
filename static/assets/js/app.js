@@ -2034,14 +2034,15 @@
       },
 
       async createInvocation() {
-        if (!this.invocationForm.skill_key || !this.invocationForm.user_input.trim()) {
-          this.showNotice("error", "请选择 Skill 并填写运行输入。");
+        if (!this.invocationForm.skill_key) {
+          this.showNotice("error", "请选择 Skill。");
           return;
         }
 
         this.busy.createInvocation = true;
         this.clearNotice();
         try {
+          const userInput = this.invocationForm.user_input.trim();
           const invocation = await this.apiRequest("/gateway/invocations", {
             method: "POST",
             body: JSON.stringify({
@@ -2050,9 +2051,7 @@
               terminal_context: {
                 terminal_kind: "web"
               },
-              input_envelope: {
-                user_input: this.invocationForm.user_input.trim()
-              }
+              input_envelope: userInput ? { user_input: userInput } : {}
             })
           });
           this.invocationForm.user_input = "";

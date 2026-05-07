@@ -105,14 +105,14 @@ def test_compiler_emits_mvp_formal_v5_artifact(runtime_stack) -> None:
     assert inference_gateway.calls[0]["system_prompt"] == PromptRegistry().load_default_compile_agent().system_prompt
     assert artifact.artifact["graph_summary"]["template"] == "formal-v5 skill workflow graph"
     assert artifact.artifact["graph_summary"]["workflow_nodes"] == [
-        "collect_context",
-        "inspect_constraints",
-        "produce_guidance",
+        "instruct_collect_context",
+        "evaluate_collect_context",
+        "final_verify",
     ]
     assert artifact.artifact["compiler_metadata"]["agent_prompt"]["prompt_hash"]
     assert artifact.artifact["compiler_metadata"]["domain_pack"]["domain_pack_id"] == "generic"
     assert artifact.artifact["schema"]["input_name"] == "user_input"
-    assert artifact.capability_summary["tools"] == ["psop.demo.inspect_input"]
+    assert artifact.capability_summary["tools"] == []
     assert any(item.code == "compile.agent.enabled" for item in diagnostics)
     assert any(item.code == "compile.agent.prompt_pack" for item in diagnostics)
 
@@ -409,11 +409,10 @@ def test_formal_v5_validator_rejects_generic_shell_without_skill_workflow() -> N
 def test_formal_v5_validator_normalizes_common_agent_dsl_aliases() -> None:
     artifact = build_test_formal_v5_artifact()
     artifact["nodes"][0]["guard"] = {"op": "phase_is", "value": "start"}
-    artifact["nodes"][1]["guard"] = {"op": "phase_is", "phase": "input"}
-    artifact["nodes"][1]["merge"][0]["path"] = "token.user_input"
-    artifact["nodes"][2]["guard"] = {"op": "phase_is", "phase": "collect_context"}
-    artifact["nodes"][2]["merge"].append({"op": "set", "path": "llm_response", "from": "observation.content"})
-    artifact["nodes"][5]["merge"][0]["path"] = "final_response"
+    artifact["nodes"][1]["guard"] = {"op": "phase_is", "phase": "instruct_collect_context"}
+    artifact["nodes"][1]["merge"].append({"op": "set", "path": "llm_response", "from": "observation.content"})
+    artifact["nodes"][2]["guard"] = {"op": "phase_is", "phase": "evaluate_collect_context"}
+    artifact["nodes"][4]["merge"][0]["path"] = "final_response"
     artifact["halt"] = {"op": "field_equals", "path": "status", "value": "success"}
 
     result = validate_and_normalize_artifact(artifact)
@@ -421,13 +420,12 @@ def test_formal_v5_validator_normalizes_common_agent_dsl_aliases() -> None:
     assert not result.has_errors
     assert result.artifact is not None
     assert result.artifact["nodes"][0]["guard"] == {"phase_is": "start"}
-    assert result.artifact["nodes"][1]["merge"][0]["path"] == "observations.input.user_input"
-    assert result.artifact["nodes"][2]["merge"][-1]["path"] == "observations.llm.content"
-    assert result.artifact["nodes"][5]["merge"][0]["path"] == "outputs.final_response"
+    assert result.artifact["nodes"][1]["merge"][-1]["path"] == "observations.llm.content"
+    assert result.artifact["nodes"][4]["merge"][0]["path"] == "outputs.final_response"
     assert result.artifact["halt"] == {"success": {"field_equals": {"path": "status", "value": "success"}}}
 
 
-def test_runtime_service_executes_llm_tool_and_builds_replay(runtime_stack) -> None:
+def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime_stack) -> None:
     database_manager, _, inference_gateway, compiler_service, skills_service, runtime_service = runtime_stack
 
     with database_manager.session() as session:
@@ -450,7 +448,20 @@ def test_runtime_service_executes_llm_tool_and_builds_replay(runtime_stack) -> N
             session,
             CreateInvocationRequest(
                 skill_key="runtime-unit",
-                input_envelope={"user_input": "请分析阀门异常？"},
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        initial_run = runtime_service.get_run(session, invocation.run_id or "")
+        initial_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        appended = runtime_service.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="我已经完成当前步骤，并上传了现场说明。",
+                external_event_id="runtime-unit-evidence-001",
             ),
         )
         run = runtime_service.get_run(session, invocation.run_id or "")
@@ -460,34 +471,39 @@ def test_runtime_service_executes_llm_tool_and_builds_replay(runtime_stack) -> N
         terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
         bindings = runtime_service.list_run_bindings(session, invocation.run_id or "")
 
-    assert invocation.status == "succeeded"
+    assert invocation.status == "running"
     assert invocation.terminal_session_id
+    assert initial_run.status == "waiting_input"
+    assert initial_run.current_step == "collect_context"
+    assert initial_run.checkpoint_id == "collect_context_evidence"
+    assert initial_run.expected_inputs
+    assert [event.direction for event in initial_events] == ["output"]
+    assert appended.seq_no == 2
     assert run.status == "succeeded"
-    assert run.latest_snapshot_seq == 6
-    assert run.latest_terminal_seq == 2
+    assert run.latest_snapshot_seq == 5
+    assert run.latest_terminal_seq == 5
     assert run.latest_trace_seq == 7
     assert run.terminal_session_id == invocation.terminal_session_id
     assert len(run.binding_summary) == 2
-    assert "已处理输入" in run.final_output
-    assert inference_gateway.calls[-1]["user_prompt"].startswith("用户输入：请分析阀门异常？")
-    assert [snapshot.seq_no for snapshot in snapshots] == [0, 1, 2, 3, 4, 5, 6]
+    assert run.latest_evaluation["decision"] == "complete"
+    assert "测试任务已完成" in run.final_output
+    assert "final_verify" in inference_gateway.calls[-1]["system_prompt"]
+    assert [snapshot.seq_no for snapshot in snapshots] == [0, 1, 2, 3, 4, 5]
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
-    assert [event.direction for event in terminal_events] == ["input", "output"]
-    assert terminal_events[0].payload_inline == "请分析阀门异常？"
+    assert terminal_session.terminal_session.status == "closed"
+    assert [event.direction for event in terminal_events] == ["output", "input", "output", "output", "output"]
+    assert terminal_events[1].payload_inline == "我已经完成当前步骤，并上传了现场说明。"
     assert {binding.requirement_key for binding in bindings} == {"terminal.input", "terminal.output"}
-    assert len(replay.terminal_events) == 2
+    assert len(replay.terminal_events) == 5
     assert len(replay.bindings) == 2
-    assert [item.event_type for item in replay.timeline] == [
-        "terminal.event.appended",
+    assert [item.event_type for item in replay.timeline][:5] == [
         "binding.resolved",
         "runtime.start.completed",
-        "runtime.input.accepted",
-        "gateway.inference.completed",
-        "gateway.tool.completed",
-        "gateway.inference.completed",
         "terminal.event.appended",
-        "runtime.final.completed",
+        "runtime.wait_checkpoint.entered",
+        "gateway.inference.completed",
     ]
+    assert "runtime.final.completed" in [item.event_type for item in replay.timeline]
 
 
 def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
@@ -558,8 +574,8 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
     assert appended.seq_no == 3
     assert duplicate.event_id == appended.event_id
     assert duplicate.seq_no == appended.seq_no
-    assert [event.seq_no for event in events] == [1, 2, 3]
-    assert events[-1].payload_inline == "追加输入"
+    assert [event.seq_no for event in events] == [1, 2, 3, 4, 5, 6]
+    assert events[2].payload_inline == "追加输入"
 
 
 def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> None:

@@ -201,8 +201,28 @@ class FakeInferenceGateway:
         )
         if "SKILL 编译智能体" in system_prompt:
             content = json.dumps(build_test_formal_v5_artifact(), ensure_ascii=False)
+        elif "final_verify" in system_prompt or "final_verify" in user_prompt:
+            content = json.dumps(
+                {
+                    "decision": "complete",
+                    "reason": "最终完成标准已验证。",
+                    "next_phase": "terminal",
+                    "terminal_message": "测试任务已完成，现场步骤已验证。",
+                },
+                ensure_ascii=False,
+            )
+        elif "只输出 JSON decision" in system_prompt or "JSON decision" in user_prompt:
+            content = json.dumps(
+                {
+                    "decision": "proceed",
+                    "reason": "现场证据满足当前步骤完成标准。",
+                    "next_phase": "final_verify",
+                    "terminal_message": "已确认这一步完成，继续最终核验。",
+                },
+                ensure_ascii=False,
+            )
         else:
-            content = f"已处理输入：{user_prompt}"
+            content = "请先完成当前现实步骤，并提交文本、图片或文件作为现场证据。"
         return LlmCompletion(
             content=content,
             provider="fake-openai-compatible",
@@ -260,6 +280,7 @@ def build_test_formal_v5_artifact() -> dict:
                 "memory",
                 "trace",
                 "status",
+                "terminal",
             ],
             "input_name": "user_input",
             "output_name": "final_response",
@@ -272,71 +293,76 @@ def build_test_formal_v5_artifact() -> dict:
                 "actor": {"name": "runtime.start"},
                 "merge": [
                     {"op": "set", "path": "observations.start", "from": "observation"},
-                    {"op": "set", "path": "phase", "value": "input"},
+                    {"op": "set", "path": "phase", "value": "instruct_collect_context"},
                 ],
                 "policy": {"priority": 10},
             },
             {
-                "id": "input",
-                "kind": "input",
-                "guard": {"phase_is": "input"},
-                "actor": {"name": "runtime.input"},
+                "id": "instruct_collect_context",
+                "kind": "llm",
+                "guard": {"phase_is": "instruct_collect_context"},
+                "actor": {"name": "agent.llm"},
+                "interaction": {
+                    "output_to_terminal": True,
+                    "wait_after_output": True,
+                    "checkpoint_id": "collect_context_evidence",
+                    "workflow_step_id": "collect_context",
+                    "wait_reason": "等待用户提交当前真实场景的说明或多模态证据。",
+                    "expected_inputs": [
+                        {"kind": "text", "event_kind": "terminal.text.input.v1"},
+                        {"kind": "image", "event_kind": "terminal.image.input.v1"},
+                        {"kind": "file", "event_kind": "terminal.file.input.v1"},
+                    ],
+                    "resume_phase": "evaluate_collect_context",
+                },
+                "projection": {
+                    "system_template": "输出当前现实步骤指令。collect_context",
+                    "user_template": (
+                        "步骤目标：识别用户任务、约束和期望输出。\n"
+                        "依据：SKILL.md 要求先理解用户任务。\n"
+                        "当前 Token：{{token}}"
+                    ),
+                },
                 "merge": [
-                    {"op": "set", "path": "observations.input", "from": "observation"},
-                    {"op": "set", "path": "phase", "value": "collect_context"},
+                    {"op": "set", "path": "observations.instruct_collect_context", "from": "observation"},
                 ],
                 "policy": {"priority": 20},
             },
             {
-                "id": "collect_context",
+                "id": "evaluate_collect_context",
                 "kind": "llm",
-                "guard": {"phase_is": "collect_context"},
+                "guard": {"phase_is": "evaluate_collect_context"},
                 "actor": {"name": "agent.llm"},
+                "interaction": {"evaluation": True},
                 "projection": {
-                    "system_template": "你正在执行 PSOP Skill：{{skill.name}} 的【收集上下文】步骤。",
+                    "system_template": "只输出 JSON decision。evaluate_collect_context",
                     "user_template": (
-                        "用户输入：{{input.user_input}}\n"
-                        "步骤目标：识别用户任务、约束和期望输出。\n"
-                        "依据：SKILL.md 要求先理解用户任务。\n"
-                        "前序观察：{{token.observations}}"
+                        "根据 token.control.wait.evidence 判断 collect_context 是否完成。\n"
+                        "必须输出 JSON decision。当前 Token：{{token}}"
                     ),
                 },
                 "merge": [
-                    {"op": "set", "path": "observations.collect_context", "from": "observation"},
-                    {"op": "set", "path": "phase", "value": "inspect_constraints"},
+                    {"op": "set", "path": "observations.evaluate_collect_context", "from": "observation"},
+                    {"op": "set", "path": "phase", "from": "observation.next_phase"},
                 ],
                 "policy": {"priority": 30},
             },
             {
-                "id": "inspect_constraints",
-                "kind": "tool",
-                "guard": {"phase_is": "inspect_constraints"},
-                "actor": {"name": "capability.demo_tool", "tool_name": "psop.demo.inspect_input"},
-                "merge": [
-                    {"op": "set", "path": "observations.inspect_constraints", "from": "observation"},
-                    {"op": "set", "path": "phase", "value": "produce_guidance"},
-                ],
-                "policy": {"priority": 40},
-            },
-            {
-                "id": "produce_guidance",
+                "id": "final_verify",
                 "kind": "llm",
-                "guard": {"phase_is": "produce_guidance"},
+                "guard": {"phase_is": "final_verify"},
                 "actor": {"name": "agent.llm"},
+                "interaction": {"evaluation": True},
                 "projection": {
-                    "system_template": "你正在执行 PSOP Skill：{{skill.name}} 的【产出指导】步骤。",
-                    "user_template": (
-                        "用户输入：{{input.user_input}}\n"
-                        "步骤目标：基于上下文和检查结果生成最终可执行答复。\n"
-                        "依据：SKILL.md 要求输出清晰结果。\n"
-                        "前序观察：{{token.observations}}"
-                    ),
+                    "system_template": "只输出 JSON decision。final_verify",
+                    "user_template": "根据 completion_criteria 与当前 Token 做最终验证。当前 Token：{{token}}",
                 },
                 "merge": [
-                    {"op": "set", "path": "observations.produce_guidance", "from": "observation"},
-                    {"op": "set", "path": "phase", "value": "terminal"},
+                    {"op": "set", "path": "observations.final_verify", "from": "observation"},
+                    {"op": "set", "path": "phase", "from": "observation.next_phase"},
+                    {"op": "set", "path": "outputs.final_response", "from": "observation.terminal_message"},
                 ],
-                "policy": {"priority": 50},
+                "policy": {"priority": 40},
             },
             {
                 "id": "terminal",
@@ -348,22 +374,26 @@ def build_test_formal_v5_artifact() -> dict:
                     {"op": "set", "path": "status", "value": "success"},
                     {"op": "set", "path": "phase", "value": "completed"},
                 ],
-                "policy": {"priority": 60},
+                "policy": {"priority": 50},
             },
         ],
         "init": {"entry_node": "start"},
         "halt": {"success": {"field_equals": {"path": "status", "value": "success"}}},
         "policies": {"selection": "priority_then_order", "max_steps": 10},
         "dependency_graph_for_view": [
-            {"from": "start", "to": "input"},
-            {"from": "input", "to": "collect_context"},
-            {"from": "collect_context", "to": "inspect_constraints"},
-            {"from": "inspect_constraints", "to": "produce_guidance"},
-            {"from": "produce_guidance", "to": "terminal"},
+            {"from": "start", "to": "instruct_collect_context"},
+            {"from": "instruct_collect_context", "to": "evaluate_collect_context"},
+            {"from": "evaluate_collect_context", "to": "final_verify"},
+            {"from": "final_verify", "to": "terminal"},
         ],
         "runtime_contract": {
             "llm_route_key": "default",
             "skill_instruction": "遵循 SKILL.md 完成任务。",
+            "execution_goal": "帮助用户在现实世界完成当前 Skill 目标。",
+            "applicability": {
+                "applies_when": ["用户处在真实任务现场并可提交证据。"],
+                "does_not_apply_when": ["任务存在不可控安全风险或用户无法提供现场反馈。"],
+            },
             "workflow_steps": [
                 {
                     "id": "collect_context",
@@ -371,19 +401,28 @@ def build_test_formal_v5_artifact() -> dict:
                     "goal": "识别用户任务、约束和期望输出。",
                     "source_evidence": "SKILL.md 要求先理解用户任务。",
                 },
-                {
-                    "id": "inspect_constraints",
-                    "title": "检查输入约束",
-                    "goal": "检查用户输入是否足够支撑执行。",
-                    "source_evidence": "SKILL.md 要求在执行前确认输入条件。",
-                },
-                {
-                    "id": "produce_guidance",
-                    "title": "产出指导",
-                    "goal": "基于上下文和检查结果生成最终可执行答复。",
-                    "source_evidence": "SKILL.md 要求输出清晰结果。",
-                },
             ],
+            "expected_evidence": {
+                "collect_context": [
+                    {"kind": "text", "event_kind": "terminal.text.input.v1"},
+                    {"kind": "image", "event_kind": "terminal.image.input.v1"},
+                    {"kind": "file", "event_kind": "terminal.file.input.v1"},
+                ]
+            },
+            "safety_constraints": ["如果用户证据显示存在安全风险，应中止或要求人工介入。"],
+            "wait_checkpoints": [
+                {
+                    "checkpoint_id": "collect_context_evidence",
+                    "workflow_step_id": "collect_context",
+                    "expected_inputs": [
+                        {"kind": "text"},
+                        {"kind": "image"},
+                        {"kind": "file"},
+                    ],
+                }
+            ],
+            "completion_criteria": ["所有必须的现实步骤已经由证据验证完成。"],
+            "recovery_paths": [{"when": "evidence_insufficient", "action": "request_more_evidence"}],
         },
     }
 
@@ -777,13 +816,11 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         invocation_payload = invocation_response.json()
         run_id = invocation_payload["run_id"]
 
-        run_response = client.get(f"/api/v1/runs/{run_id}")
-        trace_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
+        initial_run_response = client.get(f"/api/v1/runs/{run_id}")
         binding_requirements_response = client.get(f"/api/v1/runs/{run_id}/binding-requirements")
         bindings_response = client.get(f"/api/v1/runs/{run_id}/bindings")
         terminal_session_response = client.get(f"/api/v1/terminal/sessions/{run_id}")
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
-        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
         terminal_append_response = client.post(
             f"/api/v1/terminal/sessions/{run_id}/events",
             json={
@@ -794,7 +831,10 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
                 "external_event_id": "issue-one-demo-extra-input",
             },
         )
+        run_response = client.get(f"/api/v1/runs/{run_id}")
+        trace_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
         terminal_events_after_append_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
         jobs_response = client.get("/api/v1/runtime/jobs")
 
     assert publish_response.status_code == 202
@@ -811,38 +851,41 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert invalid_update_response.json()["details"]["diagnostics"][0]["code"] == "compile.formal_v5.validation_failed"
     assert artifact_response.json()["graph_summary"]["nodes"] == [
         "start",
-        "input",
-        "collect_context",
-        "inspect_constraints",
-        "produce_guidance",
+        "instruct_collect_context",
+        "evaluate_collect_context",
+        "final_verify",
         "terminal",
     ]
     assert artifact_response.json()["graph_summary"]["workflow_nodes"] == [
-        "collect_context",
-        "inspect_constraints",
-        "produce_guidance",
+        "instruct_collect_context",
+        "evaluate_collect_context",
+        "final_verify",
     ]
 
     assert invocation_response.status_code == 201
-    assert invocation_payload["status"] == "succeeded"
+    assert invocation_payload["status"] == "running"
     assert invocation_payload["gateway_type"] == "terminal"
     assert invocation_payload["terminal_session_id"]
+    initial_run_payload = initial_run_response.json()
+    assert initial_run_payload["status"] == "waiting_input"
+    assert initial_run_payload["current_step"] == "collect_context"
+    assert initial_run_payload["checkpoint_id"] == "collect_context_evidence"
     run_payload = run_response.json()
     assert run_payload["status"] == "succeeded"
     assert run_payload["terminal_session_id"] == invocation_payload["terminal_session_id"]
-    assert run_payload["latest_terminal_seq"] == 2
+    assert run_payload["latest_terminal_seq"] == 6
     assert run_payload["latest_trace_seq"] == 7
     assert len(run_payload["binding_summary"]) == 2
-    assert "已处理输入" in run_payload["final_output"]
-    assert fake_inference.calls[-1]["user_prompt"].startswith("用户输入：请检查泵站压力异常？")
+    assert "测试任务已完成" in run_payload["final_output"]
+    assert "final_verify" in fake_inference.calls[-1]["system_prompt"]
 
     event_types = [event["event_type"] for event in trace_response.json()]
     assert event_types == [
         "binding.resolved",
         "runtime.start.completed",
-        "runtime.input.accepted",
+        "runtime.wait_checkpoint.entered",
         "gateway.inference.completed",
-        "gateway.tool.completed",
+        "gateway.inference.completed",
         "gateway.inference.completed",
         "runtime.final.completed",
     ]
@@ -860,21 +903,18 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert [item["direction"] for item in terminal_events_response.json()] == ["input", "output"]
     assert terminal_append_response.status_code == 202
     assert terminal_append_response.json()["seq_no"] == 3
-    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3]
+    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3, 4, 5, 6]
 
     replay_payload = replay_response.json()
-    assert [item["title"] for item in replay_payload["timeline"]] == [
+    assert [item["title"] for item in replay_payload["timeline"]][:6] == [
         "终端输入",
         "绑定解析",
         "runtime.start.completed",
-        "输入",
-        "LLM 输出",
-        "工具调用",
-        "LLM 输出",
         "终端输出",
-        "最终结果",
+        "等待现场证据",
+        "LLM 输出",
     ]
-    assert len(replay_payload["terminal_events"]) == 2
+    assert len(replay_payload["terminal_events"]) == 6
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
 
@@ -968,7 +1008,7 @@ def test_skill_test_case_upload_run_send_data_and_evaluate() -> None:
                 ],
                 "assertions": [
                     {"type": "run.status_equals", "status": "succeeded"},
-                    {"type": "final_output_contains", "text": "已处理输入"},
+                    {"type": "final_output_contains", "text": "测试任务已完成"},
                     {"type": "trace_event_exists", "event_type": "gateway.inference.completed"},
                     {"type": "terminal_event_exists", "direction": "output", "event_kind": "terminal.text.output.v1"},
                 ],
@@ -991,13 +1031,6 @@ def test_skill_test_case_upload_run_send_data_and_evaluate() -> None:
             json={"selected_data_object_ids": [data_id]},
         )
         test_run = start_response.json()
-        send_initial_response = client.post(
-            f"/api/v1/terminal/sessions/{test_run['run_id']}/events",
-            json={
-                **case_response.json()["initial_terminal_events"][0],
-                "external_event_id": f"test-run-{test_run['id']}-initial",
-            },
-        )
         send_data_response = client.post(
             f"/api/v1/skill-test-runs/{test_run['id']}/send-data",
             json={"test_data_object_id": data_id},
@@ -1016,7 +1049,6 @@ def test_skill_test_case_upload_run_send_data_and_evaluate() -> None:
     assert test_run["run_id"]
     assert test_run["initial_terminal_events"] == []
     assert test_run["assertion_summary"]["pending"] > 0
-    assert send_initial_response.status_code == 202
     assert send_data_response.status_code == 202
     assert send_data_response.json()["terminal_event"]["artifact_object_id"] == upload_response.json()["artifact_object_id"]
     assert evaluate_response.status_code == 200

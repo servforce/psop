@@ -904,11 +904,11 @@
                 <input x-model="runtimeFilters.created_to" type="date" class="input-field h-10 px-3 py-0" />
               </label>
               <label class="field-block gap-1">
-                <span class="field-label">运行输入</span>
+                <span class="field-label">连接说明（可选）</span>
                 <input
                   x-model="invocationForm.user_input"
                   class="input-field h-10 px-3 py-0"
-                  placeholder="请输入要交给当前 Skill 执行的内容"
+                  placeholder="可选：补充终端环境或现场背景"
                   :disabled="!currentSkill.latest_published_version || busy.createInvocation"
                   @keydown.enter.prevent="createInvocation()"
                 />
@@ -917,13 +917,13 @@
                 <button
                   type="button"
                   class="button-primary h-10 w-10"
-                  title="发起运行"
-                  aria-label="发起运行"
+                  title="建立真实运行连接"
+                  aria-label="建立真实运行连接"
                   :disabled="busy.createInvocation || !currentSkill.latest_published_version"
                   @click="createInvocation()"
                 >
                   <span class="material-symbols-outlined text-[18px]">play_circle</span>
-                  <span x-text="busy.createInvocation ? '运行中...' : '发起运行'"></span>
+                  <span x-text="busy.createInvocation ? '连接中...' : '建立连接'"></span>
                 </button>
               </div>
             </div>
@@ -931,7 +931,7 @@
 
           <template x-if="!currentSkill.latest_published_version">
             <div class="border-b border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-              当前 Skill 尚未发布，无法发起运行。
+              当前 Skill 尚未发布，无法建立真实运行连接。
             </div>
           </template>
 
@@ -946,7 +946,7 @@
             <div class="empty-state flex-1 py-14">
               <span class="material-symbols-outlined text-[30px] text-slate-400">play_circle</span>
               <p class="mt-3 text-sm text-slate-500" x-text="currentSkillInvocations().length > 0 ? '没有匹配的运行记录。' : '当前 Skill 尚无运行记录。'"></p>
-              <p class="mt-2 text-xs text-slate-500">发布后可在这里发起运行，并进入运行现场查看执行过程。</p>
+              <p class="mt-2 text-xs text-slate-500">发布后可在这里建立运行连接，并进入运行现场查看执行过程。</p>
             </div>
           </template>
 

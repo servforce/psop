@@ -467,16 +467,32 @@ def _validate_token_path(value: str, token_fields: set[str], path: str) -> list[
 
 def _validate_workflow_contract(runtime_contract: dict[str, Any], node_ids: set[str]) -> tuple[list[FormalDiagnostic], set[str]]:
     diagnostics: list[FormalDiagnostic] = []
+    required_fields = [
+        "execution_goal",
+        "applicability",
+        "workflow_steps",
+        "expected_evidence",
+        "safety_constraints",
+        "wait_checkpoints",
+        "completion_criteria",
+        "recovery_paths",
+    ]
+    for field_name in required_fields:
+        value = runtime_contract.get(field_name)
+        if value in (None, "", [], {}):
+            diagnostics.append(_workflow_error(f"runtime_contract.{field_name} 是现实世界协作执行必填字段。", f"runtime_contract.{field_name}"))
+
     workflow_steps = runtime_contract.get("workflow_steps")
     if not isinstance(workflow_steps, list) or not workflow_steps:
-        return [
+        diagnostics.append(
             FormalDiagnostic(
                 severity="error",
                 code="compile.workflow.not_extracted",
                 message="runtime_contract.workflow_steps 必须包含从 SKILL.md/README.md 提取出的业务工作流步骤。",
                 location={"path": "runtime_contract.workflow_steps"},
             )
-        ], set()
+        )
+        return diagnostics, set()
 
     step_ids: set[str] = set()
     for index, step in enumerate(workflow_steps):
@@ -497,8 +513,12 @@ def _validate_workflow_contract(runtime_contract: dict[str, Any], node_ids: set[
                     f"{path}.id",
                 )
             )
-        if node_ids and step_id not in node_ids:
-            diagnostics.append(_workflow_error(f"workflow step.id `{step_id}` 没有对应 node。", f"{path}.id"))
+        instruct_id = f"instruct_{step_id}"
+        evaluate_id = f"evaluate_{step_id}"
+        if node_ids and instruct_id not in node_ids:
+            diagnostics.append(_workflow_error(f"workflow step `{step_id}` 缺少指令节点 `{instruct_id}`。", f"{path}.id"))
+        if node_ids and evaluate_id not in node_ids:
+            diagnostics.append(_workflow_error(f"workflow step `{step_id}` 缺少证据评估节点 `{evaluate_id}`。", f"{path}.id"))
         title = step.get("title")
         goal = step.get("goal")
         evidence = step.get("source_evidence")
@@ -514,6 +534,24 @@ def _validate_workflow_contract(runtime_contract: dict[str, Any], node_ids: set[
                 )
             )
         step_ids.add(step_id)
+
+    wait_checkpoints = runtime_contract.get("wait_checkpoints")
+    if isinstance(wait_checkpoints, list):
+        checkpoint_step_ids = {
+            item.get("workflow_step_id")
+            for item in wait_checkpoints
+            if isinstance(item, dict) and isinstance(item.get("workflow_step_id"), str)
+        }
+        missing_wait_steps = sorted(step_ids - checkpoint_step_ids)
+        for step_id in missing_wait_steps:
+            diagnostics.append(
+                _workflow_error(
+                    f"workflow step `{step_id}` 缺少 runtime_contract.wait_checkpoints 声明。",
+                    "runtime_contract.wait_checkpoints",
+                )
+            )
+    else:
+        diagnostics.append(_workflow_error("runtime_contract.wait_checkpoints 必须是数组。", "runtime_contract.wait_checkpoints"))
     return diagnostics, step_ids
 
 
@@ -522,54 +560,81 @@ def _validate_workflow_nodes(nodes: list[Any], workflow_step_ids: set[str]) -> l
         return []
 
     diagnostics: list[FormalDiagnostic] = []
-    business_nodes = [node for node in nodes if isinstance(node, dict) and node.get("id") in workflow_step_ids]
-    if not business_nodes:
-        return [
-            FormalDiagnostic(
-                severity="error",
-                code="compile.workflow.not_extracted",
-                message="nodes 中缺少与 runtime_contract.workflow_steps 对应的业务节点。",
-                location={"path": "nodes"},
-            )
-        ]
-
-    for node in business_nodes:
-        node_id = str(node.get("id"))
-        kind = node.get("kind")
-        if kind not in {"llm", "tool"}:
-            diagnostics.append(
-                _workflow_error(
-                    f"workflow node `{node_id}` 必须是 llm 或 tool 业务节点，不能是 `{kind}`。",
-                    f"nodes[{node_id}].kind",
-                )
-            )
-        if kind == "llm":
-            projection = node.get("projection")
-            if not isinstance(projection, dict) or not projection.get("user_template"):
-                diagnostics.append(
-                    _workflow_error(
-                        f"workflow llm node `{node_id}` 必须包含面向该步骤的 projection.user_template。",
-                        f"nodes[{node_id}].projection",
-                    )
-                )
-        merge = node.get("merge")
-        writes_own_observation = (
-            isinstance(merge, list)
-            and any(
-                isinstance(operation, dict)
-                and operation.get("op") == "set"
-                and operation.get("path") == f"observations.{node_id}"
-                and operation.get("from") == "observation"
-                for operation in merge
+    node_map = {str(node.get("id")): node for node in nodes if isinstance(node, dict) and node.get("id")}
+    if any(step_id in node_map for step_id in workflow_step_ids):
+        diagnostics.append(
+            _workflow_error(
+                "新编译产物不允许把 workflow step 直接编译为同名线性业务节点；必须使用 instruct_<step_id> / evaluate_<step_id> 结构。",
+                "nodes",
             )
         )
-        if not writes_own_observation:
+
+    if "final_verify" not in node_map:
+        diagnostics.append(_workflow_error("terminal(success) 前必须存在 final_verify 或等价最终验证节点。", "nodes.final_verify"))
+
+    for step_id in sorted(workflow_step_ids):
+        instruct_id = f"instruct_{step_id}"
+        evaluate_id = f"evaluate_{step_id}"
+        instruct = node_map.get(instruct_id)
+        evaluate = node_map.get(evaluate_id)
+        if not instruct or not evaluate:
+            continue
+
+        if instruct.get("kind") != "llm":
+            diagnostics.append(_workflow_error(f"`{instruct_id}` 必须是 llm 指令节点。", f"nodes[{instruct_id}].kind"))
+        instruct_interaction = instruct.get("interaction")
+        if not isinstance(instruct_interaction, dict):
+            diagnostics.append(_workflow_error(f"`{instruct_id}` 必须声明 interaction。", f"nodes[{instruct_id}].interaction"))
+            instruct_interaction = {}
+        if instruct_interaction.get("output_to_terminal") is not True:
+            diagnostics.append(
+                _workflow_error(f"`{instruct_id}` 必须 output_to_terminal=true。", f"nodes[{instruct_id}].interaction.output_to_terminal")
+            )
+        if instruct_interaction.get("wait_after_output") is not True:
+            diagnostics.append(
+                _workflow_error(f"`{instruct_id}` 必须 wait_after_output=true。", f"nodes[{instruct_id}].interaction.wait_after_output")
+            )
+        if instruct_interaction.get("resume_phase") != evaluate_id:
             diagnostics.append(
                 _workflow_error(
-                    f"workflow node `{node_id}` 必须把 observation 写入 observations.{node_id}。",
-                    f"nodes[{node_id}].merge",
+                    f"`{instruct_id}` 的 resume_phase 必须指向 `{evaluate_id}`。",
+                    f"nodes[{instruct_id}].interaction.resume_phase",
                 )
             )
+        expected_inputs = instruct_interaction.get("expected_inputs")
+        if not isinstance(expected_inputs, list) or not expected_inputs:
+            diagnostics.append(
+                _workflow_error(f"`{instruct_id}` 必须声明 expected_inputs。", f"nodes[{instruct_id}].interaction.expected_inputs")
+            )
+
+        if evaluate.get("kind") != "llm":
+            diagnostics.append(_workflow_error(f"`{evaluate_id}` 必须是 llm 评估节点。", f"nodes[{evaluate_id}].kind"))
+        evaluate_interaction = evaluate.get("interaction")
+        if not isinstance(evaluate_interaction, dict) or evaluate_interaction.get("evaluation") is not True:
+            diagnostics.append(_workflow_error(f"`{evaluate_id}` 必须声明 interaction.evaluation=true。", f"nodes[{evaluate_id}].interaction"))
+        projection = evaluate.get("projection")
+        if not isinstance(projection, dict) or not projection.get("user_template"):
+            diagnostics.append(_workflow_error(f"`{evaluate_id}` 必须包含 projection.user_template。", f"nodes[{evaluate_id}].projection"))
+
+        for node_id, node in ((instruct_id, instruct), (evaluate_id, evaluate)):
+            merge = node.get("merge")
+            writes_own_observation = (
+                isinstance(merge, list)
+                and any(
+                    isinstance(operation, dict)
+                    and operation.get("op") == "set"
+                    and operation.get("path") == f"observations.{node_id}"
+                    and operation.get("from") == "observation"
+                    for operation in merge
+                )
+            )
+            if not writes_own_observation:
+                diagnostics.append(
+                    _workflow_error(
+                        f"`{node_id}` 必须把 observation 写入 observations.{node_id}。",
+                        f"nodes[{node_id}].merge",
+                    )
+                )
     return diagnostics
 
 

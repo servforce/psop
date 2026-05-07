@@ -107,14 +107,13 @@ class RuntimeService:
         session.flush()
 
         initial_input = self._extract_initial_terminal_input(payload.input_envelope)
-        has_initial_terminal_input = initial_input is not None
         run = Run(
             invocation_id=invocation.id,
             skill_definition_id=skill_definition.id,
             skill_version_id=skill_version.id,
             compile_artifact_id=artifact.id,
-            status="queued" if has_initial_terminal_input else "waiting_input",
-            runtime_phase=self._initial_phase(artifact_payload) if has_initial_terminal_input else "waiting_input",
+            status="queued",
+            runtime_phase=self._initial_phase(artifact_payload),
         )
         session.add(run)
         session.flush()
@@ -166,19 +165,16 @@ class RuntimeService:
                 source_ref={"kind": "web", "connection_id": "invocation"},
                 external_event_id=f"invocation:{invocation.id}:initial-input",
             )
-        if has_initial_terminal_input:
-            session.add(
-                RuntimeJob(
-                    job_type="runtime",
-                    status="pending",
-                    payload={"run_id": run.id},
-                    run_id=run.id,
-                    dedupe_key=f"job:runtime:{run.id}",
-                    max_attempts=self.settings.runtime_job_max_attempts,
-                )
+        session.add(
+            RuntimeJob(
+                job_type="runtime",
+                status="pending",
+                payload={"run_id": run.id},
+                run_id=run.id,
+                dedupe_key=f"job:runtime:{run.id}",
+                max_attempts=self.settings.runtime_job_max_attempts,
             )
-        else:
-            invocation.status = "running"
+        )
         session.commit()
         LOGGER.info(
             "runtime invocation created",
@@ -193,10 +189,9 @@ class RuntimeService:
         )
 
         # MVP local drain: keeps the issue #1 flow runnable without a separate worker process.
-        # Terminal-first callers may create the session before sending a first input; those runs
-        # stay waiting until a persisted terminal_event wakes the runtime.
-        if has_initial_terminal_input:
-            self.process_run(session, run.id)
+        # Real-world runs start even without user_input so Runtime can introduce the task,
+        # output the first actionable step, and enter a durable wait checkpoint.
+        self.process_run(session, run.id)
         refreshed = self.repository.get_invocation(session, invocation.id)
         if not refreshed:
             raise SkillNotFoundError("Invocation 创建后无法读取。")
@@ -206,7 +201,7 @@ class RuntimeService:
         run = self.repository.get_run(session, run_id)
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
-        if run.status == "succeeded":
+        if run.status in {"succeeded", "failed", "cancelled"}:
             return run
 
         artifact = self.repository.get_artifact(session, run.compile_artifact_id)
@@ -231,8 +226,6 @@ class RuntimeService:
             job.status = "running"
             job.attempt_no += 1
 
-        run.status = "running"
-        run.runtime_phase = self._initial_phase(artifact_payload)
         run.started_at = run.started_at or now_utc()
         invocation.status = "running"
         session.flush()
@@ -240,6 +233,17 @@ class RuntimeService:
         try:
             token = self.repository.list_snapshots(session, run.id)[-1].token_payload
             token = self._sync_terminal_events(session, run=run, token=token)
+            run.status = "running"
+            run.runtime_phase = str(token.get("phase") or self._initial_phase(artifact_payload))
+            if token.get("status") == "waiting":
+                run.status = "waiting_input"
+                run.runtime_phase = self._runtime_phase_from_token(token)
+                invocation.status = "running"
+                if job:
+                    job.status = "succeeded"
+                session.commit()
+                LOGGER.info("runtime loop waiting for terminal evidence")
+                return run
             max_steps = int(artifact_payload.get("policies", {}).get("max_steps") or 16)
             with start_span(
                 "runtime.loop",
@@ -257,7 +261,7 @@ class RuntimeService:
                     if not enabled_nodes:
                         if self._halt_wait(artifact_payload, token):
                             run.status = "waiting_input"
-                            run.runtime_phase = "waiting"
+                            run.runtime_phase = self._runtime_phase_from_token(token)
                             invocation.status = "running"
                             if job:
                                 job.status = "succeeded"
@@ -285,14 +289,32 @@ class RuntimeService:
                             record_span_exception(actor_span, exc)
                             raise
                     token = self._merge_observation(node=node, token=token, observation=observation)
+                    token, entered_wait = self._apply_node_interaction(
+                        session,
+                        run=run,
+                        token=token,
+                        node=node,
+                        observation=observation,
+                    )
                     token = self._append_runtime_step(
                         session,
                         run=run,
                         token=token,
                         node=node,
                         observation=observation,
-                        enabled_after=[item["id"] for item in self._enabled_nodes(artifact_payload, token)],
+                        enabled_after=[]
+                        if entered_wait
+                        else [item["id"] for item in self._enabled_nodes(artifact_payload, token)],
                     )
+                    if entered_wait:
+                        run.status = "waiting_input"
+                        run.runtime_phase = self._runtime_phase_from_token(token)
+                        invocation.status = "running"
+                        if job:
+                            job.status = "succeeded"
+                        session.commit()
+                        LOGGER.info("runtime loop entered wait checkpoint")
+                        return run
                 else:
                     raise RuntimeError(f"Runtime exceeded max_steps={max_steps}.")
 
@@ -308,6 +330,7 @@ class RuntimeService:
             run.final_output = str(_get_path(token, "outputs.final_response") or "")
             run.ended_at = now_utc()
             invocation.status = "succeeded"
+            self._close_terminal_session(session, run)
             if job:
                 job.status = "succeeded"
                 job.last_error = ""
@@ -320,6 +343,7 @@ class RuntimeService:
             run.exit_reason = str(exc)
             run.ended_at = now_utc()
             invocation.status = "failed"
+            self._close_terminal_session(session, run)
             if job:
                 job.status = "failed"
                 job.last_error = str(exc)
@@ -418,9 +442,6 @@ class RuntimeService:
         run = self.repository.get_run(session, run_id)
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
-        terminal_session = self.repository.get_terminal_session_for_run(session, run_id)
-        if not terminal_session or terminal_session.status != "open":
-            raise SkillValidationError("当前 Run 没有可用的 Terminal Session。", details={"run_id": run_id})
 
         external_event_id = payload.external_event_id or idempotency_key
         if external_event_id:
@@ -437,6 +458,12 @@ class RuntimeService:
                     seq_no=existing.seq_no,
                     event=event_response,
                 )
+
+        if run.status in {"succeeded", "failed", "cancelled"}:
+            raise SkillValidationError("Run 已结束，不能继续追加终端输入。", details={"run_id": run_id, "status": run.status})
+        terminal_session = self.repository.get_terminal_session_for_run(session, run_id)
+        if not terminal_session or terminal_session.status != "open":
+            raise SkillValidationError("当前 Run 没有可用的 Terminal Session。", details={"run_id": run_id})
 
         event = self._append_terminal_event(
             session,
@@ -666,6 +693,142 @@ class RuntimeService:
         session.flush()
         return token
 
+    def _apply_node_interaction(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        token: dict[str, Any],
+        node: dict[str, Any],
+        observation: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
+        next_token = token
+        entered_wait = False
+
+        terminal_message = self._terminal_message_from_observation(observation)
+        should_output = bool(interaction.get("output_to_terminal")) or (
+            self._node_is_evaluation(node) and bool(terminal_message)
+        )
+        if should_output and terminal_message:
+            terminal_session = self.repository.get_terminal_session_for_run(session, run.id)
+            if terminal_session and terminal_session.status == "open":
+                self._append_terminal_event(
+                    session,
+                    run=run,
+                    terminal_session=terminal_session,
+                    direction="output",
+                    event_kind=str(interaction.get("output_event_kind") or "terminal.text.output.v1"),
+                    mime_type=str(interaction.get("output_mime_type") or "text/markdown"),
+                    payload_inline=terminal_message,
+                    binding_id=None,
+                    source_ref={"kind": "runtime", "node_id": str(node.get("id"))},
+                )
+
+        if self._node_is_evaluation(node):
+            next_token.setdefault("control", {})["latest_evaluation"] = self._evaluation_summary(node, observation)
+            decision = str(observation.get("decision") or "").strip().lower()
+            if decision in {"retry", "need_more_evidence"}:
+                wait = next_token.setdefault("control", {}).get("wait")
+                if isinstance(wait, dict):
+                    wait["status"] = "waiting"
+                    wait["reason"] = str(observation.get("reason") or wait.get("reason") or "等待更多现场证据。")
+                    next_token["status"] = "waiting"
+                    next_token["phase"] = "waiting"
+                    entered_wait = True
+            elif decision == "abort":
+                next_token["status"] = "failure"
+                next_token["phase"] = "failed"
+                next_token.setdefault("outputs", {})["final_response"] = terminal_message or str(
+                    observation.get("reason") or "任务已终止。"
+                )
+
+        if interaction.get("wait_after_output"):
+            next_token = self._enter_wait_checkpoint(run=run, token=next_token, node=node, observation=observation)
+            entered_wait = True
+            self._append_trace_event(
+                session,
+                run=run,
+                phase=str(node.get("id")),
+                event_type="runtime.wait_checkpoint.entered",
+                payload={"wait": next_token.get("control", {}).get("wait", {})},
+            )
+
+        return next_token, entered_wait
+
+    @staticmethod
+    def _node_is_evaluation(node: dict[str, Any]) -> bool:
+        interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
+        return bool(interaction.get("evaluation")) or str(node.get("id") or "").startswith("evaluate_")
+
+    @staticmethod
+    def _terminal_message_from_observation(observation: dict[str, Any]) -> str:
+        value = (
+            observation.get("terminal_message")
+            or observation.get("content")
+            or observation.get("final_response")
+            or observation.get("summary")
+        )
+        return str(value).strip() if value is not None else ""
+
+    @staticmethod
+    def _evaluation_summary(node: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "node_id": str(node.get("id") or ""),
+            "decision": str(observation.get("decision") or ""),
+            "reason": str(observation.get("reason") or ""),
+            "next_phase": str(observation.get("next_phase") or ""),
+            "terminal_message": str(observation.get("terminal_message") or ""),
+        }
+
+    @staticmethod
+    def _enter_wait_checkpoint(
+        *,
+        run: Run,
+        token: dict[str, Any],
+        node: dict[str, Any],
+        observation: dict[str, Any],
+    ) -> dict[str, Any]:
+        interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
+        checkpoint_id = str(interaction.get("checkpoint_id") or f"{node.get('id')}:wait")
+        wait = {
+            "status": "waiting",
+            "checkpoint_id": checkpoint_id,
+            "workflow_step_id": str(interaction.get("workflow_step_id") or node.get("id") or ""),
+            "reason": str(interaction.get("wait_reason") or observation.get("wait_reason") or "等待用户提交现场证据。"),
+            "expected_inputs": interaction.get("expected_inputs") if isinstance(interaction.get("expected_inputs"), list) else [],
+            "resume_phase": str(interaction.get("resume_phase") or f"evaluate_{node.get('id')}"),
+            "entered_by_node": str(node.get("id") or ""),
+            "entered_at": now_utc().isoformat(),
+            "run_id": run.id,
+            "evidence": [],
+        }
+        token.setdefault("control", {})["wait"] = wait
+        token.setdefault("control", {}).setdefault("wait_checkpoints", []).append(
+            {
+                "checkpoint_id": checkpoint_id,
+                "workflow_step_id": wait["workflow_step_id"],
+                "entered_by_node": wait["entered_by_node"],
+                "entered_at": wait["entered_at"],
+            }
+        )
+        token["status"] = "waiting"
+        token["phase"] = "waiting"
+        return token
+
+    @staticmethod
+    def _runtime_phase_from_token(token: dict[str, Any]) -> str:
+        wait = token.get("control", {}).get("wait") if isinstance(token.get("control"), dict) else None
+        if isinstance(wait, dict) and token.get("status") == "waiting":
+            return str(wait.get("checkpoint_id") or wait.get("workflow_step_id") or "waiting")
+        return str(token.get("phase") or "")
+
+    def _close_terminal_session(self, session: Session, run: Run) -> None:
+        terminal_session = self.repository.get_terminal_session_for_run(session, run.id)
+        if terminal_session and terminal_session.status == "open":
+            terminal_session.status = "closed"
+            terminal_session.closed_at = now_utc()
+
     def _append_trace_event(
         self,
         session: Session,
@@ -755,7 +918,8 @@ class RuntimeService:
         token_events = terminal.setdefault("events", [])
         input_envelope = next_token.setdefault("input_envelope", {})
         for event in events:
-            token_events.append(self._terminal_event_token_payload(event))
+            event_payload = self._terminal_event_token_payload(event)
+            token_events.append(event_payload)
             terminal["latest_seq"] = event.seq_no
             next_token.setdefault("metadata", {})["terminal_cursor"] = event.seq_no
             if event.direction == "input":
@@ -763,6 +927,18 @@ class RuntimeService:
                 if input_text:
                     input_envelope["user_input"] = input_text
                     input_envelope.setdefault("text", input_text)
+                wait = next_token.setdefault("control", {}).get("wait")
+                if isinstance(wait, dict) and next_token.get("status") == "waiting":
+                    evidence = {
+                        **event_payload,
+                        "text": input_text,
+                    }
+                    wait.setdefault("evidence", []).append(evidence)
+                    wait["latest_event_seq"] = event.seq_no
+                    wait["status"] = "received"
+                    next_token.setdefault("control", {})["latest_evidence"] = evidence
+                    next_token["status"] = "running"
+                    next_token["phase"] = str(wait.get("resume_phase") or next_token.get("phase") or "start")
         return next_token
 
     def _ensure_default_run_bindings(
@@ -854,7 +1030,9 @@ class RuntimeService:
             "event_kind": event.event_kind,
             "mime_type": event.mime_type,
             "payload_inline": event.payload_inline,
+            "artifact_object_id": event.artifact_object_id,
             "binding_id": event.run_capability_binding_id,
+            "source_ref": event.source_ref,
             "occurred_at": event.occurred_at.isoformat(),
         }
 
@@ -992,12 +1170,15 @@ class RuntimeService:
                     route_key=route_key,
                 )
             token.setdefault("budgets", {})["llm_calls"] = int(token.setdefault("budgets", {}).get("llm_calls", 0)) + 1
-            return {
+            observation = {
                 "content": llm_completion.content,
                 "provider": llm_completion.provider,
                 "model": llm_completion.model,
                 "summary": "LLM 节点执行完成。",
             }
+            if self._node_is_evaluation(node):
+                observation.update(self._parse_evaluation_observation(llm_completion.content, node=node))
+            return observation
         if kind == "tool" or actor_name == "capability.demo_tool":
             user_input = self._extract_user_input(token.get("input_envelope", {}), artifact_payload)
             llm_output = str(
@@ -1076,6 +1257,37 @@ class RuntimeService:
         return _render_template(system_template, context), _render_template(user_template, context)
 
     @staticmethod
+    def _parse_evaluation_observation(content: str, *, node: dict[str, Any]) -> dict[str, Any]:
+        raw = content.strip()
+        if raw.startswith("```"):
+            import re
+
+            match = re.search(r"```(?:json)?\s*(.*?)```", raw, flags=re.DOTALL | re.IGNORECASE)
+            if match:
+                raw = match.group(1).strip()
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Evaluation node `{node.get('id')}` must return JSON decision: {exc.msg}") from exc
+        if not isinstance(parsed, dict):
+            raise RuntimeError(f"Evaluation node `{node.get('id')}` must return a JSON object.")
+        decision = str(parsed.get("decision") or "").strip().lower()
+        if decision not in {"proceed", "retry", "need_more_evidence", "abort", "complete"}:
+            raise RuntimeError(
+                f"Evaluation node `{node.get('id')}` returned unsupported decision `{decision or '<missing>'}`."
+            )
+        if decision in {"proceed", "complete"} and not str(parsed.get("next_phase") or "").strip():
+            raise RuntimeError(f"Evaluation node `{node.get('id')}` must include next_phase for decision `{decision}`.")
+        return {
+            **parsed,
+            "decision": decision,
+            "reason": str(parsed.get("reason") or ""),
+            "next_phase": str(parsed.get("next_phase") or ""),
+            "terminal_message": str(parsed.get("terminal_message") or ""),
+            "summary": f"Evaluation decision: {decision}",
+        }
+
+    @staticmethod
     def _event_type_for_node(node: dict[str, Any]) -> str:
         kind = node.get("kind")
         mapping = {
@@ -1095,7 +1307,7 @@ class RuntimeService:
             condition = success["field_equals"]
             if isinstance(condition, dict):
                 return _get_path(token, str(condition.get("path"))) == condition.get("value")
-        return token.get("status") == "success" or bool(_get_path(token, "outputs.final_response"))
+        return token.get("status") == "success"
 
     @staticmethod
     def _halt_wait(artifact_payload: dict[str, Any], token: dict[str, Any]) -> bool:
@@ -1151,6 +1363,7 @@ class RuntimeService:
         )
 
     def _build_run_response(self, session: Session, run: Run) -> RunResponse:
+        wait_context = self._run_wait_context(session, run)
         return RunResponse(
             id=run.id,
             invocation_id=run.invocation_id,
@@ -1164,6 +1377,12 @@ class RuntimeService:
             latest_trace_seq=run.latest_trace_seq,
             terminal_session_id=run.terminal_session_id,
             binding_summary=[self._binding_payload(item) for item in self.repository.list_run_bindings(session, run.id)],
+            current_step=wait_context["current_step"],
+            wait_reason=wait_context["wait_reason"],
+            expected_inputs=wait_context["expected_inputs"],
+            checkpoint_id=wait_context["checkpoint_id"],
+            resume_phase=wait_context["resume_phase"],
+            latest_evaluation=wait_context["latest_evaluation"],
             final_output=run.final_output,
             exit_reason=run.exit_reason,
             created_at=run.created_at,
@@ -1171,6 +1390,24 @@ class RuntimeService:
             ended_at=run.ended_at,
             updated_at=run.updated_at,
         )
+
+    def _run_wait_context(self, session: Session, run: Run) -> dict[str, Any]:
+        snapshots = self.repository.list_snapshots(session, run.id)
+        token = snapshots[-1].token_payload if snapshots else {}
+        control = token.get("control") if isinstance(token, dict) else {}
+        control = control if isinstance(control, dict) else {}
+        wait = control.get("wait")
+        wait = wait if isinstance(wait, dict) else {}
+        latest_evaluation = control.get("latest_evaluation")
+        latest_evaluation = latest_evaluation if isinstance(latest_evaluation, dict) else {}
+        return {
+            "current_step": str(wait.get("workflow_step_id") or token.get("current_step") or ""),
+            "wait_reason": str(wait.get("reason") or ""),
+            "expected_inputs": wait.get("expected_inputs") if isinstance(wait.get("expected_inputs"), list) else [],
+            "checkpoint_id": str(wait.get("checkpoint_id") or ""),
+            "resume_phase": str(wait.get("resume_phase") or ""),
+            "latest_evaluation": latest_evaluation,
+        }
 
     @staticmethod
     def _build_terminal_session_response(terminal_session: TerminalSession) -> TerminalSessionResponse:
@@ -1274,6 +1511,7 @@ class RuntimeService:
             "binding.resolved": "绑定解析",
             "binding.updated": "绑定更新",
             "runtime.input.accepted": "输入",
+            "runtime.wait_checkpoint.entered": "等待现场证据",
             "gateway.inference.completed": "LLM 输出",
             "gateway.tool.completed": "工具调用",
             "runtime.final.completed": "最终结果",

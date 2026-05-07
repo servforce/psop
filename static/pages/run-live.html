@@ -52,6 +52,30 @@
               <dd class="mt-1 mono-field" x-text="liveRun.runtime_phase"></dd>
             </div>
             <div>
+              <dt class="field-label">当前现实步骤</dt>
+              <dd class="mt-1 text-sm font-medium text-slate-950" x-text="liveRun.current_step || '准备任务上下文'"></dd>
+            </div>
+            <div>
+              <dt class="field-label">等待原因</dt>
+              <dd class="mt-1 text-sm leading-6 text-slate-700" x-text="liveRun.wait_reason || 'Runtime 正在推进或尚未进入等待点。'"></dd>
+            </div>
+            <div>
+              <dt class="field-label">期望输入</dt>
+              <dd class="mt-2 space-y-2">
+                <template x-for="item in liveRun.expected_inputs || []" :key="JSON.stringify(item)">
+                  <span class="status-badge bg-slate-100 text-slate-700" x-text="item.kind || item.event_kind || item.mime_type || 'evidence'"></span>
+                </template>
+                <p class="mono-field" x-show="!(liveRun.expected_inputs || []).length">text / image / video / file</p>
+              </dd>
+            </div>
+            <div x-show="liveRun.latest_evaluation && liveRun.latest_evaluation.decision">
+              <dt class="field-label">最近评估</dt>
+              <dd class="mt-2 rounded-lg border border-slate-200 bg-white p-3">
+                <p class="text-sm font-semibold text-slate-950" x-text="liveRun.latest_evaluation.decision"></p>
+                <p class="mt-1 text-xs leading-5 text-slate-600" x-text="liveRun.latest_evaluation.reason"></p>
+              </dd>
+            </div>
+            <div>
               <dt class="field-label">Terminal Session</dt>
               <dd class="mt-1 mono-field break-all" x-text="liveRun.terminal_session_id || 'N/A'"></dd>
             </div>
@@ -109,8 +133,8 @@
               </template>
             </div>
             <form class="flex gap-2 border-t border-slate-200 bg-slate-50 p-3" @submit.prevent="sendTerminalInput()">
-              <input x-model="terminalInputForm.payload" class="input-field" placeholder="输入下一条 terminal input" />
-              <button type="submit" class="button-primary shrink-0" :disabled="busy.terminalInput || !terminalInputForm.payload.trim()">
+              <input x-model="terminalInputForm.payload" class="input-field" placeholder="根据当前步骤提交文本证据或说明" />
+              <button type="submit" class="button-primary shrink-0" :disabled="busy.terminalInput || liveRun.status === 'succeeded' || liveRun.status === 'failed' || !terminalInputForm.payload.trim()">
                 <span class="material-symbols-outlined text-[18px]">send</span>
                 <span x-text="busy.terminalInput ? '发送中...' : '发送'"></span>
               </button>
