@@ -64,6 +64,18 @@ class SkillTestRepository:
             ).all()
         )
 
+    def list_open_runs(self, session: Session, case_id: str) -> list[SkillTestRun]:
+        return list(
+            session.scalars(
+                select(SkillTestRun)
+                .where(
+                    SkillTestRun.test_case_id == case_id,
+                    SkillTestRun.status.in_(("pending", "queued", "running", "waiting_input")),
+                )
+                .order_by(SkillTestRun.created_at.desc())
+            ).all()
+        )
+
     def get_latest_run(self, session: Session, case_id: str) -> SkillTestRun | None:
         return session.scalar(
             select(SkillTestRun)

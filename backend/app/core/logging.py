@@ -28,6 +28,18 @@ _CONTEXT_KEYS = (
     "model",
 )
 _SENSITIVE_KEY_PARTS = ("authorization", "token", "api_key", "apikey", "password", "secret")
+_TOKEN_USAGE_KEYS = {
+    "cached_tokens",
+    "completion_tokens",
+    "input_tokens",
+    "llm_input_tokens",
+    "llm_output_tokens",
+    "llm_total_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "reasoning_tokens",
+    "total_tokens",
+}
 
 
 def configure_logging(level: str, *, log_format: str = "plain") -> None:
@@ -136,7 +148,7 @@ def _sanitize(value: Any) -> Any:
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
             key_str = str(key)
-            if any(part in key_str.lower() for part in _SENSITIVE_KEY_PARTS):
+            if _is_sensitive_key(key_str):
                 sanitized[key_str] = "[REDACTED]"
             else:
                 sanitized[key_str] = _sanitize(item)
@@ -146,3 +158,10 @@ def _sanitize(value: Any) -> Any:
     if isinstance(value, tuple):
         return tuple(_sanitize(item) for item in value)
     return value
+
+
+def _is_sensitive_key(key: str) -> bool:
+    normalized = key.lower()
+    if normalized in _TOKEN_USAGE_KEYS:
+        return False
+    return any(part in normalized for part in _SENSITIVE_KEY_PARTS)

@@ -23,6 +23,9 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
 13. runtime_contract.workflow_steps 是必填字段，必须与 instruct/evaluate 节点成对对应，并说明 title、goal、source_evidence。
 14. source_evidence 必须引用 SKILL.md 或 README.md 中支持该步骤的原文片段或摘要，不能凭空生成。
 15. 如果用户消息中提供 domain_pack，它只能帮助你理解行业术语、常见步骤和质量标准；不能改变 formal v5、白名单、guard DSL、merge DSL 或 Runtime 状态边界。
+16. Prompt View 必须服务运行时可判定性：任何需要根据 Session Token、现场证据、terminal transcript、历史 observations 或完成标准做判断的 llm 节点，都必须在 projection.user_template 中显式包含 `当前 Token：{{token}}` 或等价的 `{{token}}` 投影。
+17. evaluate 节点和 final_verify 节点禁止只写“根据 token.xxx 判断”但不暴露 `{{token}}`；否则 Runtime Agent 无法看到真实证据，产物不可接受。
+18. applicability 必须与 Skill 的 name、description、execution_goal 和 source_evidence 保持一致。不得把 Skill 标题、描述或主目标中的核心适用场景写入 does_not_apply_when；只有 SKILL.md/README.md 明确排除的场景才可写入 does_not_apply_when。
 
 必需 JSON 顶层字段：
 - artifact_version：建议 `psop-eg-formal-v5/llm-compiler-mvp-v1`
@@ -37,7 +40,7 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
 - runtime_contract
 
 编译流程要求：
-1. 从 SKILL.md/README.md 提取 1 到 8 个业务工作流步骤。
+1. 从 SKILL.md/README.md 合理的提取出业务工作流步骤。
 2. 在 runtime_contract.workflow_steps 中记录这些步骤：
    - id：snake_case，必须对应 `instruct_<id>` 和 `evaluate_<id>`。
    - title：面向用户的中文步骤名。
@@ -54,13 +57,16 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
    - wait_reason
    - expected_inputs，列出可接受的 text/image/video/audio/file/sensor 等证据类型
    - resume_phase="evaluate_<step_id>"
+   - projection.user_template 必须包含当前步骤目标、来自 Skill source 的依据、当前安全边界或注意事项，以及 `当前 Token：{{token}}`，以便 Runtime Agent 只输出当前步骤指令而不重新规划整个 Skill。
 7. 每个 evaluate 节点必须是 llm，必须包含 interaction.evaluation=true。它消费 token.control.wait.evidence、terminal.events 和当前步骤标准，只能输出 JSON object：
    - decision: proceed | retry | need_more_evidence | abort | complete
    - reason
    - next_phase：proceed/complete 时必须给出下一 phase
    - terminal_message：需要反馈给用户的中间说明，可为空
+   - projection.user_template 必须包含当前 workflow_step_id、该步骤完成标准、可恢复失败路径、安全停止条件、合法 next_phase 映射，以及 `当前 Token：{{token}}`。如果不包含 `{{token}}`，evaluate 节点无权判断证据。
 8. retry 或 need_more_evidence 代表继续等待当前 checkpoint；proceed 进入下一步 instruct；complete 进入 final_verify。
-9. final_verify 必须在 terminal(success) 前验证 completion_criteria。terminal 节点只在最终完成标准被验证后写 outputs.final_response 与 status=success。
+9. final_verify 必须在 terminal(success) 前验证 completion_criteria。final_verify 的 projection.user_template 必须包含 completion_criteria、安全停止条件、所有步骤 observations 的检查要求，以及 `当前 Token：{{token}}`。terminal 节点只在最终完成标准被验证后写 outputs.final_response 与 status=success。
+10. 对每个 evaluate 节点，next_phase 映射必须符合实际工作流：proceed 指向下一个 `instruct_<next_step>` 或 final_verify；retry / need_more_evidence 不应推进到下一步；abort 表示运行失败或不适用，terminal_message 应说明停止原因，next_phase 可为空；complete 只用于最终完成或进入 final_verify。
 
 规范化 DSL 示例：
 - guard 必须写为 {"phase_is":"llm"}，禁止写 {"op":"phase_is","value":"llm"}。
@@ -74,8 +80,8 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
   "nodes": [
     {"id":"start","kind":"start","guard":{"phase_is":"start"},"actor":{"name":"runtime.start"},"merge":[{"op":"set","path":"phase","value":"instruct_diagnose_problem"}]},
     {"id":"instruct_diagnose_problem","kind":"llm","guard":{"phase_is":"instruct_diagnose_problem"},"actor":{"name":"agent.llm"},"interaction":{"output_to_terminal":true,"wait_after_output":true,"checkpoint_id":"diagnose_problem_evidence","workflow_step_id":"diagnose_problem","wait_reason":"等待用户提交现场证据。","expected_inputs":[{"kind":"text"},{"kind":"image"}],"resume_phase":"evaluate_diagnose_problem"},"projection":{"system_template":"输出当前现实步骤指令。","user_template":"步骤目标：...\n依据：...\n当前 Token：{{token}}"},"merge":[{"op":"set","path":"observations.instruct_diagnose_problem","from":"observation"}]},
-    {"id":"evaluate_diagnose_problem","kind":"llm","guard":{"phase_is":"evaluate_diagnose_problem"},"actor":{"name":"agent.llm"},"interaction":{"evaluation":true},"projection":{"system_template":"只输出 JSON decision。","user_template":"根据 token.control.wait.evidence 判断该步骤是否完成。"},"merge":[{"op":"set","path":"observations.evaluate_diagnose_problem","from":"observation"},{"op":"set","path":"phase","from":"observation.next_phase"}]},
-    {"id":"final_verify","kind":"llm","guard":{"phase_is":"final_verify"},"actor":{"name":"agent.llm"},"interaction":{"evaluation":true},"merge":[{"op":"set","path":"observations.final_verify","from":"observation"},{"op":"set","path":"phase","from":"observation.next_phase"},{"op":"set","path":"outputs.final_response","from":"observation.terminal_message"}]},
+    {"id":"evaluate_diagnose_problem","kind":"llm","guard":{"phase_is":"evaluate_diagnose_problem"},"actor":{"name":"agent.llm"},"interaction":{"evaluation":true},"projection":{"system_template":"只输出 JSON decision。","user_template":"workflow_step_id：diagnose_problem\n完成标准：...\n可恢复失败路径：证据不足时 decision=need_more_evidence，问题不适用时 decision=abort。\n合法 next_phase：proceed -> instruct_next_step；need_more_evidence/retry -> waiting；abort -> 空字符串并在 terminal_message 说明停止原因。\n当前 Token：{{token}}\n输出 JSON：{\"decision\":\"proceed|retry|need_more_evidence|abort|complete\",\"reason\":\"...\",\"next_phase\":\"...\",\"terminal_message\":\"...\"}"},"merge":[{"op":"set","path":"observations.evaluate_diagnose_problem","from":"observation"},{"op":"set","path":"phase","from":"observation.next_phase"}]},
+    {"id":"final_verify","kind":"llm","guard":{"phase_is":"final_verify"},"actor":{"name":"agent.llm"},"interaction":{"evaluation":true},"projection":{"system_template":"只输出 JSON decision。","user_template":"最终完成标准：...\n安全停止条件：...\n请根据所有步骤 observations、terminal.events 与最新证据判断是否全部满足。\n当前 Token：{{token}}\n输出 JSON：{\"decision\":\"complete|abort\",\"reason\":\"...\",\"next_phase\":\"terminal\",\"terminal_message\":\"...\"}"},"merge":[{"op":"set","path":"observations.final_verify","from":"observation"},{"op":"set","path":"phase","from":"observation.next_phase"},{"op":"set","path":"outputs.final_response","from":"observation.terminal_message"}]},
     {"id":"terminal","kind":"terminal","guard":{"phase_is":"terminal"},"actor":{"name":"runtime.terminal"},"merge":[{"op":"set","path":"outputs.final_response","from":"observation.final_response"},{"op":"set","path":"status","value":"success"}]}
   ],
   "runtime_contract": {

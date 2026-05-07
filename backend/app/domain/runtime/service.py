@@ -1169,11 +1169,19 @@ class RuntimeService:
                     user_prompt=user_prompt,
                     route_key=route_key,
                 )
-            token.setdefault("budgets", {})["llm_calls"] = int(token.setdefault("budgets", {}).get("llm_calls", 0)) + 1
+            budgets = token.setdefault("budgets", {})
+            budgets["llm_calls"] = int(budgets.get("llm_calls", 0)) + 1
+            self._accumulate_llm_usage(budgets, llm_completion.usage)
             observation = {
                 "content": llm_completion.content,
                 "provider": llm_completion.provider,
                 "model": llm_completion.model,
+                "input": {
+                    "system_prompt": system_prompt,
+                    "user_prompt": user_prompt,
+                },
+                "output": {"content": llm_completion.content},
+                "usage": llm_completion.usage,
                 "summary": "LLM 节点执行完成。",
             }
             if self._node_is_evaluation(node):
@@ -1337,6 +1345,18 @@ class RuntimeService:
             f"工具检查：{tool_result['result']}输入长度 {tool_result['input_length']}，"
             f"是否包含问题：{'是' if tool_result['contains_question'] else '否'}。"
         )
+
+    @staticmethod
+    def _accumulate_llm_usage(budgets: dict[str, Any], usage: dict[str, Any]) -> None:
+        fields = {
+            "input_tokens": "llm_input_tokens",
+            "output_tokens": "llm_output_tokens",
+            "total_tokens": "llm_total_tokens",
+        }
+        for source_key, budget_key in fields.items():
+            value = usage.get(source_key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                budgets[budget_key] = int(budgets.get(budget_key, 0)) + value
 
     @staticmethod
     def _hash_payload(payload: dict[str, Any]) -> str:

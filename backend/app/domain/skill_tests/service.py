@@ -24,7 +24,7 @@ from app.domain.skill_tests.schemas import (
     SkillTestRunSummary,
     StartSkillTestRunRequest,
 )
-from app.domain.skills.exceptions import SkillNotFoundError, SkillValidationError
+from app.domain.skills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.domain.skills.models import now_utc
 from app.gateway.inference import LlmInferenceGateway
 from app.infra.object_store import ObjectStoreService
@@ -206,6 +206,16 @@ class SkillTestService:
     ) -> SkillTestRunResponse:
         skill = self._get_skill(session, skill_id)
         case = self._get_case(session, skill_id, case_id)
+        open_test_run = self._get_open_test_run(session, case.id)
+        if open_test_run:
+            raise SkillConflictError(
+                "当前测试 Case 已存在进行中测试，请关闭或继续已进行中的测试。",
+                details={
+                    "active_test_run_id": open_test_run.id,
+                    "run_id": open_test_run.run_id,
+                    "status": open_test_run.status,
+                },
+            )
         data_objects = self.repository.list_data_objects(session, case_id)
         available_data_ids = {item.id for item in data_objects}
         selected_ids = (
@@ -237,7 +247,7 @@ class SkillTestService:
             started_at=now_utc(),
         )
         session.add(test_run)
-        session.commit()
+        session.flush()
 
         invocation = self.runtime_service.create_invocation(
             session,
@@ -436,6 +446,18 @@ class SkillTestService:
             return
         if test_run.status == "running":
             self.evaluate_run(session, test_run.id)
+
+    def _get_open_test_run(self, session: Session, case_id: str) -> SkillTestRun | None:
+        for test_run in self.repository.list_open_runs(session, case_id):
+            self._sync_test_run_status(session, test_run)
+        return next(
+            (
+                test_run
+                for test_run in self.repository.list_open_runs(session, case_id)
+                if test_run.status in {"pending", "queued", "running", "waiting_input"}
+            ),
+            None,
+        )
 
     def _get_skill(self, session: Session, skill_id: str):
         skill = self.repository.get_skill(session, skill_id)

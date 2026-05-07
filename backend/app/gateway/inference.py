@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import time
 from typing import Protocol
@@ -20,6 +20,7 @@ class LlmCompletion:
     provider: str
     model: str
     raw_response: dict
+    usage: dict[str, int | dict[str, object]] = field(default_factory=dict)
 
 
 class LlmInferenceGateway(Protocol):
@@ -72,87 +73,162 @@ class OpenAICompatibleInferenceGateway:
 
         timeout = httpx.Timeout(self.timeout_seconds, connect=min(15.0, self.timeout_seconds))
         started_at = time.perf_counter()
-        try:
-            with start_span(
-                "gateway.inference",
-                provider=self.provider,
-                model=model,
-                route_key=route_key,
-                api_base_url=self.api_base_url,
-            ) as span:
+        with start_span(
+            "gateway.inference",
+            provider=self.provider,
+            model=model,
+            route_key=route_key,
+            api_base_url=self.api_base_url,
+            llm_input_system_prompt_length=len(system_prompt),
+            llm_input_user_prompt_length=len(user_prompt),
+        ) as span:
+            try:
+                span.add_event(
+                    "llm.input",
+                    attributes={
+                        "llm.system_prompt": system_prompt,
+                        "llm.user_prompt": user_prompt,
+                    },
+                )
                 with httpx.Client(timeout=timeout, headers=headers) as client:
                     response = client.post(f"{self.api_base_url}/chat/completions", json=payload)
                 elapsed_ms = int((time.perf_counter() - started_at) * 1000)
                 set_span_attributes(span, {"http.status_code": response.status_code, "duration_ms": elapsed_ms})
-                LOGGER.info(
-                    "LLM inference completed",
+            except httpx.HTTPError as exc:
+                error_type = exc.__class__.__name__
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                set_span_attributes(span, {"duration_ms": elapsed_ms, "error.type": error_type})
+                record_span_exception(span, exc)
+                LOGGER.warning(
+                    "LLM inference failed",
+                    extra={
+                        "provider": self.provider,
+                        "model": model,
+                        "route_key": route_key,
+                        "error_type": error_type,
+                        "duration_ms": elapsed_ms,
+                        "llm_input": {
+                            "system_prompt": system_prompt,
+                            "user_prompt": user_prompt,
+                        },
+                    },
+                )
+                raise SkillsGatewayError(
+                    f"调用 LLM Inference Gateway 失败：{error_type}。",
+                    details={
+                        "error_type": error_type,
+                        "error": str(exc),
+                        "provider": self.provider,
+                        "api_base_url": self.api_base_url,
+                        "model": model,
+                        "timeout_seconds": self.timeout_seconds,
+                    },
+                ) from exc
+
+            if response.status_code >= 400:
+                LOGGER.warning(
+                    "LLM inference returned error response",
                     extra={
                         "provider": self.provider,
                         "model": model,
                         "route_key": route_key,
                         "status_code": response.status_code,
-                        "duration_ms": elapsed_ms,
+                        "llm_input": {
+                            "system_prompt": system_prompt,
+                            "user_prompt": user_prompt,
+                        },
+                        "llm_output": {"error_body": response.text},
                     },
                 )
-        except httpx.HTTPError as exc:
-            error_type = exc.__class__.__name__
-            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-            with start_span(
-                "gateway.inference.error",
+                span.add_event("llm.output", attributes={"llm.error_body": response.text})
+                raise SkillsGatewayError(
+                    "LLM Inference Gateway 返回错误响应。",
+                    details={
+                        "status_code": response.status_code,
+                        "body": response.text,
+                        "provider": self.provider,
+                        "api_base_url": self.api_base_url,
+                        "model": model,
+                    },
+                )
+
+            data = response.json()
+            usage = _normalize_usage(data.get("usage"))
+            try:
+                content = str(data["choices"][0]["message"]["content"])
+            except (KeyError, IndexError, TypeError) as exc:
+                raise SkillsGatewayError("LLM Inference Gateway 响应缺少 message content。") from exc
+
+            set_span_attributes(
+                span,
+                {
+                    "llm.output.content_length": len(content),
+                    "llm.usage.input_tokens": usage.get("input_tokens"),
+                    "llm.usage.output_tokens": usage.get("output_tokens"),
+                    "llm.usage.total_tokens": usage.get("total_tokens"),
+                },
+            )
+            span.add_event("llm.output", attributes={"llm.content": content})
+            log_extra = {
+                "provider": self.provider,
+                "model": model,
+                "route_key": route_key,
+                "status_code": response.status_code,
+                "duration_ms": elapsed_ms,
+                "llm_input": {
+                    "system_prompt": system_prompt,
+                    "user_prompt": user_prompt,
+                },
+                "llm_output": {"content": content},
+                "llm_usage": usage,
+            }
+            LOGGER.info(
+                "LLM inference completed",
+                extra=log_extra,
+            )
+            return LlmCompletion(
+                content=content,
                 provider=self.provider,
                 model=model,
-                route_key=route_key,
-                api_base_url=self.api_base_url,
-                duration_ms=elapsed_ms,
-            ) as span:
-                record_span_exception(span, exc)
-            LOGGER.warning(
-                "LLM inference failed",
-                extra={
-                    "provider": self.provider,
-                    "model": model,
-                    "route_key": route_key,
-                    "error_type": error_type,
-                    "duration_ms": elapsed_ms,
-                },
-            )
-            raise SkillsGatewayError(
-                f"调用 LLM Inference Gateway 失败：{error_type}。",
-                details={
-                    "error_type": error_type,
-                    "error": str(exc),
-                    "provider": self.provider,
-                    "api_base_url": self.api_base_url,
-                    "model": model,
-                    "timeout_seconds": self.timeout_seconds,
-                },
-            ) from exc
-
-        if response.status_code >= 400:
-            LOGGER.warning(
-                "LLM inference returned error response",
-                extra={
-                    "provider": self.provider,
-                    "model": model,
-                    "route_key": route_key,
-                    "status_code": response.status_code,
-                },
-            )
-            raise SkillsGatewayError(
-                "LLM Inference Gateway 返回错误响应。",
-                details={
-                    "status_code": response.status_code,
-                    "body": response.text,
-                    "provider": self.provider,
-                    "api_base_url": self.api_base_url,
-                    "model": model,
-                },
+                raw_response=data,
+                usage=usage,
             )
 
-        data = response.json()
-        try:
-            content = str(data["choices"][0]["message"]["content"])
-        except (KeyError, IndexError, TypeError) as exc:
-            raise SkillsGatewayError("LLM Inference Gateway 响应缺少 message content。") from exc
 
-        return LlmCompletion(content=content, provider=self.provider, model=model, raw_response=data)
+def _normalize_usage(raw_usage: object) -> dict[str, int | dict[str, object]]:
+    if not isinstance(raw_usage, dict):
+        return {}
+
+    input_tokens = _coerce_int(_first_present(raw_usage, "prompt_tokens", "input_tokens"))
+    output_tokens = _coerce_int(_first_present(raw_usage, "completion_tokens", "output_tokens"))
+    total_tokens = _coerce_int(raw_usage.get("total_tokens"))
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+
+    usage: dict[str, int | dict[str, object]] = {"raw": raw_usage}
+    if input_tokens is not None:
+        usage["input_tokens"] = input_tokens
+    if output_tokens is not None:
+        usage["output_tokens"] = output_tokens
+    if total_tokens is not None:
+        usage["total_tokens"] = total_tokens
+    return usage
+
+
+def _coerce_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _first_present(payload: dict[str, object], *keys: str) -> object:
+    for key in keys:
+        if key in payload:
+            return payload[key]
+    return None

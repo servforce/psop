@@ -345,7 +345,7 @@
         <section class="detail-section flex h-full min-h-0 flex-col overflow-hidden !p-0">
           <template x-if="publishWorkspaceOpen">
             <form class="flex h-full min-h-0 flex-col overflow-hidden rounded-none border-0 bg-white" @submit.prevent="publishSkill()">
-              <div class="flex items-start justify-between gap-4 border-b border-slate-200 bg-sky-50/80 px-5 py-4">
+              <div class="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 bg-sky-50/80 px-5 py-4">
                 <div>
                   <p class="panel-kicker" x-text="publishProgress.active ? '发布进度' : '发布确认'"></p>
                   <p class="mt-1 text-lg font-semibold text-slate-950">发布 Skill</p>
@@ -357,7 +357,7 @@
               </div>
 
               <template x-if="!publishProgress.active">
-                <div class="space-y-5 px-5 py-5">
+                <div class="min-h-0 flex-1 space-y-5 overflow-auto px-5 py-5">
                   <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
                     <p class="field-label">即将发布</p>
                     <p class="mt-2 text-lg font-semibold text-slate-950" x-text="currentSkill.name"></p>
@@ -392,7 +392,7 @@
               </template>
 
               <template x-if="publishProgress.active">
-                <div class="space-y-5 px-5 py-5">
+                <div class="min-h-0 flex-1 space-y-5 overflow-auto px-5 py-5">
                   <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
                     <p class="field-label">发布对象</p>
                     <p class="mt-2 text-lg font-semibold text-slate-950" x-text="currentSkill.name"></p>
@@ -448,7 +448,7 @@
                 </div>
               </template>
 
-              <div class="flex justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4">
+              <div class="flex shrink-0 justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4">
                 <template x-if="!publishProgress.active">
                   <div class="flex gap-3">
                     <button type="button" class="button-secondary" title="取消" aria-label="取消" @click="closePublishDrawer()">

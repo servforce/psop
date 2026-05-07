@@ -467,6 +467,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         run = runtime_service.get_run(session, invocation.run_id or "")
         replay = runtime_service.build_replay(session, invocation.run_id or "")
         snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
+        trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
         terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
         terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
         bindings = runtime_service.list_run_bindings(session, invocation.run_id or "")
@@ -489,6 +490,14 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert "测试任务已完成" in run.final_output
     assert "final_verify" in inference_gateway.calls[-1]["system_prompt"]
     assert [snapshot.seq_no for snapshot in snapshots] == [0, 1, 2, 3, 4, 5]
+    assert snapshots[-1].token_payload["budgets"]["llm_input_tokens"] == 30
+    assert snapshots[-1].token_payload["budgets"]["llm_output_tokens"] == 15
+    llm_trace_payloads = [
+        event.payload for event in trace_events if event.event_type == "gateway.inference.completed"
+    ]
+    assert llm_trace_payloads[0]["observation"]["input"]["system_prompt"]
+    assert llm_trace_payloads[0]["observation"]["output"]["content"]
+    assert llm_trace_payloads[0]["observation"]["usage"]["total_tokens"] == 15
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
     assert terminal_session.terminal_session.status == "closed"
     assert [event.direction for event in terminal_events] == ["output", "input", "output", "output", "output"]

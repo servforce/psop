@@ -18,9 +18,9 @@
             <span class="material-symbols-outlined text-[18px]">arrow_back</span>
             <span>返回列表</span>
           </button>
-          <button type="button" class="button-primary" :disabled="busy.skillTestRun || !skillTestCase" @click="skillTestCase && startSkillTestRun(skillTestCase.id)">
-            <span class="material-symbols-outlined text-[18px]">play_arrow</span>
-            <span x-text="busy.skillTestRun ? '启动中...' : '开始测试'"></span>
+          <button type="button" class="button-primary" :disabled="busy.skillTestRun || !skillTestCase" :title="openSkillTestRunForCase(skillTestCase?.id) ? '继续进行中的测试' : '开始新的测试'" :aria-label="openSkillTestRunForCase(skillTestCase?.id) ? '继续进行中的测试' : '开始新的测试'" @click="skillTestCase && startSkillTestRun(skillTestCase.id)">
+            <span class="material-symbols-outlined text-[18px]" x-text="openSkillTestRunForCase(skillTestCase?.id) ? 'play_arrow' : 'play_circle'"></span>
+            <span x-text="busy.skillTestRun ? '启动中...' : (openSkillTestRunForCase(skillTestCase?.id) ? '继续测试' : '开始测试')"></span>
           </button>
         </div>
       </div>

@@ -1106,6 +1106,9 @@ WS 策略：
 - `run_duration_seconds`
 - `gateway_call_duration_seconds`
 - `llm_inference_duration_seconds`
+- `llm_inference_input_tokens_total`
+- `llm_inference_output_tokens_total`
+- `llm_inference_total_tokens_total`
 - `terminal_wait_duration_seconds`
 
 ### 11.4 审计原则
@@ -1113,6 +1116,7 @@ WS 策略：
 - 所有关键状态变更都必须可通过 `operation_log + trace_event + snapshot` 追溯。
 - replay 服务不能自行推断不存在的状态；只允许重组已持久化事实。
 - gateway 与模型调用必须记录请求摘要、超时、错误与结果摘要。
+- 大模型调用必须记录完整输入、完整输出与 token 消耗；运行时 LLM 节点的 `trace_event.payload.observation` 至少包含 `input.system_prompt`、`input.user_prompt`、`output.content`、`usage.input_tokens`、`usage.output_tokens`、`usage.total_tokens` 与 provider 原始 usage 摘要。
 
 ## 12. 开发切片、实现顺序与完成定义
 

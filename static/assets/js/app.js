@@ -1898,6 +1898,12 @@
         if (!this.currentSkill || !caseId) {
           return;
         }
+        const openTestRun = this.openSkillTestRunForCase(caseId);
+        if (openTestRun) {
+          this.showNotice("info", "当前 Case 已有进行中的测试，请继续已有测试。");
+          await this.navigate(buildSkillTestRunLivePath(this.currentSkill.id, caseId, openTestRun.id));
+          return;
+        }
         this.busy.skillTestRun = true;
         try {
           const selectedDataIds = this.skillTestCase?.id === caseId ? this.skillTestStartForm.selected_data_object_ids || [] : [];
@@ -1911,6 +1917,12 @@
           });
           await this.navigate(buildSkillTestRunLivePath(this.currentSkill.id, caseId, testRun.id));
         } catch (error) {
+          const activeTestRunId = error.payload?.details?.active_test_run_id;
+          if (activeTestRunId) {
+            this.showNotice("info", error.message || "当前 Case 已有进行中的测试，请继续已有测试。");
+            await this.navigate(buildSkillTestRunLivePath(this.currentSkill.id, caseId, activeTestRunId));
+            return;
+          }
           this.showNotice("error", error.message || "启动测试失败。");
         } finally {
           this.busy.skillTestRun = false;
@@ -3290,6 +3302,13 @@
 
       openSkillTestRunsCount() {
         return this.skillTestRuns.filter((testRun) => this.isOpenSkillTestRun(testRun)).length;
+      },
+
+      openSkillTestRunForCase(caseId = this.skillTestCase?.id) {
+        if (!caseId) {
+          return null;
+        }
+        return this.sortedSkillTestRuns().find((testRun) => testRun.test_case_id === caseId && this.isOpenSkillTestRun(testRun)) || null;
       },
 
       sortedSkillTestRuns() {

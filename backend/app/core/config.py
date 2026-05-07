@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     llm_api_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str | None = None
     llm_default_model: str = "gpt-4.1-mini"
-    llm_timeout_seconds: float = 180.0
+    llm_timeout_seconds: float = 600.0
     runtime_worker_enabled: bool = True
     runtime_job_lease_seconds: int = 60
     runtime_job_max_attempts: int = 3

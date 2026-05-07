@@ -228,6 +228,12 @@ class FakeInferenceGateway:
             provider="fake-openai-compatible",
             model="fake-model",
             raw_response={"id": "fake-response"},
+            usage={
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "raw": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
         )
 
 
@@ -1031,6 +1037,10 @@ def test_skill_test_case_upload_run_send_data_and_evaluate() -> None:
             json={"selected_data_object_ids": [data_id]},
         )
         test_run = start_response.json()
+        duplicate_start_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-cases/{case_id}/runs",
+            json={"selected_data_object_ids": [data_id]},
+        )
         send_data_response = client.post(
             f"/api/v1/skill-test-runs/{test_run['id']}/send-data",
             json={"test_data_object_id": data_id},
@@ -1049,6 +1059,8 @@ def test_skill_test_case_upload_run_send_data_and_evaluate() -> None:
     assert test_run["run_id"]
     assert test_run["initial_terminal_events"] == []
     assert test_run["assertion_summary"]["pending"] > 0
+    assert duplicate_start_response.status_code == 409
+    assert duplicate_start_response.json()["details"]["active_test_run_id"] == test_run["id"]
     assert send_data_response.status_code == 202
     assert send_data_response.json()["terminal_event"]["artifact_object_id"] == upload_response.json()["artifact_object_id"]
     assert evaluate_response.status_code == 200

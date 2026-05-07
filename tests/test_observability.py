@@ -56,6 +56,34 @@ def test_json_log_formatter_includes_context_and_redacts_sensitive_values() -> N
     assert payload["api_key"] == "[REDACTED]"
 
 
+def test_json_log_formatter_preserves_llm_token_usage() -> None:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonLogFormatter())
+    logger = logging.getLogger("tests.observability.llm")
+    logger.handlers = [handler]
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+
+    logger.info(
+        "llm usage",
+        extra={
+            "llm_usage": {
+                "input_tokens": 11,
+                "output_tokens": 7,
+                "total_tokens": 18,
+                "raw": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+            },
+            "session_token": "secret",
+        },
+    )
+
+    payload = json.loads(stream.getvalue())
+    assert payload["llm_usage"]["input_tokens"] == 11
+    assert payload["llm_usage"]["raw"]["prompt_tokens"] == 11
+    assert payload["session_token"] == "[REDACTED]"
+
+
 def test_observability_disabled_is_noop() -> None:
     settings = Settings(otel_enabled=False)
     handle = configure_observability(app=object(), settings=settings, engine=None)
