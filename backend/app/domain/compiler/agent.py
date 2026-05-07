@@ -189,6 +189,15 @@ class SkillCompileAgent:
                     "指令型 llm 节点输出 terminal_message；评估型 llm 节点必须只输出 JSON object，"
                     "包含 decision/proceed|retry|need_more_evidence|abort|complete、reason、next_phase、terminal_message。"
                 ),
+                "policy_budget_rule": (
+                    "不要生成固定模板值 max_llm_calls=8。LLM 调用预算必须按 workflow_steps 动态推导："
+                    "happy path 至少为 2 * workflow_steps.length + 1；当前阶段优先不设置 hard limit，"
+                    "如必须设置也不得低于 happy path 调用数并需为 retry/need_more_evidence 留出弹性。"
+                ),
+                "view_graph_rule": (
+                    "dependency_graph_for_view 只表达 guard/merge/next_phase 真实可达的展示边；"
+                    "不得添加 artifact 中没有明确 phase 写入路径的 speculative recovery edge。"
+                ),
                 "domain_pack_rule": (
                     "domain_pack 只用于理解行业术语、常见步骤和质量标准；"
                     "不得改变 formal v5、actor/tool 白名单、guard DSL、merge DSL 或状态主权边界。"
