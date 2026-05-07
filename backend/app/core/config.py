@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     object_store_bucket: str = "psop-artifacts"
     object_store_region: str = "us-east-1"
     object_store_secure: bool = False
+    test_data_max_upload_bytes: int = 25 * 1024 * 1024
     otel_enabled: bool = True
     otel_traces_enabled: bool = True
     otel_logs_enabled: bool = True

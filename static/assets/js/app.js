@@ -21,6 +21,46 @@
       };
     }
 
+    const skillRunLiveMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/runs\/([^/]+)\/live$/);
+    if (skillRunLiveMatch) {
+      return {
+        name: "skill-run-live",
+        params: { skillId: skillRunLiveMatch[1], runId: skillRunLiveMatch[2] }
+      };
+    }
+
+    const skillReplayRunMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/runs\/([^/]+)\/replay$/);
+    if (skillReplayRunMatch) {
+      return {
+        name: "skill-replay-detail",
+        params: { skillId: skillReplayRunMatch[1], runId: skillReplayRunMatch[2] }
+      };
+    }
+
+    const skillTestRunLiveMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/tests\/([^/]+)\/runs\/([^/]+)\/live$/);
+    if (skillTestRunLiveMatch) {
+      return {
+        name: "skill-test-live",
+        params: { skillId: skillTestRunLiveMatch[1], caseId: skillTestRunLiveMatch[2], testRunId: skillTestRunLiveMatch[3] }
+      };
+    }
+
+    const skillTestNewMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/tests\/new$/);
+    if (skillTestNewMatch) {
+      return {
+        name: "skill-test-new",
+        params: { skillId: skillTestNewMatch[1] }
+      };
+    }
+
+    const skillTestCaseMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/tests\/([^/]+)$/);
+    if (skillTestCaseMatch) {
+      return {
+        name: "skill-test-case",
+        params: { skillId: skillTestCaseMatch[1], caseId: skillTestCaseMatch[2] }
+      };
+    }
+
     if (normalized === "/admin/compiler") {
       return { name: "compiler-list", params: {} };
     }
@@ -62,8 +102,28 @@
     return `/admin/runs/${runId}/live`;
   }
 
+  function buildSkillRunLivePath(skillId, runId) {
+    return `/admin/skills/${skillId}/runs/${runId}/live`;
+  }
+
   function buildReplayPath(runId) {
     return `/admin/replay/runs/${runId}`;
+  }
+
+  function buildSkillReplayPath(skillId, runId) {
+    return `/admin/skills/${skillId}/runs/${runId}/replay`;
+  }
+
+  function buildSkillTestCasePath(skillId, caseId) {
+    return `/admin/skills/${skillId}/tests/${caseId}`;
+  }
+
+  function buildSkillTestCaseNewPath(skillId) {
+    return `/admin/skills/${skillId}/tests/new`;
+  }
+
+  function buildSkillTestRunLivePath(skillId, caseId, testRunId) {
+    return `/admin/skills/${skillId}/tests/${caseId}/runs/${testRunId}/live`;
   }
 
   function buildCompilerArtifactPath(artifactId) {
@@ -134,6 +194,48 @@
     return html;
   }
 
+  function highlightYamlScalar(value) {
+    let html = escapeHtml(value);
+    const stringTokens = [];
+    html = html.replace(/(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;)/g, (token) => {
+      const placeholder = `@@PSOP_YAML_STRING_${stringTokens.length}@@`;
+      stringTokens.push(`<span class="yaml-token-string">${token}</span>`);
+      return placeholder;
+    });
+    html = html.replace(/\b(true|false|yes|no|on|off)\b/gi, '<span class="yaml-token-boolean">$1</span>');
+    html = html.replace(/\b(null|~)\b/gi, '<span class="yaml-token-null">$1</span>');
+    html = html.replace(/(^|[\s\[{,])(-?\d+(?:\.\d+)?)(?=$|[\s\]},])/g, '$1<span class="yaml-token-number">$2</span>');
+    stringTokens.forEach((token, index) => {
+      html = html.replace(`@@PSOP_YAML_STRING_${index}@@`, token);
+    });
+    return html;
+  }
+
+  function highlightYaml(value) {
+    const lines = String(value ?? "").replace(/\r\n/g, "\n").split("\n");
+    return lines
+      .map((line) => {
+        const commentIndex = line.indexOf("#");
+        const code = commentIndex >= 0 ? line.slice(0, commentIndex) : line;
+        const comment = commentIndex >= 0 ? line.slice(commentIndex) : "";
+        const keyMatch = code.match(/^(\s*(?:-\s*)?)([A-Za-z0-9_.-]+)(\s*:)(.*)$/);
+        let html;
+        if (keyMatch) {
+          html = `${escapeHtml(keyMatch[1])}<span class="yaml-token-key">${escapeHtml(keyMatch[2])}</span>${escapeHtml(keyMatch[3])}${highlightYamlScalar(keyMatch[4])}`;
+        } else {
+          const listMatch = code.match(/^(\s*-\s+)(.*)$/);
+          html = listMatch
+            ? `${escapeHtml(listMatch[1])}${highlightYamlScalar(listMatch[2])}`
+            : highlightYamlScalar(code);
+        }
+        if (comment) {
+          html += `<span class="yaml-token-comment">${escapeHtml(comment)}</span>`;
+        }
+        return html;
+      })
+      .join("\n");
+  }
+
   function renderInlineMarkdown(value) {
     return escapeHtml(value)
       .replace(/`([^`]+)`/g, "<code>$1</code>")
@@ -150,6 +252,7 @@
     const html = [];
     let inCodeBlock = false;
     let codeLines = [];
+    let codeLanguage = "";
     let listType = null;
 
     function closeList() {
@@ -160,19 +263,30 @@
     }
 
     function closeCodeBlock() {
-      html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+      const code = codeLines.join("\n");
+      const language = codeLanguage.toLowerCase();
+      let codeHtml = escapeHtml(code);
+      if (language === "json") {
+        codeHtml = highlightJson(code);
+      } else if (language === "yaml" || language === "yml") {
+        codeHtml = highlightYaml(code);
+      }
+      html.push(`<pre class="source-code-preview"><code>${codeHtml}</code></pre>`);
       codeLines = [];
+      codeLanguage = "";
       inCodeBlock = false;
     }
 
     for (const line of lines) {
-      if (line.trim().startsWith("```")) {
+      const fence = line.trim().match(/^```([A-Za-z0-9_-]+)?/);
+      if (fence) {
         if (inCodeBlock) {
           closeCodeBlock();
         } else {
           closeList();
           inCodeBlock = true;
           codeLines = [];
+          codeLanguage = fence[1] || "";
         }
         continue;
       }
@@ -317,6 +431,29 @@
         created_from: "",
         created_to: ""
       },
+      skillTestCases: [],
+      skillTestCase: null,
+      skillTestDataObjects: [],
+      skillTestRuns: [],
+      skillTestRun: null,
+      skillTestCaseSearch: "",
+      skillTestCaseForm: {
+        name: "",
+        description: "",
+        target_version_selector: "latest",
+        target_compile_artifact_id: "",
+        initial_event_payload: "",
+        assertions_json: "[]"
+      },
+      skillTestDataForm: {
+        name: "",
+        description: "",
+        role: "input",
+        file: null
+      },
+      skillTestStartForm: {
+        selected_data_object_ids: []
+      },
       invocations: [],
       replayRuns: [],
       liveRun: null,
@@ -333,7 +470,8 @@
         user_input: ""
       },
       terminalInputForm: {
-        payload: ""
+        payload: "",
+        file: null
       },
       copyFeedback: {},
       centerToast: null,
@@ -401,6 +539,13 @@
         createInvocation: false,
         liveRun: false,
         terminalInput: false,
+        skillTestCases: false,
+        skillTestCase: false,
+        skillTestSave: false,
+        skillTestData: false,
+        skillTestRun: false,
+        skillTestEvaluate: false,
+        skillTestSendData: false,
         replayRuns: false,
         replayDetail: false
       }
@@ -434,6 +579,8 @@
           ["compiler-artifact-page", "/pages/compiler-artifact-detail.html"],
           ["invocations-list-page", "/pages/invocations-list.html"],
           ["run-live-page", "/pages/run-live.html"],
+          ["skill-test-case-page", "/pages/skill-test-case-detail.html"],
+          ["skill-test-live-page", "/pages/skill-test-live.html"],
           ["replay-list-page", "/pages/replay-list.html"],
           ["replay-detail-page", "/pages/replay-detail.html"],
           ["create-skill-modal-page", "/pages/create-skill-modal.html"],
@@ -529,7 +676,7 @@
       async loadCurrentRoute() {
         this.loadingPage = true;
         this.clearNotice();
-        if (this.route.name !== "run-live") {
+        if (!["run-live", "skill-run-live", "skill-test-live"].includes(this.route.name)) {
           this.disconnectRunWebSocket();
         }
         if (this.route.name !== "compiler-artifact") {
@@ -551,6 +698,46 @@
 
           if (this.route.name === "skill-detail") {
             await this.loadSkillDetail(this.route.params.skillId);
+            return;
+          }
+
+          if (this.route.name === "skill-run-live") {
+            this.activeDetailTab = "runtime";
+            await this.loadSkillDetail(this.route.params.skillId);
+            await this.loadRunLive(this.route.params.runId);
+            return;
+          }
+
+          if (this.route.name === "skill-replay-detail") {
+            this.activeDetailTab = "runtime";
+            await this.loadSkillDetail(this.route.params.skillId);
+            await this.loadReplayDetail(this.route.params.runId);
+            return;
+          }
+
+          if (this.route.name === "skill-test-case") {
+            this.activeDetailTab = "test";
+            await this.loadSkillDetail(this.route.params.skillId);
+            await this.loadSkillTestCaseDetail(this.route.params.skillId, this.route.params.caseId);
+            return;
+          }
+
+          if (this.route.name === "skill-test-new") {
+            this.activeDetailTab = "test";
+            await this.loadSkillDetail(this.route.params.skillId);
+            this.skillTestCase = null;
+            this.resetSkillTestCaseForm();
+            return;
+          }
+
+          if (this.route.name === "skill-test-live") {
+            this.activeDetailTab = "test";
+            await this.loadSkillDetail(this.route.params.skillId);
+            await this.loadSkillTestRunLive(
+              this.route.params.skillId,
+              this.route.params.caseId,
+              this.route.params.testRunId
+            );
             return;
           }
 
@@ -599,11 +786,15 @@
       },
 
       async apiRequest(pathname, options) {
+        const requestOptions = options || {};
+        const isFormData = requestOptions.body instanceof FormData;
+        const headers = {
+          ...(isFormData ? {} : { "Content-Type": "application/json" }),
+          ...(requestOptions.headers || {})
+        };
         const response = await fetch(`${this.apiBaseUrl}${pathname}`, {
-          headers: {
-            "Content-Type": "application/json"
-          },
-          ...options
+          ...requestOptions,
+          headers
         });
 
         if (!response.ok) {
@@ -714,7 +905,7 @@
             description: detail.description
           };
           this.resetLazyDetailState(skillId);
-          if (!["overview", "source", "publish", "compiler", "runtime"].includes(this.activeDetailTab)) {
+          if (!["overview", "source", "publish", "compiler", "runtime", "test"].includes(this.activeDetailTab)) {
             this.activeDetailTab = "overview";
           }
           if (this.activeDetailTab === "compiler") {
@@ -723,6 +914,9 @@
           if (this.activeDetailTab === "runtime") {
             this.invocationForm.skill_key = detail.key;
             await this.loadInvocations(detail.key);
+          }
+          if (this.activeDetailTab === "test") {
+            await this.loadSkillTestCases(detail.id);
           }
         } finally {
           this.busy.detail = false;
@@ -756,6 +950,13 @@
           path: "",
           content: ""
         };
+        this.skillTestCases = [];
+        this.skillTestCase = null;
+        this.skillTestDataObjects = [];
+        this.skillTestRuns = [];
+        this.skillTestRun = null;
+        this.skillTestCaseSearch = "";
+        this.resetSkillTestCaseForm();
         this.closeCompilerArtifactWorkspace();
         if (skillId) {
           this.activeSourceTab = "skill.yaml";
@@ -1292,7 +1493,7 @@
 
       isSkillCompilerArtifactWorkspace() {
         return (
-          this.route.name === "skill-detail" &&
+          Boolean(this.currentSkill) &&
           this.activeDetailTab === "compiler" &&
           this.compilerArtifactWorkspaceOpen
         );
@@ -1395,6 +1596,433 @@
         this.closeCompilerArtifactNodeDrawer();
       },
 
+      resetSkillTestCaseForm(caseDetail = null) {
+        const initialEvent = this.skillTestCaseInitialEvents(caseDetail)[0] || null;
+        const assertions = caseDetail ? caseDetail.assertions || [] : this.defaultSkillTestAssertions();
+        this.skillTestCaseForm = {
+          name: caseDetail?.name || "",
+          description: caseDetail?.description || "",
+          target_version_selector: caseDetail?.target_version_selector || "latest",
+          target_compile_artifact_id: caseDetail?.target_compile_artifact_id || "",
+          initial_event_payload: this.skillTestInitialEventText(initialEvent),
+          assertions_json: JSON.stringify(assertions, null, 2)
+        };
+      },
+
+      skillTestCaseInitialEvents(caseDetail = this.skillTestCase) {
+        if (!caseDetail) {
+          return [];
+        }
+        if (Array.isArray(caseDetail.initial_terminal_events)) {
+          return caseDetail.initial_terminal_events;
+        }
+        const inputEnvelope = caseDetail.input_envelope || {};
+        if (Array.isArray(inputEnvelope.initial_terminal_events)) {
+          return inputEnvelope.initial_terminal_events;
+        }
+        const legacyInput = inputEnvelope.user_input || inputEnvelope.text || "";
+        return legacyInput
+          ? [
+              {
+                direction: "input",
+                event_kind: "terminal.text.input.v1",
+                mime_type: "text/plain",
+                payload_inline: legacyInput,
+                source: { kind: "web" }
+              }
+            ]
+          : [];
+      },
+
+      skillTestInitialEventText(event) {
+        if (!event) {
+          return "";
+        }
+        const payload = event.payload_inline;
+        if (typeof payload === "string") {
+          return payload;
+        }
+        if (payload === null || payload === undefined) {
+          return "";
+        }
+        return JSON.stringify(payload, null, 2);
+      },
+
+      skillTestInitialEventPreview(caseDetail = this.skillTestCase) {
+        const event = this.skillTestCaseInitialEvents(caseDetail)[0];
+        return this.skillTestInitialEventText(event) || "未设置首轮输入模板";
+      },
+
+      hasSkillTestInitialEventTemplate(caseDetail = this.skillTestCase) {
+        return this.skillTestCaseInitialEvents(caseDetail).length > 0;
+      },
+
+      buildSkillTestInitialEventsFromForm() {
+        const text = this.skillTestCaseForm.initial_event_payload.trim();
+        if (!text) {
+          return [];
+        }
+        return [
+          {
+            direction: "input",
+            event_kind: "terminal.text.input.v1",
+            mime_type: "text/plain",
+            payload_inline: text,
+            source: { kind: "web" }
+          }
+        ];
+      },
+
+      defaultSkillTestAssertions() {
+        return [
+          { type: "run.status_equals", status: "succeeded", label: "Run 成功完成" },
+          { type: "terminal_event_exists", direction: "output", event_kind: "terminal.text.output.v1", label: "产生终端输出" }
+        ];
+      },
+
+      parseSkillTestAssertions() {
+        try {
+          const parsed = JSON.parse(this.skillTestCaseForm.assertions_json || "[]");
+          if (!Array.isArray(parsed)) {
+            throw new Error("assertions must be an array");
+          }
+          return parsed;
+        } catch {
+          throw new Error("断言 JSON 必须是数组。");
+        }
+      },
+
+      async loadSkillTestCases(skillId) {
+        this.busy.skillTestCases = true;
+        try {
+          this.skillTestCases = await this.apiRequest(`/skills/${skillId}/test-cases`);
+        } finally {
+          this.busy.skillTestCases = false;
+        }
+      },
+
+      async createSkillTestCase() {
+        if (!this.currentSkill || !this.skillTestCaseForm.name.trim()) {
+          this.showNotice("error", "请填写测试 Case 名称。");
+          return;
+        }
+        this.busy.skillTestSave = true;
+        try {
+          const assertions = this.skillTestCaseForm.assertions_json.trim()
+            ? this.parseSkillTestAssertions()
+            : this.defaultSkillTestAssertions();
+          const created = await this.apiRequest(`/skills/${this.currentSkill.id}/test-cases`, {
+            method: "POST",
+            body: JSON.stringify({
+              name: this.skillTestCaseForm.name.trim(),
+              description: this.skillTestCaseForm.description.trim(),
+              target_version_selector: this.skillTestCaseForm.target_version_selector || "latest",
+              target_compile_artifact_id: this.skillTestCaseForm.target_compile_artifact_id || null,
+              initial_terminal_events: this.buildSkillTestInitialEventsFromForm(),
+              terminal_context: { terminal_kind: "web" },
+              assertions
+            })
+          });
+          this.resetSkillTestCaseForm();
+          await this.loadSkillTestCases(this.currentSkill.id);
+          await this.navigate(buildSkillTestCasePath(this.currentSkill.id, created.id));
+        } catch (error) {
+          this.showNotice("error", error.message || "创建测试 Case 失败。");
+        } finally {
+          this.busy.skillTestSave = false;
+        }
+      },
+
+      async loadSkillTestCaseDetail(skillId, caseId) {
+        this.busy.skillTestCase = true;
+        try {
+          const [caseDetail, dataObjects, runs] = await Promise.all([
+            this.apiRequest(`/skills/${skillId}/test-cases/${caseId}`),
+            this.apiRequest(`/skills/${skillId}/test-cases/${caseId}/data`),
+            this.apiRequest(`/skills/${skillId}/test-cases/${caseId}/runs`)
+          ]);
+          this.skillTestCase = caseDetail;
+          this.skillTestDataObjects = dataObjects;
+          this.skillTestRuns = runs;
+          this.skillTestStartForm.selected_data_object_ids = dataObjects.map((item) => item.id);
+          this.resetSkillTestCaseForm(caseDetail);
+        } finally {
+          this.busy.skillTestCase = false;
+        }
+      },
+
+      async saveSkillTestCase() {
+        if (!this.currentSkill || !this.skillTestCase) {
+          return;
+        }
+        this.busy.skillTestSave = true;
+        try {
+          const saved = await this.apiRequest(`/skills/${this.currentSkill.id}/test-cases/${this.skillTestCase.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              name: this.skillTestCaseForm.name.trim(),
+              description: this.skillTestCaseForm.description.trim(),
+              target_version_selector: this.skillTestCaseForm.target_version_selector || "latest",
+              target_compile_artifact_id: this.skillTestCaseForm.target_compile_artifact_id || null,
+              initial_terminal_events: this.buildSkillTestInitialEventsFromForm(),
+              terminal_context: { terminal_kind: "web" },
+              assertions: this.parseSkillTestAssertions()
+            })
+          });
+          this.skillTestCase = saved;
+          await this.loadSkillTestCases(this.currentSkill.id);
+          this.showNotice("success", "测试 Case 已保存。");
+        } catch (error) {
+          this.showNotice("error", error.message || "保存测试 Case 失败。");
+        } finally {
+          this.busy.skillTestSave = false;
+        }
+      },
+
+      async deleteSkillTestCase(caseId = this.skillTestCase?.id) {
+        if (!this.currentSkill || !caseId) {
+          return;
+        }
+        this.busy.skillTestSave = true;
+        try {
+          await this.apiRequest(`/skills/${this.currentSkill.id}/test-cases/${caseId}`, { method: "DELETE" });
+          await this.loadSkillTestCases(this.currentSkill.id);
+          if (this.route.name === "skill-test-case") {
+            await this.navigate(buildSkillDetailPath(this.currentSkill.id));
+            this.activeDetailTab = "test";
+          }
+        } catch (error) {
+          this.showNotice("error", error.message || "删除测试 Case 失败。");
+        } finally {
+          this.busy.skillTestSave = false;
+        }
+      },
+
+      handleSkillTestFile(event) {
+        this.skillTestDataForm.file = event.target.files?.[0] || null;
+        if (this.skillTestDataForm.file && !this.skillTestDataForm.name) {
+          this.skillTestDataForm.name = this.skillTestDataForm.file.name;
+        }
+      },
+
+      handleTerminalInputFile(event) {
+        this.terminalInputForm.file = event.target.files?.[0] || null;
+      },
+
+      clearTerminalInputFile() {
+        this.terminalInputForm.file = null;
+        if (this.$refs?.terminalInputFile) {
+          this.$refs.terminalInputFile.value = "";
+        }
+      },
+
+      async uploadSkillTestData() {
+        if (!this.currentSkill || !this.skillTestCase || !this.skillTestDataForm.file) {
+          this.showNotice("error", "请选择要上传的测试数据。");
+          return;
+        }
+        this.busy.skillTestData = true;
+        try {
+          const formData = new FormData();
+          formData.append("file", this.skillTestDataForm.file);
+          formData.append("name", this.skillTestDataForm.name || this.skillTestDataForm.file.name);
+          formData.append("description", this.skillTestDataForm.description || "");
+          formData.append("role", this.skillTestDataForm.role || "input");
+          await this.apiRequest(`/skills/${this.currentSkill.id}/test-cases/${this.skillTestCase.id}/data`, {
+            method: "POST",
+            body: formData
+          });
+          this.skillTestDataForm = { name: "", description: "", role: "input", file: null };
+          await this.loadSkillTestCaseDetail(this.currentSkill.id, this.skillTestCase.id);
+        } catch (error) {
+          this.showNotice("error", error.message || "上传测试数据失败。");
+        } finally {
+          this.busy.skillTestData = false;
+        }
+      },
+
+      async uploadSkillTestRuntimeData(file, description = "") {
+        if (!this.currentSkill || !this.skillTestCase || !file) {
+          throw new Error("当前测试上下文不可上传多模态数据。");
+        }
+
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("name", file.name);
+        formData.append("description", description || "");
+        formData.append("role", "runtime-input");
+        const dataObject = await this.apiRequest(`/skills/${this.currentSkill.id}/test-cases/${this.skillTestCase.id}/data`, {
+          method: "POST",
+          body: formData
+        });
+        this.skillTestDataObjects = window.PSOPRuntimeEvents.mergeById(this.skillTestDataObjects, [dataObject]);
+        if (!this.isSkillTestDataSelected(dataObject.id)) {
+          this.skillTestStartForm.selected_data_object_ids = [
+            ...(this.skillTestStartForm.selected_data_object_ids || []),
+            dataObject.id
+          ];
+        }
+        return dataObject;
+      },
+
+      async deleteSkillTestData(dataId) {
+        if (!this.currentSkill || !this.skillTestCase) {
+          return;
+        }
+        this.busy.skillTestData = true;
+        try {
+          await this.apiRequest(`/skills/${this.currentSkill.id}/test-cases/${this.skillTestCase.id}/data/${dataId}`, {
+            method: "DELETE"
+          });
+          await this.loadSkillTestCaseDetail(this.currentSkill.id, this.skillTestCase.id);
+        } finally {
+          this.busy.skillTestData = false;
+        }
+      },
+
+      toggleSkillTestDataSelection(dataId) {
+        const selected = new Set(this.skillTestStartForm.selected_data_object_ids || []);
+        if (selected.has(dataId)) {
+          selected.delete(dataId);
+        } else {
+          selected.add(dataId);
+        }
+        this.skillTestStartForm.selected_data_object_ids = Array.from(selected);
+      },
+
+      isSkillTestDataSelected(dataId) {
+        return (this.skillTestStartForm.selected_data_object_ids || []).includes(dataId);
+      },
+
+      async startSkillTestRun(caseId = this.skillTestCase?.id) {
+        if (!this.currentSkill || !caseId) {
+          return;
+        }
+        this.busy.skillTestRun = true;
+        try {
+          const selectedDataIds = this.skillTestCase?.id === caseId ? this.skillTestStartForm.selected_data_object_ids || [] : [];
+          const requestBody = {};
+          if (this.skillTestCase?.id === caseId) {
+            requestBody.selected_data_object_ids = selectedDataIds;
+          }
+          const testRun = await this.apiRequest(`/skills/${this.currentSkill.id}/test-cases/${caseId}/runs`, {
+            method: "POST",
+            body: JSON.stringify(requestBody)
+          });
+          await this.navigate(buildSkillTestRunLivePath(this.currentSkill.id, caseId, testRun.id));
+        } catch (error) {
+          this.showNotice("error", error.message || "启动测试失败。");
+        } finally {
+          this.busy.skillTestRun = false;
+        }
+      },
+
+      async loadSkillTestRunLive(skillId, caseId, testRunId) {
+        this.busy.skillTestRun = true;
+        try {
+          const [testRun, dataObjects] = await Promise.all([
+            this.apiRequest(`/skill-test-runs/${testRunId}`),
+            this.apiRequest(`/skills/${skillId}/test-cases/${caseId}/data`)
+          ]);
+          this.skillTestRun = testRun;
+          this.skillTestDataObjects = dataObjects;
+          this.skillTestStartForm.selected_data_object_ids = testRun.selected_data_object_ids || [];
+          await this.loadSkillTestCaseDetail(skillId, caseId);
+          this.skillTestRun = testRun;
+          this.skillTestStartForm.selected_data_object_ids = testRun.selected_data_object_ids || [];
+          if (testRun.run_id) {
+            await this.loadRunLive(testRun.run_id);
+          }
+        } finally {
+          this.busy.skillTestRun = false;
+        }
+      },
+
+      async sendSkillTestData(dataId, payloadInline = null, options = {}) {
+        if (!this.skillTestRun || !dataId) {
+          return;
+        }
+        this.busy.skillTestSendData = true;
+        try {
+          const body = { test_data_object_id: dataId };
+          if (payloadInline) {
+            body.payload_inline = payloadInline;
+          }
+          const result = await this.apiRequest(`/skill-test-runs/${this.skillTestRun.id}/send-data`, {
+            method: "POST",
+            body: JSON.stringify(body)
+          });
+          this.mergeTerminalEvents([result.terminal_event]);
+          if (this.liveRun?.id) {
+            await this.loadRunLive(this.liveRun.id);
+          }
+          await this.evaluateSkillTestRun();
+          if (options.showNotice !== false) {
+            this.showNotice("success", "测试数据已发送。");
+          }
+          return result;
+        } catch (error) {
+          this.showNotice("error", error.message || "发送测试数据失败。");
+          return null;
+        } finally {
+          this.busy.skillTestSendData = false;
+        }
+      },
+
+      applySkillTestInitialEvent() {
+        const event = this.skillTestCaseInitialEvents()[0];
+        const text = this.skillTestInitialEventText(event);
+        if (text) {
+          this.terminalInputForm.payload = text;
+        }
+      },
+
+      async sendSkillTestInitialEvent(index = 0) {
+        if (!this.liveRun || !this.skillTestRun) {
+          return;
+        }
+        const event = this.skillTestCaseInitialEvents()[index];
+        if (!event) {
+          return;
+        }
+        this.busy.terminalInput = true;
+        try {
+          const response = await this.apiRequest(`/terminal/sessions/${this.liveRun.id}/events`, {
+            method: "POST",
+            body: JSON.stringify({
+              direction: event.direction || "input",
+              event_kind: event.event_kind || "terminal.text.input.v1",
+              mime_type: event.mime_type || "text/plain",
+              payload_inline: event.payload_inline,
+              artifact_object_id: event.artifact_object_id || null,
+              source: event.source || { kind: "web" },
+              external_event_id: `skill-test-run:${this.skillTestRun.id}:case-initial:${index + 1}`
+            })
+          });
+          this.mergeTerminalEvents([response.event]);
+          await this.loadRunLive(this.liveRun.id);
+          await this.evaluateSkillTestRun();
+        } catch (error) {
+          this.showNotice("error", error.message || "发送首轮模板失败。");
+        } finally {
+          this.busy.terminalInput = false;
+        }
+      },
+
+      async evaluateSkillTestRun() {
+        if (!this.skillTestRun) {
+          return;
+        }
+        this.busy.skillTestEvaluate = true;
+        try {
+          this.skillTestRun = await this.apiRequest(`/skill-test-runs/${this.skillTestRun.id}/evaluate`, {
+            method: "POST"
+          });
+        } finally {
+          this.busy.skillTestEvaluate = false;
+        }
+      },
+
       async loadInvocations(skillKey = null) {
         this.busy.invocations = true;
         try {
@@ -1430,7 +2058,10 @@
           this.invocationForm.user_input = "";
           await this.loadInvocations(this.route.name === "skill-detail" ? this.currentSkill?.key : null);
           if (invocation.run_id) {
-            await this.navigate(buildRunLivePath(invocation.run_id));
+            const livePath = this.currentSkill?.id
+              ? buildSkillRunLivePath(this.currentSkill.id, invocation.run_id)
+              : buildRunLivePath(invocation.run_id);
+            await this.navigate(livePath);
           }
         } catch (error) {
           this.showNotice("error", error.message || "发起运行失败。");
@@ -1461,28 +2092,53 @@
       },
 
       async sendTerminalInput() {
-        if (!this.liveRun || !this.terminalInputForm.payload.trim()) {
+        const runId = this.liveRun?.id;
+        const textPayload = this.terminalInputForm.payload.trim();
+        const filePayload = this.terminalInputForm.file;
+        if (!runId || (!textPayload && !filePayload)) {
           return;
         }
 
         this.busy.terminalInput = true;
         try {
-          const response = await this.apiRequest(`/terminal/sessions/${this.liveRun.id}/events`, {
-            method: "POST",
-            body: JSON.stringify({
-              direction: "input",
-              event_kind: "terminal.text.input.v1",
-              mime_type: "text/plain",
-              payload_inline: this.terminalInputForm.payload.trim(),
-              source: {
-                kind: "web"
-              },
-              external_event_id: `web-${Date.now().toString(36)}`
-            })
-          });
+          if (filePayload) {
+            if (!this.skillTestRun || !this.skillTestCase || !this.currentSkill) {
+              this.showNotice("error", "当前页面不支持直接发送附件。");
+              return;
+            }
+            const dataObject = await this.uploadSkillTestRuntimeData(filePayload, textPayload);
+            const result = await this.sendSkillTestData(
+              dataObject.id,
+              textPayload ? { caption: textPayload } : null,
+              { showNotice: false }
+            );
+            if (!result) {
+              return;
+            }
+            this.showNotice("success", "多模态消息已发送。");
+          } else {
+            const response = await this.apiRequest(`/terminal/sessions/${runId}/events`, {
+              method: "POST",
+              body: JSON.stringify({
+                direction: "input",
+                event_kind: "terminal.text.input.v1",
+                mime_type: "text/plain",
+                payload_inline: textPayload,
+                source: {
+                  kind: "web"
+                },
+                external_event_id: `web-${Date.now().toString(36)}`
+              })
+            });
+            this.mergeTerminalEvents([response.event]);
+            this.showNotice("success", "消息已发送。");
+          }
           this.terminalInputForm.payload = "";
-          this.mergeTerminalEvents([response.event]);
-          await this.loadRunLive(this.liveRun.id);
+          this.clearTerminalInputFile();
+          await this.loadRunLive(runId);
+          if (this.skillTestRun) {
+            await this.evaluateSkillTestRun();
+          }
         } catch (error) {
           this.showNotice("error", error.message || "终端输入发送失败。");
         } finally {
@@ -2039,11 +2695,36 @@
         await this.navigate(buildSkillDetailPath(skillId));
       },
 
+      skillRunLivePath(runId) {
+        return this.currentSkill?.id
+          ? buildSkillRunLivePath(this.currentSkill.id, runId)
+          : buildRunLivePath(runId);
+      },
+
+      runReplayPath(runId) {
+        return this.currentSkill?.id
+          ? buildSkillReplayPath(this.currentSkill.id, runId)
+          : buildReplayPath(runId);
+      },
+
+      async openCurrentSkillRuntime() {
+        if (!this.currentSkill?.id) {
+          return;
+        }
+
+        this.activeDetailTab = "runtime";
+        await this.navigate(buildSkillDetailPath(this.currentSkill.id));
+      },
+
       async openCompilerArtifact(artifactId) {
         if (!artifactId) {
           return;
         }
-        if (this.route.name === "skill-detail") {
+        if (this.currentSkill && this.activeDetailTab === "compiler") {
+          if (this.route.name !== "skill-detail") {
+            window.history.pushState({}, "", buildSkillDetailPath(this.currentSkill.id));
+            this.syncRoute();
+          }
           this.compilerArtifactWorkspaceOpen = true;
           await this.loadCompilerArtifact(artifactId);
           return;
@@ -2152,6 +2833,10 @@
         if (!this.currentSkill) {
           return;
         }
+        if (this.route.name === "skill-test-new" && tabName !== "test") {
+          window.history.pushState({}, "", buildSkillDetailPath(this.currentSkill.id));
+          this.syncRoute();
+        }
 
         try {
           if (tabName === "source") {
@@ -2166,6 +2851,9 @@
           if (tabName === "runtime") {
             this.invocationForm.skill_key = this.currentSkill.key;
             await this.loadInvocations(this.currentSkill.key);
+          }
+          if (tabName === "test") {
+            await this.loadSkillTestCases(this.currentSkill.id);
           }
         } catch (error) {
           this.showNotice("error", error.message || "数据加载失败。");
@@ -2389,15 +3077,36 @@
       },
 
       isMarkdownPreview() {
-        return this.repositoryFileForm.path.toLowerCase().endsWith(".md");
+        return this.repositoryPreviewKind() === "markdown";
+      },
+
+      repositoryPreviewKind(path = this.repositoryFileForm.path) {
+        const normalized = this.normalizeRepositoryPath(path).toLowerCase();
+        if (normalized.endsWith(".md") || normalized.endsWith(".markdown")) {
+          return "markdown";
+        }
+        if (normalized.endsWith(".json")) {
+          return "json";
+        }
+        if (normalized.endsWith(".yaml") || normalized.endsWith(".yml")) {
+          return "yaml";
+        }
+        return "text";
       },
 
       repositoryPreviewHtml() {
-        if (this.isMarkdownPreview()) {
+        const kind = this.repositoryPreviewKind();
+        if (kind === "markdown") {
           return renderMarkdown(this.repositoryFileForm.content);
         }
+        if (kind === "json") {
+          return `<pre class="source-code-preview"><code>${highlightJson(this.repositoryFileForm.content)}</code></pre>`;
+        }
+        if (kind === "yaml") {
+          return `<pre class="source-code-preview"><code>${highlightYaml(this.repositoryFileForm.content)}</code></pre>`;
+        }
 
-        return `<pre><code>${escapeHtml(this.repositoryFileForm.content)}</code></pre>`;
+        return `<pre class="source-code-preview"><code>${escapeHtml(this.repositoryFileForm.content)}</code></pre>`;
       },
 
       publishStageIcon(stage) {
@@ -2477,9 +3186,11 @@
           compiling: "编译中",
           pending: "待处理",
           running: "运行中",
+          waiting_input: "等待输入",
           queued: "排队中",
           accepted: "已接受",
           succeeded: "成功",
+          passed: "通过",
           failed: "失败",
           rejected: "已拒绝",
           cancelled: "已取消",
@@ -2496,7 +3207,10 @@
         if (["active", "published", "succeeded", "success", "accepted"].includes(normalized)) {
           return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
         }
-        if (["compiling", "running", "in_progress", "processing"].includes(normalized)) {
+        if (["passed"].includes(normalized)) {
+          return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
+        }
+        if (["compiling", "running", "waiting_input", "in_progress", "processing"].includes(normalized)) {
           return "border-sky-500/25 bg-sky-500/10 text-sky-200";
         }
         if (["requested", "pending", "queued", "draft", "retrying"].includes(normalized)) {
@@ -2542,9 +3256,107 @@
         return JSON.stringify(value, null, 2);
       },
 
+      formatTerminalEventPayload(event) {
+        if (!event) {
+          return "";
+        }
+        const lines = [];
+        if (event.artifact_object_id) {
+          lines.push(`artifact_object_id: ${event.artifact_object_id}`);
+        }
+        if (event.mime_type && event.mime_type !== "text/plain") {
+          lines.push(`mime_type: ${event.mime_type}`);
+        }
+        const payload = this.formatTerminalPayload(event.payload_inline);
+        if (payload) {
+          lines.push(payload);
+        }
+        return lines.join("\n") || event.event_kind || "";
+      },
+
+      formatAssertionSummary(summary) {
+        if (!summary) {
+          return "0 passed / 0 failed";
+        }
+        return `${summary.passed || 0} passed / ${summary.failed || 0} failed / ${summary.pending || 0} pending`;
+      },
+
+      assertionStatusTone(value) {
+        return this.statusBadgeTone(value);
+      },
+
+      isOpenSkillTestRun(testRun) {
+        return ["running", "queued", "pending", "waiting_input"].includes(String(testRun?.status || "").toLowerCase());
+      },
+
+      openSkillTestRunsCount() {
+        return this.skillTestRuns.filter((testRun) => this.isOpenSkillTestRun(testRun)).length;
+      },
+
+      sortedSkillTestRuns() {
+        return [...this.skillTestRuns].sort((left, right) => {
+          const leftOpen = this.isOpenSkillTestRun(left) ? 1 : 0;
+          const rightOpen = this.isOpenSkillTestRun(right) ? 1 : 0;
+          if (leftOpen !== rightOpen) {
+            return rightOpen - leftOpen;
+          }
+          const leftTime = new Date(left.updated_at || left.started_at || left.created_at || 0).getTime();
+          const rightTime = new Date(right.updated_at || right.started_at || right.created_at || 0).getTime();
+          return rightTime - leftTime;
+        });
+      },
+
+      skillTestRunActivityLabel(testRun) {
+        if (!testRun) {
+          return "最近 N/A";
+        }
+        if (testRun.ended_at) {
+          return `结束 ${this.formatDateTime(testRun.ended_at)}`;
+        }
+        return `最近 ${this.formatDateTime(testRun.updated_at || testRun.started_at || testRun.created_at)}`;
+      },
+
+      filteredSkillTestCases() {
+        const query = this.skillTestCaseSearch.trim().toLowerCase();
+        if (!query) {
+          return this.skillTestCases;
+        }
+
+        return this.skillTestCases.filter((testCase) => {
+          const searchable = [
+            testCase.name,
+            testCase.description,
+            JSON.stringify(testCase.initial_terminal_events || []),
+            JSON.stringify(testCase.input_envelope || {}),
+            testCase.latest_run?.run_id || "",
+            testCase.latest_run?.status || "",
+            testCase.status || ""
+          ]
+            .join(" ")
+            .toLowerCase();
+          return searchable.includes(query);
+        });
+      },
+
       routeTitle() {
-        if (this.route.name === "skill-detail" && this.currentSkill) {
+        if (
+          [
+            "skill-detail",
+            "skill-run-live",
+            "skill-replay-detail",
+            "skill-test-new",
+            "skill-test-case",
+            "skill-test-live"
+          ].includes(this.route.name) &&
+          this.currentSkill
+        ) {
           return this.currentSkill.name;
+        }
+        if (this.route.name === "skill-test-case") {
+          return "测试 Case";
+        }
+        if (this.route.name === "skill-test-live") {
+          return "测试现场";
         }
         if (this.route.name === "compiler-list") {
           return "编译";

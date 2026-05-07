@@ -8,10 +8,12 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.domain.compiler.service import CompilerService
 from app.domain.runtime.service import RuntimeService
+from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.service import SkillsService
 from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway
 from app.infra.database import DatabaseManager
+from app.infra.object_store import ObjectStoreService
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -28,6 +30,10 @@ def get_gitlab_gateway(request: Request) -> GitLabSkillSourceGateway:
 
 def get_inference_gateway(request: Request) -> LlmInferenceGateway:
     return request.app.state.inference_gateway  # type: ignore[return-value]
+
+
+def get_object_store(request: Request) -> ObjectStoreService:
+    return request.app.state.object_store  # type: ignore[return-value]
 
 
 def get_db_session(request: Request) -> Generator[Session, None, None]:
@@ -58,4 +64,12 @@ def get_runtime_service(request: Request) -> RuntimeService:
     return RuntimeService(
         settings=get_app_settings(request),
         inference_gateway=get_inference_gateway(request),
+    )
+
+
+def get_skill_test_service(request: Request) -> SkillTestService:
+    return SkillTestService(
+        settings=get_app_settings(request),
+        inference_gateway=get_inference_gateway(request),
+        object_store=get_object_store(request),
     )

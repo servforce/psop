@@ -10,6 +10,7 @@ from app.app import create_app
 from app.core.config import Settings
 from app.domain.skills.exceptions import SkillsGatewayError
 from app.gateway.inference import LlmCompletion
+from app.infra.object_store import StoredObject
 from app.gateway.gitlab import GitLabProjectInfo, RepositoryFile, RepositoryTreeEntry, SkillSourceBundle
 
 
@@ -210,6 +211,36 @@ class FakeInferenceGateway:
         )
 
 
+class FakeObjectStore:
+    def __init__(self) -> None:
+        self.uploads: list[dict[str, object]] = []
+
+    def upload_bytes(
+        self,
+        *,
+        object_key: str,
+        content: bytes,
+        media_type: str,
+        metadata: dict[str, str] | None = None,
+    ) -> StoredObject:
+        self.uploads.append(
+            {
+                "object_key": object_key,
+                "content": content,
+                "media_type": media_type,
+                "metadata": metadata or {},
+            }
+        )
+        return StoredObject(
+            bucket="test-bucket",
+            object_key=object_key,
+            media_type=media_type,
+            size_bytes=len(content),
+            checksum=f"sha256-{len(content)}",
+            metadata=metadata or {},
+        )
+
+
 def build_test_formal_v5_artifact() -> dict:
     return {
         "artifact_version": "psop-eg-formal-v5/llm-compiler-mvp-v1",
@@ -371,11 +402,13 @@ def create_test_settings() -> Settings:
 def create_test_client() -> tuple[TestClient, FakeGitLabGateway, FakeInferenceGateway]:
     fake_gateway = FakeGitLabGateway()
     fake_inference = FakeInferenceGateway()
+    fake_object_store = FakeObjectStore()
     client = TestClient(
         create_app(
             create_test_settings(),
             gitlab_gateway=fake_gateway,
             inference_gateway=fake_inference,
+            object_store=fake_object_store,
         )
     )
     return client, fake_gateway, fake_inference
@@ -899,6 +932,98 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
     assert message["event_type"] == "terminal.event.appended"
     assert message["payload"]["payload_inline"] == "WS 输入"
     assert message["seq_no"] == append_response.json()["seq_no"]
+
+
+def test_skill_test_case_upload_run_send_data_and_evaluate() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "skill-test-demo",
+                "name": "Skill Test Demo",
+                "description": "Validate skill EG test flow.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Skill test publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+
+        case_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-cases",
+            json={
+                "name": "多模态确认流程",
+                "description": "使用图片作为测试数据。",
+                "initial_terminal_events": [
+                    {
+                        "direction": "input",
+                        "event_kind": "terminal.text.input.v1",
+                        "mime_type": "text/plain",
+                        "payload_inline": "请检查这把伞如何修复",
+                    }
+                ],
+                "assertions": [
+                    {"type": "run.status_equals", "status": "succeeded"},
+                    {"type": "final_output_contains", "text": "已处理输入"},
+                    {"type": "trace_event_exists", "event_type": "gateway.inference.completed"},
+                    {"type": "terminal_event_exists", "direction": "output", "event_kind": "terminal.text.output.v1"},
+                ],
+            },
+        )
+        case_id = case_response.json()["id"]
+        upload_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-cases/{case_id}/data",
+            data={"name": "伞骨图片", "description": "测试图片", "role": "input"},
+            files={"file": ("umbrella.png", b"fake-image", "image/png")},
+        )
+        data_id = upload_response.json()["id"]
+        invalid_upload_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-cases/{case_id}/data",
+            files={"file": ("bad.exe", b"binary", "application/x-msdownload")},
+        )
+
+        start_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-cases/{case_id}/runs",
+            json={"selected_data_object_ids": [data_id]},
+        )
+        test_run = start_response.json()
+        send_initial_response = client.post(
+            f"/api/v1/terminal/sessions/{test_run['run_id']}/events",
+            json={
+                **case_response.json()["initial_terminal_events"][0],
+                "external_event_id": f"test-run-{test_run['id']}-initial",
+            },
+        )
+        send_data_response = client.post(
+            f"/api/v1/skill-test-runs/{test_run['id']}/send-data",
+            json={"test_data_object_id": data_id},
+        )
+        evaluate_response = client.post(f"/api/v1/skill-test-runs/{test_run['id']}/evaluate")
+        events_response = client.get(f"/api/v1/terminal/sessions/{test_run['run_id']}/events")
+        cases_response = client.get(f"/api/v1/skills/{created['id']}/test-cases")
+        runs_response = client.get(f"/api/v1/skills/{created['id']}/test-cases/{case_id}/runs")
+
+    assert case_response.status_code == 201
+    assert upload_response.status_code == 201
+    assert upload_response.json()["mime_type"] == "image/png"
+    assert invalid_upload_response.status_code == 422
+    assert start_response.status_code == 202
+    assert test_run["status"] == "running"
+    assert test_run["run_id"]
+    assert test_run["initial_terminal_events"] == []
+    assert test_run["assertion_summary"]["pending"] > 0
+    assert send_initial_response.status_code == 202
+    assert send_data_response.status_code == 202
+    assert send_data_response.json()["terminal_event"]["artifact_object_id"] == upload_response.json()["artifact_object_id"]
+    assert evaluate_response.status_code == 200
+    assert evaluate_response.json()["status"] == "passed"
+    assert any(event["event_kind"] == "terminal.file.input.v1" for event in events_response.json())
+    assert cases_response.json()[0]["latest_run"]["id"] == test_run["id"]
+    assert runs_response.json()[0]["id"] == test_run["id"]
 
 
 def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -> None:

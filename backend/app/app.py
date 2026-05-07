@@ -21,6 +21,7 @@ from app.domain.jobs.worker import RuntimeJobWorker
 from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway, HttpGitLabSkillSourceGateway
 from app.infra.database import DatabaseManager
+from app.infra.object_store import ObjectStoreService
 
 
 LOGGER = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ def create_app(
     *,
     gitlab_gateway: GitLabSkillSourceGateway | None = None,
     inference_gateway: LlmInferenceGateway | None = None,
+    object_store: ObjectStoreService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
 
@@ -83,6 +85,7 @@ def create_app(
     app.state.db_manager = DatabaseManager(resolved_settings.sqlalchemy_database_url)
     app.state.gitlab_gateway = gitlab_gateway or HttpGitLabSkillSourceGateway.from_settings(resolved_settings)
     app.state.inference_gateway = inference_gateway or OpenAICompatibleInferenceGateway.from_settings(resolved_settings)
+    app.state.object_store = object_store or ObjectStoreService.from_settings(resolved_settings)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=resolved_settings.cors_allow_origins,

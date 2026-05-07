@@ -49,6 +49,7 @@ class DatabaseManager:
         from app.domain.compiler import models as compiler_models  # noqa: F401
         from app.domain.jobs import models as job_models  # noqa: F401
         from app.domain.runtime import models as runtime_models  # noqa: F401
+        from app.domain.skill_tests import models as skill_test_models  # noqa: F401
 
         Base.metadata.create_all(self.engine)
 

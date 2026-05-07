@@ -2,13 +2,28 @@
   <section class="panel rounded-none border-0">
     <div class="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
       <nav class="breadcrumb-bar border-0 pb-0" aria-label="Breadcrumb">
-        <button type="button" class="breadcrumb-link" @click="navigate('/admin/invocations')">运行</button>
-        <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
-        <button type="button" class="breadcrumb-link font-medium text-slate-950" @click="loadRunLive(liveRun.id)">Run Live</button>
+        <template x-if="route.name === 'skill-run-live' && currentSkill">
+          <span class="inline-flex min-w-0 flex-wrap items-center gap-2">
+            <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
+            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
+            <button type="button" class="breadcrumb-link min-w-0 truncate" @click="openCurrentSkillRuntime()" x-text="currentSkill.name"></button>
+            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
+            <button type="button" class="breadcrumb-link" @click="openCurrentSkillRuntime()">运行</button>
+            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
+            <button type="button" class="breadcrumb-link font-medium text-slate-950" @click="loadRunLive(liveRun.id)">Run Live</button>
+          </span>
+        </template>
+        <template x-if="route.name !== 'skill-run-live' || !currentSkill">
+          <span class="inline-flex min-w-0 flex-wrap items-center gap-2">
+            <button type="button" class="breadcrumb-link" @click="navigate('/admin/invocations')">运行</button>
+            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
+            <button type="button" class="breadcrumb-link font-medium text-slate-950" @click="loadRunLive(liveRun.id)">Run Live</button>
+          </span>
+        </template>
       </nav>
       <div class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div>
-          <p class="mono-field" x-text="liveRun.id"></p>
+        <div class="min-w-0">
+          <p class="mono-field break-all" x-text="liveRun.id"></p>
         </div>
         <div class="flex flex-wrap gap-3">
           <span class="status-badge" :class="statusBadgeTone(liveRun.status)" x-text="formatStatus(liveRun.status)"></span>
@@ -16,7 +31,7 @@
             <span class="material-symbols-outlined text-[18px]">refresh</span>
             <span>刷新</span>
           </button>
-          <button type="button" class="button-primary" title="查看回放" aria-label="查看回放" x-show="liveRun.status === 'succeeded'" @click="navigate(`/admin/replay/runs/${liveRun.id}`)">
+          <button type="button" class="button-primary" title="查看回放" aria-label="查看回放" x-show="liveRun.status === 'succeeded'" @click="navigate(runReplayPath(liveRun.id))">
             <span class="material-symbols-outlined text-[18px]">history</span>
             <span>查看回放</span>
           </button>
@@ -24,104 +39,110 @@
       </div>
     </div>
 
-    <div class="grid min-h-0 flex-1 overflow-hidden xl:grid-cols-[22rem_1fr]">
-      <aside class="border-b border-slate-200 bg-slate-50 p-5 xl:border-b-0 xl:border-r">
-        <dl class="space-y-4 text-sm">
-          <div>
-            <dt class="field-label">状态</dt>
-            <dd class="mt-1 font-medium text-slate-950" x-text="formatStatus(liveRun.status)"></dd>
-          </div>
-          <div>
-            <dt class="field-label">阶段</dt>
-            <dd class="mt-1 mono-field" x-text="liveRun.runtime_phase"></dd>
-          </div>
-          <div>
-            <dt class="field-label">Terminal Session</dt>
-            <dd class="mt-1 mono-field break-all" x-text="liveRun.terminal_session_id || 'N/A'"></dd>
-          </div>
-          <div>
-            <dt class="field-label">实时连接</dt>
-            <dd class="mt-1">
-              <span class="status-badge" :class="statusBadgeTone(liveRunWsStatus === 'open' ? 'succeeded' : liveRunWsStatus === 'connecting' ? 'running' : liveRunWsStatus)" x-text="wsStatusLabel(liveRunWsStatus)"></span>
-            </dd>
-          </div>
-          <div>
-            <dt class="field-label">Artifact</dt>
-            <dd class="mt-1 mono-field break-all" x-text="liveRun.compile_artifact_id"></dd>
-          </div>
-          <div>
-            <dt class="field-label">Binding</dt>
-            <dd class="mt-2 space-y-2">
-              <template x-for="binding in liveRunBindings" :key="binding.id">
-                <div class="rounded-lg border border-slate-200 bg-white p-3">
-                  <p class="text-xs font-semibold text-slate-950" x-text="binding.requirement_key"></p>
-                  <p class="mt-1 mono-field" x-text="`${binding.capability} -> ${binding.target_kind}`"></p>
-                </div>
-              </template>
-            </dd>
-          </div>
-          <div>
-            <dt class="field-label">最终输出</dt>
-            <dd class="mt-2 whitespace-pre-wrap rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700" x-text="liveRun.final_output || '运行中...'"></dd>
-          </div>
-        </dl>
-      </aside>
-
-      <div class="grid min-h-0 grid-rows-[minmax(18rem,0.9fr)_1fr] overflow-hidden">
-        <section class="min-h-0 border-b border-slate-200">
-          <div class="flex items-center justify-between border-b border-slate-200 bg-white px-5 py-3">
+    <div class="min-h-0 flex-1 overflow-auto">
+      <div class="grid min-w-0 items-start xl:grid-cols-[22rem_minmax(0,1fr)]">
+        <aside class="min-w-0 border-b border-slate-200 bg-slate-50 p-5 xl:border-b-0 xl:border-r">
+          <dl class="space-y-4 text-sm">
             <div>
-              <p class="text-sm font-semibold text-slate-950">Terminal Transcript</p>
-              <p class="mono-field" x-text="`${liveRunTerminalEvents.length} events · latest ${liveRun.latest_terminal_seq || 0}`"></p>
+              <dt class="field-label">状态</dt>
+              <dd class="mt-1 font-medium text-slate-950" x-text="formatStatus(liveRun.status)"></dd>
             </div>
-          </div>
-          <div class="min-h-0 max-h-[calc(100%-4rem)] overflow-auto divide-y divide-slate-200">
-            <template x-for="event in liveRunTerminalEvents" :key="event.id">
-              <article class="px-5 py-3">
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                  <div class="flex items-center gap-3">
-                    <span class="status-badge" :class="terminalDirectionTone(event.direction)" x-text="terminalDirectionLabel(event.direction)"></span>
-                    <div>
-                      <p class="font-semibold text-slate-950" x-text="event.event_kind"></p>
-                      <p class="mono-field" x-text="formatDateTime(event.occurred_at)"></p>
-                    </div>
+            <div>
+              <dt class="field-label">阶段</dt>
+              <dd class="mt-1 mono-field" x-text="liveRun.runtime_phase"></dd>
+            </div>
+            <div>
+              <dt class="field-label">Terminal Session</dt>
+              <dd class="mt-1 mono-field break-all" x-text="liveRun.terminal_session_id || 'N/A'"></dd>
+            </div>
+            <div>
+              <dt class="field-label">实时连接</dt>
+              <dd class="mt-1">
+                <span class="status-badge" :class="statusBadgeTone(liveRunWsStatus === 'open' ? 'succeeded' : liveRunWsStatus === 'connecting' ? 'running' : liveRunWsStatus)" x-text="wsStatusLabel(liveRunWsStatus)"></span>
+              </dd>
+            </div>
+            <div>
+              <dt class="field-label">Artifact</dt>
+              <dd class="mt-1 mono-field break-all" x-text="liveRun.compile_artifact_id"></dd>
+            </div>
+            <div>
+              <dt class="field-label">Binding</dt>
+              <dd class="mt-2 space-y-2">
+                <template x-for="binding in liveRunBindings" :key="binding.id">
+                  <div class="rounded-lg border border-slate-200 bg-white p-3">
+                    <p class="text-xs font-semibold text-slate-950" x-text="binding.requirement_key"></p>
+                    <p class="mt-1 mono-field break-all" x-text="`${binding.capability} -> ${binding.target_kind}`"></p>
                   </div>
-                  <span class="mono-field" x-text="`#${event.seq_no}`"></span>
-                </div>
-                <pre class="mt-2 whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-100" x-text="formatTerminalPayload(event.payload_inline)"></pre>
-              </article>
-            </template>
-          </div>
-          <form class="flex gap-2 border-t border-slate-200 bg-slate-50 p-3" @submit.prevent="sendTerminalInput()">
-            <input x-model="terminalInputForm.payload" class="input-field" placeholder="输入下一条 terminal input" />
-            <button type="submit" class="button-primary" :disabled="busy.terminalInput || !terminalInputForm.payload.trim()">
-              <span class="material-symbols-outlined text-[18px]">send</span>
-              <span x-text="busy.terminalInput ? '发送中...' : '发送'"></span>
-            </button>
-          </form>
-        </section>
+                </template>
+              </dd>
+            </div>
+            <div>
+              <dt class="field-label">最终输出</dt>
+              <dd class="mt-2 whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700" x-text="liveRun.final_output || '运行中...'"></dd>
+            </div>
+          </dl>
+        </aside>
 
-        <div class="min-h-0 overflow-auto">
-          <div class="divide-y divide-slate-200">
-            <template x-for="event in liveRunTraceEvents" :key="event.id">
-              <article class="px-5 py-4">
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                  <div class="flex items-center gap-3">
-                    <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
-                      <span class="material-symbols-outlined text-[18px]">timeline</span>
-                    </span>
-                    <div>
-                      <p class="font-semibold text-slate-950" x-text="event.event_type"></p>
-                      <p class="mono-field" x-text="formatDateTime(event.occurred_at)"></p>
+        <main class="min-w-0 divide-y divide-slate-200">
+          <section>
+            <div class="flex items-center justify-between border-b border-slate-200 bg-white px-5 py-3">
+              <div>
+                <p class="text-sm font-semibold text-slate-950">Terminal Transcript</p>
+                <p class="mono-field" x-text="`${liveRunTerminalEvents.length} events · latest ${liveRun.latest_terminal_seq || 0}`"></p>
+              </div>
+            </div>
+            <div class="divide-y divide-slate-200">
+              <template x-for="event in liveRunTerminalEvents" :key="event.id">
+                <article class="px-5 py-4">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                      <span class="status-badge" :class="terminalDirectionTone(event.direction)" x-text="terminalDirectionLabel(event.direction)"></span>
+                      <div>
+                        <p class="font-semibold text-slate-950" x-text="event.event_kind"></p>
+                        <p class="mono-field" x-text="formatDateTime(event.occurred_at)"></p>
+                      </div>
                     </div>
+                    <span class="mono-field" x-text="`#${event.seq_no}`"></span>
                   </div>
-                  <span class="mono-field" x-text="event.phase"></span>
-                </div>
-                <pre class="mt-3 overflow-auto rounded-lg border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-100" x-text="JSON.stringify(event.payload, null, 2)"></pre>
-              </article>
-            </template>
-          </div>
-        </div>
+                  <pre class="mt-3 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-100" x-text="formatTerminalPayload(event.payload_inline)"></pre>
+                </article>
+              </template>
+            </div>
+            <form class="flex gap-2 border-t border-slate-200 bg-slate-50 p-3" @submit.prevent="sendTerminalInput()">
+              <input x-model="terminalInputForm.payload" class="input-field" placeholder="输入下一条 terminal input" />
+              <button type="submit" class="button-primary shrink-0" :disabled="busy.terminalInput || !terminalInputForm.payload.trim()">
+                <span class="material-symbols-outlined text-[18px]">send</span>
+                <span x-text="busy.terminalInput ? '发送中...' : '发送'"></span>
+              </button>
+            </form>
+          </section>
+
+          <section>
+            <div class="border-b border-slate-200 bg-white px-5 py-3">
+              <p class="text-sm font-semibold text-slate-950">Trace Events</p>
+              <p class="mono-field" x-text="`${liveRunTraceEvents.length} events`"></p>
+            </div>
+            <div class="divide-y divide-slate-200">
+              <template x-for="event in liveRunTraceEvents" :key="event.id">
+                <article class="px-5 py-4">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                      <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
+                        <span class="material-symbols-outlined text-[18px]">timeline</span>
+                      </span>
+                      <div>
+                        <p class="font-semibold text-slate-950" x-text="event.event_type"></p>
+                        <p class="mono-field" x-text="formatDateTime(event.occurred_at)"></p>
+                      </div>
+                    </div>
+                    <span class="mono-field" x-text="event.phase"></span>
+                  </div>
+                  <pre class="mt-3 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-100" x-text="JSON.stringify(event.payload, null, 2)"></pre>
+                </article>
+              </template>
+            </div>
+          </section>
+        </main>
       </div>
     </div>
   </section>

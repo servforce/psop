@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class CreateInvocationRequest(BaseModel):
     skill_key: str = Field(min_length=1, max_length=120)
     version_selector: str = Field(default="latest")
+    compile_artifact_id: str | None = None
     input_envelope: dict[str, Any] = Field(default_factory=dict)
     gateway_type: str = Field(default="terminal", max_length=64)
     terminal_context: dict[str, Any] = Field(default_factory=dict)

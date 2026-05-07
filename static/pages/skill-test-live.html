@@ -1,0 +1,187 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950 px-4 py-3">
+      <nav class="breadcrumb-bar border-0 pb-0" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
+        <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link" @click="currentSkill && skillTestCase && navigate(`/admin/skills/${currentSkill.id}/tests/${skillTestCase.id}`)" x-text="skillTestCase?.name || '测试 Case'"></button>
+        <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-100" @click="currentSkill && skillTestCase && skillTestRun && loadSkillTestRunLive(currentSkill.id, skillTestCase.id, skillTestRun.id)">Test Live</button>
+      </nav>
+      <div class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div>
+          <p class="mono-field" x-text="skillTestRun?.id || 'loading'"></p>
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <span class="status-badge" :class="statusBadgeTone(skillTestRun?.status)" x-text="formatStatus(skillTestRun?.status)"></span>
+            <span class="status-badge" :class="statusBadgeTone(liveRunWsStatus === 'open' ? 'succeeded' : liveRunWsStatus)" x-text="wsStatusLabel(liveRunWsStatus)"></span>
+            <span class="mono-field" x-text="liveRun?.id || skillTestRun?.run_id || 'N/A'"></span>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="button-secondary" title="重新评估断言" aria-label="重新评估断言" @click="evaluateSkillTestRun()" :disabled="busy.skillTestEvaluate">
+            <span class="material-symbols-outlined text-[18px]">fact_check</span>
+            <span x-text="busy.skillTestEvaluate ? '评估中...' : '重新评估'"></span>
+          </button>
+          <button type="button" class="button-secondary" title="打开真实 Run Live" aria-label="打开真实 Run Live" x-show="liveRun?.id" @click="navigate(skillRunLivePath(liveRun.id))">
+            <span class="material-symbols-outlined text-[18px]">open_in_new</span>
+            <span>Run Live</span>
+          </button>
+          <button type="button" class="button-primary" title="打开运行回放" aria-label="打开运行回放" x-show="liveRun?.id" @click="navigate(runReplayPath(liveRun.id))">
+            <span class="material-symbols-outlined text-[18px]">history</span>
+            <span>Replay</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid min-h-0 flex-1 overflow-hidden xl:grid-cols-[20rem_minmax(0,1fr)_24rem]">
+      <aside class="min-h-0 overflow-auto border-b border-slate-800 bg-slate-950/35 p-4 xl:border-b-0 xl:border-r">
+        <div class="space-y-4">
+          <section>
+            <p class="text-sm font-semibold text-slate-100">断言结果</p>
+            <p class="mono-field mt-1" x-text="formatAssertionSummary(skillTestRun?.assertion_summary)"></p>
+            <div class="mt-3 space-y-2">
+              <template x-for="assertion in skillTestRun?.assertion_results || []" :key="assertion.id">
+                <article class="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                  <div class="flex items-start justify-between gap-2">
+                    <p class="text-sm font-medium text-slate-100" x-text="assertion.label || assertion.type"></p>
+                    <span class="status-badge" :class="assertionStatusTone(assertion.status)" x-text="formatStatus(assertion.status)"></span>
+                  </div>
+                  <p class="mt-2 text-xs leading-5 text-slate-400" x-text="assertion.message"></p>
+                </article>
+              </template>
+            </div>
+          </section>
+
+          <section>
+            <p class="text-sm font-semibold text-slate-100">首轮输入模板</p>
+            <pre class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs leading-5 text-slate-300" x-text="skillTestInitialEventPreview()"></pre>
+            <div class="mt-3 grid grid-cols-2 gap-2">
+              <button type="button" class="button-secondary" title="填入首轮模板" aria-label="填入首轮模板" :disabled="!hasSkillTestInitialEventTemplate()" @click="applySkillTestInitialEvent()">
+                <span class="material-symbols-outlined text-[18px]">edit</span>
+                <span>填入</span>
+              </button>
+              <button type="button" class="button-secondary" title="发送首轮模板" aria-label="发送首轮模板" :disabled="busy.terminalInput || !hasSkillTestInitialEventTemplate()" @click="sendSkillTestInitialEvent()">
+                <span class="material-symbols-outlined text-[18px]">send</span>
+                <span>发送</span>
+              </button>
+            </div>
+          </section>
+
+          <section>
+            <p class="text-sm font-semibold text-slate-100">测试数据</p>
+            <div class="mt-3 space-y-2">
+              <template x-for="dataObject in skillTestDataObjects" :key="dataObject.id">
+                <article class="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                  <p class="truncate text-sm font-medium text-slate-100" x-text="dataObject.name"></p>
+                  <p class="mono-field mt-1 truncate" x-text="dataObject.mime_type"></p>
+                  <button type="button" class="button-secondary mt-3 w-full" title="发送该测试数据" aria-label="发送该测试数据" :disabled="busy.skillTestSendData || !isSkillTestDataSelected(dataObject.id)" @click="sendSkillTestData(dataObject.id)">
+                    <span class="material-symbols-outlined text-[18px]">send</span>
+                    <span>发送数据</span>
+                  </button>
+                </article>
+              </template>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <main class="grid min-h-0 grid-rows-[minmax(18rem,0.9fr)_1fr] overflow-hidden">
+        <section class="min-h-0 border-b border-slate-800">
+          <div class="flex items-center justify-between border-b border-slate-800 bg-slate-950/40 px-4 py-3">
+            <div>
+              <p class="text-sm font-semibold text-slate-100">Terminal Transcript</p>
+              <p class="mono-field" x-text="`${liveRunTerminalEvents.length} events · latest ${liveRun?.latest_terminal_seq || 0}`"></p>
+            </div>
+          </div>
+          <div class="min-h-0 max-h-[calc(100%-4rem)] overflow-auto divide-y divide-slate-800">
+            <template x-for="event in liveRunTerminalEvents" :key="event.id">
+              <article class="px-4 py-3">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="flex items-center gap-3">
+                    <span class="status-badge" :class="terminalDirectionTone(event.direction)" x-text="terminalDirectionLabel(event.direction)"></span>
+                    <div>
+                      <p class="font-semibold text-slate-100" x-text="event.event_kind"></p>
+                      <p class="mono-field" x-text="formatDateTime(event.occurred_at)"></p>
+                    </div>
+                  </div>
+                  <span class="mono-field" x-text="`#${event.seq_no}`"></span>
+                </div>
+                <pre class="mt-2 whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs leading-5 text-slate-100" x-text="formatTerminalEventPayload(event)"></pre>
+              </article>
+            </template>
+          </div>
+          <form class="border-t border-slate-800 bg-slate-950/35 p-3" @submit.prevent="sendTerminalInput()">
+            <div class="flex gap-2">
+              <button type="button" class="button-secondary shrink-0" title="添加图片、音频、视频、PDF 或文本文件" aria-label="添加多模态文件" @click="$refs.terminalInputFile.click()">
+                <span class="material-symbols-outlined text-[18px]">attach_file</span>
+                <span>添加文件</span>
+              </button>
+              <input x-ref="terminalInputFile" type="file" class="hidden" accept="image/*,audio/*,video/*,application/pdf,application/json,text/*" @change="handleTerminalInputFile($event)" />
+              <input x-model="terminalInputForm.payload" class="input-field" placeholder="输入文本，或添加图片 / 音频 / 视频 / PDF 后一起发送" />
+              <button type="submit" class="button-primary shrink-0" title="发送消息" aria-label="发送消息" :disabled="busy.terminalInput || (!terminalInputForm.payload.trim() && !terminalInputForm.file)">
+                <span class="material-symbols-outlined text-[18px]">send</span>
+                <span x-text="busy.terminalInput ? '发送中...' : '发送'"></span>
+              </button>
+            </div>
+            <template x-if="terminalInputForm.file">
+              <div class="mt-2 flex items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2">
+                <div class="min-w-0">
+                  <p class="truncate text-xs font-medium text-slate-200" x-text="terminalInputForm.file?.name"></p>
+                  <p class="mono-field" x-text="`${terminalInputForm.file?.type || 'application/octet-stream'} · ${terminalInputForm.file?.size || 0} bytes`"></p>
+                </div>
+                <button type="button" class="icon-button shrink-0" title="移除附件" aria-label="移除附件" @click="clearTerminalInputFile()">
+                  <span class="material-symbols-outlined text-[18px]">close</span>
+                </button>
+              </div>
+            </template>
+          </form>
+        </section>
+
+        <section class="min-h-0 overflow-auto">
+          <div class="divide-y divide-slate-800">
+            <template x-for="event in liveRunTraceEvents" :key="event.id">
+              <article class="px-4 py-3">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p class="font-semibold text-slate-100" x-text="event.event_type"></p>
+                    <p class="mono-field" x-text="formatDateTime(event.occurred_at)"></p>
+                  </div>
+                  <span class="mono-field" x-text="event.phase"></span>
+                </div>
+              </article>
+            </template>
+          </div>
+        </section>
+      </main>
+
+      <aside class="min-h-0 overflow-auto border-t border-slate-800 bg-slate-950/35 p-4 xl:border-l xl:border-t-0">
+        <div class="space-y-4">
+          <section>
+            <p class="field-label">Runtime Phase</p>
+            <p class="mt-1 text-sm font-medium text-slate-100" x-text="liveRun?.runtime_phase || 'N/A'"></p>
+          </section>
+          <section>
+            <p class="field-label">Run Status</p>
+            <span class="status-badge mt-2" :class="statusBadgeTone(liveRun?.status)" x-text="formatStatus(liveRun?.status)"></span>
+          </section>
+          <section>
+            <p class="field-label">Binding Summary</p>
+            <div class="mt-2 space-y-2">
+              <template x-for="binding in liveRunBindings" :key="binding.id">
+                <div class="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                  <p class="text-xs font-semibold text-slate-100" x-text="binding.requirement_key"></p>
+                  <p class="mono-field mt-1" x-text="`${binding.capability} -> ${binding.target_kind}`"></p>
+                </div>
+              </template>
+            </div>
+          </section>
+          <section>
+            <p class="field-label">Final Output</p>
+            <p class="mt-2 whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm leading-6 text-slate-300" x-text="liveRun?.final_output || '运行中...'"></p>
+          </section>
+        </div>
+      </aside>
+    </div>
+  </section>
+</div>

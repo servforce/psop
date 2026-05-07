@@ -69,13 +69,23 @@ class RuntimeService:
         if not skill_definition or skill_definition.status == "archived":
             raise SkillNotFoundError("未找到可调用的 Skill。", details={"skill_key": payload.skill_key})
 
-        skill_version = self.repository.get_skill_version(session, skill_definition.latest_published_version_id)
-        if not skill_version or skill_version.status != "published":
-            raise SkillValidationError("当前 Skill 尚无已发布版本，无法发起运行。")
+        if payload.compile_artifact_id:
+            artifact = self.repository.get_artifact(session, payload.compile_artifact_id)
+            if not artifact:
+                raise SkillValidationError("指定编译产物不存在。", details={"compile_artifact_id": payload.compile_artifact_id})
+            if artifact.status != "ready":
+                raise SkillValidationError("指定编译产物尚不可运行。", details={"compile_artifact_id": payload.compile_artifact_id})
+            skill_version = self.repository.get_skill_version(session, artifact.skill_version_id)
+            if not skill_version or skill_version.skill_definition_id != skill_definition.id:
+                raise SkillValidationError("指定编译产物不属于当前 Skill。", details={"compile_artifact_id": payload.compile_artifact_id})
+        else:
+            skill_version = self.repository.get_skill_version(session, skill_definition.latest_published_version_id)
+            if not skill_version or skill_version.status != "published":
+                raise SkillValidationError("当前 Skill 尚无已发布版本，无法发起运行。")
 
-        artifact = self.repository.get_latest_ready_artifact(session, skill_version.id)
-        if not artifact:
-            raise SkillValidationError("当前 Skill 尚无成功编译产物，无法发起运行。")
+            artifact = self.repository.get_latest_ready_artifact(session, skill_version.id)
+            if not artifact:
+                raise SkillValidationError("当前 Skill 尚无成功编译产物，无法发起运行。")
         artifact_object = self.repository.get_artifact_object(session, artifact.artifact_object_id)
         artifact_payload = artifact_object.content_json if artifact_object else {}
         gateway_type = "terminal" if payload.gateway_type in {"web", "terminal"} else payload.gateway_type
@@ -96,13 +106,15 @@ class RuntimeService:
         session.add(invocation)
         session.flush()
 
+        initial_input = self._extract_initial_terminal_input(payload.input_envelope)
+        has_initial_terminal_input = initial_input is not None
         run = Run(
             invocation_id=invocation.id,
             skill_definition_id=skill_definition.id,
             skill_version_id=skill_version.id,
             compile_artifact_id=artifact.id,
-            status="queued",
-            runtime_phase=self._initial_phase(artifact_payload),
+            status="queued" if has_initial_terminal_input else "waiting_input",
+            runtime_phase=self._initial_phase(artifact_payload) if has_initial_terminal_input else "waiting_input",
         )
         session.add(run)
         session.flush()
@@ -141,7 +153,6 @@ class RuntimeService:
                 snapshot_hash=self._hash_payload(initial_token),
             )
         )
-        initial_input = self._extract_initial_terminal_input(payload.input_envelope)
         if initial_input is not None:
             self._append_terminal_event(
                 session,
@@ -155,16 +166,19 @@ class RuntimeService:
                 source_ref={"kind": "web", "connection_id": "invocation"},
                 external_event_id=f"invocation:{invocation.id}:initial-input",
             )
-        session.add(
-            RuntimeJob(
-                job_type="runtime",
-                status="pending",
-                payload={"run_id": run.id},
-                run_id=run.id,
-                dedupe_key=f"job:runtime:{run.id}",
-                max_attempts=self.settings.runtime_job_max_attempts,
+        if has_initial_terminal_input:
+            session.add(
+                RuntimeJob(
+                    job_type="runtime",
+                    status="pending",
+                    payload={"run_id": run.id},
+                    run_id=run.id,
+                    dedupe_key=f"job:runtime:{run.id}",
+                    max_attempts=self.settings.runtime_job_max_attempts,
+                )
             )
-        )
+        else:
+            invocation.status = "running"
         session.commit()
         LOGGER.info(
             "runtime invocation created",
@@ -179,7 +193,10 @@ class RuntimeService:
         )
 
         # MVP local drain: keeps the issue #1 flow runnable without a separate worker process.
-        self.process_run(session, run.id)
+        # Terminal-first callers may create the session before sending a first input; those runs
+        # stay waiting until a persisted terminal_event wakes the runtime.
+        if has_initial_terminal_input:
+            self.process_run(session, run.id)
         refreshed = self.repository.get_invocation(session, invocation.id)
         if not refreshed:
             raise SkillNotFoundError("Invocation 创建后无法读取。")

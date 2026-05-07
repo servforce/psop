@@ -45,7 +45,7 @@
               <button
                 type="button"
                 class="sidebar-link"
-                :class="[['skills-list', 'skill-detail'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                :class="[['skills-list', 'skill-detail', 'skill-run-live', 'skill-replay-detail', 'skill-test-new', 'skill-test-case', 'skill-test-live'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
                 title="Skills"
                 @click="navigate('/admin/skills')"
               >
@@ -99,13 +99,15 @@
               </template>
 
               <div id="skills-list-page" class="h-full" x-show="!loadingPage && route.name === 'skills-list'"></div>
-              <div id="skill-detail-page" class="h-full" x-show="!loadingPage && route.name === 'skill-detail' && currentSkill"></div>
+              <div id="skill-detail-page" class="h-full" x-show="!loadingPage && ['skill-detail', 'skill-test-new'].includes(route.name) && currentSkill"></div>
               <div id="compiler-list-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-list'"></div>
               <div id="compiler-artifact-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-artifact' && compilerArtifact"></div>
               <div id="invocations-list-page" class="h-full" x-show="!loadingPage && route.name === 'invocations-list'"></div>
-              <div id="run-live-page" class="h-full" x-show="!loadingPage && route.name === 'run-live' && liveRun"></div>
+              <div id="run-live-page" class="h-full" x-show="!loadingPage && ['run-live', 'skill-run-live'].includes(route.name) && liveRun"></div>
+              <div id="skill-test-case-page" class="h-full" x-show="!loadingPage && route.name === 'skill-test-case' && currentSkill && skillTestCase"></div>
+              <div id="skill-test-live-page" class="h-full" x-show="!loadingPage && route.name === 'skill-test-live' && currentSkill && skillTestCase && skillTestRun"></div>
               <div id="replay-list-page" class="h-full" x-show="!loadingPage && route.name === 'replay-list'"></div>
-              <div id="replay-detail-page" class="h-full" x-show="!loadingPage && route.name === 'replay-detail' && replayDetail"></div>
+              <div id="replay-detail-page" class="h-full" x-show="!loadingPage && ['replay-detail', 'skill-replay-detail'].includes(route.name) && replayDetail"></div>
             </section>
         </main>
 

@@ -262,13 +262,13 @@
 
 #### 7.4.1 `Invocation List` `/admin/invocations`
 
-- 页面目标：从 gateway 视角看“谁调用了哪个 skill，现在执行到哪里”。
+- 页面目标：从 gateway 视角看“谁选择了哪个 skill，真实终端连接是否建立，现在执行到哪个现实步骤”。
 - 核心区块：
   - invocation 列表
   - 运行状态聚合卡
   - 快速发起 invocation 表单
 - 关键动作：
-  - 发起调用
+  - 建立某个 skill 的真实终端协作连接
   - 进入 invocation 详情
   - 打开 live run 页面
 - 依赖数据：
@@ -282,7 +282,7 @@
   - 调用请求摘要
   - 绑定的 skill version / compile artifact
   - run 状态
-  - gateway 输入封装
+  - terminal context、设备/环境能力和 run binding 摘要
 - 关键动作：
   - 跳转 live run
   - 查看 terminal 输入输出
@@ -290,9 +290,13 @@
 
 #### 7.4.3 `Run Live` `/admin/runs/:runId/live`
 
-- 页面目标：实时观察运行中的 skill，并在需要时通过 gateway 注入输入。
+- 页面目标：围绕当前现实步骤实时协作执行 skill，并在 Runtime 等待时提交文本、图片、视频、文件或设备反馈等现场证据。
 - 核心区块：
   - run 状态头，展示 `status`、`runtime_phase`、`terminal_session_id`
+  - 当前任务摘要、适用边界、安全提醒和准备事项
+  - 当前现实步骤：`current_step`、步骤标题、步骤目标、当前指令
+  - 等待上下文：`wait_reason`、`expected_inputs`、`checkpoint_id`、最近 evaluation decision
+  - 多模态输入区：文本、图片、视频、音频、文件或设备反馈入口
   - binding summary
   - node execution timeline
   - session token 摘要
@@ -300,7 +304,7 @@
   - trace event stream
   - node / actor inspector
 - 关键动作：
-  - 通过 `/api/terminal/sessions/{run_id}/events` 注入 terminal input
+  - 通过 `/api/terminal/sessions/{run_id}/events` 注入当前 checkpoint 所需的 terminal input / evidence
   - 暂停自动滚动
   - 按 event type 过滤 trace
   - 打开 OTel trace
@@ -309,7 +313,42 @@
   - WS 断开时自动回退轮询
   - 前端重连后按 REST 拉取缺失的 terminal / trace / snapshot seq，并在 store 层排序去重
   - WS 发送 terminal input 只作为后续低延迟优化；服务端仍必须先落成 `terminal_event` 后再广播
+  - 页面不得把 terminal output 都当作最终结果；只有 run 终态和 final verification 成立后才展示为最终完成
+  - `waiting_input` 时必须突出当前等待原因与期望输入类型，避免退化成普通聊天框
   - 结束后自动提示进入 replay
+
+### 7.4.4 `Skill Test` `/admin/skills/:skillId/tests/:caseId`
+
+- 页面目标：围绕当前 skill 管理测试 case、测试数据与测试运行历史。
+- 导航归属：`Skill Detail -> 测试` tab；列表页在 tab 内展示，case 详情使用深链。
+- 核心区块：
+  - test case 列表：名称、最近测试状态、最近 run、断言摘要、更新时间
+  - case 编辑：基础信息、可选证据模板、目标版本/artifact、基础断言
+  - 测试数据：上传/删除/选择图片、音频、视频、PDF、JSON、文本等多模态数据
+  - 运行历史：每次 test run 的状态、断言结果、真实 run/replay 入口
+- 关键动作：
+  - 新建、编辑、删除 case
+  - 上传测试数据
+  - 选择测试数据后启动真实 test run；启动动作只创建真实连接和 terminal session，Runtime 仍按 artifact 主动输出任务介绍和第一步指令
+
+### 7.4.5 `Skill Test Live` `/admin/skills/:skillId/tests/:caseId/runs/:testRunId/live`
+
+- 页面目标：在测试上下文中实时操作一次真实 run，验证当前 skill 是否能稳定引导用户完成现实步骤、等待证据、评估证据并继续推进。
+- 核心区块：
+  - test run 状态与断言结果
+  - 当前任务摘要、当前现实步骤、当前 Runtime 指令
+  - 等待上下文：等待原因、期望输入类型、checkpoint、最近 evaluation decision
+  - 可选证据模板预览、填入终端输入框、立即发送
+  - 选中的测试数据与发送按钮
+  - terminal transcript / 多模态输入框
+  - runtime phase、binding summary、trace stream
+- 状态要求：
+  - 连接真实 `/ws/runs/{run_id}`，断线后通过 REST 补齐 terminal / trace / run 状态
+  - 文本输入走 `/api/terminal/sessions/{run_id}/events`
+  - 证据模板发送也走 `/api/terminal/sessions/{run_id}/events`，并以幂等 `external_event_id` 防止重复点击写入重复事件
+  - 多模态测试数据先上传为 `artifact_object`，再通过 `/api/skill-test-runs/{test_run_id}/send-data` 注入 terminal event
+  - Test Live 不持有正式运行状态，只消费服务端 DTO 与真实 terminal/trace/replay 数据
+  - Test Live 不模拟完成判断；断言只基于真实 run、terminal transcript、trace、snapshot 和 replay 评估
 
 ### 7.5 `Replay`
 
@@ -387,9 +426,9 @@ Skills Detail -> 编译 table -> 运行 table -> Run Live -> Run Replay
 
 - `Skills Detail`：发布动作启动后展示 `publish_record`、`compile_request` 与阶段时间线；编译中通过 SSE 接收 `publish.progress / publish.terminal`，断线后轮询 `/progress`，成功后在 `编译` table 页展示 request/artifact，在 `运行` table 页提供“发起运行”入口；用户主要编辑 `SKILL.md` 与结构化配置表单，`skill.yaml` 仅作为系统生成快照预览。
 - `编译 table`：展示当前 skill 的 compile request 列表、diagnostics 摘要和 artifact 入口；artifact 详情继续支持 EG JSON 与 BPMN 静态结构预览。
-- `运行 table`：提供一个最小运行表单，默认绑定当前 skill，输入文本 payload 后创建 invocation。
-- `Run Live`：展示 run 状态、当前 phase、binding summary、terminal transcript、最新输出、trace event stream；WebSocket 未完成前允许以 2 秒轮询 `/api/runs/{run_id}`、terminal events 与 trace events。
-- `Run Replay`：运行完成后展示 timeline，至少包含 invocation、binding resolved、terminal input/output、LLM request/response 摘要、内置 tool call/result、final response。
+- `运行 table`：提供一个最小运行入口，默认绑定当前 skill，提交 terminal context 后创建 invocation；用户的现场反馈在 Run Live 中通过 terminal event 注入。
+- `Run Live`：展示 run 状态、当前 phase、当前现实步骤、等待原因、期望输入、binding summary、terminal transcript、最新中间指令、trace event stream；WebSocket 未完成前允许以 2 秒轮询 `/api/runs/{run_id}`、terminal events 与 trace events。
+- `Run Replay`：运行完成后展示 timeline，至少包含 invocation、binding resolved、Runtime 中间指令、terminal input/evidence、wait checkpoint、evidence evaluation、LLM request/response 摘要、内置 tool call/result、final verification 与 final response。
 - 顶部和面包屑必须始终暴露 `skill_id`、`compile_request_id`、`compile_artifact_id`、`invocation_id`、`run_id` 中的关键跳转关系，方便排障。
 
 ## 8. 路由组织与布局壳
@@ -429,7 +468,7 @@ AppShell
 | `skillsStore` | skill 列表、详情、版本与草稿编辑状态 |
 | `compilerStore` | publish request、compile request、diagnostics、artifact |
 | `invocationStore` | invocation 列表、详情、创建表单 |
-| `runStore` | live run、run binding、terminal transcript、session token 摘要 |
+| `runStore` | live run、当前现实步骤、等待上下文、run binding、terminal transcript、session token 摘要 |
 | `replayStore` | replay timeline、snapshot、trace detail、terminal transcript |
 | `observabilityStore` | 聚合指标、异常 trace、趋势图数据 |
 | `gatewayStore` | terminal / MCP / inference gateway 配置与健康 |
@@ -464,6 +503,8 @@ AppShell
 | `Compile Artifact Detail` | `compile_artifact_id` | `/api/compiler/*`, `/api/runs/*` |
 | `Invocation Detail` | `invocation_id` | `/api/gateway/invocations/*` |
 | `Run Live` | `run_id` | `/api/runs/*`, `/api/runs/{run_id}/binding-requirements`, `/api/runs/{run_id}/bindings`, `/api/terminal/*`, `/ws/runs/{run_id}` |
+| `Skill Test Case` | `skill_id`, `test_case_id` | `/api/skills/{skill_id}/test-cases/*` |
+| `Skill Test Live` | `skill_id`, `test_case_id`, `test_run_id`, `run_id` | `/api/skill-test-runs/*`, `/api/terminal/*`, `/ws/runs/{run_id}` |
 | `Run Replay` | `run_id`, `trace_id` | `/api/replay/*` |
 | `Observability` | `trace_id`, `run_id` | `/api/system/*`, `/api/runtime/*` |
 | `Gateway Console` | `mcp_server_id`, `provider_id` | `/api/gateway/mcp/*`, `/api/gateway/inference/*` |
