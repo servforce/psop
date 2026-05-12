@@ -12,7 +12,6 @@ from app.core.config import Settings
 LOGGER = logging.getLogger(__name__)
 _PROVIDERS_INITIALIZED = False
 _FASTAPI_INSTRUMENTED_IDS: set[int] = set()
-_SQLALCHEMY_INSTRUMENTED_URLS: set[str] = set()
 _HTTPX_INSTRUMENTED = False
 
 
@@ -53,6 +52,8 @@ def configure_observability(*, app: Any, settings: Settings, engine: Any | None 
 
     The function intentionally fails open. A collector outage or missing optional
     package should reduce observability, not prevent PSOP from starting.
+    SQLAlchemy auto-instrumentation is intentionally disabled because per-query
+    spans are too noisy for the current PSOP analysis workflow.
     """
 
     if not settings.otel_enabled:
@@ -85,8 +86,6 @@ def configure_observability(*, app: Any, settings: Settings, engine: Any | None 
 
     _instrument_fastapi(app)
     _instrument_httpx()
-    if engine is not None:
-        _instrument_sqlalchemy(engine)
     return handle
 
 
@@ -261,16 +260,3 @@ def _instrument_httpx() -> None:
         _HTTPX_INSTRUMENTED = True
     except Exception as exc:
         LOGGER.warning("httpx OpenTelemetry instrumentation skipped: %s", exc)
-
-
-def _instrument_sqlalchemy(engine: Any) -> None:
-    url = str(getattr(engine, "url", ""))
-    if url in _SQLALCHEMY_INSTRUMENTED_URLS:
-        return
-    try:
-        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-
-        SQLAlchemyInstrumentor().instrument(engine=engine)
-        _SQLALCHEMY_INSTRUMENTED_URLS.add(url)
-    except Exception as exc:
-        LOGGER.warning("SQLAlchemy OpenTelemetry instrumentation skipped: %s", exc)

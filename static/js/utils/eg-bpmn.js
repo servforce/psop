@@ -216,6 +216,71 @@
     };
   }
 
+  function waypointXml(point) {
+    return `        <di:waypoint x="${point.x}" y="${point.y}" />`;
+  }
+
+  function edgeWaypoints(edge, nodes, layout) {
+    const sourceIndex = nodes.findIndex((node) => node.id === edge.from);
+    const targetIndex = nodes.findIndex((node) => node.id === edge.to);
+    const sourceBounds = layout.get(edge.from);
+    const targetBounds = layout.get(edge.to);
+    const sourceMiddleY = sourceBounds.y + Math.round(sourceBounds.height / 2);
+    const targetMiddleY = targetBounds.y + Math.round(targetBounds.height / 2);
+
+    if (sourceIndex === targetIndex) {
+      const loopX = sourceBounds.x + sourceBounds.width + 54;
+      const loopY = sourceBounds.y + sourceBounds.height + 52;
+      return [
+        { x: sourceBounds.x + sourceBounds.width, y: sourceMiddleY },
+        { x: loopX, y: sourceMiddleY },
+        { x: loopX, y: loopY },
+        { x: sourceBounds.x + Math.round(sourceBounds.width / 2), y: loopY },
+        { x: sourceBounds.x + Math.round(sourceBounds.width / 2), y: sourceBounds.y + sourceBounds.height }
+      ];
+    }
+
+    const direction = targetIndex > sourceIndex ? 1 : -1;
+    const distance = Math.abs(targetIndex - sourceIndex);
+    if (distance === 1) {
+      const startX = direction > 0 ? sourceBounds.x + sourceBounds.width : sourceBounds.x;
+      const endX = direction > 0 ? targetBounds.x : targetBounds.x + targetBounds.width;
+      const midX = Math.round((startX + endX) / 2);
+      return [
+        { x: startX, y: sourceMiddleY },
+        { x: midX, y: sourceMiddleY },
+        { x: midX, y: targetMiddleY },
+        { x: endX, y: targetMiddleY }
+      ];
+    }
+
+    const laneIndex = Math.min(4, Math.max(0, distance - 2));
+    if (direction > 0) {
+      const laneY = Math.min(sourceBounds.y, targetBounds.y) - 80 - laneIndex * 34;
+      const startX = sourceBounds.x + Math.round(sourceBounds.width / 2);
+      const endX = targetBounds.x + Math.round(targetBounds.width / 2);
+      return [
+        { x: startX, y: sourceBounds.y },
+        { x: startX, y: laneY },
+        { x: endX, y: laneY },
+        { x: endX, y: targetBounds.y }
+      ];
+    }
+
+    const laneY = Math.max(
+      sourceBounds.y + sourceBounds.height,
+      targetBounds.y + targetBounds.height
+    ) + 80 + laneIndex * 34;
+    const startX = sourceBounds.x + Math.round(sourceBounds.width / 2);
+    const endX = targetBounds.x + Math.round(targetBounds.width / 2);
+    return [
+      { x: startX, y: sourceBounds.y + sourceBounds.height },
+      { x: startX, y: laneY },
+      { x: endX, y: laneY },
+      { x: endX, y: targetBounds.y + targetBounds.height }
+    ];
+  }
+
   function buildBpmnXml(payload) {
     const viewModel = buildEgBpmnViewModel(payload);
     const { nodes, edges } = viewModel;
@@ -253,16 +318,8 @@
     });
 
     const edgeShapes = edges.map((edge) => {
-      const source = nodeById.get(edge.from);
-      const target = nodeById.get(edge.to);
-      const sourceBounds = layout.get(source.id);
-      const targetBounds = layout.get(target.id);
-      const startX = sourceBounds.x + sourceBounds.width;
-      const startY = sourceBounds.y + Math.round(sourceBounds.height / 2);
-      const endX = targetBounds.x;
-      const endY = targetBounds.y + Math.round(targetBounds.height / 2);
-      const midX = Math.round((startX + endX) / 2);
-      return `      <bpmndi:BPMNEdge id="${escapeXml(edge.bpmnId)}_di" bpmnElement="${escapeXml(edge.bpmnId)}">\n        <di:waypoint x="${startX}" y="${startY}" />\n        <di:waypoint x="${midX}" y="${startY}" />\n        <di:waypoint x="${midX}" y="${endY}" />\n        <di:waypoint x="${endX}" y="${endY}" />\n      </bpmndi:BPMNEdge>`;
+      const waypoints = edgeWaypoints(edge, nodes, layout).map(waypointXml).join("\n");
+      return `      <bpmndi:BPMNEdge id="${escapeXml(edge.bpmnId)}_di" bpmnElement="${escapeXml(edge.bpmnId)}">\n${waypoints}\n      </bpmndi:BPMNEdge>`;
     });
 
     return {
@@ -275,8 +332,8 @@
         "  </bpmn:process>",
         '  <bpmndi:BPMNDiagram id="EG_Diagram_1">',
         `    <bpmndi:BPMNPlane id="EG_Plane_1" bpmnElement="${processId}">`,
-        ...shapes,
         ...edgeShapes,
+        ...shapes,
         "    </bpmndi:BPMNPlane>",
         "  </bpmndi:BPMNDiagram>",
         "</bpmn:definitions>"

@@ -317,38 +317,40 @@
   - `waiting_input` 时必须突出当前等待原因与期望输入类型，避免退化成普通聊天框
   - 结束后自动提示进入 replay
 
-### 7.4.4 `Skill Test` `/admin/skills/:skillId/tests/:caseId`
+### 7.4.4 `Skill Test Scenario` `/admin/skills/:skillId/tests/new` 与 `/admin/skills/:skillId/tests/:scenarioId`
 
-- 页面目标：围绕当前 skill 管理测试 case、测试数据与测试运行历史。
-- 导航归属：`Skill Detail -> 测试` tab；列表页在 tab 内展示，case 详情使用深链。
-- 核心区块：
-  - test case 列表：名称、最近测试状态、最近 run、断言摘要、更新时间
-  - case 编辑：基础信息、可选证据模板、目标版本/artifact、基础断言
-  - 测试数据：上传/删除/选择图片、音频、视频、PDF、JSON、文本等多模态数据
-  - 运行历史：每次 test run 的状态、断言结果、真实 run/replay 入口
-- 关键动作：
-  - 新建、编辑、删除 case
-  - 上传测试数据
-  - 选择测试数据后启动真实 test run；启动动作只创建真实连接和 terminal session，Runtime 仍按 artifact 主动输出任务介绍和第一步指令
-
-### 7.4.5 `Skill Test Live` `/admin/skills/:skillId/tests/:caseId/runs/:testRunId/live`
-
-- 页面目标：在测试上下文中实时操作一次真实 run，验证当前 skill 是否能稳定引导用户完成现实步骤、等待证据、评估证据并继续推进。
-- 核心区块：
-  - test run 状态与断言结果
-  - 当前任务摘要、当前现实步骤、当前 Runtime 指令
-  - 等待上下文：等待原因、期望输入类型、checkpoint、最近 evaluation decision
-  - 可选证据模板预览、填入终端输入框、立即发送
-  - 选中的测试数据与发送按钮
-  - terminal transcript / 多模态输入框
-  - runtime phase、binding summary、trace stream
+- 页面目标：围绕当前 skill 管理黑盒时序测试场景，而不是交互式调试入口。测试场景描述“在什么时间向智能体输入什么事实，以及在某个时间点以前应看到什么语义输出”。
+- 导航归属：`Skill Detail -> 测试` tab；场景列表在 tab 内展示，新建和编辑使用深链。
+- 列表核心区块：
+  - scenario 列表：名称、最近运行状态、最近 run、语义评估摘要、更新时间
+  - 新建场景入口、运行场景入口、最近运行 review 入口
+- 场景编辑器核心区块：
+  - 右侧基础信息：场景名称、描述；目标运行产物默认使用 latest published ready artifact，不在普通表单中暴露版本/artifact 选择
+  - 主体时间轴：输入分组包含文本、图片、音频、视频信道；输出分组包含单一语义信道；底部时间行以分钟配置总时长，默认 30 分钟
+  - 事件创建：用户点击某个信道的时间位置即可新增事件；拖动事件可改变 `at_ms`，右侧属性面板编辑内容
+  - 多模态输入：图片、音频、视频事件可在事件属性中直接上传并绑定资源，也可选择已有场景资源
+  - 语义输出：输出事件只配置时间点与 `expectation`，不配置时间窗口；判断语义为“该时间点以前已经满足”
+  - 高级 JSON：保留 `timeline` 与 `judge_policy` 的 JSON 编辑入口，但默认流程不要求用户手写 JSON
 - 状态要求：
-  - 连接真实 `/ws/runs/{run_id}`，断线后通过 REST 补齐 terminal / trace / run 状态
-  - 文本输入走 `/api/terminal/sessions/{run_id}/events`
-  - 证据模板发送也走 `/api/terminal/sessions/{run_id}/events`，并以幂等 `external_event_id` 防止重复点击写入重复事件
-  - 多模态测试数据先上传为 `artifact_object`，再通过 `/api/skill-test-runs/{test_run_id}/send-data` 注入 terminal event
-  - Test Live 不持有正式运行状态，只消费服务端 DTO 与真实 terminal/trace/replay 数据
-  - Test Live 不模拟完成判断；断言只基于真实 run、terminal transcript、trace、snapshot 和 replay 评估
+  - `timeline.schema_version` 固定为 `psop-skill-test-timeline/v1`
+  - 输入事件保存 `id`、`lane_id`、`at_ms`、`event_kind`、`mime_type`、`payload_inline` 或 `asset_id`
+  - 输出期望事件保存 `id`、`lane_id="expected.semantic"`、`at_ms`、`expectation`
+  - 场景资源上传进入对象存储，并以 `skill_test_asset.artifact_object_id` 被 timeline 事件引用
+  - 新建场景时如果存在本地暂存资源，前端先创建 scenario，再上传资源并 patch timeline 中的临时 `asset_id`
+
+### 7.4.5 `Skill Test Scenario Review` `/admin/skills/:skillId/tests/:scenarioId/runs/:scenarioRunId/review`
+
+- 页面目标：回看一次黑盒时序测试的真实执行，并把预设 timeline、真实 replay、driver events 与语义评估结果叠加展示。
+- 核心区块：
+  - 预设 timeline：展示各信道输入事件和语义输出期望，标识 scheduled/sent/passed/failed/inconclusive
+  - Review 时间：拖动时间轴游标后，右侧 transcript 只展示该切面以前发生的真实 terminal events
+  - 真实 transcript：以 terminal/chat 风格展示真实 input/output，并支持根据 Judge 证据引用高亮
+  - 评估结果：展示每条语义期望的状态、置信度、理由、证据引用和 raw response 摘要
+  - Fork 操作：当前切面可 `Fork Scenario` 或 `Fork Debug`；也可打开真实 Run Replay
+- 状态要求：
+  - Review 优先消费 `/api/skill-test-scenario-runs/{scenario_run_id}/review`
+  - 游标以 `time_ms`、`terminal_seq`、`snapshot_seq` 三元组表示，保证 fork 使用精确 Session Token Snapshot 与 terminal prefix
+  - Review 不模拟运行结果，只基于已持久化的 replay timeline、terminal events、trace events、snapshots 与 evaluation records
 
 ### 7.5 `Replay`
 
@@ -453,9 +455,12 @@ AppShell
 ### 8.3 跳转规则
 
 - `Skill Detail -> 编译`：从当前 skill 查看 compile request / artifact。
+- `Skill Detail -> 测试`：管理黑盒时序测试场景；场景运行结束后进入 scenario review。
 - `Skill Detail -> 运行`：从当前 skill 发起 invocation，并跳到对应 live run。
+- `Skill Detail -> 调试`：发起真实 debug invocation，并跳到 Skill Debug Live；该入口不依赖测试场景。
 - `Compile Artifact -> Run`：从 artifact 跳到以该 artifact 为基础的 run。
 - `Invocations / Runs -> Replay`：运行结束后进入 replay。
+- `Skill Test Scenario Review -> Fork Scenario / Fork Debug`：从当前时间切面创建新测试场景或真实调试会话。
 - `Replay -> Observability`：从 trace 跳到平台侧观测。
 
 ## 9. 前端状态模型、轮询与 WebSocket 策略
@@ -469,6 +474,7 @@ AppShell
 | `compilerStore` | publish request、compile request、diagnostics、artifact |
 | `invocationStore` | invocation 列表、详情、创建表单 |
 | `runStore` | live run、当前现实步骤、等待上下文、run binding、terminal transcript、session token 摘要 |
+| `skillTestStore` | scenario 列表、时间轴草稿、场景资源、场景运行、review 游标与语义评估结果 |
 | `replayStore` | replay timeline、snapshot、trace detail、terminal transcript |
 | `observabilityStore` | 聚合指标、异常 trace、趋势图数据 |
 | `gatewayStore` | terminal / MCP / inference gateway 配置与健康 |
@@ -479,6 +485,8 @@ AppShell
 | --- | --- | --- |
 | compile request 进行中 | SSE 实时推送 | 轮询 `/progress` / 手动刷新 |
 | live run 页面 | `WS` 实时订阅 | 轮询 2 秒 |
+| skill test scenario 列表/详情 | REST 按需加载 | 手动刷新 |
+| skill test scenario review | 一次性拉取 review DTO | 手动刷新 / 重新评估 |
 | invocation 列表 | 轮询 5 秒 | 手动刷新 |
 | replay 页面 | 一次性拉取 | 手动刷新 |
 | observability 聚合指标 | 轮询 10 秒 | 手动刷新 |
@@ -503,8 +511,8 @@ AppShell
 | `Compile Artifact Detail` | `compile_artifact_id` | `/api/compiler/*`, `/api/runs/*` |
 | `Invocation Detail` | `invocation_id` | `/api/gateway/invocations/*` |
 | `Run Live` | `run_id` | `/api/runs/*`, `/api/runs/{run_id}/binding-requirements`, `/api/runs/{run_id}/bindings`, `/api/terminal/*`, `/ws/runs/{run_id}` |
-| `Skill Test Case` | `skill_id`, `test_case_id` | `/api/skills/{skill_id}/test-cases/*` |
-| `Skill Test Live` | `skill_id`, `test_case_id`, `test_run_id`, `run_id` | `/api/skill-test-runs/*`, `/api/terminal/*`, `/ws/runs/{run_id}` |
+| `Skill Test Scenario` | `skill_id`, `scenario_id` | `/api/skills/{skill_id}/test-scenarios/*` |
+| `Skill Test Scenario Review` | `skill_id`, `scenario_id`, `scenario_run_id`, `run_id` | `/api/skill-test-scenario-runs/*`, `/api/replay/*`, `/api/terminal/*` |
 | `Run Replay` | `run_id`, `trace_id` | `/api/replay/*` |
 | `Observability` | `trace_id`, `run_id` | `/api/system/*`, `/api/runtime/*` |
 | `Gateway Console` | `mcp_server_id`, `provider_id` | `/api/gateway/mcp/*`, `/api/gateway/inference/*` |

@@ -323,12 +323,14 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 ### 6.12 `SkillTestService`
 
-- 管理 skill 级测试 case、测试数据、测试运行与断言结果。
-- 测试执行必须创建真实 `skill_invocation / run / terminal_session`，并复用 Terminal Gateway、RuntimeKernel、Replay 与 OTel。
-- 测试运行的创建语义与真实远程终端一致：`Invocation` 只建立运行会话、提交 `terminal_context`、绑定 Web terminal 能力，不把 case 的文本字段直接写入正式输入。
-- 测试 case 可保存 `initial_terminal_events` 作为可选首轮终端事件模板；是否发送模板由用户在 Test Live 中决定，或由调用方在启动 test run 时显式声明。
-- 多模态测试数据通过对象存储保存，`artifact_object` 只作为索引；测试时通过 `terminal_event.artifact_object_id` 注入。
-- 第一版支持交互式测试与基础断言评估，不实现批量回归、CI gate、脚本自动驱动器或 IoT adapter。
+- 管理 skill 级黑盒时序测试场景、场景资源、场景运行、时间轴 driver 与语义期望评估。
+- 测试执行必须创建真实 `skill_invocation / run / terminal_session`，并复用 Terminal Gateway、RuntimeKernel、Replay 与 OTel；测试层不模拟 Runtime，也不直接写 Session Token。
+- 测试场景使用 `timeline.schema_version = psop-skill-test-timeline/v1` 描述相对时间轴：输入信道包含文本、图片、音频、视频，输出信道包含语义期望。
+- 场景运行创建真实 invocation/run 后写入 `runtime_job.job_type = skill_test_timeline_driver`；driver 按 `event.at_ms` 到点调用 `RuntimeService.append_terminal_event(...)` 追加真实 terminal input。
+- 输入事件即使发生在 Runtime 尚未进入 `waiting_input` 时，也先落库为终端事实；Runtime 后续在 `Sync` 阶段按 terminal cursor 消费。
+- 输出判断按“时间点以前”执行：每条语义期望只把 `occurred_at <= time_origin + at_ms` 的真实 terminal output 提供给 Judge。
+- Judge 必须通过 `LLM Inference Gateway`，默认 route key 为 `skill-test-judge`；评估结果保存状态、置信度、证据引用、理由、prompt hash 和 raw response。
+- Review 支持基于 `time_ms + terminal_seq + snapshot_seq` 的切面 fork：可 fork 新测试场景，也可 fork 到独立调试会话继续手动输入。
 
 ### 6.13 `ObjectStoreService`
 
@@ -557,7 +559,49 @@ POST /api/gateway/invocations with terminal_context
 - 约束：小文本、小 JSON 使用 `payload_inline`；图片、音频、视频、大日志、大批量传感器数据使用 `artifact_object_id`。
 - 约束：IoT、MQTT、OPC-UA、Modbus 等原始协议不直接进入 Runtime，必须先由 adapter 转为内部 terminal event DTO。
 
-#### 8.2.13 `mcp_server`
+#### 8.2.13 `skill_test_scenario`
+
+- 主键：`id UUID`
+- 外键：`skill_definition_id -> skill_definition.id`、`target_compile_artifact_id -> eg_compile_artifact.id`
+- 关键字段：`name`、`description`、`target_version_selector`、`duration_ms`、`timeline JSONB`、`judge_policy JSONB`、`fork_seed JSONB`、`status`
+- 状态枚举：`active | archived`
+- 索引：`idx_skill_test_scenario_skill_status_updated_at`
+- 审计字段：`created_at`、`updated_at`
+- 主链路关联：skill 级黑盒时序测试场景定义；普通创建默认使用 latest published ready artifact，`target_compile_artifact_id` 仅作为高级/兼容指定入口。
+- 约束：`timeline.schema_version` 为 `psop-skill-test-timeline/v1`，`duration_ms` 默认 30 分钟；输入事件按 `at_ms` 排序，输出期望事件固定使用 `lane_id = expected.semantic`。
+
+#### 8.2.14 `skill_test_asset`
+
+- 主键：`id UUID`
+- 外键：`skill_definition_id -> skill_definition.id`、`scenario_id -> skill_test_scenario.id`、`artifact_object_id -> artifact_object.id`
+- 关键字段：`name`、`description`、`lane_id`、`filename`、`mime_type`、`size_bytes`、`checksum`
+- 状态枚举：无独立状态，删除场景时级联删除引用；对象内容仍由对象存储与 `artifact_object` 管理
+- 索引：`idx_skill_test_asset_scenario_created_at`
+- 审计字段：`created_at`
+- 主链路关联：场景时间轴中图片、音频、视频等多模态输入事件的资源引用。
+
+#### 8.2.15 `skill_test_scenario_run`
+
+- 主键：`id UUID`
+- 外键：`skill_definition_id -> skill_definition.id`、`scenario_id -> skill_test_scenario.id`、`invocation_id -> skill_invocation.id`、`run_id -> run.id`
+- 关键字段：`status`、`driver_status`、`driver_cursor`、`driver_events JSONB`、`timeline JSONB`、`result_summary JSONB`、`time_origin`
+- 状态枚举：`pending | queued | running | waiting_input | passed | failed | cancelled`
+- 索引：`idx_skill_test_scenario_run_scenario_created_at`、`idx_skill_test_scenario_run_status_created_at`
+- 审计字段：`created_at`、`updated_at`、`started_at`、`ended_at`
+- 主链路关联：一次黑盒时序测试执行，关联真实 invocation/run/replay，并记录 driver 对时间轴输入的发送事实。
+- 约束：同一 scenario 同时只允许一个 open run；必需输入尚未发送完而 Runtime 终结时，scenario run 判定为 failed。
+
+#### 8.2.16 `skill_test_expectation_evaluation`
+
+- 主键：`id UUID`
+- 外键：`scenario_run_id -> skill_test_scenario_run.id`
+- 关键字段：`expectation_id`、`status`、`confidence`、`reason`、`evidence_refs JSONB`、`judge_provider`、`judge_model`、`prompt_hash`、`raw_response JSONB`
+- 状态枚举：`passed | failed | inconclusive`
+- 索引：`idx_skill_test_expectation_eval_run_created_at`、`idx_skill_test_expectation_eval_run_expectation`
+- 审计字段：`created_at`
+- 主链路关联：语义期望的 LLM Judge 审计记录；`inconclusive` 默认按失败计入结果摘要。
+
+#### 8.2.17 `mcp_server`
 
 - 主键：`id UUID`
 - 外键：无
@@ -568,7 +612,7 @@ POST /api/gateway/invocations with terminal_context
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：MCP tool discovery 与调用入口配置
 
-#### 8.2.14 `mcp_tool`
+#### 8.2.18 `mcp_tool`
 
 - 主键：`id UUID`
 - 外键：`mcp_server_id -> mcp_server.id`
@@ -579,7 +623,7 @@ POST /api/gateway/invocations with terminal_context
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：CapabilityHost 的可调用工具目录
 
-#### 8.2.15 `inference_provider`
+#### 8.2.19 `inference_provider`
 
 - 主键：`id UUID`
 - 外键：无
@@ -590,7 +634,7 @@ POST /api/gateway/invocations with terminal_context
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：模型调用 provider 抽象
 
-#### 8.2.16 `model_catalog`
+#### 8.2.20 `model_catalog`
 
 - 主键：`id UUID`
 - 外键：`provider_id -> inference_provider.id`
@@ -601,7 +645,7 @@ POST /api/gateway/invocations with terminal_context
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：Inference Gateway 路由目标清单
 
-#### 8.2.17 `gateway_policy`
+#### 8.2.21 `gateway_policy`
 
 - 主键：`id UUID`
 - 外键：无
@@ -612,7 +656,7 @@ POST /api/gateway/invocations with terminal_context
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：tool、model、budget、timeout 等统一策略
 
-#### 8.2.18 `capability_binding`
+#### 8.2.22 `capability_binding`
 
 - 主键：`id UUID`
 - 外键：`compile_artifact_id`、`gateway_policy_id`
@@ -623,7 +667,7 @@ POST /api/gateway/invocations with terminal_context
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：artifact 级静态能力声明或编译期绑定，不代表某次 run 的具体设备或终端实例
 
-#### 8.2.19 `run_capability_binding`
+#### 8.2.23 `run_capability_binding`
 
 - 主键：`id UUID`
 - 外键：`run_id`、`compile_artifact_id`、`capability_binding_id`、`gateway_policy_id`
@@ -635,19 +679,20 @@ POST /api/gateway/invocations with terminal_context
 - 主链路关联：run 级具体能力解析结果，用于把本次运行的抽象能力绑定到具体 Web terminal、device、channel、schema 与 policy
 - 约束：MVP 默认把 `terminal.text.input.v1` 与 `terminal.text.output.v1` 绑定到 Web terminal；IoT / 真实设备绑定先作为 post-MVP reserved design。
 
-#### 8.2.20 `runtime_job`
+#### 8.2.24 `runtime_job`
 
 - 主键：`id UUID`
 - 外键：`run_id`、`compile_request_id`
 - 关键字段：`job_type`、`status`、`payload JSONB`、`lease_until`、`dedupe_key`、`attempt_no`
 - 状态枚举：`pending | claimed | running | succeeded | failed | cancelled | deadletter`
 - compile job 的 `payload.progress_stages` 是发布阶段进度事实源，供 `/progress` 与 SSE 读取；不新增独立进度表。
+- `skill_test_timeline_driver` job 的 `payload = { scenario_run_id }`，`dedupe_key = job:skill-test-timeline-driver:{scenario_run_id}`。
 - 唯一约束：`uk_runtime_job_dedupe_key`
 - 索引：`idx_runtime_job_status_available_at`、`idx_runtime_job_lease_until`
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：数据库驱动的异步任务系统
 
-#### 8.2.21 `worker_heartbeat`
+#### 8.2.25 `worker_heartbeat`
 
 - 主键：`id UUID`
 - 外键：无
@@ -658,7 +703,7 @@ POST /api/gateway/invocations with terminal_context
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：worker 健康检查与调度可见性
 
-#### 8.2.22 `sandbox_lease`
+#### 8.2.26 `sandbox_lease`
 
 - 主键：`id UUID`
 - 外键：`run_id`、`runtime_job_id`
@@ -669,7 +714,7 @@ POST /api/gateway/invocations with terminal_context
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：高风险 actor 的隔离执行租约
 
-#### 8.2.23 `artifact_object`
+#### 8.2.27 `artifact_object`
 
 - 主键：`id UUID`
 - 外键：无
@@ -680,7 +725,7 @@ POST /api/gateway/invocations with terminal_context
 - 审计字段：`created_at`
 - 主链路关联：artifact 文件、terminal 二进制内容、大对象证据
 
-#### 8.2.24 `runtime_config`
+#### 8.2.28 `runtime_config`
 
 - 主键：`id UUID`
 - 外键：无
@@ -691,39 +736,7 @@ POST /api/gateway/invocations with terminal_context
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：运行时与 gateway 的可调配置
 
-#### 8.2.25 `skill_test_case`
-
-- 主键：`id UUID`
-- 外键：`skill_definition_id`、`target_compile_artifact_id?`
-- 关键字段：`name`、`description`、`target_version_selector`、`input_envelope JSONB`、`terminal_context JSONB`、`assertions JSONB`、`status`
-- `input_envelope` 在当前实现中兼容保存 `initial_terminal_events`；对外 API 应优先暴露 `initial_terminal_events`，不再把它解释为必须随 Invocation 上送的 `user_input`
-- 状态枚举：`active | archived`
-- 索引：`idx_skill_test_case_skill_status_updated_at`
-- 审计字段：`created_at`、`updated_at`
-- 主链路关联：当前 skill 的测试场景定义
-
-#### 8.2.26 `skill_test_data_object`
-
-- 主键：`id UUID`
-- 外键：`skill_definition_id`、`test_case_id`、`artifact_object_id`
-- 关键字段：`name`、`description`、`role`、`filename`、`mime_type`、`size_bytes`、`checksum`
-- 状态枚举：无独立状态
-- 索引：`idx_skill_test_data_case_created_at`
-- 审计字段：`created_at`
-- 主链路关联：case 可选用的多模态测试数据
-
-#### 8.2.27 `skill_test_run`
-
-- 主键：`id UUID`
-- 外键：`skill_definition_id`、`test_case_id`、`invocation_id?`、`run_id?`
-- 关键字段：`status`、`selected_data_object_ids JSONB`、`input_envelope JSONB`、`assertion_results JSONB`、`assertion_summary JSONB`
-- `input_envelope` 只记录本次 test run 启动时显式发送的首轮模板事件；默认交互测试为空，后续输入以真实 `terminal_event` 为准
-- 状态枚举：`pending | running | passed | failed | cancelled`
-- 索引：`idx_skill_test_run_case_created_at`、`idx_skill_test_run_status_created_at`
-- 审计字段：`started_at`、`ended_at`、`created_at`、`updated_at`
-- 主链路关联：一次 test case 执行与真实 invocation/run 的关联记录
-
-#### 8.2.28 `operation_log`
+#### 8.2.29 `operation_log`
 
 - 主键：`id UUID`
 - 外键：`run_id`、`invocation_id`、`compile_request_id`
@@ -919,48 +932,88 @@ POST /api/gateway/invocations with terminal_context
 }
 ```
 
-### 9.9 `/api/skills/{skill_id}/test-cases/*`
+### 9.9 `/api/skills/{skill_id}/test-scenarios/*`
 
-该组接口用于 `Skill Detail -> 测试`。测试层只管理测试上下文，不替代 Runtime；每次 test run 都必须创建真实 invocation/run。
+该组接口用于 `Skill Detail -> 测试`。测试层管理黑盒时序测试场景，不替代 Runtime；每次 scenario run 都必须创建真实 invocation/run。
 
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/skills/{skill_id}/test-cases` | 测试 case 列表 | 无 | `skill test case list` |
-| `POST` | `/api/skills/{skill_id}/test-cases` | 创建测试 case | `{ name, description?, initial_terminal_events?, terminal_context?, target_version_selector?, target_compile_artifact_id?, assertions? }` | `skill test case detail` |
-| `GET` | `/api/skills/{skill_id}/test-cases/{case_id}` | 测试 case 详情 | 无 | `skill test case detail` |
-| `PATCH` | `/api/skills/{skill_id}/test-cases/{case_id}` | 更新测试 case | partial case payload | `skill test case detail` |
-| `DELETE` | `/api/skills/{skill_id}/test-cases/{case_id}` | 归档测试 case | 无 | `skill test case detail` |
+| `GET` | `/api/skills/{skill_id}/test-scenarios` | 测试场景列表 | 无 | `skill test scenario list` |
+| `POST` | `/api/skills/{skill_id}/test-scenarios` | 创建测试场景 | `{ name, description?, duration_ms?, timeline?, judge_policy?, fork_seed? }` | `skill test scenario detail` |
+| `GET` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}` | 测试场景详情 | 无 | `skill test scenario detail` |
+| `PATCH` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}` | 更新测试场景 | partial scenario payload | `skill test scenario detail` |
+| `DELETE` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}` | 归档测试场景 | 无 | `skill test scenario detail` |
 
 状态要求：
 
-- `initial_terminal_events` 是可选首轮模板，保存的是将来可发送的 terminal input 事件，不在创建 test run 时默认注入。
-- 旧字段 `input_envelope.user_input` 只作为兼容读取来源；新客户端不得把它当作 Invocation 创建参数。
+- 普通客户端默认不暴露版本/artifact 选择，服务端以 `target_version_selector = latest` 启动真实 run；`target_compile_artifact_id` 仅作为高级/兼容字段保留。
+- `DELETE` 采用归档语义，将 `status` 设置为 `archived`，不物理删除历史运行。
+- `timeline` 最小结构：
 
-### 9.10 `/api/skills/{skill_id}/test-cases/{case_id}/data`
+```json
+{
+  "schema_version": "psop-skill-test-timeline/v1",
+  "duration_ms": 1800000,
+  "lanes": [
+    { "id": "input.text", "kind": "input", "label": "文本", "event_kind": "terminal.text.input.v1" },
+    { "id": "input.image", "kind": "input", "label": "图片", "event_kind": "terminal.image.input.v1" },
+    { "id": "input.audio", "kind": "input", "label": "音频", "event_kind": "terminal.audio.input.v1" },
+    { "id": "input.video", "kind": "input", "label": "视频", "event_kind": "terminal.video.input.v1" },
+    { "id": "expected.semantic", "kind": "output", "label": "语义输出" }
+  ],
+  "events": [
+    {
+      "id": "initial_fault_context",
+      "lane_id": "input.text",
+      "at_ms": 0,
+      "event_kind": "terminal.text.input.v1",
+      "mime_type": "text/plain",
+      "payload_inline": "现场描述文本",
+      "required": true
+    },
+    {
+      "id": "expect_completion",
+      "lane_id": "expected.semantic",
+      "at_ms": 60000,
+      "expectation": "该时间点以前应输出可执行的下一步指导。",
+      "required": true
+    }
+  ]
+}
+```
+
+### 9.10 `/api/skills/{skill_id}/test-scenarios/{scenario_id}/assets`
 
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |
-| `POST` | `/api/skills/{skill_id}/test-cases/{case_id}/data` | 上传测试数据 | `multipart/form-data: file,name?,description?,role?` | `skill test data object` |
-| `GET` | `/api/skills/{skill_id}/test-cases/{case_id}/data` | 测试数据列表 | 无 | `skill test data list` |
-| `DELETE` | `/api/skills/{skill_id}/test-cases/{case_id}/data/{data_id}` | 删除测试数据引用 | 无 | `{ deleted: true }` |
-
-### 9.11 `/api/skill-test-runs/*`
-
-| Method | Path | 用途 | Request | Response |
-| --- | --- | --- | --- | --- |
-| `POST` | `/api/skills/{skill_id}/test-cases/{case_id}/runs` | 启动一次测试执行 | `{ selected_data_object_ids?, send_case_initial_events?, initial_terminal_events?, terminal_context_override? }` | `skill test run detail` |
-| `GET` | `/api/skills/{skill_id}/test-cases/{case_id}/runs` | case 测试运行历史 | 无 | `skill test run list` |
-| `GET` | `/api/skill-test-runs/{test_run_id}` | 测试运行详情 | 无 | `skill test run detail` |
-| `POST` | `/api/skill-test-runs/{test_run_id}/send-data` | 把测试数据注入真实 run | `{ test_data_object_id, event_kind?, payload_inline? }` | `{ accepted, terminal_event }` |
-| `POST` | `/api/skill-test-runs/{test_run_id}/evaluate` | 重新评估断言 | 无 | `skill test run detail` |
-
-第一版断言类型固定为 `run.status_equals`、`final_output_contains`、`final_output_not_contains`、`trace_event_exists`、`terminal_event_exists`。
+| `POST` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/assets` | 上传场景资源 | `multipart/form-data: file,name?,description?,lane_id?` | `skill test asset` |
+| `GET` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/assets` | 场景资源列表 | 无 | `skill test asset list` |
+| `DELETE` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}` | 删除场景资源引用 | 无 | `{ deleted, asset_id }` |
 
 状态要求：
 
-- 默认启动 test run 只创建真实 `invocation / run / terminal_session / run_capability_binding`，并进入 Test Live；不会自动发送 case 模板。
-- 用户可在 Test Live 中点击发送首轮模板、手动输入文本，或选择测试数据通过 `send-data` 注入多模态 terminal event。
-- 调用方只有在显式传入 `send_case_initial_events=true` 或 `initial_terminal_events` 时，服务端才会在创建 run 后追加这些 terminal events。
+- 上传内容进入对象存储，并创建 `artifact_object`；`skill_test_asset` 只保存场景级引用与文件元数据。
+- 图片、音频、视频输入事件通过 `asset_id` 引用场景资源；driver 发送时转换为 `terminal_event.artifact_object_id`。
+
+### 9.11 `/api/skill-test-scenario-runs/*`
+
+| Method | Path | 用途 | Request | Response |
+| --- | --- | --- | --- | --- |
+| `POST` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/runs` | 启动一次场景运行 | `{ timeline_override?, terminal_context_override? }` | `skill test scenario run detail` |
+| `GET` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/runs` | 场景运行历史 | 无 | `skill test scenario run list` |
+| `GET` | `/api/skill-test-scenario-runs/{scenario_run_id}` | 场景运行详情 | 无 | `skill test scenario run detail` |
+| `GET` | `/api/skill-test-scenario-runs/{scenario_run_id}/review` | 场景运行 Review | 无 | `scenario + scenario_run + replay + driver_events + expectation_evaluations + cursor_anchors` |
+| `POST` | `/api/skill-test-scenario-runs/{scenario_run_id}/evaluate` | 重新评估语义期望 | 无 | `skill test scenario run detail` |
+| `POST` | `/api/skill-test-scenario-runs/{scenario_run_id}/fork-scenario` | 从 Review 切面 fork 新测试场景 | `{ cursor: { time_ms, terminal_seq, snapshot_seq }, name?, description? }` | `skill test scenario detail` |
+| `POST` | `/api/skill-test-scenario-runs/{scenario_run_id}/fork-debug` | 从 Review 切面 fork 调试会话 | `{ cursor: { time_ms, terminal_seq, snapshot_seq } }` | `skill invocation detail` |
+
+执行要求：
+
+- 启动场景运行时创建真实 `skill_invocation / run / terminal_session / run_capability_binding`，`terminal_context.operator_mode = test`，`test_context.kind = skill_blackbox_timeline_test`。
+- 服务端写入 `skill_test_timeline_driver` job；driver 以 scenario run 的 `time_origin` 为原点，按输入事件的 `at_ms` 到点追加真实 terminal input。
+- driver 追加输入时使用幂等 `external_event_id = skill-test-scenario-run:{scenario_run_id}:timeline:{event_id}`，并记录 `scheduled_at / actual_sent_at / drift_ms / terminal_event_id / terminal_seq`。
+- 输出期望评估只向 Judge 提供时间切面以前的真实 terminal output；Judge 失败、JSON 不合法或证据不足均落为 `inconclusive`，默认按失败计入。
+- `fork-scenario` 保存 `fork_seed` 并把切面以后的 timeline 事件平移到新场景；`fork-debug` 使用指定 snapshot 与 terminal prefix 创建真实 debug invocation。
 
 ### 9.12 `/api/terminal/devices/*` post-MVP reserved
 

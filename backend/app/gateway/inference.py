@@ -121,6 +121,7 @@ class OpenAICompatibleInferenceGateway:
                         "provider": self.provider,
                         "api_base_url": self.api_base_url,
                         "model": model,
+                        "route_key": route_key,
                         "timeout_seconds": self.timeout_seconds,
                     },
                 ) from exc
@@ -149,6 +150,7 @@ class OpenAICompatibleInferenceGateway:
                         "provider": self.provider,
                         "api_base_url": self.api_base_url,
                         "model": model,
+                        "route_key": route_key,
                     },
                 )
 
@@ -157,7 +159,15 @@ class OpenAICompatibleInferenceGateway:
             try:
                 content = str(data["choices"][0]["message"]["content"])
             except (KeyError, IndexError, TypeError) as exc:
-                raise SkillsGatewayError("LLM Inference Gateway 响应缺少 message content。") from exc
+                raise SkillsGatewayError(
+                    "LLM Inference Gateway 响应缺少 message content。",
+                    details={
+                        "provider": self.provider,
+                        "api_base_url": self.api_base_url,
+                        "model": model,
+                        "route_key": route_key,
+                    },
+                ) from exc
 
             set_span_attributes(
                 span,

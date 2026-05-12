@@ -189,9 +189,10 @@ flowchart TB
 - `Replay`
   - 回看已执行完成 skills 的 trace、token 快照和对象证据
 - `Skill Test`
-  - 针对当前 skill 维护测试 case、测试数据与测试运行记录
-  - 测试执行不是模拟 Runtime，而是带测试上下文的真实 invocation/run，并复用 Terminal Gateway、Replay 与 OTel
-  - 测试 case 可保存可选“首轮终端事件模板”，但点击运行默认先建立真实 terminal session；用户在 Test Live 中再选择发送模板、上传/发送测试数据或手动多轮输入
+  - 针对当前 skill 维护黑盒时序测试场景、场景资源、场景运行与语义评估记录
+  - 测试场景在相对时间轴上编排文本、图片、音频、视频等多信道输入，并在语义输出信道上定义期望
+  - 测试执行不是模拟 Runtime，而是创建真实 invocation/run/terminal session，按时间轴把输入追加为真实 `terminal_event`，并复用 Runtime Kernel、Replay 与 OTel
+  - 语义输出判断以期望事件所在时间点为切面，只判断该时间点以前的真实 terminal output 是否满足期望
 - `Observability`
   - 查看 OTel traces、metrics、logs、异常拓扑与慢调用
 
@@ -241,10 +242,14 @@ flowchart TB
   - run 内 append-only 的终端输入输出事件，是用户反馈、现场证据、系统指导、terminal transcript、Replay 与 Runtime `Sync` 的事实源
 - `Run Capability Binding`
   - 本次 run 的能力解析结果，把 `terminal`、设备、MCP、LLM、sandbox 等抽象需求绑定到具体受控目标
-- `Skill Test Case`
-  - skill 级测试场景定义，包含可选首轮终端事件模板、多模态测试数据、目标版本/artifact 与基础断言
-- `Skill Test Run`
-  - 某个 test case 的一次真实执行，关联真实 invocation/run/terminal transcript/replay，并记录断言结果
+- `Skill Test Scenario`
+  - skill 级黑盒时序测试场景，包含 `duration_ms`、多信道 `timeline`、语义输出期望、场景资源引用、Judge 策略与可选 fork seed
+- `Skill Test Asset`
+  - 场景级图片、音频、视频等测试资源引用，底层二进制内容进入对象存储，并由 `artifact_object` 统一索引
+- `Skill Test Scenario Run`
+  - 某个 scenario 的一次真实执行，关联真实 invocation/run/terminal transcript/replay，记录时间轴 driver 状态、输入发送事实与结果摘要
+- `Skill Test Expectation Evaluation`
+  - 针对语义输出期望的 Judge 评估记录，保存 `passed / failed / inconclusive`、置信度、证据引用、理由与原始响应
 - `MCP Gateway`
   - 统一 MCP server/tool 受控接入
 - `LLM Inference Gateway`

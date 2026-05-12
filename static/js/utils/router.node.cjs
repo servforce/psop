@@ -1,4 +1,4 @@
-export function normalizePath(pathname) {
+function normalizePath(pathname) {
   if (!pathname || pathname === "/") {
     return "/";
   }
@@ -10,7 +10,7 @@ export function normalizePath(pathname) {
   return pathname;
 }
 
-export function resolveAdminRoute(pathname) {
+function resolveAdminRoute(pathname) {
   const normalized = normalizePath(pathname);
   if (normalized === "/" || normalized === "/admin" || normalized === "/admin/skills") {
     return { name: "skills-list", params: {} };
@@ -32,6 +32,14 @@ export function resolveAdminRoute(pathname) {
     };
   }
 
+  const skillDebugRunLiveMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/debug\/runs\/([^/]+)\/live$/);
+  if (skillDebugRunLiveMatch) {
+    return {
+      name: "skill-debug-live",
+      params: { skillId: skillDebugRunLiveMatch[1], runId: skillDebugRunLiveMatch[2] }
+    };
+  }
+
   const skillReplayRunMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/runs\/([^/]+)\/replay$/);
   if (skillReplayRunMatch) {
     return {
@@ -40,27 +48,27 @@ export function resolveAdminRoute(pathname) {
     };
   }
 
-  const skillTestRunLiveMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/tests\/([^/]+)\/runs\/([^/]+)\/live$/);
-  if (skillTestRunLiveMatch) {
+  const skillTestRunReviewMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/tests\/([^/]+)\/runs\/([^/]+)\/review$/);
+  if (skillTestRunReviewMatch) {
     return {
-      name: "skill-test-live",
-      params: { skillId: skillTestRunLiveMatch[1], caseId: skillTestRunLiveMatch[2], testRunId: skillTestRunLiveMatch[3] }
+      name: "skill-test-scenario-review",
+      params: { skillId: skillTestRunReviewMatch[1], scenarioId: skillTestRunReviewMatch[2], scenarioRunId: skillTestRunReviewMatch[3] }
     };
   }
 
   const skillTestNewMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/tests\/new$/);
   if (skillTestNewMatch) {
     return {
-      name: "skill-test-new",
+      name: "skill-test-scenario-new",
       params: { skillId: skillTestNewMatch[1] }
     };
   }
 
-  const skillTestCaseMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/tests\/([^/]+)$/);
-  if (skillTestCaseMatch) {
+  const skillTestScenarioMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/tests\/([^/]+)$/);
+  if (skillTestScenarioMatch) {
     return {
-      name: "skill-test-case",
-      params: { skillId: skillTestCaseMatch[1], caseId: skillTestCaseMatch[2] }
+      name: "skill-test-scenario",
+      params: { skillId: skillTestScenarioMatch[1], scenarioId: skillTestScenarioMatch[2] }
     };
   }
 
@@ -97,38 +105,57 @@ export function resolveAdminRoute(pathname) {
   return { name: "skills-list", params: {} };
 }
 
-export function buildSkillDetailPath(skillId) {
+function buildSkillDetailPath(skillId) {
   return `/admin/skills/${skillId}`;
 }
 
-export function buildRunLivePath(runId) {
+function buildRunLivePath(runId) {
   return `/admin/runs/${runId}/live`;
 }
 
-export function buildSkillRunLivePath(skillId, runId) {
+function buildSkillRunLivePath(skillId, runId) {
   return `/admin/skills/${skillId}/runs/${runId}/live`;
 }
 
-export function buildReplayPath(runId) {
+function buildSkillDebugRunLivePath(skillId, runId) {
+  return `/admin/skills/${skillId}/debug/runs/${runId}/live`;
+}
+
+function buildReplayPath(runId) {
   return `/admin/replay/runs/${runId}`;
 }
 
-export function buildSkillReplayPath(skillId, runId) {
+function buildSkillReplayPath(skillId, runId) {
   return `/admin/skills/${skillId}/runs/${runId}/replay`;
 }
 
-export function buildSkillTestCasePath(skillId, caseId) {
-  return `/admin/skills/${skillId}/tests/${caseId}`;
+function buildSkillTestScenarioPath(skillId, scenarioId) {
+  return `/admin/skills/${skillId}/tests/${scenarioId}`;
 }
 
-export function buildSkillTestCaseNewPath(skillId) {
+function buildSkillTestScenarioNewPath(skillId) {
   return `/admin/skills/${skillId}/tests/new`;
 }
 
-export function buildSkillTestRunLivePath(skillId, caseId, testRunId) {
-  return `/admin/skills/${skillId}/tests/${caseId}/runs/${testRunId}/live`;
+function buildSkillTestScenarioRunReviewPath(skillId, scenarioId, scenarioRunId) {
+  return `/admin/skills/${skillId}/tests/${scenarioId}/runs/${scenarioRunId}/review`;
 }
 
-export function buildCompilerArtifactPath(artifactId) {
+function buildCompilerArtifactPath(artifactId) {
   return `/admin/compiler/artifacts/${artifactId}`;
 }
+
+module.exports = {
+  normalizePath,
+  resolveAdminRoute,
+  buildSkillDetailPath,
+  buildRunLivePath,
+  buildSkillRunLivePath,
+  buildSkillDebugRunLivePath,
+  buildReplayPath,
+  buildSkillReplayPath,
+  buildSkillTestScenarioPath,
+  buildSkillTestScenarioNewPath,
+  buildSkillTestScenarioRunReviewPath,
+  buildCompilerArtifactPath
+};

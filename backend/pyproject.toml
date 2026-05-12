@@ -17,7 +17,6 @@ dependencies = [
   "opentelemetry-exporter-otlp-proto-http>=1.28,<2.0",
   "opentelemetry-instrumentation-fastapi>=0.49b0,<1.0",
   "opentelemetry-instrumentation-httpx>=0.49b0,<1.0",
-  "opentelemetry-instrumentation-sqlalchemy>=0.49b0,<1.0",
   "opentelemetry-instrumentation-logging>=0.49b0,<1.0",
   "pydantic-settings>=2.6,<3.0",
   "PyYAML>=6.0,<7.0",

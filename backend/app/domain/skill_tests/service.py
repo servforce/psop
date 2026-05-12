@@ -1,33 +1,60 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import posixpath
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.domain.compiler.models import ArtifactObject
-from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest
+from app.domain.jobs.models import RuntimeJob
+from app.domain.jobs.repository import JobRepository
+from app.domain.runtime.models import Run
+from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest, InvocationResponse
 from app.domain.runtime.service import RuntimeService
-from app.domain.skill_tests.models import SkillTestCase, SkillTestDataObject, SkillTestRun
+from app.domain.skill_tests.models import (
+    SkillTestAsset,
+    SkillTestExpectationEvaluation,
+    SkillTestScenario,
+    SkillTestScenarioRun,
+)
 from app.domain.skill_tests.repository import SkillTestRepository
 from app.domain.skill_tests.schemas import (
-    DeleteSkillTestDataResponse,
-    SendSkillTestDataRequest,
-    SendSkillTestDataResponse,
-    SkillTestCaseCreateRequest,
-    SkillTestCaseResponse,
-    SkillTestCaseUpdateRequest,
-    SkillTestDataObjectResponse,
-    SkillTestRunResponse,
-    SkillTestRunSummary,
-    StartSkillTestRunRequest,
+    DeleteSkillTestAssetResponse,
+    ForkSkillDebugRequest,
+    ForkSkillTestScenarioRequest,
+    SkillTestAssetResponse,
+    SkillTestExpectationEvaluationResponse,
+    SkillTestScenarioCreateRequest,
+    SkillTestScenarioResponse,
+    SkillTestScenarioReviewResponse,
+    SkillTestScenarioRunResponse,
+    SkillTestScenarioRunSummary,
+    SkillTestScenarioUpdateRequest,
+    StartSkillTestScenarioRunRequest,
 )
 from app.domain.skills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
-from app.domain.skills.models import now_utc
+from app.domain.skills.models import SkillDefinition, now_utc
 from app.gateway.inference import LlmInferenceGateway
 from app.infra.object_store import ObjectStoreService
+
+
+TIMELINE_SCHEMA_VERSION = "psop-skill-test-timeline/v1"
+TIMELINE_DRIVER_JOB_TYPE = "skill_test_timeline_driver"
+DEFAULT_TIMELINE_DURATION_MS = 1_800_000
+OPEN_SCENARIO_RUN_STATUSES = {"pending", "queued", "running", "waiting_input"}
+TERMINAL_RUNTIME_STATUSES = {"succeeded", "failed", "cancelled"}
+DEFAULT_TIMELINE_LANES = [
+    {"id": "input.text", "kind": "input", "label": "文本", "event_kind": "terminal.text.input.v1"},
+    {"id": "input.image", "kind": "input", "label": "图片", "event_kind": "terminal.image.input.v1"},
+    {"id": "input.audio", "kind": "input", "label": "音频", "event_kind": "terminal.audio.input.v1"},
+    {"id": "input.video", "kind": "input", "label": "视频", "event_kind": "terminal.video.input.v1"},
+    {"id": "expected.semantic", "kind": "output", "label": "语义输出"},
+]
 
 
 class SkillTestService:
@@ -39,111 +66,115 @@ class SkillTestService:
         object_store: ObjectStoreService,
         repository: SkillTestRepository | None = None,
         runtime_service: RuntimeService | None = None,
+        job_repository: JobRepository | None = None,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
         self.object_store = object_store
         self.repository = repository or SkillTestRepository()
         self.runtime_service = runtime_service or RuntimeService(settings=settings, inference_gateway=inference_gateway)
+        self.job_repository = job_repository or JobRepository()
 
-    def list_cases(self, session: Session, skill_id: str) -> list[SkillTestCaseResponse]:
+    def list_scenarios(self, session: Session, skill_id: str) -> list[SkillTestScenarioResponse]:
         self._get_skill(session, skill_id)
-        return [self._build_case_response(session, item) for item in self.repository.list_cases(session, skill_id)]
+        scenarios = self.repository.list_scenarios(session, skill_id)
+        return [self._build_scenario_response(session, item) for item in scenarios]
 
-    def create_case(self, session: Session, skill_id: str, payload: SkillTestCaseCreateRequest) -> SkillTestCaseResponse:
+    def create_scenario(
+        self,
+        session: Session,
+        skill_id: str,
+        payload: SkillTestScenarioCreateRequest,
+    ) -> SkillTestScenarioResponse:
         self._get_skill(session, skill_id)
         self._validate_target_artifact(session, skill_id, payload.target_compile_artifact_id)
-        case = SkillTestCase(
+        timeline = self._normalize_timeline(payload.timeline, duration_ms=payload.duration_ms)
+        scenario = SkillTestScenario(
             skill_definition_id=skill_id,
             target_compile_artifact_id=payload.target_compile_artifact_id,
-            name=self._normalize_case_name(payload.name),
-            description=payload.description,
+            name=self._normalize_name(payload.name, field="name"),
+            description=payload.description or "",
             target_version_selector=payload.target_version_selector or "latest",
-            input_envelope=self._build_case_input_envelope(
-                explicit_initial_events=payload.initial_terminal_events,
-                legacy_input_envelope=payload.input_envelope,
-            ),
-            terminal_context=self._normalize_terminal_context(payload.terminal_context),
-            assertions=payload.assertions,
+            duration_ms=timeline["duration_ms"],
+            timeline=timeline,
+            judge_policy=self._normalize_judge_policy(payload.judge_policy),
+            fork_seed=payload.fork_seed or {},
             status="active",
         )
-        session.add(case)
+        session.add(scenario)
         session.commit()
-        return self._build_case_response(session, case)
+        return self._build_scenario_response(session, scenario)
 
-    def get_case(self, session: Session, skill_id: str, case_id: str) -> SkillTestCaseResponse:
-        case = self._get_case(session, skill_id, case_id)
-        return self._build_case_response(session, case)
+    def get_scenario(self, session: Session, skill_id: str, scenario_id: str) -> SkillTestScenarioResponse:
+        scenario = self._get_scenario(session, skill_id, scenario_id)
+        return self._build_scenario_response(session, scenario)
 
-    def update_case(
+    def update_scenario(
         self,
         session: Session,
         skill_id: str,
-        case_id: str,
-        payload: SkillTestCaseUpdateRequest,
-    ) -> SkillTestCaseResponse:
-        case = self._get_case(session, skill_id, case_id)
+        scenario_id: str,
+        payload: SkillTestScenarioUpdateRequest,
+    ) -> SkillTestScenarioResponse:
+        scenario = self._get_scenario(session, skill_id, scenario_id)
         if "target_compile_artifact_id" in payload.model_fields_set:
             self._validate_target_artifact(session, skill_id, payload.target_compile_artifact_id)
-            case.target_compile_artifact_id = payload.target_compile_artifact_id
+            scenario.target_compile_artifact_id = payload.target_compile_artifact_id
         if payload.name is not None:
-            case.name = self._normalize_case_name(payload.name)
+            scenario.name = self._normalize_name(payload.name, field="name")
         if payload.description is not None:
-            case.description = payload.description
+            scenario.description = payload.description
         if payload.target_version_selector is not None:
-            case.target_version_selector = payload.target_version_selector or "latest"
-        if "initial_terminal_events" in payload.model_fields_set:
-            case.input_envelope = self._build_case_input_envelope(
-                explicit_initial_events=payload.initial_terminal_events or [],
-                legacy_input_envelope={},
-            )
-        elif payload.input_envelope is not None:
-            case.input_envelope = payload.input_envelope
-        if payload.terminal_context is not None:
-            case.terminal_context = self._normalize_terminal_context(payload.terminal_context)
-        if payload.assertions is not None:
-            case.assertions = payload.assertions
+            scenario.target_version_selector = payload.target_version_selector or "latest"
+        if payload.duration_ms is not None:
+            scenario.duration_ms = payload.duration_ms
+        if payload.timeline is not None:
+            scenario.timeline = self._normalize_timeline(payload.timeline, duration_ms=scenario.duration_ms)
+            scenario.duration_ms = scenario.timeline["duration_ms"]
+        if payload.judge_policy is not None:
+            scenario.judge_policy = self._normalize_judge_policy(payload.judge_policy)
+        if payload.fork_seed is not None:
+            scenario.fork_seed = payload.fork_seed
         if payload.status is not None:
             if payload.status not in {"active", "archived"}:
-                raise SkillValidationError("测试 case 状态无效。", details={"status": payload.status})
-            case.status = payload.status
+                raise SkillValidationError("测试场景状态无效。", details={"status": payload.status})
+            scenario.status = payload.status
         session.commit()
-        return self._build_case_response(session, case)
+        return self._build_scenario_response(session, scenario)
 
-    def delete_case(self, session: Session, skill_id: str, case_id: str) -> SkillTestCaseResponse:
-        case = self._get_case(session, skill_id, case_id)
-        case.status = "archived"
+    def delete_scenario(self, session: Session, skill_id: str, scenario_id: str) -> SkillTestScenarioResponse:
+        scenario = self._get_scenario(session, skill_id, scenario_id)
+        scenario.status = "archived"
         session.commit()
-        return self._build_case_response(session, case)
+        return self._build_scenario_response(session, scenario)
 
-    def upload_data_object(
+    def upload_asset(
         self,
         session: Session,
         skill_id: str,
-        case_id: str,
+        scenario_id: str,
         *,
         filename: str,
         content: bytes,
         mime_type: str,
         name: str | None = None,
         description: str = "",
-        role: str = "input",
-    ) -> SkillTestDataObjectResponse:
-        case = self._get_case(session, skill_id, case_id)
+        lane_id: str = "input.file",
+    ) -> SkillTestAssetResponse:
+        scenario = self._get_scenario(session, skill_id, scenario_id)
         self._validate_upload(filename=filename, content=content, mime_type=mime_type)
         safe_filename = self._safe_filename(filename)
-        object_key = posixpath.join("skill-tests", skill_id, case_id, f"{uuid.uuid4()}-{safe_filename}")
-        metadata = {
-            "skill_id": skill_id,
-            "test_case_id": case.id,
-            "filename": safe_filename,
-            "role": role or "input",
-        }
+        object_key = posixpath.join("skill-tests", "scenarios", skill_id, scenario.id, f"{uuid.uuid4()}-{safe_filename}")
         stored = self.object_store.upload_bytes(
             object_key=object_key,
             content=content,
             media_type=mime_type,
-            metadata=metadata,
+            metadata={
+                "skill_id": skill_id,
+                "test_scenario_id": scenario.id,
+                "filename": safe_filename,
+                "lane_id": lane_id or "input.file",
+            },
         )
         artifact_object = ArtifactObject(
             bucket=stored.bucket,
@@ -152,359 +183,661 @@ class SkillTestService:
             size_bytes=stored.size_bytes,
             checksum=stored.checksum,
             content_json={
-                "kind": "skill_test_data",
+                "kind": "skill_test_asset",
                 "filename": safe_filename,
                 "name": name or safe_filename,
                 "description": description,
-                "role": role or "input",
+                "lane_id": lane_id or "input.file",
                 "metadata": stored.metadata,
             },
         )
         session.add(artifact_object)
         session.flush()
-        data_object = SkillTestDataObject(
+        asset = SkillTestAsset(
             skill_definition_id=skill_id,
-            test_case_id=case.id,
+            scenario_id=scenario.id,
             artifact_object_id=artifact_object.id,
             name=name or safe_filename,
-            description=description,
-            role=role or "input",
+            description=description or "",
+            lane_id=lane_id or "input.file",
             filename=safe_filename,
             mime_type=stored.media_type,
             size_bytes=stored.size_bytes,
             checksum=stored.checksum,
         )
-        session.add(data_object)
+        session.add(asset)
         session.commit()
-        return self._build_data_response(data_object)
+        return self._build_asset_response(asset)
 
-    def list_data_objects(self, session: Session, skill_id: str, case_id: str) -> list[SkillTestDataObjectResponse]:
-        self._get_case(session, skill_id, case_id)
-        return [self._build_data_response(item) for item in self.repository.list_data_objects(session, case_id)]
+    def list_assets(self, session: Session, skill_id: str, scenario_id: str) -> list[SkillTestAssetResponse]:
+        self._get_scenario(session, skill_id, scenario_id)
+        return [self._build_asset_response(item) for item in self.repository.list_assets(session, scenario_id)]
 
-    def delete_data_object(
+    def delete_asset(
         self,
         session: Session,
         skill_id: str,
-        case_id: str,
-        data_id: str,
-    ) -> DeleteSkillTestDataResponse:
-        self._get_case(session, skill_id, case_id)
-        data_object = self.repository.get_data_object(session, data_id)
-        if not data_object or data_object.test_case_id != case_id:
-            raise SkillNotFoundError("未找到测试数据。", details={"data_id": data_id})
-        session.delete(data_object)
+        scenario_id: str,
+        asset_id: str,
+    ) -> DeleteSkillTestAssetResponse:
+        self._get_scenario(session, skill_id, scenario_id)
+        asset = self.repository.get_asset(session, asset_id)
+        if not asset or asset.scenario_id != scenario_id:
+            raise SkillNotFoundError("未找到测试资源。", details={"asset_id": asset_id})
+        session.delete(asset)
         session.commit()
-        return DeleteSkillTestDataResponse(deleted=True, data_id=data_id)
+        return DeleteSkillTestAssetResponse(deleted=True, asset_id=asset_id)
 
     def start_run(
         self,
         session: Session,
         skill_id: str,
-        case_id: str,
-        payload: StartSkillTestRunRequest,
-    ) -> SkillTestRunResponse:
+        scenario_id: str,
+        payload: StartSkillTestScenarioRunRequest,
+    ) -> SkillTestScenarioRunResponse:
         skill = self._get_skill(session, skill_id)
-        case = self._get_case(session, skill_id, case_id)
-        open_test_run = self._get_open_test_run(session, case.id)
-        if open_test_run:
+        scenario = self._get_scenario(session, skill_id, scenario_id)
+        open_run = self._get_open_scenario_run(session, scenario)
+        if open_run:
             raise SkillConflictError(
-                "当前测试 Case 已存在进行中测试，请关闭或继续已进行中的测试。",
-                details={
-                    "active_test_run_id": open_test_run.id,
-                    "run_id": open_test_run.run_id,
-                    "status": open_test_run.status,
-                },
+                "当前测试场景已有进行中运行。",
+                details={"scenario_run_id": open_run.id, "run_id": open_run.run_id, "status": open_run.status},
             )
-        data_objects = self.repository.list_data_objects(session, case_id)
-        available_data_ids = {item.id for item in data_objects}
-        selected_ids = (
-            payload.selected_data_object_ids
-            if "selected_data_object_ids" in payload.model_fields_set
-            else [item.id for item in data_objects]
-        )
-        invalid_ids = sorted(set(selected_ids) - available_data_ids)
-        if invalid_ids:
-            raise SkillValidationError("测试数据不属于当前 case。", details={"data_ids": invalid_ids})
-        initial_events = self._initial_events_for_run(case=case, payload=payload)
-        input_envelope = {"initial_terminal_events": initial_events} if initial_events else {}
-        terminal_context = self._normalize_terminal_context(payload.terminal_context_override or case.terminal_context)
-        if not isinstance(terminal_context.get("test_context"), dict):
-            terminal_context["test_context"] = {}
-        terminal_context["test_context"].update(
-            {
-                "skill_test_case_id": case.id,
-                "selected_data_object_ids": selected_ids,
-            }
-        )
-        test_run = SkillTestRun(
+
+        timeline = self._normalize_timeline(payload.timeline_override or scenario.timeline, duration_ms=scenario.duration_ms)
+        started_at = now_utc()
+        scenario_run = SkillTestScenarioRun(
             skill_definition_id=skill_id,
-            test_case_id=case.id,
+            scenario_id=scenario.id,
             status="running",
-            selected_data_object_ids=selected_ids,
-            input_envelope=input_envelope,
-            assertion_summary={"total": len(case.assertions or []), "passed": 0, "failed": 0, "pending": len(case.assertions or [])},
-            started_at=now_utc(),
+            driver_status="pending",
+            driver_cursor=0,
+            driver_events=[],
+            timeline=timeline,
+            result_summary=self._initial_result_summary(timeline),
+            time_origin=started_at,
+            started_at=started_at,
         )
-        session.add(test_run)
+        session.add(scenario_run)
         session.flush()
 
-        invocation = self.runtime_service.create_invocation(
-            session,
-            CreateInvocationRequest(
-                skill_key=skill.key,
-                version_selector=case.target_version_selector or "latest",
-                compile_artifact_id=case.target_compile_artifact_id,
-                input_envelope={},
-                gateway_type="terminal",
-                terminal_context=terminal_context,
-            ),
+        terminal_context = self._build_run_terminal_context(
+            skill_id=skill_id,
+            scenario=scenario,
+            scenario_run=scenario_run,
+            override=payload.terminal_context_override,
         )
-        test_run = self.repository.get_test_run(session, test_run.id) or test_run
-        test_run.invocation_id = invocation.id
-        test_run.run_id = invocation.run_id
+        if scenario.fork_seed:
+            invocation = self._start_forked_invocation(session, scenario=scenario, scenario_run=scenario_run, terminal_context=terminal_context)
+        else:
+            invocation = self.runtime_service.create_invocation(
+                session,
+                CreateInvocationRequest(
+                    skill_key=skill.key,
+                    version_selector=scenario.target_version_selector or "latest",
+                    compile_artifact_id=scenario.target_compile_artifact_id,
+                    input_envelope={},
+                    gateway_type="terminal",
+                    terminal_context=terminal_context,
+                ),
+            )
+        scenario_run.invocation_id = invocation.id
+        scenario_run.run_id = invocation.run_id
+        self._sync_scenario_run_from_runtime(session, scenario_run)
+        driver_job = self._ensure_driver_job_pending(session, scenario_run, available_at=started_at)
         session.commit()
-        if invocation.run_id and initial_events:
-            for index, event in enumerate(initial_events, start=1):
-                self.runtime_service.append_terminal_event(
-                    session,
-                    invocation.run_id,
-                    self._append_request_from_initial_event(
-                        event,
-                        external_event_id=f"skill-test-run:{test_run.id}:initial:{index}",
-                    ),
-                )
-        return self.evaluate_run(session, test_run.id)
+        if not self.settings.runtime_worker_enabled:
+            return self.process_driver_job(session, driver_job.id)
+        return self._build_run_response(scenario_run)
 
-    def list_runs(self, session: Session, skill_id: str, case_id: str) -> list[SkillTestRunResponse]:
-        self._get_case(session, skill_id, case_id)
-        runs = self.repository.list_runs(session, case_id)
+    def list_runs(self, session: Session, skill_id: str, scenario_id: str) -> list[SkillTestScenarioRunResponse]:
+        self._get_scenario(session, skill_id, scenario_id)
+        runs = self.repository.list_runs(session, scenario_id)
         for item in runs:
-            self._sync_test_run_status(session, item)
+            self._sync_scenario_run_from_runtime(session, item)
+        session.commit()
         return [self._build_run_response(item) for item in runs]
 
-    def get_run(self, session: Session, test_run_id: str) -> SkillTestRunResponse:
-        test_run = self.repository.get_test_run(session, test_run_id)
-        if not test_run:
-            raise SkillNotFoundError("未找到测试运行。", details={"test_run_id": test_run_id})
-        self._sync_test_run_status(session, test_run)
-        return self._build_run_response(test_run)
+    def get_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRunResponse:
+        scenario_run = self._get_scenario_run(session, scenario_run_id)
+        self._sync_scenario_run_from_runtime(session, scenario_run)
+        session.commit()
+        return self._build_run_response(scenario_run)
 
-    def send_data(
+    def process_driver_job(self, session: Session, job_id: str) -> SkillTestScenarioRunResponse:
+        job = self.job_repository.get_runtime_job(session, job_id)
+        if not job:
+            raise SkillNotFoundError("未找到测试时间轴 Driver Job。", details={"job_id": job_id})
+        scenario_run_id = job.payload.get("scenario_run_id")
+        if not scenario_run_id:
+            raise SkillValidationError("测试时间轴 Driver Job 缺少 scenario_run_id。", details={"job_id": job_id})
+        response = self.process_timeline_driver_for_run(session, str(scenario_run_id))
+        scenario_run = self._get_scenario_run(session, str(scenario_run_id))
+        if scenario_run.driver_status in {"completed", "failed", "cancelled"}:
+            job.status = "succeeded" if scenario_run.driver_status == "completed" else scenario_run.driver_status
+        elif job.status == "running":
+            job.status = "pending"
+        job.last_error = ""
+        session.commit()
+        return response
+
+    def process_timeline_driver_for_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRunResponse:
+        scenario_run = self._get_scenario_run(session, scenario_run_id)
+        if not scenario_run.run_id:
+            raise SkillValidationError("测试场景运行尚未关联 Runtime Run。", details={"scenario_run_id": scenario_run_id})
+        run = self.repository.get_run(session, scenario_run.run_id)
+        if not run:
+            raise SkillNotFoundError("未找到测试场景关联 Run。", details={"run_id": scenario_run.run_id})
+
+        self._sync_scenario_run_from_runtime(session, scenario_run, run=run)
+        input_events = self._timeline_input_events(scenario_run.timeline)
+        now = now_utc()
+        cursor = max(0, min(scenario_run.driver_cursor, len(input_events)))
+        if run.status in TERMINAL_RUNTIME_STATUSES and cursor < len(input_events):
+            scenario_run.status = "failed"
+            scenario_run.driver_status = "failed"
+            scenario_run.ended_at = scenario_run.ended_at or now
+            scenario_run.result_summary = {
+                **(scenario_run.result_summary or {}),
+                "status": "failed",
+                "reason": "runtime_ended_before_required_inputs_sent",
+                "remaining_input_event_ids": [item["id"] for item in input_events[cursor:]],
+            }
+            session.commit()
+            return self._build_run_response(scenario_run)
+
+        sent_any = False
+        while cursor < len(input_events):
+            event = input_events[cursor]
+            scheduled_at = self._scenario_time(scenario_run, int(event.get("at_ms") or 0))
+            if scheduled_at > now:
+                scenario_run.driver_status = "waiting_time"
+                scenario_run.driver_cursor = cursor
+                self._ensure_driver_job_pending(session, scenario_run, available_at=scheduled_at)
+                session.commit()
+                return self._build_run_response(scenario_run)
+            append_response = self._append_timeline_input_event(session, scenario_run, event, scheduled_at=scheduled_at)
+            actual_sent_at = now_utc()
+            driver_events = list(scenario_run.driver_events or [])
+            driver_events.append(
+                {
+                    "status": "sent",
+                    "event_id": event["id"],
+                    "lane_id": event.get("lane_id"),
+                    "at_ms": int(event.get("at_ms") or 0),
+                    "scheduled_at": scheduled_at.isoformat(),
+                    "actual_sent_at": actual_sent_at.isoformat(),
+                    "drift_ms": max(0, int((actual_sent_at - scheduled_at).total_seconds() * 1000)),
+                    "terminal_event_id": append_response.event_id,
+                    "terminal_seq": append_response.seq_no,
+                }
+            )
+            scenario_run.driver_events = driver_events
+            cursor += 1
+            scenario_run.driver_cursor = cursor
+            sent_any = True
+            run = self.repository.get_run(session, scenario_run.run_id) or run
+            self._sync_scenario_run_from_runtime(session, scenario_run, run=run)
+            now = now_utc()
+            if run.status in TERMINAL_RUNTIME_STATUSES and cursor < len(input_events):
+                scenario_run.status = "failed"
+                scenario_run.driver_status = "failed"
+                scenario_run.ended_at = scenario_run.ended_at or now
+                scenario_run.result_summary = {
+                    **(scenario_run.result_summary or {}),
+                    "status": "failed",
+                    "reason": "runtime_ended_before_required_inputs_sent",
+                    "remaining_input_event_ids": [item["id"] for item in input_events[cursor:]],
+                }
+                session.commit()
+                return self._build_run_response(scenario_run)
+
+        scenario_run.driver_status = "completed"
+        scenario_run.driver_cursor = cursor
+        if sent_any:
+            self._sync_scenario_run_from_runtime(session, scenario_run)
+        session.commit()
+        return self.evaluate_run(session, scenario_run.id)
+
+    def get_review(self, session: Session, scenario_run_id: str) -> SkillTestScenarioReviewResponse:
+        scenario_run = self._get_scenario_run(session, scenario_run_id)
+        scenario = self._get_scenario(session, scenario_run.skill_definition_id, scenario_run.scenario_id)
+        self._sync_scenario_run_from_runtime(session, scenario_run)
+        replay = self.runtime_service.build_replay(session, scenario_run.run_id) if scenario_run.run_id else None
+        evaluations = self.repository.list_expectation_evaluations(session, scenario_run.id)
+        return SkillTestScenarioReviewResponse(
+            scenario=self._build_scenario_response(session, scenario),
+            scenario_run=self._build_run_response(scenario_run),
+            replay=replay.model_dump(mode="json") if replay else None,
+            scenario_timeline=scenario_run.timeline or scenario.timeline,
+            replay_timeline=[item.model_dump(mode="json") for item in replay.timeline] if replay else [],
+            cursor_anchors=self._build_cursor_anchors(scenario_run, replay),
+            driver_events=list(scenario_run.driver_events or []),
+            expectation_evaluations=[self._build_evaluation_response(item) for item in evaluations],
+        )
+
+    def evaluate_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRunResponse:
+        scenario_run = self._get_scenario_run(session, scenario_run_id)
+        if not scenario_run.run_id:
+            raise SkillValidationError("测试场景运行尚未关联 Runtime Run。", details={"scenario_run_id": scenario_run_id})
+        run = self.repository.get_run(session, scenario_run.run_id)
+        if not run:
+            raise SkillNotFoundError("未找到测试场景关联 Run。", details={"run_id": scenario_run.run_id})
+        scenario = self._get_scenario(session, scenario_run.skill_definition_id, scenario_run.scenario_id)
+        self._sync_scenario_run_from_runtime(session, scenario_run, run=run)
+        expectations = self._timeline_expectation_events(scenario_run.timeline)
+        self.repository.delete_expectation_evaluations(session, scenario_run.id)
+        replay = self.runtime_service.build_replay(session, run.id)
+        output_events = [item for item in replay.terminal_events if item.direction == "output"]
+        now = now_utc()
+        summary = {
+            "total": len(expectations),
+            "passed": 0,
+            "failed": 0,
+            "inconclusive": 0,
+            "pending": 0,
+            "status": scenario_run.status,
+        }
+        for expectation in expectations:
+            cutoff = self._scenario_time(scenario_run, int(expectation.get("at_ms") or 0))
+            if run.status not in TERMINAL_RUNTIME_STATUSES and cutoff > now:
+                summary["pending"] += 1
+                continue
+            scoped_outputs = [item for item in output_events if self._aware_datetime(item.occurred_at) <= cutoff]
+            evaluation = self._evaluate_expectation(
+                session,
+                scenario=scenario,
+                scenario_run=scenario_run,
+                expectation=expectation,
+                scoped_outputs=scoped_outputs,
+                final_output=run.final_output,
+                run_status=run.status,
+                cutoff=cutoff,
+            )
+            summary[evaluation.status] = int(summary.get(evaluation.status, 0)) + 1
+
+        if summary["pending"] > 0 or run.status not in TERMINAL_RUNTIME_STATUSES:
+            if scenario_run.status not in {"failed", "cancelled"}:
+                scenario_run.status = "running"
+        elif summary["failed"] > 0 or summary["inconclusive"] > 0 or run.status != "succeeded":
+            scenario_run.status = "failed"
+            scenario_run.ended_at = scenario_run.ended_at or now_utc()
+        else:
+            scenario_run.status = "passed"
+            scenario_run.ended_at = scenario_run.ended_at or now_utc()
+        summary["status"] = scenario_run.status
+        scenario_run.result_summary = summary
+        session.commit()
+        return self._build_run_response(scenario_run)
+
+    def fork_scenario(
         self,
         session: Session,
-        test_run_id: str,
-        payload: SendSkillTestDataRequest,
-    ) -> SendSkillTestDataResponse:
-        test_run = self.repository.get_test_run(session, test_run_id)
-        if not test_run or not test_run.run_id:
-            raise SkillNotFoundError("未找到可注入数据的测试运行。", details={"test_run_id": test_run_id})
-        data_object = self.repository.get_data_object(session, payload.test_data_object_id)
-        if not data_object or data_object.test_case_id != test_run.test_case_id:
-            raise SkillValidationError("测试数据不属于当前测试运行。", details={"data_id": payload.test_data_object_id})
-        selected_ids = list(test_run.selected_data_object_ids or [])
-        if payload.test_data_object_id not in set(selected_ids):
-            selected_ids.append(payload.test_data_object_id)
-            test_run.selected_data_object_ids = selected_ids
-
-        event_payload = {
-            "filename": data_object.filename,
-            "name": data_object.name,
-            "role": data_object.role,
-            "description": data_object.description,
-            **(payload.payload_inline or {}),
+        scenario_run_id: str,
+        payload: ForkSkillTestScenarioRequest,
+    ) -> SkillTestScenarioResponse:
+        source_run = self._get_scenario_run(session, scenario_run_id)
+        source_scenario = self._get_scenario(session, source_run.skill_definition_id, source_run.scenario_id)
+        if not source_run.run_id:
+            raise SkillValidationError("测试场景运行尚未关联 Runtime Run。", details={"scenario_run_id": scenario_run_id})
+        cursor = payload.cursor
+        timeline = self._fork_timeline(source_run.timeline, time_ms=cursor.time_ms)
+        fork_seed = {
+            "source_scenario_id": source_scenario.id,
+            "source_scenario_run_id": source_run.id,
+            "source_run_id": source_run.run_id,
+            "snapshot_seq": cursor.snapshot_seq,
+            "terminal_seq": cursor.terminal_seq,
+            "time_ms": cursor.time_ms,
         }
-        appended = self.runtime_service.append_terminal_event(
+        scenario = SkillTestScenario(
+            skill_definition_id=source_run.skill_definition_id,
+            target_compile_artifact_id=source_scenario.target_compile_artifact_id,
+            name=payload.name or f"{source_scenario.name} fork",
+            description=payload.description if payload.description is not None else source_scenario.description,
+            target_version_selector=source_scenario.target_version_selector,
+            duration_ms=timeline["duration_ms"],
+            timeline=timeline,
+            judge_policy=source_scenario.judge_policy,
+            fork_seed=fork_seed,
+            status="active",
+        )
+        session.add(scenario)
+        session.commit()
+        return self._build_scenario_response(session, scenario)
+
+    def fork_debug(
+        self,
+        session: Session,
+        scenario_run_id: str,
+        payload: ForkSkillDebugRequest,
+    ) -> InvocationResponse:
+        source_run = self._get_scenario_run(session, scenario_run_id)
+        if not source_run.run_id:
+            raise SkillValidationError("测试场景运行尚未关联 Runtime Run。", details={"scenario_run_id": scenario_run_id})
+        terminal_context = {
+            "terminal_kind": "web",
+            "operator_mode": "debug",
+            "debug_context": {
+                "kind": "skill_debug",
+                "skill_id": source_run.skill_definition_id,
+                "source": "skill_test_scenario_run",
+                "scenario_run_id": source_run.id,
+                "cursor": payload.cursor.model_dump(),
+            },
+        }
+        return self.runtime_service.fork_invocation_from_snapshot(
             session,
-            test_run.run_id,
+            source_run_id=source_run.run_id,
+            snapshot_seq=payload.cursor.snapshot_seq,
+            terminal_seq=payload.cursor.terminal_seq,
+            terminal_context=terminal_context,
+            input_envelope={},
+        )
+
+    def _start_forked_invocation(
+        self,
+        session: Session,
+        *,
+        scenario: SkillTestScenario,
+        scenario_run: SkillTestScenarioRun,
+        terminal_context: dict[str, Any],
+    ) -> InvocationResponse:
+        seed = scenario.fork_seed or {}
+        source_run_id = seed.get("source_run_id")
+        if not source_run_id:
+            raise SkillValidationError("Fork 场景缺少 source_run_id。", details={"scenario_id": scenario.id})
+        return self.runtime_service.fork_invocation_from_snapshot(
+            session,
+            source_run_id=str(source_run_id),
+            snapshot_seq=int(seed.get("snapshot_seq") or 0),
+            terminal_seq=int(seed.get("terminal_seq") or 0),
+            terminal_context=terminal_context,
+            input_envelope={
+                "skill_test_scenario_id": scenario.id,
+                "skill_test_scenario_run_id": scenario_run.id,
+                "fork_seed": seed,
+            },
+        )
+
+    def _append_timeline_input_event(
+        self,
+        session: Session,
+        scenario_run: SkillTestScenarioRun,
+        event: dict[str, Any],
+        *,
+        scheduled_at: datetime,
+    ):
+        asset_id = event.get("asset_id")
+        artifact_object_id = event.get("artifact_object_id")
+        payload_inline = event.get("payload_inline")
+        if asset_id:
+            asset = self.repository.get_asset(session, str(asset_id))
+            if not asset or asset.scenario_id != scenario_run.scenario_id:
+                raise SkillValidationError("时间轴事件引用的测试资源不存在。", details={"asset_id": asset_id})
+            artifact_object_id = asset.artifact_object_id
+            payload_inline = self._payload_for_asset_event(event, asset)
+        return self.runtime_service.append_terminal_event(
+            session,
+            scenario_run.run_id or "",
             AppendTerminalEventRequest(
                 direction="input",
-                event_kind=payload.event_kind or "terminal.file.input.v1",
-                mime_type=data_object.mime_type,
-                payload_inline=event_payload,
-                artifact_object_id=data_object.artifact_object_id,
-                external_event_id=f"skill-test-run:{test_run.id}:data:{data_object.id}:{uuid.uuid4()}",
+                event_kind=str(event.get("event_kind") or self._default_event_kind_for_lane(str(event.get("lane_id") or ""))),
+                mime_type=str(event.get("mime_type") or self._default_mime_for_lane(str(event.get("lane_id") or ""))),
+                payload_inline=payload_inline,
+                artifact_object_id=artifact_object_id,
+                source={"kind": "skill_test_timeline_driver"},
+                external_event_id=f"skill-test-scenario-run:{scenario_run.id}:timeline:{event['id']}",
+                occurred_at=scheduled_at,
             ),
         )
-        return SendSkillTestDataResponse(
-            accepted=True,
-            terminal_event=appended.event.model_dump(mode="json"),
-        )
 
-    def evaluate_run(self, session: Session, test_run_id: str) -> SkillTestRunResponse:
-        test_run = self.repository.get_test_run(session, test_run_id)
-        if not test_run:
-            raise SkillNotFoundError("未找到测试运行。", details={"test_run_id": test_run_id})
-        case = self.repository.get_case(session, test_run.test_case_id)
-        if not case:
-            raise SkillNotFoundError("未找到测试 case。", details={"case_id": test_run.test_case_id})
-        if not test_run.run_id:
-            test_run.assertion_results = []
-            test_run.assertion_summary = {"total": len(case.assertions or []), "passed": 0, "failed": 0, "pending": len(case.assertions or [])}
-            test_run.status = "running"
-            session.commit()
-            return self._build_run_response(test_run)
-
-        replay = self.runtime_service.build_replay(session, test_run.run_id)
-        results = [self._evaluate_assertion(assertion, index=index, replay=replay) for index, assertion in enumerate(case.assertions or [], start=1)]
-        summary = {
-            "total": len(results),
-            "passed": sum(1 for item in results if item["status"] == "passed"),
-            "failed": sum(1 for item in results if item["status"] == "failed"),
-            "pending": sum(1 for item in results if item["status"] == "pending"),
+    def _evaluate_expectation(
+        self,
+        session: Session,
+        *,
+        scenario: SkillTestScenario,
+        scenario_run: SkillTestScenarioRun,
+        expectation: dict[str, Any],
+        scoped_outputs: list[Any],
+        final_output: str,
+        run_status: str,
+        cutoff: datetime,
+    ) -> SkillTestExpectationEvaluation:
+        policy = scenario.judge_policy or {}
+        route_key = str(policy.get("route_key") or "skill-test-judge")
+        prompt_payload = {
+            "expectation": expectation.get("expectation") or "",
+            "cutoff_occurred_at": cutoff.isoformat(),
+            "terminal_outputs_before_cutoff": [item.model_dump(mode="json") for item in scoped_outputs],
+            "final_output": final_output,
+            "run_status": run_status,
         }
-        if summary["failed"]:
-            test_run.status = "failed"
-            test_run.ended_at = test_run.ended_at or now_utc()
-        elif summary["pending"] or replay.run.status in {"running", "queued", "waiting_input"}:
-            test_run.status = "running"
+        system_prompt = (
+            "你是 PSOP Skill 黑盒时序测试 Judge。"
+            "只根据给定时间点以前的真实 terminal output 判断语义期望是否满足。"
+            "必须只输出 JSON，字段为 status、confidence、reason、evidence_refs、missing_evidence。"
+            "status 只能是 passed、failed、inconclusive。"
+        )
+        user_prompt = json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True)
+        prompt_hash = hashlib.sha256(f"{system_prompt}\n{user_prompt}".encode("utf-8")).hexdigest()
+        status = "inconclusive"
+        confidence = 0.0
+        reason = "Judge 未能给出有效结论。"
+        evidence_refs: list[dict[str, Any]] = []
+        raw_response: dict[str, Any] = {}
+        provider = ""
+        model = ""
+        try:
+            completion = self.inference_gateway.complete(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                route_key=route_key,
+            )
+            provider = completion.provider
+            model = completion.model
+            parsed = json.loads(completion.content)
+            raw_response = {"content": completion.content, "parsed": parsed, "usage": completion.usage, "raw": completion.raw_response}
+            parsed_status = str(parsed.get("status") or "").lower()
+            status = parsed_status if parsed_status in {"passed", "failed", "inconclusive"} else "inconclusive"
+            confidence = self._coerce_confidence(parsed.get("confidence"))
+            reason = str(parsed.get("reason") or reason)
+            raw_refs = parsed.get("evidence_refs")
+            evidence_refs = raw_refs if isinstance(raw_refs, list) else []
+        except Exception as exc:
+            raw_response = {"error": str(exc), "error_type": exc.__class__.__name__}
+            reason = f"Judge 调用失败或响应非法：{exc.__class__.__name__}"
+            status = "inconclusive"
+
+        evaluation = SkillTestExpectationEvaluation(
+            scenario_run_id=scenario_run.id,
+            expectation_id=str(expectation["id"]),
+            status=status,
+            confidence=confidence,
+            reason=reason,
+            evidence_refs=evidence_refs,
+            judge_provider=provider,
+            judge_model=model,
+            prompt_hash=prompt_hash,
+            raw_response=raw_response,
+        )
+        session.add(evaluation)
+        return evaluation
+
+    def _ensure_driver_job_pending(
+        self,
+        session: Session,
+        scenario_run: SkillTestScenarioRun,
+        *,
+        available_at: datetime | None = None,
+    ) -> RuntimeJob:
+        dedupe_key = f"job:skill-test-timeline-driver:{scenario_run.id}"
+        job = self.job_repository.get_runtime_job_by_dedupe_key(session, dedupe_key)
+        if job:
+            if job.status in {"succeeded", "failed", "cancelled"}:
+                job.attempt_no = 0
+            job.job_type = TIMELINE_DRIVER_JOB_TYPE
+            job.status = "pending"
+            job.payload = {"scenario_run_id": scenario_run.id}
+            job.run_id = scenario_run.run_id
+            job.available_at = available_at or now_utc()
+            job.last_error = ""
+            return job
+        job = RuntimeJob(
+            job_type=TIMELINE_DRIVER_JOB_TYPE,
+            status="pending",
+            payload={"scenario_run_id": scenario_run.id},
+            run_id=scenario_run.run_id,
+            dedupe_key=dedupe_key,
+            available_at=available_at or now_utc(),
+            max_attempts=self.settings.runtime_job_max_attempts,
+        )
+        session.add(job)
+        return job
+
+    def _sync_scenario_run_from_runtime(
+        self,
+        session: Session,
+        scenario_run: SkillTestScenarioRun,
+        *,
+        run: Run | None = None,
+    ) -> None:
+        if scenario_run.status in {"passed", "failed", "cancelled"}:
+            return
+        runtime_run = run or self.repository.get_run(session, scenario_run.run_id)
+        if not runtime_run:
+            return
+        if runtime_run.status == "cancelled":
+            scenario_run.status = "cancelled"
+            scenario_run.driver_status = "cancelled"
+            scenario_run.ended_at = scenario_run.ended_at or runtime_run.ended_at or now_utc()
+        elif runtime_run.status == "failed":
+            scenario_run.status = "failed"
+            scenario_run.ended_at = scenario_run.ended_at or runtime_run.ended_at or now_utc()
+            scenario_run.result_summary = {
+                **(scenario_run.result_summary or {}),
+                "status": "failed",
+                "reason": runtime_run.exit_reason or "runtime_failed",
+            }
+        elif runtime_run.status == "succeeded" and scenario_run.driver_status == "completed":
+            scenario_run.status = "running"
+            scenario_run.ended_at = scenario_run.ended_at or runtime_run.ended_at
         else:
-            test_run.status = "passed"
-            test_run.ended_at = test_run.ended_at or now_utc()
-        test_run.assertion_results = results
-        test_run.assertion_summary = summary
-        session.commit()
-        return self._build_run_response(test_run)
+            scenario_run.status = runtime_run.status if runtime_run.status in OPEN_SCENARIO_RUN_STATUSES else "running"
 
-    def _evaluate_assertion(self, assertion: dict[str, Any], *, index: int, replay) -> dict[str, Any]:
-        assertion_type = str(assertion.get("type") or "")
-        label = assertion.get("label") or assertion_type or f"assertion-{index}"
-        result = {
-            "id": str(assertion.get("id") or f"assertion-{index}"),
-            "type": assertion_type,
-            "label": label,
-            "status": "failed",
-            "expected": assertion,
-            "actual": None,
-            "message": "",
-        }
-        run_status = replay.run.status
-        run_is_open = run_status in {"queued", "running", "waiting_input"}
+    def _get_open_scenario_run(self, session: Session, scenario: SkillTestScenario) -> SkillTestScenarioRun | None:
+        for item in self.repository.list_open_runs(session, scenario.id):
+            self._sync_scenario_run_from_runtime(session, item)
+            if item.status in OPEN_SCENARIO_RUN_STATUSES:
+                return item
+        return None
 
-        if assertion_type == "run.status_equals":
-            expected = str(assertion.get("status") or assertion.get("expected") or "succeeded")
-            result["actual"] = run_status
-            result["status"] = "passed" if run_status == expected else ("pending" if run_is_open else "failed")
-            result["message"] = f"run.status is {run_status}, expected {expected}"
-            return result
-
-        if assertion_type in {"final_output_contains", "final_output_not_contains"}:
-            text = str(assertion.get("text") or assertion.get("contains") or "")
-            final_output = replay.run.final_output or ""
-            contains = text in final_output
-            expected_contains = assertion_type == "final_output_contains"
-            result["actual"] = final_output
-            if contains == expected_contains:
-                result["status"] = "passed"
-            elif run_is_open and not final_output:
-                result["status"] = "pending"
-            else:
-                result["status"] = "failed"
-            result["message"] = f"final_output {'contains' if contains else 'does not contain'} {text!r}"
-            return result
-
-        if assertion_type == "trace_event_exists":
-            event_type = str(assertion.get("event_type") or assertion.get("expected") or "")
-            exists = any(event.event_type == event_type for event in replay.trace_events)
-            result["actual"] = [event.event_type for event in replay.trace_events]
-            result["status"] = "passed" if exists else ("pending" if run_is_open else "failed")
-            result["message"] = f"trace event {event_type!r} {'exists' if exists else 'not found'}"
-            return result
-
-        if assertion_type == "terminal_event_exists":
-            event_kind = str(assertion.get("event_kind") or "")
-            direction = str(assertion.get("direction") or "")
-            contains = str(assertion.get("contains") or "")
-            events = replay.terminal_events
-            matched = [
-                event
-                for event in events
-                if (not event_kind or event.event_kind == event_kind)
-                and (not direction or event.direction == direction)
-                and (not contains or contains in str(event.payload_inline or ""))
-            ]
-            result["actual"] = [
-                {"direction": event.direction, "event_kind": event.event_kind, "payload_inline": event.payload_inline}
-                for event in events
-            ]
-            result["status"] = "passed" if matched else ("pending" if run_is_open else "failed")
-            result["message"] = "terminal event exists" if matched else "terminal event not found"
-            return result
-
-        result["status"] = "failed"
-        result["message"] = f"unsupported assertion type: {assertion_type}"
-        return result
-
-    def _sync_test_run_status(self, session: Session, test_run: SkillTestRun) -> None:
-        if not test_run.run_id:
-            return
-        run = self.runtime_service.get_run(session, test_run.run_id)
-        if run.status in {"queued", "running", "waiting_input"}:
-            if test_run.status != "running":
-                test_run.status = "running"
-                session.commit()
-            return
-        if test_run.status == "running":
-            self.evaluate_run(session, test_run.id)
-
-    def _get_open_test_run(self, session: Session, case_id: str) -> SkillTestRun | None:
-        for test_run in self.repository.list_open_runs(session, case_id):
-            self._sync_test_run_status(session, test_run)
-        return next(
-            (
-                test_run
-                for test_run in self.repository.list_open_runs(session, case_id)
-                if test_run.status in {"pending", "queued", "running", "waiting_input"}
-            ),
-            None,
-        )
-
-    def _get_skill(self, session: Session, skill_id: str):
+    def _get_skill(self, session: Session, skill_id: str) -> SkillDefinition:
         skill = self.repository.get_skill(session, skill_id)
         if not skill or skill.status == "archived":
             raise SkillNotFoundError("未找到 Skill。", details={"skill_id": skill_id})
         return skill
 
-    def _get_case(self, session: Session, skill_id: str, case_id: str) -> SkillTestCase:
-        case = self.repository.get_case(session, case_id)
-        if not case or case.skill_definition_id != skill_id or case.status == "archived":
-            raise SkillNotFoundError("未找到测试 case。", details={"skill_id": skill_id, "case_id": case_id})
-        return case
+    def _get_scenario(self, session: Session, skill_id: str, scenario_id: str) -> SkillTestScenario:
+        scenario = self.repository.get_scenario(session, scenario_id)
+        if not scenario or scenario.skill_definition_id != skill_id or scenario.status == "archived":
+            raise SkillNotFoundError("未找到测试场景。", details={"skill_id": skill_id, "scenario_id": scenario_id})
+        return scenario
+
+    def _get_scenario_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRun:
+        scenario_run = self.repository.get_scenario_run(session, scenario_run_id)
+        if not scenario_run:
+            raise SkillNotFoundError("未找到测试场景运行。", details={"scenario_run_id": scenario_run_id})
+        return scenario_run
 
     def _validate_target_artifact(self, session: Session, skill_id: str, artifact_id: str | None) -> None:
         if not artifact_id:
             return
         artifact = self.repository.get_artifact(session, artifact_id)
-        if not artifact:
-            raise SkillValidationError("指定编译产物不存在。", details={"compile_artifact_id": artifact_id})
-        if artifact.status != "ready":
-            raise SkillValidationError("指定编译产物尚不可运行。", details={"compile_artifact_id": artifact_id})
-        skill_version = self.repository.get_skill_version(session, artifact.skill_version_id)
-        if not skill_version or skill_version.skill_definition_id != skill_id:
+        if not artifact or artifact.status != "ready":
+            raise SkillValidationError("指定编译产物不存在或尚不可运行。", details={"compile_artifact_id": artifact_id})
+        version = self.repository.get_skill_version(session, artifact.skill_version_id)
+        if not version or version.skill_definition_id != skill_id:
             raise SkillValidationError("指定编译产物不属于当前 Skill。", details={"compile_artifact_id": artifact_id})
 
+    def _normalize_timeline(self, value: dict[str, Any] | None, *, duration_ms: int) -> dict[str, Any]:
+        raw = value if isinstance(value, dict) else {}
+        normalized_duration = int(raw.get("duration_ms") or duration_ms or DEFAULT_TIMELINE_DURATION_MS)
+        if normalized_duration < 1:
+            raise SkillValidationError("测试场景时长必须大于 0。", details={"duration_ms": normalized_duration})
+        lanes = raw.get("lanes")
+        if not isinstance(lanes, list) or not lanes:
+            lanes = DEFAULT_TIMELINE_LANES
+        lane_ids = {str(item.get("id")) for item in lanes if isinstance(item, dict) and item.get("id")}
+        events = raw.get("events")
+        normalized_events: list[dict[str, Any]] = []
+        if isinstance(events, list):
+            for index, event in enumerate(events):
+                if not isinstance(event, dict):
+                    continue
+                normalized_events.append(self._normalize_timeline_event(event, index=index, lane_ids=lane_ids))
+        normalized_events.sort(key=lambda item: (int(item.get("at_ms") or 0), str(item.get("id") or "")))
+        return {
+            "schema_version": str(raw.get("schema_version") or TIMELINE_SCHEMA_VERSION),
+            "duration_ms": normalized_duration,
+            "lanes": lanes,
+            "events": normalized_events,
+            "fork_seed": raw.get("fork_seed") or {},
+        }
+
+    def _normalize_timeline_event(self, event: dict[str, Any], *, index: int, lane_ids: set[str]) -> dict[str, Any]:
+        lane_id = str(event.get("lane_id") or "")
+        if not lane_id:
+            raise SkillValidationError("时间轴事件缺少 lane_id。", details={"index": index})
+        if lane_ids and lane_id not in lane_ids:
+            lane_ids.add(lane_id)
+        at_ms = int(event.get("at_ms") or 0)
+        if at_ms < 0:
+            raise SkillValidationError("时间轴事件 at_ms 不能小于 0。", details={"index": index, "at_ms": at_ms})
+        event_id = str(event.get("id") or f"event_{index + 1}")
+        normalized = dict(event)
+        normalized["id"] = event_id
+        normalized["lane_id"] = lane_id
+        normalized["at_ms"] = at_ms
+        normalized["required"] = bool(event.get("required", True))
+        if self._is_expectation_event(normalized):
+            expectation = str(event.get("expectation") or "").strip()
+            if not expectation:
+                raise SkillValidationError("语义输出事件缺少 expectation。", details={"event_id": event_id})
+            normalized["lane_id"] = "expected.semantic"
+            normalized["expectation"] = expectation
+        else:
+            normalized["event_kind"] = str(event.get("event_kind") or self._default_event_kind_for_lane(lane_id))
+            normalized["mime_type"] = str(event.get("mime_type") or self._default_mime_for_lane(lane_id))
+        return normalized
+
     @staticmethod
-    def _normalize_case_name(name: str) -> str:
-        normalized = name.strip()
+    def _normalize_judge_policy(value: dict[str, Any] | None) -> dict[str, Any]:
+        policy = dict(value or {})
+        policy.setdefault("route_key", "skill-test-judge")
+        policy.setdefault("confidence_threshold", 0.7)
+        policy.setdefault("inconclusive_as", "failed")
+        return policy
+
+    @staticmethod
+    def _normalize_name(value: str, *, field: str) -> str:
+        normalized = value.strip()
         if not normalized:
-            raise SkillValidationError("测试 case 名称不能为空。")
+            raise SkillValidationError(f"{field} 不能为空。")
         return normalized
 
     def _validate_upload(self, *, filename: str, content: bytes, mime_type: str) -> None:
-        if not filename:
-            raise SkillValidationError("上传文件名不能为空。")
         if not content:
             raise SkillValidationError("上传文件不能为空。")
         if len(content) > self.settings.test_data_max_upload_bytes:
-            raise SkillValidationError("上传文件过大。", details={"max_bytes": self.settings.test_data_max_upload_bytes})
-        if not self._is_allowed_mime_type(mime_type):
-            raise SkillValidationError("不支持的测试数据 MIME 类型。", details={"mime_type": mime_type})
-
-    @staticmethod
-    def _is_allowed_mime_type(mime_type: str) -> bool:
-        if mime_type.startswith(("text/", "image/", "audio/", "video/")):
-            return True
-        return mime_type in {"application/json", "application/pdf", "application/octet-stream"}
+            raise SkillValidationError(
+                "上传文件超过大小限制。",
+                details={"max_bytes": self.settings.test_data_max_upload_bytes, "size_bytes": len(content)},
+            )
+        if not filename:
+            raise SkillValidationError("上传文件名不能为空。")
+        if not mime_type:
+            raise SkillValidationError("上传文件类型不能为空。")
 
     @staticmethod
     def _safe_filename(filename: str) -> str:
@@ -512,181 +845,255 @@ class SkillTestService:
         return cleaned or "upload.bin"
 
     @staticmethod
-    def _normalize_terminal_context(value: dict[str, Any] | None) -> dict[str, Any]:
-        context = dict(value or {})
-        context.setdefault("terminal_kind", "web")
-        context.setdefault("operator_mode", "manual")
-        context.setdefault(
-            "supported_inputs",
-            ["terminal.text.input.v1", "terminal.file.input.v1", "terminal.image.input.v1"],
-        )
-        context.setdefault("supported_outputs", ["terminal.text.output.v1", "terminal.markdown.output.v1"])
-        return context
+    def _is_expectation_event(event: dict[str, Any]) -> bool:
+        return event.get("lane_id") == "expected.semantic" or "expectation" in event
 
-    def _build_case_input_envelope(
+    def _timeline_input_events(self, timeline: dict[str, Any]) -> list[dict[str, Any]]:
+        return [item for item in timeline.get("events", []) if isinstance(item, dict) and not self._is_expectation_event(item)]
+
+    def _timeline_expectation_events(self, timeline: dict[str, Any]) -> list[dict[str, Any]]:
+        return [item for item in timeline.get("events", []) if isinstance(item, dict) and self._is_expectation_event(item)]
+
+    def _scenario_time(self, scenario_run: SkillTestScenarioRun, at_ms: int) -> datetime:
+        origin = self._aware_datetime(scenario_run.time_origin or scenario_run.started_at or scenario_run.created_at)
+        return self._aware_datetime(origin) + timedelta(milliseconds=max(0, at_ms))
+
+    @staticmethod
+    def _aware_datetime(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+    def _payload_for_asset_event(self, event: dict[str, Any], asset: SkillTestAsset) -> dict[str, Any]:
+        raw_payload = event.get("payload_inline")
+        payload = raw_payload.copy() if isinstance(raw_payload, dict) else {}
+        if isinstance(raw_payload, str) and raw_payload.strip():
+            payload["caption"] = raw_payload.strip()
+        result = {
+            "asset_id": asset.id,
+            "artifact_object_id": asset.artifact_object_id,
+            "filename": asset.filename,
+            "name": asset.name,
+            "description": asset.description,
+            "mime_type": asset.mime_type,
+            "size_bytes": asset.size_bytes,
+            "checksum": asset.checksum,
+        }
+        result.update(payload)
+        result.update(
+            {
+                "asset_id": asset.id,
+                "artifact_object_id": asset.artifact_object_id,
+                "filename": asset.filename,
+                "name": asset.name,
+                "mime_type": asset.mime_type,
+                "size_bytes": asset.size_bytes,
+                "checksum": asset.checksum,
+            }
+        )
+        return result
+
+    @staticmethod
+    def _default_event_kind_for_lane(lane_id: str) -> str:
+        if "image" in lane_id:
+            return "terminal.image.input.v1"
+        if "audio" in lane_id:
+            return "terminal.audio.input.v1"
+        if "video" in lane_id:
+            return "terminal.video.input.v1"
+        return "terminal.text.input.v1"
+
+    @staticmethod
+    def _default_mime_for_lane(lane_id: str) -> str:
+        if "image" in lane_id:
+            return "image/*"
+        if "audio" in lane_id:
+            return "audio/*"
+        if "video" in lane_id:
+            return "video/*"
+        return "text/plain"
+
+    @staticmethod
+    def _coerce_confidence(value: Any) -> float:
+        try:
+            confidence = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, min(1.0, confidence))
+
+    def _build_run_terminal_context(
         self,
         *,
-        explicit_initial_events: list[dict[str, Any]] | None,
-        legacy_input_envelope: dict[str, Any] | None,
+        skill_id: str,
+        scenario: SkillTestScenario,
+        scenario_run: SkillTestScenarioRun,
+        override: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        if explicit_initial_events is not None and len(explicit_initial_events) > 0:
-            return {"initial_terminal_events": self._normalize_initial_terminal_events(explicit_initial_events)}
-
-        legacy_events = self._initial_events_from_input_envelope(legacy_input_envelope or {})
-        return {"initial_terminal_events": legacy_events} if legacy_events else {}
-
-    def _initial_events_for_run(self, *, case: SkillTestCase, payload: StartSkillTestRunRequest) -> list[dict[str, Any]]:
-        if payload.initial_terminal_events:
-            return self._normalize_initial_terminal_events(payload.initial_terminal_events)
-        if payload.input_override:
-            return self._initial_events_from_input_envelope(payload.input_override)
-        if payload.send_case_initial_events:
-            return self._extract_case_initial_events(case)
-        return []
-
-    def _extract_case_initial_events(self, case: SkillTestCase) -> list[dict[str, Any]]:
-        return self._initial_events_from_input_envelope(case.input_envelope or {})
-
-    def _initial_events_from_input_envelope(self, input_envelope: dict[str, Any]) -> list[dict[str, Any]]:
-        initial_events = input_envelope.get("initial_terminal_events")
-        if isinstance(initial_events, list):
-            return self._normalize_initial_terminal_events(initial_events)
-        if "user_input" in input_envelope:
-            return self._text_initial_event(input_envelope["user_input"])
-        if "text" in input_envelope:
-            return self._text_initial_event(input_envelope["text"])
-        return []
-
-    def _text_initial_event(self, value: Any) -> list[dict[str, Any]]:
-        if value is None:
-            return []
-        text = str(value).strip()
-        if not text:
-            return []
-        return [
-            {
-                "direction": "input",
-                "event_kind": "terminal.text.input.v1",
-                "mime_type": "text/plain",
-                "payload_inline": text,
-                "source": {"kind": "web"},
-            }
-        ]
-
-    def _normalize_initial_terminal_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        normalized: list[dict[str, Any]] = []
-        for index, event in enumerate(events, start=1):
-            item = dict(event or {})
-            direction = str(item.get("direction") or "input").strip().lower()
-            if direction != "input":
-                raise SkillValidationError(
-                    "测试 case 的首轮终端事件只能是 input。",
-                    details={"index": index, "direction": direction},
-                )
-            event_kind = str(item.get("event_kind") or "terminal.text.input.v1").strip()
-            mime_type = str(item.get("mime_type") or "text/plain").strip()
-            if not event_kind or not mime_type:
-                raise SkillValidationError("首轮终端事件必须包含 event_kind 与 mime_type。", details={"index": index})
-            payload_inline = item.get("payload_inline")
-            artifact_object_id = item.get("artifact_object_id")
-            if payload_inline in (None, "") and not artifact_object_id:
-                continue
-            normalized.append(
+        base = {
+            "terminal_kind": "web",
+            "operator_mode": "test",
+            "test_context": {
+                "kind": "skill_blackbox_timeline_test",
+                "skill_id": skill_id,
+                "skill_test_scenario_id": scenario.id,
+                "skill_test_scenario_run_id": scenario_run.id,
+            },
+        }
+        if override:
+            base.update(override)
+            base.setdefault("test_context", {}).update(
                 {
-                    "direction": "input",
-                    "event_kind": event_kind,
-                    "mime_type": mime_type,
-                    "payload_inline": payload_inline,
-                    "artifact_object_id": artifact_object_id,
-                    "source": item.get("source") or {"kind": "web"},
+                    "kind": "skill_blackbox_timeline_test",
+                    "skill_id": skill_id,
+                    "skill_test_scenario_id": scenario.id,
+                    "skill_test_scenario_run_id": scenario_run.id,
                 }
             )
-        return normalized
+        return base
 
     @staticmethod
-    def _append_request_from_initial_event(
-        event: dict[str, Any],
-        *,
-        external_event_id: str,
-    ) -> AppendTerminalEventRequest:
-        return AppendTerminalEventRequest(
-            direction=str(event.get("direction") or "input"),
-            event_kind=str(event.get("event_kind") or "terminal.text.input.v1"),
-            mime_type=str(event.get("mime_type") or "text/plain"),
-            payload_inline=event.get("payload_inline"),
-            artifact_object_id=event.get("artifact_object_id"),
-            source=event.get("source") or {"kind": "web"},
-            external_event_id=external_event_id,
+    def _initial_result_summary(timeline: dict[str, Any]) -> dict[str, Any]:
+        expectations = [item for item in timeline.get("events", []) if isinstance(item, dict) and SkillTestService._is_expectation_event(item)]
+        return {
+            "total": len(expectations),
+            "passed": 0,
+            "failed": 0,
+            "inconclusive": 0,
+            "pending": len(expectations),
+            "status": "running",
+        }
+
+    def _fork_timeline(self, timeline: dict[str, Any], *, time_ms: int) -> dict[str, Any]:
+        duration_ms = max(1000, int(timeline.get("duration_ms") or DEFAULT_TIMELINE_DURATION_MS) - time_ms)
+        events: list[dict[str, Any]] = []
+        for item in timeline.get("events", []):
+            if not isinstance(item, dict):
+                continue
+            at_ms = int(item.get("at_ms") or 0)
+            if at_ms < time_ms:
+                continue
+            shifted = dict(item)
+            shifted["at_ms"] = at_ms - time_ms
+            shifted["id"] = f"fork_{shifted.get('id') or uuid.uuid4()}"
+            events.append(shifted)
+        return self._normalize_timeline(
+            {
+                "schema_version": TIMELINE_SCHEMA_VERSION,
+                "duration_ms": duration_ms,
+                "lanes": timeline.get("lanes") or DEFAULT_TIMELINE_LANES,
+                "events": events,
+            },
+            duration_ms=duration_ms,
         )
 
-    def _build_case_response(self, session: Session, case: SkillTestCase) -> SkillTestCaseResponse:
-        latest_run = self.repository.get_latest_run(session, case.id)
-        return SkillTestCaseResponse(
-            id=case.id,
-            skill_definition_id=case.skill_definition_id,
-            name=case.name,
-            description=case.description,
-            target_version_selector=case.target_version_selector,
-            target_compile_artifact_id=case.target_compile_artifact_id,
-            initial_terminal_events=self._extract_case_initial_events(case),
-            input_envelope=case.input_envelope,
-            terminal_context=case.terminal_context,
-            assertions=case.assertions,
-            status=case.status,
+    def _build_cursor_anchors(self, scenario_run: SkillTestScenarioRun, replay) -> list[dict[str, Any]]:
+        if not replay:
+            return []
+        origin = self._aware_datetime(scenario_run.time_origin or scenario_run.started_at or scenario_run.created_at)
+        snapshots = sorted(replay.snapshots, key=lambda item: item.seq_no)
+        anchors: list[dict[str, Any]] = []
+        latest_snapshot_seq = 0
+        for item in replay.timeline:
+            occurred_at = self._aware_datetime(item.occurred_at)
+            while snapshots and self._aware_datetime(snapshots[0].created_at) <= occurred_at:
+                latest_snapshot_seq = snapshots.pop(0).seq_no
+            payload = item.payload if isinstance(item.payload, dict) else {}
+            terminal_seq = int(payload.get("seq_no") or 0) if item.event_type == "terminal.event.appended" else 0
+            anchors.append(
+                {
+                    "time_ms": max(0, int((occurred_at - origin).total_seconds() * 1000)),
+                    "occurred_at": item.occurred_at.isoformat(),
+                    "terminal_seq": terminal_seq,
+                    "snapshot_seq": latest_snapshot_seq,
+                    "event_type": item.event_type,
+                }
+            )
+        return anchors
+
+    def _build_scenario_response(self, session: Session, scenario: SkillTestScenario) -> SkillTestScenarioResponse:
+        latest_run = self.repository.get_latest_run(session, scenario.id)
+        if latest_run:
+            self._sync_scenario_run_from_runtime(session, latest_run)
+        return SkillTestScenarioResponse(
+            id=scenario.id,
+            skill_definition_id=scenario.skill_definition_id,
+            name=scenario.name,
+            description=scenario.description,
+            target_version_selector=scenario.target_version_selector,
+            target_compile_artifact_id=scenario.target_compile_artifact_id,
+            duration_ms=scenario.duration_ms,
+            timeline=scenario.timeline,
+            judge_policy=scenario.judge_policy,
+            fork_seed=scenario.fork_seed,
+            status=scenario.status,
             latest_run=self._build_run_summary(latest_run) if latest_run else None,
-            created_at=case.created_at,
-            updated_at=case.updated_at,
+            created_at=scenario.created_at,
+            updated_at=scenario.updated_at,
         )
 
     @staticmethod
-    def _build_data_response(data_object: SkillTestDataObject) -> SkillTestDataObjectResponse:
-        return SkillTestDataObjectResponse(
-            id=data_object.id,
-            skill_definition_id=data_object.skill_definition_id,
-            test_case_id=data_object.test_case_id,
-            artifact_object_id=data_object.artifact_object_id,
-            name=data_object.name,
-            description=data_object.description,
-            role=data_object.role,
-            filename=data_object.filename,
-            mime_type=data_object.mime_type,
-            size_bytes=data_object.size_bytes,
-            checksum=data_object.checksum,
-            created_at=data_object.created_at,
+    def _build_asset_response(asset: SkillTestAsset) -> SkillTestAssetResponse:
+        return SkillTestAssetResponse(
+            id=asset.id,
+            skill_definition_id=asset.skill_definition_id,
+            scenario_id=asset.scenario_id,
+            artifact_object_id=asset.artifact_object_id,
+            name=asset.name,
+            description=asset.description,
+            lane_id=asset.lane_id,
+            filename=asset.filename,
+            mime_type=asset.mime_type,
+            size_bytes=asset.size_bytes,
+            checksum=asset.checksum,
+            created_at=asset.created_at,
         )
 
     @staticmethod
-    def _build_run_response(test_run: SkillTestRun) -> SkillTestRunResponse:
-        return SkillTestRunResponse(
-            id=test_run.id,
-            skill_definition_id=test_run.skill_definition_id,
-            test_case_id=test_run.test_case_id,
-            invocation_id=test_run.invocation_id,
-            run_id=test_run.run_id,
-            status=test_run.status,
-            selected_data_object_ids=test_run.selected_data_object_ids,
-            initial_terminal_events=SkillTestService._initial_events_from_run_envelope(test_run.input_envelope),
-            input_envelope=test_run.input_envelope,
-            assertion_results=test_run.assertion_results,
-            assertion_summary=test_run.assertion_summary,
-            started_at=test_run.started_at,
-            ended_at=test_run.ended_at,
-            created_at=test_run.created_at,
-            updated_at=test_run.updated_at,
+    def _build_run_response(scenario_run: SkillTestScenarioRun) -> SkillTestScenarioRunResponse:
+        return SkillTestScenarioRunResponse(
+            id=scenario_run.id,
+            skill_definition_id=scenario_run.skill_definition_id,
+            scenario_id=scenario_run.scenario_id,
+            invocation_id=scenario_run.invocation_id,
+            run_id=scenario_run.run_id,
+            status=scenario_run.status,
+            driver_status=scenario_run.driver_status,
+            driver_cursor=scenario_run.driver_cursor,
+            driver_events=list(scenario_run.driver_events or []),
+            timeline=scenario_run.timeline,
+            result_summary=scenario_run.result_summary,
+            time_origin=scenario_run.time_origin,
+            started_at=scenario_run.started_at,
+            ended_at=scenario_run.ended_at,
+            created_at=scenario_run.created_at,
+            updated_at=scenario_run.updated_at,
         )
 
     @staticmethod
-    def _build_run_summary(test_run: SkillTestRun) -> SkillTestRunSummary:
-        return SkillTestRunSummary(
-            id=test_run.id,
-            status=test_run.status,
-            run_id=test_run.run_id,
-            assertion_summary=test_run.assertion_summary,
-            created_at=test_run.created_at,
-            ended_at=test_run.ended_at,
+    def _build_run_summary(scenario_run: SkillTestScenarioRun) -> SkillTestScenarioRunSummary:
+        return SkillTestScenarioRunSummary(
+            id=scenario_run.id,
+            status=scenario_run.status,
+            driver_status=scenario_run.driver_status,
+            run_id=scenario_run.run_id,
+            result_summary=scenario_run.result_summary,
+            created_at=scenario_run.created_at,
+            ended_at=scenario_run.ended_at,
         )
 
     @staticmethod
-    def _initial_events_from_run_envelope(input_envelope: dict[str, Any]) -> list[dict[str, Any]]:
-        initial_events = input_envelope.get("initial_terminal_events")
-        return initial_events if isinstance(initial_events, list) else []
+    def _build_evaluation_response(evaluation: SkillTestExpectationEvaluation) -> SkillTestExpectationEvaluationResponse:
+        return SkillTestExpectationEvaluationResponse(
+            id=evaluation.id,
+            scenario_run_id=evaluation.scenario_run_id,
+            expectation_id=evaluation.expectation_id,
+            status=evaluation.status,
+            confidence=evaluation.confidence,
+            reason=evaluation.reason,
+            evidence_refs=evaluation.evidence_refs,
+            judge_provider=evaluation.judge_provider,
+            judge_model=evaluation.judge_model,
+            prompt_hash=evaluation.prompt_hash,
+            raw_response=evaluation.raw_response,
+            created_at=evaluation.created_at,
+        )

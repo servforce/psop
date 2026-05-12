@@ -12,10 +12,13 @@ from app.core.observability import record_span_exception, start_span
 from app.domain.compiler.service import CompilerService
 from app.domain.jobs.progress import ensure_publish_progress_payload, mark_publish_stage
 from app.domain.jobs.repository import JobRepository
+from app.domain.runtime.service import RuntimeService
+from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.models import now_utc
 from app.gateway.inference import LlmInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway
 from app.infra.database import DatabaseManager
+from app.infra.object_store import ObjectStoreService
 
 
 LOGGER = logging.getLogger(__name__)
@@ -31,12 +34,14 @@ class RuntimeJobWorker:
         database_manager: DatabaseManager,
         gitlab_gateway: GitLabSkillSourceGateway,
         inference_gateway: LlmInferenceGateway,
+        object_store: ObjectStoreService,
         poll_interval_seconds: float = 0.5,
     ) -> None:
         self.settings = settings
         self.database_manager = database_manager
         self.gitlab_gateway = gitlab_gateway
         self.inference_gateway = inference_gateway
+        self.object_store = object_store
         self.poll_interval_seconds = poll_interval_seconds
         self.job_repository = JobRepository()
 
@@ -53,15 +58,20 @@ class RuntimeJobWorker:
     def run_once(self) -> bool:
         try:
             with self.database_manager.session() as session:
-                with start_span("job.claim", job_type="compile"):
-                    job = self.job_repository.claim_next_job(
-                        session,
-                        job_type="compile",
-                        lease_seconds=self.settings.runtime_job_lease_seconds,
-                    )
+                job = None
+                for job_type in ("compile", "runtime", "skill_test_timeline_driver"):
+                    with start_span("job.claim", job_type=job_type):
+                        job = self.job_repository.claim_next_job(
+                            session,
+                            job_type=job_type,
+                            lease_seconds=self.settings.runtime_job_lease_seconds,
+                        )
+                    if job:
+                        break
                 if not job:
                     return False
                 job_id = job.id
+                job_type = job.job_type
                 LOGGER.info(
                     "runtime job claimed",
                     extra={
@@ -77,14 +87,33 @@ class RuntimeJobWorker:
 
         try:
             with self.database_manager.session() as session:
-                compiler_service = CompilerService(
-                    settings=self.settings,
-                    gitlab_gateway=self.gitlab_gateway,
-                    inference_gateway=self.inference_gateway,
-                )
-                with log_context(job_id=job_id), start_span("job.process", job_id=job_id, job_type="compile") as span:
+                with log_context(job_id=job_id), start_span("job.process", job_id=job_id, job_type=job_type) as span:
                     try:
-                        compiler_service.process_compile_job(session, job_id)
+                        if job_type == "compile":
+                            compiler_service = CompilerService(
+                                settings=self.settings,
+                                gitlab_gateway=self.gitlab_gateway,
+                                inference_gateway=self.inference_gateway,
+                            )
+                            compiler_service.process_compile_job(session, job_id)
+                        elif job_type == "runtime":
+                            job = self.job_repository.get_runtime_job(session, job_id)
+                            if not job or not job.run_id:
+                                raise RuntimeError("Runtime job 缺少 run_id。")
+                            runtime_service = RuntimeService(
+                                settings=self.settings,
+                                inference_gateway=self.inference_gateway,
+                            )
+                            runtime_service.process_run(session, job.run_id)
+                        elif job_type == "skill_test_timeline_driver":
+                            skill_test_service = SkillTestService(
+                                settings=self.settings,
+                                inference_gateway=self.inference_gateway,
+                                object_store=self.object_store,
+                            )
+                            skill_test_service.process_driver_job(session, job_id)
+                        else:
+                            raise RuntimeError(f"Unsupported job_type={job_type}.")
                     except Exception as exc:
                         record_span_exception(span, exc)
                         raise
@@ -107,6 +136,12 @@ class RuntimeJobWorker:
                 )
             retryable = job.attempt_no < job.max_attempts
             job.last_error = error_message
+            if job.job_type != "compile":
+                job.status = "pending" if retryable else "failed"
+                if retryable:
+                    job.available_at = now_utc() + timedelta(seconds=5 * job.attempt_no)
+                session.commit()
+                return
             if retryable:
                 job.status = "pending"
                 job.available_at = now_utc() + timedelta(seconds=5 * job.attempt_no)

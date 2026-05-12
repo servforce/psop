@@ -108,6 +108,22 @@ def test_observability_missing_sdk_fails_open(monkeypatch) -> None:
     assert handle.enabled is False
 
 
+def test_observability_does_not_import_sqlalchemy_instrumentation(monkeypatch) -> None:
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "opentelemetry.instrumentation.sqlalchemy":
+            raise AssertionError("SQLAlchemy OTel instrumentation should stay disabled")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    settings = Settings(otel_enabled=True, otel_traces_enabled=False, otel_logs_enabled=False)
+
+    handle = configure_observability(app=object(), settings=settings, engine=object())
+
+    assert handle.enabled is True
+
+
 def test_start_span_preserves_business_exception() -> None:
     with pytest.raises(RuntimeError, match="business failed"):
         with start_span("test.business_exception"):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -41,7 +42,7 @@ from app.domain.runtime.schemas import (
     TerminalTranscriptSummary,
     TraceEventResponse,
 )
-from app.domain.skills.exceptions import SkillNotFoundError, SkillValidationError
+from app.domain.skills.exceptions import SkillsError, SkillNotFoundError, SkillValidationError
 from app.domain.skills.models import now_utc
 from app.gateway.inference import LlmInferenceGateway
 
@@ -172,6 +173,7 @@ class RuntimeService:
                 payload={"run_id": run.id},
                 run_id=run.id,
                 dedupe_key=f"job:runtime:{run.id}",
+                available_at=now_utc() + timedelta(seconds=2),
                 max_attempts=self.settings.runtime_job_max_attempts,
             )
         )
@@ -195,6 +197,159 @@ class RuntimeService:
         refreshed = self.repository.get_invocation(session, invocation.id)
         if not refreshed:
             raise SkillNotFoundError("Invocation 创建后无法读取。")
+        return self._build_invocation_response(session, refreshed)
+
+    def fork_invocation_from_snapshot(
+        self,
+        session: Session,
+        *,
+        source_run_id: str,
+        snapshot_seq: int,
+        terminal_seq: int,
+        terminal_context: dict[str, Any],
+        input_envelope: dict[str, Any] | None = None,
+    ) -> InvocationResponse:
+        source_run = self.repository.get_run(session, source_run_id)
+        if not source_run:
+            raise SkillNotFoundError("未找到可 fork 的源 Run。", details={"run_id": source_run_id})
+        source_invocation = self.repository.get_invocation(session, source_run.invocation_id)
+        if not source_invocation:
+            raise SkillNotFoundError("未找到源 Invocation。", details={"run_id": source_run_id})
+        artifact = self.repository.get_artifact(session, source_run.compile_artifact_id)
+        if not artifact:
+            raise SkillNotFoundError("未找到源 Run 的编译产物。", details={"run_id": source_run_id})
+        artifact_object = self.repository.get_artifact_object(session, artifact.artifact_object_id)
+        artifact_payload = artifact_object.content_json if artifact_object else {}
+        source_snapshots = self.repository.list_snapshots(session, source_run_id)
+        source_snapshot = next((item for item in source_snapshots if item.seq_no == snapshot_seq), None)
+        if not source_snapshot:
+            raise SkillValidationError(
+                "指定 fork snapshot 不存在。",
+                details={"run_id": source_run_id, "snapshot_seq": snapshot_seq},
+            )
+
+        invocation = SkillInvocation(
+            skill_definition_id=source_run.skill_definition_id,
+            skill_version_id=source_run.skill_version_id,
+            compile_artifact_id=source_run.compile_artifact_id,
+            gateway_type="terminal",
+            input_envelope=input_envelope or {},
+            terminal_context=terminal_context,
+            binding_preferences=source_invocation.binding_preferences,
+            status="running",
+        )
+        session.add(invocation)
+        session.flush()
+
+        token = self._compact_runtime_token(source_snapshot.token_payload)
+        run = Run(
+            invocation_id=invocation.id,
+            skill_definition_id=source_run.skill_definition_id,
+            skill_version_id=source_run.skill_version_id,
+            compile_artifact_id=source_run.compile_artifact_id,
+            status="waiting_input" if token.get("status") == "waiting" else "queued",
+            runtime_phase=self._runtime_phase_from_token(token),
+            started_at=now_utc(),
+        )
+        session.add(run)
+        session.flush()
+
+        terminal_session = TerminalSession(
+            run_id=run.id,
+            mode=str(terminal_context.get("terminal_kind") or "web"),
+            status="open",
+        )
+        session.add(terminal_session)
+        session.flush()
+        run.terminal_session_id = terminal_session.id
+        bindings = self._ensure_default_run_bindings(
+            session,
+            run=run,
+            terminal_session=terminal_session,
+            terminal_context=terminal_context,
+            binding_preferences=source_invocation.binding_preferences,
+        )
+        self._append_trace_event(
+            session,
+            run=run,
+            phase="binding",
+            event_type="binding.resolved",
+            payload={"bindings": [self._binding_payload(item) for item in bindings]},
+        )
+
+        copied_terminal_events: list[dict[str, Any]] = []
+        for source_event in self.repository.list_terminal_events(session, source_run_id, to_seq=terminal_seq):
+            copied = self._append_terminal_event(
+                session,
+                run=run,
+                terminal_session=terminal_session,
+                direction=source_event.direction,
+                event_kind=source_event.event_kind,
+                mime_type=source_event.mime_type,
+                payload_inline=source_event.payload_inline,
+                artifact_object_id=source_event.artifact_object_id,
+                binding_id=self._default_binding_id(bindings, source_event.direction),
+                source_ref={
+                    **(source_event.source_ref or {}),
+                    "forked_from": {
+                        "run_id": source_run_id,
+                        "terminal_event_id": source_event.id,
+                        "seq_no": source_event.seq_no,
+                    },
+                },
+                external_event_id=f"fork:{run.id}:terminal:{source_event.seq_no}",
+                occurred_at=source_event.occurred_at,
+            )
+            copied_terminal_events.append(self._terminal_event_token_payload(copied))
+
+        terminal = token.setdefault("terminal", {})
+        terminal["events"] = copied_terminal_events
+        terminal["latest_seq"] = run.latest_terminal_seq
+        token.setdefault("metadata", {})["terminal_cursor"] = run.latest_terminal_seq
+        session.add(
+            SessionTokenSnapshot(
+                run_id=run.id,
+                seq_no=0,
+                token_payload=token,
+                enabled_set=[node["id"] for node in self._enabled_nodes(artifact_payload, token)],
+                selection_summary={
+                    "selected": None,
+                    "reason": "forked",
+                    "source_run_id": source_run_id,
+                    "source_snapshot_seq": snapshot_seq,
+                    "source_terminal_seq": terminal_seq,
+                },
+                snapshot_hash=self._hash_payload(token),
+            )
+        )
+        self._append_trace_event(
+            session,
+            run=run,
+            phase="fork",
+            event_type="runtime.fork.created",
+            payload={
+                "source_run_id": source_run_id,
+                "source_snapshot_seq": snapshot_seq,
+                "source_terminal_seq": terminal_seq,
+                "terminal_prefix_count": len(copied_terminal_events),
+            },
+        )
+        if run.status != "waiting_input":
+            session.add(
+                RuntimeJob(
+                    job_type="runtime",
+                    status="pending",
+                    payload={"run_id": run.id},
+                    run_id=run.id,
+                    dedupe_key=f"job:runtime:{run.id}",
+                    available_at=now_utc() + timedelta(seconds=2),
+                    max_attempts=self.settings.runtime_job_max_attempts,
+                )
+            )
+        session.commit()
+        refreshed = self.repository.get_invocation(session, invocation.id)
+        if not refreshed:
+            raise SkillNotFoundError("Fork Invocation 创建后无法读取。")
         return self._build_invocation_response(session, refreshed)
 
     def process_run(self, session: Session, run_id: str) -> Run:
@@ -223,15 +378,18 @@ class RuntimeService:
 
         job = self.job_repository.get_runtime_job_by_dedupe_key(session, f"job:runtime:{run.id}")
         if job:
+            if job.status != "running":
+                job.attempt_no += 1
             job.status = "running"
-            job.attempt_no += 1
 
         run.started_at = run.started_at or now_utc()
         invocation.status = "running"
         session.flush()
 
+        token: dict[str, Any] = {}
         try:
             token = self.repository.list_snapshots(session, run.id)[-1].token_payload
+            token = self._compact_runtime_token(token)
             token = self._sync_terminal_events(session, run=run, token=token)
             run.status = "running"
             run.runtime_phase = str(token.get("phase") or self._initial_phase(artifact_payload))
@@ -338,22 +496,42 @@ class RuntimeService:
             LOGGER.info("runtime loop succeeded", extra={"final_output_length": len(run.final_output or "")})
             return run
         except Exception as exc:
+            if self._is_recoverable_terminal_turn_failure(token):
+                self._recover_terminal_turn_failure(
+                    session,
+                    run=run,
+                    invocation=invocation,
+                    token=token,
+                    error=exc,
+                    job=job,
+                )
+                session.commit()
+                LOGGER.exception("runtime turn processing failed; returned to waiting input", extra={"error": str(exc)})
+                return run
+
             run.status = "failed"
             run.runtime_phase = "failed"
             run.exit_reason = str(exc)
             run.ended_at = now_utc()
             invocation.status = "failed"
-            self._close_terminal_session(session, run)
             if job:
                 job.status = "failed"
                 job.last_error = str(exc)
-            self._append_trace_event(
+            failure_trace = self._append_trace_event(
                 session,
                 run=run,
                 phase="failed",
                 event_type="runtime.failed",
-                payload={"error": str(exc)},
+                payload=self._runtime_exception_trace_payload(exc, recoverable=False),
             )
+            session.flush()
+            self._append_runtime_failure_terminal_event(
+                session,
+                run=run,
+                error=str(exc),
+                trace_event=failure_trace,
+            )
+            self._close_terminal_session(session, run)
             session.commit()
             LOGGER.exception("runtime loop failed", extra={"error": str(exc)})
             return run
@@ -386,6 +564,38 @@ class RuntimeService:
         run = self.repository.get_run(session, run_id)
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        return self._build_run_response(session, run)
+
+    def cancel_run(self, session: Session, run_id: str, *, reason: str = "cancelled by user") -> RunResponse:
+        run = self.repository.get_run(session, run_id)
+        if not run:
+            raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        if run.status == "cancelled":
+            return self._build_run_response(session, run)
+        if run.status in {"succeeded", "failed"}:
+            raise SkillValidationError("Run 已结束，不能取消。", details={"run_id": run_id, "status": run.status})
+
+        invocation = self.repository.get_invocation(session, run.invocation_id)
+        run.status = "cancelled"
+        run.runtime_phase = "cancelled"
+        run.exit_reason = reason
+        run.ended_at = now_utc()
+        if invocation:
+            invocation.status = "cancelled"
+        self._close_terminal_session(session, run)
+        self._append_cancel_snapshot(session, run=run, reason=reason)
+        self._append_trace_event(
+            session,
+            run=run,
+            phase="cancelled",
+            event_type="runtime.cancelled",
+            payload={"reason": reason},
+        )
+        job = self.job_repository.get_runtime_job_by_dedupe_key(session, f"job:runtime:{run.id}")
+        if job and job.status not in {"succeeded", "failed", "cancelled"}:
+            job.status = "cancelled"
+            job.last_error = reason
+        session.commit()
         return self._build_run_response(session, run)
 
     def list_snapshots(self, session: Session, run_id: str) -> list[SessionTokenSnapshotResponse]:
@@ -479,8 +689,9 @@ class RuntimeService:
             external_event_id=external_event_id,
             occurred_at=payload.occurred_at,
         )
-        if run.status == "waiting_input":
+        if payload.direction == "input":
             self._ensure_runtime_job_pending(session, run)
+        if run.status == "waiting_input":
             session.commit()
             self.process_run(session, run.id)
             event = session.get(TerminalEvent, event.id) or event
@@ -829,6 +1040,383 @@ class RuntimeService:
             terminal_session.status = "closed"
             terminal_session.closed_at = now_utc()
 
+    @staticmethod
+    def _is_recoverable_terminal_turn_failure(token: dict[str, Any]) -> bool:
+        control = token.get("control") if isinstance(token, dict) else {}
+        control = control if isinstance(control, dict) else {}
+        wait = control.get("wait")
+        latest_evidence = control.get("latest_evidence")
+        return (
+            isinstance(wait, dict)
+            and isinstance(latest_evidence, dict)
+            and latest_evidence.get("direction") == "input"
+            and wait.get("status") in {"received", "processing"}
+        )
+
+    def _recover_terminal_turn_failure(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        invocation: SkillInvocation,
+        token: dict[str, Any],
+        error: Exception,
+        job: RuntimeJob | None,
+    ) -> None:
+        latest_evidence = token.get("control", {}).get("latest_evidence") if isinstance(token.get("control"), dict) else {}
+        error_text = str(error)
+        failure_trace = self._append_trace_event(
+            session,
+            run=run,
+            phase="waiting",
+            event_type="runtime.message_processing.failed",
+            payload=self._runtime_exception_trace_payload(
+                error,
+                recoverable=True,
+                latest_input_event_seq=latest_evidence.get("seq_no") if isinstance(latest_evidence, dict) else None,
+            ),
+        )
+        session.flush()
+        terminal_event = self._append_runtime_recoverable_failure_terminal_event(
+            session,
+            run=run,
+            trace_event=failure_trace,
+        )
+        recovered_token = self._recover_terminal_turn_token(
+            token,
+            error=error_text,
+            trace_event=failure_trace,
+            terminal_event=terminal_event,
+        )
+        run.status = "waiting_input"
+        run.runtime_phase = self._runtime_phase_from_token(recovered_token)
+        run.exit_reason = ""
+        run.ended_at = None
+        invocation.status = "running"
+        if job:
+            job.status = "succeeded"
+            job.last_error = ""
+        self._append_recoverable_failure_snapshot(
+            session,
+            run=run,
+            token=recovered_token,
+            trace_event=failure_trace,
+        )
+
+    def _append_runtime_recoverable_failure_terminal_event(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        trace_event: TraceEvent,
+    ) -> TerminalEvent | None:
+        terminal_session = self.repository.get_terminal_session_for_run(session, run.id)
+        if not terminal_session or terminal_session.status != "open":
+            return None
+
+        try:
+            return self._append_terminal_event(
+                session,
+                run=run,
+                terminal_session=terminal_session,
+                direction="output",
+                event_kind="terminal.text.output.v1",
+                mime_type="text/plain",
+                payload_inline=self._runtime_recoverable_failure_terminal_message(),
+                binding_id=None,
+                source_ref={
+                    "kind": "runtime",
+                    "status": "recoverable_failed",
+                    "trace_event_id": trace_event.id,
+                },
+                external_event_id=f"runtime:{run.id}:message-processing-failed:{trace_event.seq_no}",
+                trace_event_id=trace_event.id,
+            )
+        except Exception:
+            LOGGER.exception("failed to append recoverable runtime failure terminal event", extra={"run_id": run.id})
+            return None
+
+    @staticmethod
+    def _runtime_recoverable_failure_terminal_message() -> str:
+        return "刚才服务器开小差了，请您重试！"
+
+    def _compact_runtime_token(self, token: dict[str, Any]) -> dict[str, Any]:
+        compacted = json.loads(json.dumps(token, ensure_ascii=False, default=str))
+        observations = compacted.get("observations")
+        if not isinstance(observations, dict):
+            return compacted
+
+        for observation in observations.values():
+            self._compact_llm_observation(observation)
+        return compacted
+
+    def _compact_llm_observation(self, observation: Any) -> None:
+        if not isinstance(observation, dict):
+            return
+        input_payload = observation.get("input")
+        if not isinstance(input_payload, dict):
+            return
+        if "system_prompt" not in input_payload and "user_prompt" not in input_payload:
+            return
+
+        observation.pop("input", None)
+        summary = self._llm_prompt_summary(
+            system_prompt=str(input_payload.get("system_prompt") or ""),
+            user_prompt=str(input_payload.get("user_prompt") or ""),
+            route_key=input_payload.get("route_key") if isinstance(input_payload.get("route_key"), str) else None,
+        )
+        existing_summary = observation.get("input_summary")
+        if isinstance(existing_summary, dict):
+            summary.update(existing_summary)
+        observation["input_summary"] = summary
+
+    @staticmethod
+    def _llm_prompt_summary(
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        route_key: str | None = None,
+    ) -> dict[str, Any]:
+        system_bytes = system_prompt.encode("utf-8")
+        user_bytes = user_prompt.encode("utf-8")
+        combined = system_bytes + b"\0" + user_bytes
+        summary: dict[str, Any] = {
+            "prompt_hash": hashlib.sha256(combined).hexdigest(),
+            "system_prompt_hash": hashlib.sha256(system_bytes).hexdigest(),
+            "user_prompt_hash": hashlib.sha256(user_bytes).hexdigest(),
+            "system_chars": len(system_prompt),
+            "user_chars": len(user_prompt),
+            "total_chars": len(system_prompt) + len(user_prompt),
+        }
+        if route_key:
+            summary["route_key"] = route_key
+        return summary
+
+    def _runtime_exception_trace_payload(
+        self,
+        exc: Exception,
+        *,
+        recoverable: bool | None = None,
+        latest_input_event_seq: Any | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "error": str(exc),
+            "error_type": exc.__class__.__name__,
+        }
+        if recoverable is not None:
+            payload["recoverable"] = recoverable
+        if latest_input_event_seq is not None:
+            payload["latest_input_event_seq"] = latest_input_event_seq
+
+        if isinstance(exc, SkillsError):
+            payload["error_code"] = exc.error_code
+            payload["status_code"] = exc.status_code
+
+        details = getattr(exc, "details", None)
+        if isinstance(details, dict) and details:
+            payload["error_details"] = self._normalize_trace_error_details(details)
+        return payload
+
+    def _normalize_trace_error_details(self, details: dict[str, Any]) -> dict[str, Any]:
+        normalized = self._sanitize_trace_payload_value(details)
+        if not isinstance(normalized, dict):
+            return {}
+
+        body = details.get("body")
+        parsed_body = self._parse_trace_error_body(body)
+        if parsed_body is not None and "body_json" not in normalized:
+            normalized["body_json"] = self._sanitize_trace_payload_value(parsed_body)
+            self._copy_provider_error_summary(normalized, parsed_body)
+        return normalized
+
+    @classmethod
+    def _copy_provider_error_summary(cls, target: dict[str, Any], parsed_body: Any) -> None:
+        if not isinstance(parsed_body, dict):
+            return
+        for key in ("request_id", "id"):
+            if key in parsed_body and key not in target:
+                target[key] = cls._sanitize_trace_payload_value(parsed_body[key])
+        provider_error = parsed_body.get("error")
+        if not isinstance(provider_error, dict):
+            return
+        for key in ("code", "type", "message"):
+            if key in provider_error:
+                target[f"provider_error_{key}"] = cls._sanitize_trace_payload_value(provider_error[key])
+
+    @staticmethod
+    def _parse_trace_error_body(body: Any) -> Any | None:
+        if not isinstance(body, str) or not body.strip():
+            return None
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            return None
+
+    @classmethod
+    def _sanitize_trace_payload_value(cls, value: Any, *, depth: int = 0) -> Any:
+        if depth > 8:
+            return cls._truncate_trace_string(str(value))
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, str):
+            return cls._truncate_trace_string(value)
+        if isinstance(value, dict):
+            sanitized: dict[str, Any] = {}
+            for key, child in list(value.items())[:100]:
+                key_text = str(key)
+                if cls._is_sensitive_trace_detail_key(key_text):
+                    sanitized[key_text] = "[redacted]"
+                else:
+                    sanitized[key_text] = cls._sanitize_trace_payload_value(child, depth=depth + 1)
+            return sanitized
+        if isinstance(value, (list, tuple, set)):
+            return [cls._sanitize_trace_payload_value(item, depth=depth + 1) for item in list(value)[:100]]
+        return cls._truncate_trace_string(str(value))
+
+    @staticmethod
+    def _is_sensitive_trace_detail_key(key: str) -> bool:
+        lowered = key.lower()
+        sensitive_parts = ("api_key", "apikey", "authorization", "password", "secret", "token")
+        return any(part in lowered for part in sensitive_parts)
+
+    @staticmethod
+    def _truncate_trace_string(value: str, *, max_length: int = 8000) -> str:
+        if len(value) <= max_length:
+            return value
+        return f"{value[:max_length]}...[truncated {len(value) - max_length} chars]"
+
+    def _recover_terminal_turn_token(
+        self,
+        token: dict[str, Any],
+        *,
+        error: str,
+        trace_event: TraceEvent,
+        terminal_event: TerminalEvent | None,
+    ) -> dict[str, Any]:
+        recovered = json.loads(json.dumps(token, ensure_ascii=False, default=str))
+        control = recovered.setdefault("control", {})
+        wait = control.get("wait")
+        if isinstance(wait, dict):
+            wait["status"] = "waiting"
+            wait["reason"] = self._runtime_recoverable_failure_terminal_message()
+            wait.setdefault("recoverable_errors", []).append(
+                {
+                    "trace_event_id": trace_event.id,
+                    "trace_seq_no": trace_event.seq_no,
+                    "error": error,
+                    "occurred_at": now_utc().isoformat(),
+                }
+            )
+        control["latest_processing_error"] = {
+            "trace_event_id": trace_event.id,
+            "trace_seq_no": trace_event.seq_no,
+            "recoverable": True,
+            "occurred_at": now_utc().isoformat(),
+        }
+        recovered["status"] = "waiting"
+        recovered["phase"] = "waiting"
+        if terminal_event:
+            event_payload = self._terminal_event_token_payload(terminal_event)
+            terminal = recovered.setdefault("terminal", {})
+            terminal.setdefault("events", []).append(event_payload)
+            terminal["latest_seq"] = terminal_event.seq_no
+            recovered.setdefault("metadata", {})["terminal_cursor"] = terminal_event.seq_no
+        return recovered
+
+    def _append_recoverable_failure_snapshot(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        token: dict[str, Any],
+        trace_event: TraceEvent,
+    ) -> None:
+        next_seq = run.latest_snapshot_seq + 1
+        run.latest_snapshot_seq = next_seq
+        session.add(
+            SessionTokenSnapshot(
+                run_id=run.id,
+                seq_no=next_seq,
+                token_payload=token,
+                enabled_set=[],
+                selection_summary={
+                    "selected": None,
+                    "reason": "recoverable_terminal_turn_failure",
+                    "trace_event_id": trace_event.id,
+                },
+                snapshot_hash=self._hash_payload(token),
+            )
+        )
+
+    def _append_runtime_failure_terminal_event(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        error: str,
+        trace_event: TraceEvent,
+    ) -> None:
+        terminal_session = self.repository.get_terminal_session_for_run(session, run.id)
+        if not terminal_session or terminal_session.status != "open":
+            return
+
+        try:
+            self._append_terminal_event(
+                session,
+                run=run,
+                terminal_session=terminal_session,
+                direction="output",
+                event_kind="terminal.text.output.v1",
+                mime_type="text/plain",
+                payload_inline=self._runtime_failure_terminal_message(error),
+                binding_id=None,
+                source_ref={
+                    "kind": "runtime",
+                    "status": "failed",
+                    "trace_event_id": trace_event.id,
+                },
+                external_event_id=f"runtime:{run.id}:failed",
+                trace_event_id=trace_event.id,
+            )
+        except Exception:
+            LOGGER.exception("failed to append runtime failure terminal event", extra={"run_id": run.id})
+
+    @staticmethod
+    def _runtime_failure_terminal_message(error: str) -> str:
+        reason = error.strip() or "未知错误"
+        return (
+            "Runtime 执行失败，当前运行已停止。\n\n"
+            f"错误原因：{reason}\n\n"
+            "请查看运行回放或 Trace Events 获取更多排障信息。"
+        )
+
+    def _append_cancel_snapshot(self, session: Session, *, run: Run, reason: str) -> None:
+        snapshots = self.repository.list_snapshots(session, run.id)
+        if not snapshots:
+            return
+        token = json.loads(json.dumps(snapshots[-1].token_payload, ensure_ascii=False))
+        token["status"] = "cancelled"
+        token["phase"] = "cancelled"
+        control = token.setdefault("control", {})
+        control.pop("wait", None)
+        control["cancelled"] = {
+            "reason": reason,
+            "cancelled_at": now_utc().isoformat(),
+            "run_id": run.id,
+        }
+        next_seq = run.latest_snapshot_seq + 1
+        run.latest_snapshot_seq = next_seq
+        session.add(
+            SessionTokenSnapshot(
+                run_id=run.id,
+                seq_no=next_seq,
+                token_payload=token,
+                enabled_set=[],
+                selection_summary={"selected": None, "reason": "cancelled"},
+                snapshot_hash=self._hash_payload(token),
+            )
+        )
+
     def _append_trace_event(
         self,
         session: Session,
@@ -866,6 +1454,7 @@ class RuntimeService:
         artifact_object_id: str | None = None,
         source_ref: dict[str, Any] | None = None,
         external_event_id: str | None = None,
+        trace_event_id: str | None = None,
         occurred_at=None,
     ) -> TerminalEvent:
         normalized_direction = direction.strip().lower()
@@ -892,6 +1481,7 @@ class RuntimeService:
         event = TerminalEvent(
             terminal_session_id=terminal_session.id,
             run_id=run.id,
+            trace_event_id=trace_event_id,
             artifact_object_id=artifact_object_id,
             run_capability_binding_id=resolved_binding_id,
             direction=normalized_direction,
@@ -997,7 +1587,7 @@ class RuntimeService:
         job = self.job_repository.get_runtime_job_by_dedupe_key(session, f"job:runtime:{run.id}")
         if job:
             job.status = "pending"
-            job.available_at = now_utc()
+            job.available_at = now_utc() + timedelta(seconds=2)
             job.last_error = ""
             return job
         job = RuntimeJob(
@@ -1006,6 +1596,7 @@ class RuntimeService:
             payload={"run_id": run.id},
             run_id=run.id,
             dedupe_key=f"job:runtime:{run.id}",
+            available_at=now_utc() + timedelta(seconds=2),
             max_attempts=self.settings.runtime_job_max_attempts,
         )
         session.add(job)
@@ -1176,10 +1767,11 @@ class RuntimeService:
                 "content": llm_completion.content,
                 "provider": llm_completion.provider,
                 "model": llm_completion.model,
-                "input": {
-                    "system_prompt": system_prompt,
-                    "user_prompt": user_prompt,
-                },
+                "input_summary": self._llm_prompt_summary(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    route_key=route_key,
+                ),
                 "output": {"content": llm_completion.content},
                 "usage": llm_completion.usage,
                 "summary": "LLM 节点执行完成。",
@@ -1535,6 +2127,7 @@ class RuntimeService:
             "gateway.inference.completed": "LLM 输出",
             "gateway.tool.completed": "工具调用",
             "runtime.final.completed": "最终结果",
+            "runtime.message_processing.failed": "消息处理失败",
             "runtime.failed": "运行失败",
         }
         observation = event.payload.get("observation", {})

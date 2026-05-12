@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import posixpath
+import uuid
+
 from fastapi import APIRouter, Depends, Header, Query, WebSocket, WebSocketDisconnect
+from fastapi import File, Form, UploadFile
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db_session, get_runtime_service
+from app.api.dependencies import get_app_settings, get_db_session, get_object_store, get_runtime_service
+from app.core.config import Settings
+from app.domain.compiler.models import ArtifactObject
 from app.domain.jobs.schemas import RuntimeJobResponse
 from app.domain.runtime.schemas import (
     AppendTerminalEventRequest,
@@ -21,6 +27,8 @@ from app.domain.runtime.schemas import (
     TraceEventResponse,
 )
 from app.domain.runtime.service import RuntimeService
+from app.domain.skills.exceptions import SkillValidationError, SkillsGatewayError
+from app.infra.object_store import ObjectStoreService
 
 
 gateway_router = APIRouter(prefix="/gateway/invocations", tags=["gateway"])
@@ -204,6 +212,126 @@ async def append_terminal_event(
         },
     )
     return result
+
+
+@terminal_router.post("/sessions/{run_id}/files", response_model=TerminalEventAppendResponse, status_code=202)
+async def upload_terminal_file(
+    run_id: str,
+    file: UploadFile = File(...),
+    caption: str | None = Form(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_app_settings),
+    object_store: ObjectStoreService = Depends(get_object_store),
+    service: RuntimeService = Depends(get_runtime_service),
+) -> TerminalEventAppendResponse:
+    terminal_session = service.get_terminal_session(session, run_id).terminal_session
+    if terminal_session.status != "open":
+        raise SkillValidationError("当前 Terminal Session 已关闭，不能上传文件。", details={"run_id": run_id})
+
+    filename = _safe_terminal_upload_filename(file.filename or "upload.bin")
+    mime_type = file.content_type or "application/octet-stream"
+    content = await file.read()
+    _validate_terminal_upload(settings=settings, filename=filename, content=content, mime_type=mime_type)
+
+    object_key = posixpath.join("terminal-uploads", run_id, f"{uuid.uuid4()}-{filename}")
+    try:
+        stored = object_store.upload_bytes(
+            object_key=object_key,
+            content=content,
+            media_type=mime_type,
+            metadata={
+                "filename": filename,
+                "run_id": run_id,
+                "source": "terminal",
+            },
+        )
+    except Exception as exc:
+        raise SkillsGatewayError(
+            "终端文件上传到对象存储失败，请确认对象存储服务可用。",
+            details={"run_id": run_id, "filename": filename, "error": str(exc)},
+        ) from exc
+    event_payload = {
+        "filename": filename,
+        "name": filename,
+        "description": caption or "",
+        "caption": caption or "",
+        "size_bytes": stored.size_bytes,
+        "checksum": stored.checksum,
+        "object_key": stored.object_key,
+    }
+    artifact_object = ArtifactObject(
+        bucket=stored.bucket,
+        object_key=stored.object_key,
+        media_type=stored.media_type,
+        size_bytes=stored.size_bytes,
+        checksum=stored.checksum,
+        content_json={
+            "kind": "terminal_upload",
+            "run_id": run_id,
+            "filename": filename,
+            "caption": caption or "",
+            "metadata": stored.metadata,
+        },
+    )
+    session.add(artifact_object)
+    session.flush()
+    result = service.append_terminal_event(
+        session,
+        run_id,
+        AppendTerminalEventRequest(
+            direction="input",
+            event_kind=_terminal_upload_event_kind(stored.media_type),
+            mime_type=stored.media_type,
+            payload_inline=event_payload,
+            artifact_object_id=artifact_object.id,
+            external_event_id=idempotency_key or f"terminal-upload:{run_id}:{uuid.uuid4()}",
+        ),
+    )
+    await run_ws_hub.broadcast(
+        run_id,
+        {
+            "event_type": "terminal.event.appended",
+            "run_id": run_id,
+            "invocation_id": None,
+            "seq_no": result.seq_no,
+            "occurred_at": result.event.occurred_at.isoformat(),
+            "payload": result.event.model_dump(mode="json"),
+        },
+    )
+    return result
+
+
+def _validate_terminal_upload(*, settings: Settings, filename: str, content: bytes, mime_type: str) -> None:
+    if not filename:
+        raise SkillValidationError("上传文件名不能为空。")
+    if not content:
+        raise SkillValidationError("上传文件不能为空。")
+    if len(content) > settings.test_data_max_upload_bytes:
+        raise SkillValidationError("上传文件过大。", details={"max_bytes": settings.test_data_max_upload_bytes})
+    if not _is_allowed_terminal_upload_mime_type(mime_type):
+        raise SkillValidationError("不支持的终端输入 MIME 类型。", details={"mime_type": mime_type})
+
+
+def _is_allowed_terminal_upload_mime_type(mime_type: str) -> bool:
+    if mime_type.startswith(("text/", "image/", "audio/", "video/")):
+        return True
+    return mime_type in {"application/json", "application/pdf", "application/octet-stream"}
+
+
+def _safe_terminal_upload_filename(filename: str) -> str:
+    cleaned = filename.replace("\\", "/").split("/")[-1].strip()
+    return cleaned or "upload.bin"
+
+
+def _terminal_upload_event_kind(mime_type: str) -> str:
+    if mime_type.startswith("image/"):
+        return "terminal.image.input.v1"
+    if mime_type.startswith("audio/"):
+        return "terminal.audio.input.v1"
+    if mime_type.startswith("video/"):
+        return "terminal.video.input.v1"
+    return "terminal.file.input.v1"
 
 
 @replay_router.get("/runs", response_model=list[RunResponse])

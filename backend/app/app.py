@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             database_manager=db_manager,
             gitlab_gateway=app.state.gitlab_gateway,
             inference_gateway=app.state.inference_gateway,
+            object_store=app.state.object_store,
         )
         worker_task = asyncio.create_task(worker.run_forever())
     try:

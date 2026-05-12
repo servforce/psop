@@ -61,6 +61,24 @@ test("buildBpmnXml escapes XML and maps node kinds to BPMN elements", () => {
   expect(xml).toContain("Draft &lt;Answer&gt;");
 });
 
+test("buildBpmnXml renders edges behind shapes", () => {
+  const { xml } = buildBpmnXml(artifact());
+
+  expect(xml.indexOf("<bpmndi:BPMNEdge")).toBeLessThan(xml.indexOf("<bpmndi:BPMNShape"));
+});
+
+test("buildBpmnXml routes long jump edges outside the node row", () => {
+  const { xml } = buildBpmnXml(
+    artifact({
+      dependency_graph_for_view: {
+        edges: [{ from: "start", to: "finish" }]
+      }
+    })
+  );
+
+  expect(xml).toContain('y="32"');
+});
+
 test("escapeXml escapes XML control characters", () => {
   expect(escapeXml(`A&B<"'>`)).toBe("A&amp;B&lt;&quot;&apos;&gt;");
 });

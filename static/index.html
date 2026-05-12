@@ -4,17 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PSOP Studio</title>
-    <link rel="stylesheet" href="/assets/css/material-symbols.css" />
+    <link rel="stylesheet" href="/css/material-symbols.css" />
     <link rel="stylesheet" href="/node_modules/bpmn-js/dist/assets/diagram-js.css" />
     <link rel="stylesheet" href="/node_modules/bpmn-js/dist/assets/bpmn-js.css" />
     <link rel="stylesheet" href="/node_modules/bpmn-js/dist/assets/bpmn-font/css/bpmn-embedded.css" />
-    <link rel="stylesheet" href="/assets/css/style.compiled.css" />
-    <script defer src="/assets/js/runtime-config.js"></script>
-    <script defer src="/assets/js/utils/skill-key.js"></script>
-    <script defer src="/assets/js/utils/runtime-events.js"></script>
-    <script defer src="/assets/js/utils/eg-bpmn.js"></script>
+    <link rel="stylesheet" href="/css/style.compiled.css" />
+    <script defer src="/js/runtime-config.js"></script>
+    <script defer src="/js/utils/skill-key.js"></script>
+    <script defer src="/js/utils/runtime-events.js"></script>
+    <script defer src="/js/utils/eg-bpmn.js"></script>
     <script defer src="/node_modules/bpmn-js/dist/bpmn-navigated-viewer.production.min.js"></script>
-    <script defer src="/assets/js/app.js"></script>
+    <script defer src="/js/app.js"></script>
+    <script defer src="/js/app/core.js"></script>
+    <script defer src="/js/app/skill-detail.js"></script>
+    <script defer src="/js/app/compiler.js"></script>
+    <script defer src="/js/app/skill-test.js"></script>
+    <script defer src="/js/app/runtime.js"></script>
+    <script defer src="/js/app/formatters.js"></script>
     <script defer src="/node_modules/alpinejs/dist/cdn.min.js"></script>
   </head>
   <body class="psop-dark h-dvh overflow-hidden bg-slate-950 text-slate-200">
@@ -45,7 +51,7 @@
               <button
                 type="button"
                 class="sidebar-link"
-                :class="[['skills-list', 'skill-detail', 'skill-run-live', 'skill-replay-detail', 'skill-test-new', 'skill-test-case', 'skill-test-live'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                :class="[['skills-list', 'skill-detail', 'skill-run-live', 'skill-debug-live', 'skill-replay-detail', 'skill-test-scenario-new', 'skill-test-scenario', 'skill-test-scenario-review'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
                 title="Skills"
                 @click="navigate('/admin/skills')"
               >
@@ -99,13 +105,13 @@
               </template>
 
               <div id="skills-list-page" class="h-full" x-show="!loadingPage && route.name === 'skills-list'"></div>
-              <div id="skill-detail-page" class="h-full" x-show="!loadingPage && ['skill-detail', 'skill-test-new'].includes(route.name) && currentSkill"></div>
+              <div id="skill-detail-page" class="h-full" x-show="!loadingPage && ['skill-detail', 'skill-test-scenario-new'].includes(route.name) && currentSkill"></div>
               <div id="compiler-list-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-list'"></div>
               <div id="compiler-artifact-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-artifact' && compilerArtifact"></div>
               <div id="invocations-list-page" class="h-full" x-show="!loadingPage && route.name === 'invocations-list'"></div>
-              <div id="run-live-page" class="h-full" x-show="!loadingPage && ['run-live', 'skill-run-live'].includes(route.name) && liveRun"></div>
-              <div id="skill-test-case-page" class="h-full" x-show="!loadingPage && route.name === 'skill-test-case' && currentSkill && skillTestCase"></div>
-              <div id="skill-test-live-page" class="h-full" x-show="!loadingPage && route.name === 'skill-test-live' && currentSkill && skillTestCase && skillTestRun"></div>
+              <div id="run-live-page" class="h-full" x-show="!loadingPage && ['run-live', 'skill-run-live', 'skill-debug-live'].includes(route.name) && liveRun"></div>
+              <div id="skill-test-scenario-page" class="h-full" x-show="!loadingPage && route.name === 'skill-test-scenario' && currentSkill && skillTestCase"></div>
+              <div id="skill-test-scenario-review-page" class="h-full" x-show="!loadingPage && route.name === 'skill-test-scenario-review' && currentSkill && skillTestReview"></div>
               <div id="replay-list-page" class="h-full" x-show="!loadingPage && route.name === 'replay-list'"></div>
               <div id="replay-detail-page" class="h-full" x-show="!loadingPage && ['replay-detail', 'skill-replay-detail'].includes(route.name) && replayDetail"></div>
             </section>

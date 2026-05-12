@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 from app.core.config import Settings
 
@@ -37,6 +38,7 @@ class ObjectStoreService:
     ) -> StoredObject:
         checksum = hashlib.sha256(content).hexdigest()
         bucket = self.settings.object_store_bucket
+        normalized_metadata = self._normalize_metadata(metadata or {})
         client = self._get_client()
         self._ensure_bucket(client, bucket)
         client.put_object(
@@ -44,7 +46,7 @@ class ObjectStoreService:
             Key=object_key,
             Body=content,
             ContentType=media_type,
-            Metadata=metadata or {},
+            Metadata=normalized_metadata,
         )
         return StoredObject(
             bucket=bucket,
@@ -52,7 +54,7 @@ class ObjectStoreService:
             media_type=media_type,
             size_bytes=len(content),
             checksum=checksum,
-            metadata=metadata or {},
+            metadata=normalized_metadata,
         )
 
     def _get_client(self):
@@ -77,3 +79,19 @@ class ObjectStoreService:
             client.head_bucket(Bucket=bucket)
         except Exception:
             client.create_bucket(Bucket=bucket)
+
+    @staticmethod
+    def _normalize_metadata(metadata: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for key, value in metadata.items():
+            normalized_key = ObjectStoreService._ascii_metadata_value(str(key))
+            normalized[normalized_key] = ObjectStoreService._ascii_metadata_value(str(value))
+        return normalized
+
+    @staticmethod
+    def _ascii_metadata_value(value: str) -> str:
+        try:
+            value.encode("ascii")
+        except UnicodeEncodeError:
+            return quote(value, safe="-_.~")
+        return value

@@ -11,7 +11,7 @@ from app.domain.compiler.formal_v5 import validate_and_normalize_artifact
 from app.domain.jobs.repository import JobRepository
 from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest
 from app.domain.runtime.service import RuntimeService
-from app.domain.skills.exceptions import SkillValidationError
+from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
 from app.domain.skills.schemas import CreateSkillRequest, PublishSkillRequest
 from app.domain.skills.service import SkillsService
 from app.domain.skills.models import SkillVersion
@@ -28,6 +28,31 @@ from tests.test_skills_api import (
 class FailingInferenceGateway:
     def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
         raise RuntimeError("LLM provider unavailable")
+
+
+class FailingSkillsGatewayInferenceGateway:
+    details = {
+        "status_code": 500,
+        "provider": "aliyun",
+        "api_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "glm-5.1",
+        "route_key": "default",
+        "body": json.dumps(
+            {
+                "error": {
+                    "message": "Too many requests. Your requests are being throttled due to system capacity limits.",
+                    "type": "ServiceUnavailable",
+                    "code": "ServiceUnavailable",
+                },
+                "id": "chatcmpl-test",
+                "request_id": "request-test",
+            }
+        ),
+        "api_key": "should-not-leak",
+    }
+
+    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
+        raise SkillsGatewayError("LLM Inference Gateway 返回错误响应。", details=self.details)
 
 
 class QueuedInferenceGateway:
@@ -453,6 +478,16 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         )
         initial_run = runtime_service.get_run(session, invocation.run_id or "")
         initial_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        legacy_snapshots = runtime_service.repository.list_snapshots(session, invocation.run_id or "")
+        legacy_token = json.loads(json.dumps(legacy_snapshots[-1].token_payload, ensure_ascii=False))
+        legacy_observation = legacy_token.setdefault("observations", {}).setdefault("instruct_collect_context", {})
+        legacy_observation["input"] = {
+            "system_prompt": "legacy-system-prompt",
+            "user_prompt": "legacy-user-prompt " * 1000,
+        }
+        legacy_snapshots[-1].token_payload = legacy_token
+        session.flush()
+
         appended = runtime_service.append_terminal_event(
             session,
             invocation.run_id or "",
@@ -492,10 +527,15 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert [snapshot.seq_no for snapshot in snapshots] == [0, 1, 2, 3, 4, 5]
     assert snapshots[-1].token_payload["budgets"]["llm_input_tokens"] == 30
     assert snapshots[-1].token_payload["budgets"]["llm_output_tokens"] == 15
+    assert "input" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
+    assert snapshots[-1].token_payload["observations"]["instruct_collect_context"]["input_summary"]["user_chars"] > 0
+    assert all("legacy-user-prompt" not in call["user_prompt"] for call in inference_gateway.calls[1:])
     llm_trace_payloads = [
         event.payload for event in trace_events if event.event_type == "gateway.inference.completed"
     ]
-    assert llm_trace_payloads[0]["observation"]["input"]["system_prompt"]
+    assert "input" not in llm_trace_payloads[0]["observation"]
+    assert llm_trace_payloads[0]["observation"]["input_summary"]["system_prompt_hash"]
+    assert llm_trace_payloads[0]["observation"]["input_summary"]["route_key"] == "default"
     assert llm_trace_payloads[0]["observation"]["output"]["content"]
     assert llm_trace_payloads[0]["observation"]["usage"]["total_tokens"] == 15
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
@@ -616,8 +656,142 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
         )
         run = failing_runtime.get_run(session, invocation.run_id or "")
         trace_events = failing_runtime.list_trace_events(session, invocation.run_id or "")
+        terminal_events = failing_runtime.list_terminal_events(session, invocation.run_id or "")
 
     assert invocation.status == "failed"
     assert run.status == "failed"
     assert run.exit_reason == "LLM provider unavailable"
     assert trace_events[-1].event_type == "runtime.failed"
+    assert terminal_events[-1].direction == "output"
+    assert terminal_events[-1].event_kind == "terminal.text.output.v1"
+    assert terminal_events[-1].external_event_id == f"runtime:{invocation.run_id}:failed"
+    assert terminal_events[-1].trace_event_id == trace_events[-1].id
+    assert "Runtime 执行失败" in terminal_events[-1].payload_inline
+    assert "当前运行已停止" in terminal_events[-1].payload_inline
+    assert "调试运行" not in terminal_events[-1].payload_inline
+    assert "LLM provider unavailable" in terminal_events[-1].payload_inline
+
+
+def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, _ = runtime_stack
+    failing_runtime = RuntimeService(settings=create_test_settings(), inference_gateway=FailingSkillsGatewayInferenceGateway())
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-gateway-failure",
+                name="Runtime Gateway Failure",
+                description="Validate gateway failure trace details.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime gateway failure publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+
+        invocation = failing_runtime.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="runtime-gateway-failure",
+                input_envelope={"user_input": "触发 gateway 失败"},
+            ),
+        )
+        trace_events = failing_runtime.list_trace_events(session, invocation.run_id or "")
+
+    payload = trace_events[-1].payload
+    details = payload["error_details"]
+    assert trace_events[-1].event_type == "runtime.failed"
+    assert payload["error"] == "LLM Inference Gateway 返回错误响应。"
+    assert payload["error_type"] == "SkillsGatewayError"
+    assert payload["error_code"] == "skills_gateway_error"
+    assert payload["status_code"] == 502
+    assert payload["recoverable"] is False
+    assert details["status_code"] == 500
+    assert details["provider"] == "aliyun"
+    assert details["model"] == "glm-5.1"
+    assert details["route_key"] == "default"
+    assert details["request_id"] == "request-test"
+    assert details["provider_error_code"] == "ServiceUnavailable"
+    assert "Too many requests" in details["provider_error_message"]
+    assert details["body_json"]["error"]["type"] == "ServiceUnavailable"
+    assert details["api_key"] == "[redacted]"
+
+
+def test_runtime_service_recovers_when_single_terminal_message_processing_fails(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+    failing_runtime = RuntimeService(settings=create_test_settings(), inference_gateway=FailingSkillsGatewayInferenceGateway())
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-message-recover",
+                name="Runtime Message Recover",
+                description="Validate recoverable terminal message failures.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime message recover publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="runtime-message-recover",
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        first_run = runtime_service.get_run(session, invocation.run_id or "")
+        failing_runtime.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="第一条输入触发服务端异常",
+                external_event_id="runtime-message-recover-failed-input",
+            ),
+        )
+        recovered_run = runtime_service.get_run(session, invocation.run_id or "")
+        trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+        terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
+        terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
+
+        retry = runtime_service.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="我已经完成当前步骤，并上传了现场说明。",
+                external_event_id="runtime-message-recover-retry-input",
+            ),
+        )
+        final_run = runtime_service.get_run(session, invocation.run_id or "")
+
+    assert first_run.status == "waiting_input"
+    assert recovered_run.status == "waiting_input"
+    assert recovered_run.exit_reason == ""
+    assert recovered_run.ended_at is None
+    assert terminal_session.terminal_session.status == "open"
+    assert trace_events[-1].event_type == "runtime.message_processing.failed"
+    assert trace_events[-1].payload["recoverable"] is True
+    assert trace_events[-1].payload["error_type"] == "SkillsGatewayError"
+    assert trace_events[-1].payload["error_details"]["request_id"] == "request-test"
+    assert trace_events[-1].payload["error_details"]["provider_error_type"] == "ServiceUnavailable"
+    assert terminal_events[-1].direction == "output"
+    assert terminal_events[-1].trace_event_id == trace_events[-1].id
+    assert terminal_events[-1].payload_inline == "刚才服务器开小差了，请您重试！"
+    assert snapshots[-1].token_payload["status"] == "waiting"
+    assert snapshots[-1].token_payload["metadata"]["terminal_cursor"] == terminal_events[-1].seq_no
+    assert retry.seq_no > terminal_events[-1].seq_no
+    assert final_run.status == "succeeded"

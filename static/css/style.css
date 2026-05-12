@@ -75,6 +75,17 @@
     @apply block w-full rounded-md border border-slate-700 bg-slate-950/40 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-orange-500/40 focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-slate-900/60 disabled:text-slate-500;
   }
 
+  .number-no-spinner {
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+
+  .number-no-spinner::-webkit-inner-spin-button,
+  .number-no-spinner::-webkit-outer-spin-button {
+    margin: 0;
+    -webkit-appearance: none;
+  }
+
   .select-field {
     @apply block h-10 w-full rounded-md border border-slate-700 bg-slate-950/40 px-3 text-sm text-slate-100 outline-none transition focus:border-orange-500/40 focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-slate-900/60 disabled:text-slate-500;
   }
@@ -212,6 +223,10 @@
 
   .topbar-icon-button {
     @apply inline-flex h-9 w-9 items-center justify-center rounded-md border border-transparent bg-transparent text-slate-400 transition hover:border-slate-700 hover:bg-slate-900 hover:text-slate-100;
+  }
+
+  .segmented-toggle-button {
+    @apply inline-flex h-9 w-auto shrink-0 items-center justify-center gap-2 rounded-none border-0 px-3 text-sm font-medium text-slate-400 transition hover:bg-slate-900 hover:text-slate-100;
   }
 
   .user-avatar {
@@ -433,12 +448,12 @@
 
 .eg-bpmn-viewer .djs-container,
 .eg-bpmn-viewer .djs-viewport {
-  background: #09090b !important;
+  background: #f8fafc !important;
 }
 
 .eg-bpmn-viewer .djs-shape .djs-visual > :first-child {
-  fill: #0f172a !important;
-  stroke: #64748b !important;
+  fill: #ffffff !important;
+  stroke: #94a3b8 !important;
   stroke-width: 2px !important;
 }
 
@@ -449,7 +464,7 @@
 
 .eg-bpmn-viewer .djs-label,
 .eg-bpmn-viewer .djs-label tspan {
-  fill: #e2e8f0 !important;
+  fill: #0f172a !important;
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif !important;
 }
 
@@ -481,5 +496,5 @@
 
 .eg-bpmn-viewer .djs-minimap,
 .eg-bpmn-viewer .djs-search-container {
-  color: #e2e8f0;
+  color: #0f172a;
 }

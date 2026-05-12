@@ -44,7 +44,7 @@ function resolveFilePath(requestPath) {
 const server = http.createServer((req, res) => {
   const requestPath = decodeURIComponent((req.url || "/").split("?")[0]);
 
-  if (requestPath === "/assets/js/runtime-config.js") {
+  if (requestPath === "/js/runtime-config.js") {
     res.setHeader("Content-Type", "text/javascript; charset=utf-8");
     res.end(`(function () {
   const configuredApiBaseUrl = ${JSON.stringify(apiBaseUrl)};

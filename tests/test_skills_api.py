@@ -201,6 +201,17 @@ class FakeInferenceGateway:
         )
         if "SKILL 编译智能体" in system_prompt:
             content = json.dumps(build_test_formal_v5_artifact(), ensure_ascii=False)
+        elif route_key == "skill-test-judge":
+            content = json.dumps(
+                {
+                    "status": "passed",
+                    "confidence": 0.93,
+                    "reason": "实际输出满足预期语义。",
+                    "evidence_refs": [{"kind": "terminal_event", "seq_no": 4}],
+                    "missing_evidence": "",
+                },
+                ensure_ascii=False,
+            )
         elif "final_verify" in system_prompt or "final_verify" in user_prompt:
             content = json.dumps(
                 {
@@ -265,6 +276,11 @@ class FakeObjectStore:
             checksum=f"sha256-{len(content)}",
             metadata=metadata or {},
         )
+
+
+class FailingObjectStore(FakeObjectStore):
+    def upload_bytes(self, **_) -> StoredObject:
+        raise RuntimeError("object store offline")
 
 
 def build_test_formal_v5_artifact() -> dict:
@@ -929,6 +945,134 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert all(job["status"] == "succeeded" for job in jobs)
 
 
+def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "skill-debug-terminal",
+                "name": "Skill Debug Terminal",
+                "description": "Validate direct skill debug terminal flow.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Debug terminal publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+
+        invocation_response = client.post(
+            "/api/v1/gateway/invocations",
+            json={
+                "skill_key": "skill-debug-terminal",
+                "version_selector": "latest",
+                "gateway_type": "terminal",
+                "terminal_context": {
+                    "terminal_kind": "web",
+                    "operator_mode": "debug",
+                    "debug_context": {
+                        "kind": "skill_debug",
+                        "skill_id": created["id"],
+                    },
+                },
+                "input_envelope": {"user_input": "启动模拟终端调试"},
+            },
+        )
+        invocation = invocation_response.json()
+        run_id = invocation["run_id"]
+        persisted_invocation_response = client.get(f"/api/v1/gateway/invocations/{invocation['id']}")
+        initial_run_response = client.get(f"/api/v1/runs/{run_id}")
+        upload_response = client.post(
+            f"/api/v1/terminal/sessions/{run_id}/files",
+            data={"caption": "现场证据已确认"},
+            files={"file": ("debug-photo.png", b"debug-image", "image/png")},
+        )
+        final_run_response = client.get(f"/api/v1/runs/{run_id}")
+        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+        old_cases_response = client.get(f"/api/v1/skills/{created['id']}/test-cases", params={"mode": "debug"})
+        test_jobs_response = client.get("/api/v1/runtime/jobs", params={"job_type": "skill_test_timeline_driver"})
+
+    assert invocation_response.status_code == 201
+    assert invocation["run_id"]
+    assert invocation["terminal_context"]["operator_mode"] == "debug"
+    assert invocation["terminal_context"]["debug_context"] == {
+        "kind": "skill_debug",
+        "skill_id": created["id"],
+    }
+    persisted_context = persisted_invocation_response.json()["terminal_context"]
+    assert persisted_context["operator_mode"] == "debug"
+    assert persisted_context["debug_context"]["kind"] == "skill_debug"
+    assert initial_run_response.json()["status"] == "waiting_input"
+    assert upload_response.status_code == 202
+    assert upload_response.json()["event"]["event_kind"] == "terminal.image.input.v1"
+    assert upload_response.json()["event"]["mime_type"] == "image/png"
+    assert len(upload_response.json()["event"]["artifact_object_id"]) == 36
+    assert upload_response.json()["event"]["payload_inline"]["object_key"].startswith(f"terminal-uploads/{run_id}/")
+    assert upload_response.json()["event"]["payload_inline"]["caption"] == "现场证据已确认"
+    assert final_run_response.json()["status"] == "succeeded"
+    assert any(event["event_kind"] == "terminal.image.input.v1" for event in terminal_events_response.json())
+    assert replay_response.status_code == 200
+    assert replay_response.json()["run"]["id"] == run_id
+    assert len(replay_response.json()["terminal_events"]) >= 3
+    assert old_cases_response.status_code == 404
+    assert test_jobs_response.status_code == 200
+    assert test_jobs_response.json() == []
+
+
+def test_terminal_file_upload_returns_json_error_when_object_store_unavailable() -> None:
+    fake_gateway = FakeGitLabGateway()
+    fake_inference = FakeInferenceGateway()
+    client = TestClient(
+        create_app(
+            create_test_settings(),
+            gitlab_gateway=fake_gateway,
+            inference_gateway=fake_inference,
+            object_store=FailingObjectStore(),
+        )
+    )
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "terminal-upload-object-store-failure",
+                "name": "Terminal Upload Object Store Failure",
+                "description": "Validate upload failure is surfaced as JSON.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Upload failure publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/gateway/invocations",
+            json={
+                "skill_key": "terminal-upload-object-store-failure",
+                "gateway_type": "terminal",
+                "terminal_context": {"terminal_kind": "web", "operator_mode": "debug"},
+                "input_envelope": {},
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+        upload_response = client.post(
+            f"/api/v1/terminal/sessions/{run_id}/files",
+            data={"caption": "图片证据"},
+            files={"file": ("fault.jpg", b"image-bytes", "image/jpeg")},
+        )
+
+    assert upload_response.status_code == 502
+    payload = upload_response.json()
+    assert payload["code"] == "skills_gateway_error"
+    assert "对象存储" in payload["message"]
+    assert payload["details"]["filename"] == "fault.jpg"
+
+
 def test_run_websocket_broadcasts_terminal_event_append() -> None:
     client, _, _ = create_test_client()
 
@@ -980,94 +1124,185 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
     assert message["seq_no"] == append_response.json()["seq_no"]
 
 
-def test_skill_test_case_upload_run_send_data_and_evaluate() -> None:
+def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
+    client, _, fake_inference = create_test_client()
+
+    timeline = {
+        "schema_version": "psop-skill-test-timeline/v1",
+        "duration_ms": 5000,
+        "lanes": [
+            {"id": "input.text", "kind": "input", "label": "文本"},
+            {"id": "input.image", "kind": "input", "label": "图片"},
+            {"id": "expected.semantic", "kind": "output", "label": "语义输出"},
+        ],
+        "events": [
+            {
+                "id": "initial_fault_context",
+                "lane_id": "input.text",
+                "at_ms": 0,
+                "event_kind": "terminal.text.input.v1",
+                "mime_type": "text/plain",
+                "payload_inline": "请检查这把伞如何修复",
+            },
+            {
+                "id": "expect_completion",
+                "lane_id": "expected.semantic",
+                "at_ms": 0,
+                "expectation": "系统应确认现场步骤已完成。",
+            },
+        ],
+    }
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "skill-test-scenario",
+                "name": "Skill Test Scenario",
+                "description": "Validate black-box timeline scenario flow.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Scenario test publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+
+        scenario_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios",
+            json={
+                "name": "雨伞维修时序场景",
+                "description": "时间轴驱动输入，时间点以前判断输出。",
+                "duration_ms": 5000,
+                "timeline": timeline,
+                "judge_policy": {"route_key": "skill-test-judge", "confidence_threshold": 0.7},
+            },
+        )
+        scenario = scenario_response.json()
+        upload_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets",
+            data={"name": "伞骨图片", "description": "测试图片", "lane_id": "input.image"},
+            files={"file": ("umbrella.png", b"fake-image", "image/png")},
+        )
+        assets_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets")
+        old_case_response = client.get(f"/api/v1/skills/{created['id']}/test-cases")
+        old_runs_response = client.get("/api/v1/skill-test-runs/not-found")
+
+        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        scenario_run = start_response.json()
+        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}/events")
+        jobs_response = client.get("/api/v1/runtime/jobs")
+        evaluate_response = client.post(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/evaluate")
+        review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
+        list_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios")
+        runs_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs")
+
+        review = review_response.json()
+        cursor = review["cursor_anchors"][-1]
+        fork_response = client.post(
+            f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-scenario",
+            json={"cursor": cursor, "name": "从切面继续的场景"},
+        )
+        fork_debug_response = client.post(
+            f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-debug",
+            json={"cursor": cursor},
+        )
+
+    assert scenario_response.status_code == 201
+    assert scenario["timeline"]["schema_version"] == "psop-skill-test-timeline/v1"
+    assert upload_response.status_code == 201
+    assert upload_response.json()["mime_type"] == "image/png"
+    assert assets_response.json()[0]["id"] == upload_response.json()["id"]
+    assert old_case_response.status_code == 404
+    assert old_runs_response.status_code == 404
+
+    assert start_response.status_code == 202
+    assert scenario_run["driver_status"] == "completed"
+    assert scenario_run["driver_cursor"] == 1
+    assert scenario_run["result_summary"]["total"] == 1
+    assert scenario_run["result_summary"]["passed"] == 1
+    assert scenario_run["status"] == "passed"
+    assert [event["event_id"] for event in scenario_run["driver_events"]] == ["initial_fault_context"]
+
+    terminal_events = terminal_events_response.json()
+    scripted_inputs = [event for event in terminal_events if event["direction"] == "input"]
+    assert [event["payload_inline"] for event in scripted_inputs] == ["请检查这把伞如何修复"]
+    assert scripted_inputs[0]["external_event_id"] == (
+        f"skill-test-scenario-run:{scenario_run['id']}:timeline:initial_fault_context"
+    )
+    assert any(event["direction"] == "output" and "测试任务已完成" in str(event["payload_inline"]) for event in terminal_events)
+    assert any(job["job_type"] == "skill_test_timeline_driver" and job["status"] == "succeeded" for job in jobs_response.json())
+    assert any(call["route_key"] == "skill-test-judge" for call in fake_inference.calls)
+
+    assert evaluate_response.status_code == 200
+    assert evaluate_response.json()["status"] == "passed"
+    assert review_response.status_code == 200
+    assert review["scenario"]["id"] == scenario["id"]
+    assert review["scenario_run"]["id"] == scenario_run["id"]
+    assert review["expectation_evaluations"][0]["expectation_id"] == "expect_completion"
+    assert review["expectation_evaluations"][0]["status"] == "passed"
+    assert review["replay_timeline"]
+    assert list_response.json()[0]["latest_run"]["id"] == scenario_run["id"]
+    assert runs_response.json()[0]["id"] == scenario_run["id"]
+
+    assert fork_response.status_code == 201
+    forked = fork_response.json()
+    assert forked["fork_seed"]["source_scenario_run_id"] == scenario_run["id"]
+    assert forked["fork_seed"]["terminal_seq"] == cursor["terminal_seq"]
+    assert fork_debug_response.status_code == 201
+    assert fork_debug_response.json()["terminal_context"]["operator_mode"] == "debug"
+    assert fork_debug_response.json()["terminal_context"]["debug_context"]["kind"] == "skill_debug"
+
+
+def test_skill_test_scenario_rejects_duplicate_open_run() -> None:
     client, _, _ = create_test_client()
 
     with client:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "skill-test-demo",
-                "name": "Skill Test Demo",
-                "description": "Validate skill EG test flow.",
+                "key": "skill-test-scenario-duplicate",
+                "name": "Skill Test Scenario Duplicate",
+                "description": "Validate active scenario run conflict.",
             },
         ).json()
         publish_response = client.post(
             f"/api/v1/skills/{created['id']}/publish",
-            json={"publish_reason": "Skill test publish"},
+            json={"publish_reason": "Scenario duplicate publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
-
-        case_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-cases",
+        scenario_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios",
             json={
-                "name": "多模态确认流程",
-                "description": "使用图片作为测试数据。",
-                "initial_terminal_events": [
-                    {
-                        "direction": "input",
-                        "event_kind": "terminal.text.input.v1",
-                        "mime_type": "text/plain",
-                        "payload_inline": "请检查这把伞如何修复",
-                    }
-                ],
-                "assertions": [
-                    {"type": "run.status_equals", "status": "succeeded"},
-                    {"type": "final_output_contains", "text": "测试任务已完成"},
-                    {"type": "trace_event_exists", "event_type": "gateway.inference.completed"},
-                    {"type": "terminal_event_exists", "direction": "output", "event_kind": "terminal.text.output.v1"},
-                ],
+                "name": "等待后再输入",
+                "duration_ms": 2000,
+                "timeline": {
+                    "duration_ms": 2000,
+                    "lanes": [
+                        {"id": "input.text", "kind": "input"},
+                        {"id": "expected.semantic", "kind": "output"},
+                    ],
+                    "events": [
+                        {
+                            "id": "late_input",
+                            "lane_id": "input.text",
+                            "at_ms": 1500,
+                            "payload_inline": "稍后输入",
+                        }
+                    ],
+                },
             },
         )
-        case_id = case_response.json()["id"]
-        upload_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-cases/{case_id}/data",
-            data={"name": "伞骨图片", "description": "测试图片", "role": "input"},
-            files={"file": ("umbrella.png", b"fake-image", "image/png")},
-        )
-        data_id = upload_response.json()["id"]
-        invalid_upload_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-cases/{case_id}/data",
-            files={"file": ("bad.exe", b"binary", "application/x-msdownload")},
-        )
+        scenario_id = scenario_response.json()["id"]
+        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario_id}/runs", json={})
+        duplicate_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario_id}/runs", json={})
 
-        start_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-cases/{case_id}/runs",
-            json={"selected_data_object_ids": [data_id]},
-        )
-        test_run = start_response.json()
-        duplicate_start_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-cases/{case_id}/runs",
-            json={"selected_data_object_ids": [data_id]},
-        )
-        send_data_response = client.post(
-            f"/api/v1/skill-test-runs/{test_run['id']}/send-data",
-            json={"test_data_object_id": data_id},
-        )
-        evaluate_response = client.post(f"/api/v1/skill-test-runs/{test_run['id']}/evaluate")
-        events_response = client.get(f"/api/v1/terminal/sessions/{test_run['run_id']}/events")
-        cases_response = client.get(f"/api/v1/skills/{created['id']}/test-cases")
-        runs_response = client.get(f"/api/v1/skills/{created['id']}/test-cases/{case_id}/runs")
-
-    assert case_response.status_code == 201
-    assert upload_response.status_code == 201
-    assert upload_response.json()["mime_type"] == "image/png"
-    assert invalid_upload_response.status_code == 422
     assert start_response.status_code == 202
-    assert test_run["status"] == "running"
-    assert test_run["run_id"]
-    assert test_run["initial_terminal_events"] == []
-    assert test_run["assertion_summary"]["pending"] > 0
-    assert duplicate_start_response.status_code == 409
-    assert duplicate_start_response.json()["details"]["active_test_run_id"] == test_run["id"]
-    assert send_data_response.status_code == 202
-    assert send_data_response.json()["terminal_event"]["artifact_object_id"] == upload_response.json()["artifact_object_id"]
-    assert evaluate_response.status_code == 200
-    assert evaluate_response.json()["status"] == "passed"
-    assert any(event["event_kind"] == "terminal.file.input.v1" for event in events_response.json())
-    assert cases_response.json()[0]["latest_run"]["id"] == test_run["id"]
-    assert runs_response.json()[0]["id"] == test_run["id"]
+    assert start_response.json()["driver_status"] == "waiting_time"
+    assert duplicate_response.status_code == 409
+    assert duplicate_response.json()["details"]["scenario_run_id"] == start_response.json()["id"]
 
 
 def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -> None:
