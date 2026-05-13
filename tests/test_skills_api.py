@@ -3,11 +3,13 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
 from app.app import create_app
 from app.core.config import Settings
+from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.exceptions import SkillsGatewayError
 from app.gateway.inference import LlmCompletion
 from app.infra.object_store import StoredObject
@@ -1242,6 +1244,17 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert review["scenario_run"]["id"] == scenario_run["id"]
     assert review["expectation_evaluations"][0]["expectation_id"] == "expect_completion"
     assert review["expectation_evaluations"][0]["status"] == "passed"
+    judge_raw_response = review["expectation_evaluations"][0]["raw_response"]
+    assert judge_raw_response["request"]["route_key"] == "skill-test-judge"
+    assert judge_raw_response["request"]["prompt_payload"]["expectation"] == "系统应确认现场步骤已完成。"
+    assert judge_raw_response["request"]["prompt_payload"]["run_status"] == "succeeded"
+    assert judge_raw_response["request"]["user_prompt"] == json.dumps(
+        judge_raw_response["request"]["prompt_payload"],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    assert judge_raw_response["parsed"]["status"] == "passed"
+    assert judge_raw_response["content"]
     assert review["replay_timeline"]
     assert list_response.json()[0]["latest_run"]["id"] == scenario_run["id"]
     assert runs_response.json()[0]["id"] == scenario_run["id"]
@@ -1253,6 +1266,134 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert fork_debug_response.status_code == 201
     assert fork_debug_response.json()["terminal_context"]["operator_mode"] == "debug"
     assert fork_debug_response.json()["terminal_context"]["debug_context"]["kind"] == "skill_debug"
+
+
+def test_skill_test_scenario_fork_uses_selected_timeline_time() -> None:
+    client, _, _ = create_test_client()
+
+    timeline = {
+        "schema_version": "psop-skill-test-timeline/v1",
+        "duration_ms": 10000,
+        "lanes": [
+            {"id": "input.text", "kind": "input", "label": "文本"},
+            {"id": "expected.semantic", "kind": "output", "label": "语义输出"},
+        ],
+        "events": [
+            {
+                "id": "early_input",
+                "lane_id": "input.text",
+                "at_ms": 1000,
+                "payload_inline": "早期输入",
+            },
+            {
+                "id": "middle_input",
+                "lane_id": "input.text",
+                "at_ms": 3000,
+                "payload_inline": "中段输入",
+            },
+            {
+                "id": "late_input",
+                "lane_id": "input.text",
+                "at_ms": 8000,
+                "payload_inline": "后续输入",
+            },
+            {
+                "id": "expect_after_late",
+                "lane_id": "expected.semantic",
+                "at_ms": 9000,
+                "expectation": "系统应处理后续输入。",
+            },
+        ],
+    }
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "skill-test-scenario-fork-selected-time",
+                "name": "Skill Test Scenario Fork Selected Time",
+                "description": "Validate forked timeline respects the selected review playhead.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Scenario fork selected time publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        scenario_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios",
+            json={
+                "name": "按选中时间 Fork 的场景",
+                "duration_ms": 10000,
+                "timeline": timeline,
+            },
+        )
+        scenario = scenario_response.json()
+        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        scenario_run = start_response.json()
+        fork_response = client.post(
+            f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-scenario",
+            json={"cursor": {"time_ms": 4000, "terminal_seq": 7, "snapshot_seq": 3}, "name": "从 4s 继续"},
+        )
+
+    assert scenario_response.status_code == 201
+    assert start_response.status_code == 202
+    assert fork_response.status_code == 201
+
+    forked = fork_response.json()
+    assert forked["duration_ms"] == 6000
+    assert forked["fork_seed"]["time_ms"] == 4000
+    assert forked["fork_seed"]["terminal_seq"] == 7
+    assert [(event["id"], event["at_ms"]) for event in forked["timeline"]["events"]] == [
+        ("fork_late_input", 4000),
+        ("fork_expect_after_late", 5000),
+    ]
+    assert [event["payload_inline"] for event in forked["timeline"]["events"] if event["lane_id"] == "input.text"] == ["后续输入"]
+
+
+def test_skill_test_judge_prompt_compacts_large_outputs() -> None:
+    old_payload = "old-output-" * 5000
+    recent_payload = "recent-output-" * 5000
+    payload = SkillTestService._build_judge_prompt_payload(
+        expectation={"expectation": "判断是否已经引导用户完成下一步。"},
+        scoped_outputs=[
+            {
+                "seq_no": 1,
+                "occurred_at": "2026-05-13T00:00:01+00:00",
+                "event_kind": "terminal.text.output.v1",
+                "mime_type": "text/plain",
+                "payload_inline": old_payload,
+            },
+            {
+                "seq_no": 2,
+                "occurred_at": "2026-05-13T00:00:02+00:00",
+                "event_kind": "terminal.text.output.v1",
+                "mime_type": "text/plain",
+                "payload_inline": recent_payload,
+            },
+        ],
+        final_output="final-output-" * 5000,
+        run_status="succeeded",
+        cutoff=datetime(2026, 5, 13, tzinfo=timezone.utc),
+        policy={
+            "transcript_budget_chars": 5000,
+            "event_budget_chars": 2000,
+            "final_output_budget_chars": 1000,
+        },
+    )
+
+    prompt_json = json.dumps(payload, ensure_ascii=False)
+
+    assert payload["terminal_output_count_before_cutoff"] == 2
+    assert payload["terminal_outputs_before_cutoff"]
+    assert payload["input_compaction"]["terminal_output_count"] == 2
+    assert payload["input_compaction"]["transcript_budget_chars"] == 5000
+    assert payload["input_compaction"]["final_output_truncated"] is True
+    assert any(item["payload_truncated"] for item in payload["terminal_outputs_before_cutoff"])
+    assert len(prompt_json) < 10000
+    assert old_payload not in prompt_json
+    assert recent_payload not in prompt_json
 
 
 def test_skill_test_scenario_rejects_duplicate_open_run() -> None:

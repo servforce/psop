@@ -13,7 +13,7 @@
         <span class="font-semibold text-slate-100">Review</span>
       </nav>
       <div class="flex shrink-0 items-center gap-2">
-        <button type="button" class="button-secondary h-9 w-9 px-0" @click="toggleSkillTestReviewPlayback()">
+        <button type="button" class="button-secondary h-9 w-9 px-0" data-tooltip="播放" @click="toggleSkillTestReviewPlayback()">
           <span class="material-symbols-outlined text-[18px]" x-text="skillTestReviewPlaybackRunning ? 'pause' : 'play_arrow'"></span>
         </button>
         <button type="button" class="button-secondary h-9 w-9 px-0" @click="restartSkillTestReviewPlayback()">
@@ -61,16 +61,16 @@
                 </div>
                 <div class="relative min-h-16 overflow-visible px-3">
                   <div class="absolute inset-x-3 top-1/2 h-px bg-slate-600"></div>
-                  <div class="pointer-events-none absolute inset-y-2 z-10 w-px bg-orange-400 shadow-[0_0_12px_rgba(251,146,60,0.65)]" :style="skillTestReviewPlayheadLeftStyle()"></div>
+                  <div class="pointer-events-none absolute inset-y-2 z-40 w-px bg-orange-400 shadow-[0_0_12px_rgba(251,146,60,0.65)]" :style="skillTestReviewPlayheadLeftStyle()"></div>
                   <template x-for="item in skillTestReviewEventsForLane(lane.id)" :key="item.render_key">
-                    <div class="absolute top-1/2 z-20 flex h-12 w-32 -translate-x-1/2 -translate-y-1/2 items-center gap-2 overflow-hidden rounded-md border px-2 py-1 text-left shadow-sm transition" :class="skillTestReviewEventFrameTone(item.event)" :style="skillTestReviewTimelineEventLeftStyle(item.event)" :data-tooltip="skillTestReviewEventTooltip(item.event)">
+                    <button type="button" class="absolute top-1/2 z-20 flex h-12 w-20 -translate-x-1/2 -translate-y-1/2 items-center gap-2 overflow-hidden rounded-md border px-2 py-1 text-left shadow-sm transition" :class="`${skillTestReviewEventFrameTone(item.event)} ${isSkillTestReviewExpectationSelected(item.event) ? 'ring-2 ring-orange-300/80' : ''}`" :style="skillTestReviewTimelineEventLeftStyle(item.event)" :data-tooltip="skillTestReviewEventTooltip(item.event)" :aria-pressed="isSkillTestReviewExpectationSelected(item.event)" @click.stop="openSkillTestReviewEvent(item.event)">
                       <span class="material-symbols-outlined shrink-0 text-[16px]" x-text="skillTestTimelineLaneIcon(item.event.lane_id)"></span>
                       <span class="min-w-0 flex-1">
                         <span class="block font-mono text-[10px] leading-4" x-text="formatSkillTestTimelineMs(item.event.at_ms)"></span>
                         <span class="block truncate text-xs font-semibold" x-text="skillTestTimelineEventLabel(item.event)"></span>
                         <span class="mt-0.5 inline-flex max-w-full truncate rounded-full border px-1 text-[9px] font-semibold leading-4" :class="skillTestReviewEventBadgeTone(item.event)" x-text="skillTestReviewAssertionVerdictLabel(item.event) || skillTestReviewStepStatusLabel(item.event)"></span>
                       </span>
-                    </div>
+                    </button>
                   </template>
                 </div>
               </div>
@@ -98,10 +98,17 @@
 
       <aside class="flex min-h-0 flex-col overflow-hidden bg-slate-950/20">
         <div class="shrink-0 border-b border-slate-800 px-4 py-3">
-          <h2 class="text-sm font-semibold text-slate-100">Terminal Transcript</h2>
-          <p class="mono-field mt-1" x-text="`${filteredSkillTestReviewTerminalEvents().length} events before cursor`"></p>
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="text-sm font-semibold text-slate-100" x-text="skillTestReviewPanelTab === 'judge' ? 'Judge Debug' : 'Terminal Transcript'"></h2>
+            <div class="inline-flex rounded-md border border-slate-800 bg-black/20 p-0.5">
+              <button type="button" class="rounded px-2 py-1 text-xs font-semibold transition" :class="skillTestReviewPanelTab === 'transcript' ? 'bg-orange-500 text-slate-950' : 'text-slate-300 hover:bg-slate-900/70'" @click="skillTestReviewPanelTab = 'transcript'">Transcript</button>
+              <button type="button" class="rounded px-2 py-1 text-xs font-semibold transition" :class="skillTestReviewPanelTab === 'judge' ? 'bg-orange-500 text-slate-950' : 'text-slate-300 hover:bg-slate-900/70'" @click="skillTestReviewPanelTab = 'judge'">Judge</button>
+            </div>
+          </div>
+          <p class="mono-field mt-1" x-show="skillTestReviewPanelTab === 'transcript'" x-text="`${filteredSkillTestReviewTerminalEvents().length} events before cursor`"></p>
+          <p class="mono-field mt-1" x-show="skillTestReviewPanelTab === 'judge'" x-text="selectedSkillTestReviewExpectationEvent() ? selectedSkillTestReviewExpectationEvent().id : 'no semantic assertion selected'"></p>
         </div>
-        <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+        <div x-show="skillTestReviewPanelTab === 'transcript'" class="min-h-0 flex-1 overflow-auto px-4 py-3">
           <template x-if="filteredSkillTestReviewTerminalEvents().length === 0">
             <div class="empty-state py-16">
               <span class="material-symbols-outlined text-[30px] text-slate-400">forum</span>
@@ -126,7 +133,142 @@
             </template>
           </div>
         </div>
+        <div x-show="skillTestReviewPanelTab === 'judge'" class="min-h-0 flex-1 overflow-auto px-4 py-3">
+          <template x-if="!selectedSkillTestReviewExpectationEvent()">
+            <div class="empty-state py-16">
+              <span class="material-symbols-outlined text-[30px] text-slate-400">rule</span>
+              <p class="mt-3 text-sm text-slate-500">请选择时间轴中的语义断言事件。</p>
+            </div>
+          </template>
+          <template x-if="selectedSkillTestReviewExpectationEvent()">
+            <div class="space-y-4">
+              <section class="rounded-md border border-slate-800 bg-black/25 p-3">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold text-slate-100" x-text="selectedSkillTestReviewExpectationEvent().id"></p>
+                    <p class="mono-field mt-1" x-text="formatSkillTestTimelineMs(selectedSkillTestReviewExpectationEvent().at_ms)"></p>
+                  </div>
+                  <span class="status-badge shrink-0" :class="statusBadgeTone(selectedSkillTestReviewEvaluation()?.status || skillTestReviewStepStatus(selectedSkillTestReviewExpectationEvent()))" x-text="skillTestReviewAssertionVerdictLabel(selectedSkillTestReviewExpectationEvent()) || skillTestReviewStepStatusLabel(selectedSkillTestReviewExpectationEvent())"></span>
+                </div>
+                <p class="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-100" x-text="selectedSkillTestReviewExpectationEvent().expectation"></p>
+                <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div class="rounded border border-slate-800 bg-black/20 p-2">
+                    <p class="field-label">Confidence</p>
+                    <p class="mono-field mt-1" x-text="selectedSkillTestReviewEvaluation() ? Number(selectedSkillTestReviewEvaluation().confidence || 0).toFixed(2) : 'N/A'"></p>
+                  </div>
+                  <div class="rounded border border-slate-800 bg-black/20 p-2">
+                    <p class="field-label">Model</p>
+                    <p class="mono-field mt-1 truncate" x-text="selectedSkillTestReviewEvaluation()?.judge_model || 'N/A'"></p>
+                  </div>
+                  <div class="rounded border border-slate-800 bg-black/20 p-2">
+                    <p class="field-label">Provider</p>
+                    <p class="mono-field mt-1 truncate" x-text="selectedSkillTestReviewEvaluation()?.judge_provider || 'N/A'"></p>
+                  </div>
+                  <div class="rounded border border-slate-800 bg-black/20 p-2">
+                    <p class="field-label">Prompt Hash</p>
+                    <p class="mono-field mt-1 truncate" x-text="selectedSkillTestReviewEvaluation()?.prompt_hash || 'N/A'"></p>
+                  </div>
+                </div>
+                <p class="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-slate-300" x-text="selectedSkillTestReviewEvaluation()?.reason || '暂无 Judge 结论。'"></p>
+              </section>
+
+              <details open class="rounded-md border border-slate-800 bg-black/25 p-3">
+                <summary class="cursor-pointer text-sm font-semibold text-slate-100">大模型输入 Payload</summary>
+                <p class="mt-2 text-xs text-slate-400" x-text="selectedSkillTestReviewJudgeInputNotice()"></p>
+                <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="formatSkillTestReviewDebugJson(selectedSkillTestReviewJudgePromptPayload())"></pre>
+              </details>
+
+              <details class="rounded-md border border-slate-800 bg-black/25 p-3" x-show="selectedSkillTestReviewJudgeRequest()">
+                <summary class="cursor-pointer text-sm font-semibold text-slate-100">System Prompt</summary>
+                <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="selectedSkillTestReviewJudgeRequest()?.system_prompt || ''"></pre>
+              </details>
+
+              <details class="rounded-md border border-slate-800 bg-black/25 p-3" x-show="selectedSkillTestReviewJudgeRequest()">
+                <summary class="cursor-pointer text-sm font-semibold text-slate-100">User Prompt</summary>
+                <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="selectedSkillTestReviewJudgeRequest()?.user_prompt || ''"></pre>
+              </details>
+
+              <details open class="rounded-md border border-slate-800 bg-black/25 p-3">
+                <summary class="cursor-pointer text-sm font-semibold text-slate-100">大模型原始输出</summary>
+                <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="selectedSkillTestReviewJudgeRawOutput() || '暂无原始输出'"></pre>
+              </details>
+
+              <details open class="rounded-md border border-slate-800 bg-black/25 p-3">
+                <summary class="cursor-pointer text-sm font-semibold text-slate-100">解析结果</summary>
+                <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="formatSkillTestReviewDebugJson(selectedSkillTestReviewJudgeParsedOutput())"></pre>
+              </details>
+
+              <details class="rounded-md border border-slate-800 bg-black/25 p-3">
+                <summary class="cursor-pointer text-sm font-semibold text-slate-100">Usage / Provider Raw</summary>
+                <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="formatSkillTestReviewDebugJson({ usage: selectedSkillTestReviewJudgeUsage(), raw: selectedSkillTestReviewJudgeProviderRaw() })"></pre>
+              </details>
+            </div>
+          </template>
+        </div>
       </aside>
     </div>
   </section>
+
+  <template x-if="skillTestReviewExpandedEvent()">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="事件完整内容" @click.self="closeSkillTestReviewEvent()" @keydown.escape.window="closeSkillTestReviewEvent()">
+      <section class="flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-md border border-slate-800 bg-slate-950 shadow-xl shadow-black/50">
+        <div class="flex shrink-0 items-start justify-between gap-4 border-b border-slate-800 bg-slate-950/70 px-4 py-3">
+          <div class="flex min-w-0 items-start gap-3">
+            <span class="material-symbols-outlined rounded-md border p-1 text-[18px]" :class="skillTestTimelineLaneTone(skillTestReviewExpandedEvent().lane_id)" x-text="skillTestTimelineLaneIcon(skillTestReviewExpandedEvent().lane_id)"></span>
+            <div class="min-w-0">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500" x-text="`${skillTestTimelineLaneLabel({ id: skillTestReviewExpandedEvent().lane_id })} · ${formatSkillTestTimelineMs(skillTestReviewExpandedEvent().at_ms || 0)}`"></p>
+              <h2 class="mt-1 truncate text-lg font-semibold text-slate-100" x-text="skillTestReviewEventTitle(skillTestReviewExpandedEvent())"></h2>
+            </div>
+          </div>
+          <div class="flex shrink-0 items-center gap-2">
+            <span class="status-badge" :class="statusBadgeTone(skillTestReviewStepStatus(skillTestReviewExpandedEvent()))" x-text="skillTestReviewAssertionVerdictLabel(skillTestReviewExpandedEvent()) || skillTestReviewStepStatusLabel(skillTestReviewExpandedEvent())"></span>
+            <button type="button" class="button-secondary h-9 w-9 px-0" title="关闭" aria-label="关闭" @click="closeSkillTestReviewEvent()">
+              <span class="material-symbols-outlined text-[18px]">close</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="min-h-0 flex-1 overflow-auto px-4 py-4">
+          <div class="grid gap-3 md:grid-cols-2">
+            <template x-for="meta in skillTestReviewEventMetadata(skillTestReviewExpandedEvent())" :key="meta.label">
+              <div class="rounded-md border border-slate-800 bg-black/20 p-3">
+                <p class="field-label" x-text="meta.label"></p>
+                <p class="mono-field mt-1 break-words" x-text="meta.value"></p>
+              </div>
+            </template>
+          </div>
+
+          <section class="mt-4 rounded-md border border-slate-800 bg-black/25 p-3">
+            <p class="field-label">事件内容</p>
+            <pre class="mt-3 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="skillTestReviewEventPrimaryContent(skillTestReviewExpandedEvent())"></pre>
+          </section>
+
+          <template x-if="skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent())">
+            <section class="mt-4 rounded-md border border-slate-800 bg-black/25 p-3">
+              <div class="flex items-center justify-between gap-3">
+                <p class="text-sm font-semibold text-slate-100">Judge 结论</p>
+                <span class="status-badge" :class="statusBadgeTone(skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent()).status)" x-text="formatStatus(skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent()).status)"></span>
+              </div>
+              <div class="mt-3 grid gap-3 md:grid-cols-2">
+                <div class="rounded-md border border-slate-800 bg-black/20 p-3">
+                  <p class="field-label">Confidence</p>
+                  <p class="mono-field mt-1" x-text="Number(skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent()).confidence || 0).toFixed(2)"></p>
+                </div>
+                <div class="rounded-md border border-slate-800 bg-black/20 p-3">
+                  <p class="field-label">Model</p>
+                  <p class="mono-field mt-1 break-words" x-text="skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent()).judge_model || 'N/A'"></p>
+                </div>
+              </div>
+              <p class="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-300" x-text="skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent()).reason || '暂无 Judge 结论。'"></p>
+            </section>
+          </template>
+
+          <details open class="mt-4 rounded-md border border-slate-800 bg-black/25 p-3">
+            <summary class="cursor-pointer text-sm font-semibold text-slate-100">原始事件 JSON</summary>
+            <pre class="mt-3 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="skillTestReviewExpandedEventRawJson(skillTestReviewExpandedEvent())"></pre>
+          </details>
+        </div>
+      </section>
+    </div>
+  </template>
 </div>

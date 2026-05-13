@@ -48,6 +48,9 @@ TIMELINE_DRIVER_JOB_TYPE = "skill_test_timeline_driver"
 DEFAULT_TIMELINE_DURATION_MS = 1_800_000
 OPEN_SCENARIO_RUN_STATUSES = {"pending", "queued", "running", "waiting_input"}
 TERMINAL_RUNTIME_STATUSES = {"succeeded", "failed", "cancelled"}
+DEFAULT_JUDGE_TRANSCRIPT_BUDGET_CHARS = 60_000
+DEFAULT_JUDGE_EVENT_BUDGET_CHARS = 8_000
+DEFAULT_JUDGE_FINAL_OUTPUT_BUDGET_CHARS = 8_000
 DEFAULT_TIMELINE_LANES = [
     {"id": "input.text", "kind": "input", "label": "文本", "event_kind": "terminal.text.input.v1"},
     {"id": "input.image", "kind": "input", "label": "图片", "event_kind": "terminal.image.input.v1"},
@@ -606,21 +609,30 @@ class SkillTestService:
     ) -> SkillTestExpectationEvaluation:
         policy = scenario.judge_policy or {}
         route_key = str(policy.get("route_key") or "skill-test-judge")
-        prompt_payload = {
-            "expectation": expectation.get("expectation") or "",
-            "cutoff_occurred_at": cutoff.isoformat(),
-            "terminal_outputs_before_cutoff": [item.model_dump(mode="json") for item in scoped_outputs],
-            "final_output": final_output,
-            "run_status": run_status,
-        }
+        prompt_payload = self._build_judge_prompt_payload(
+            expectation=expectation,
+            scoped_outputs=scoped_outputs,
+            final_output=final_output,
+            run_status=run_status,
+            cutoff=cutoff,
+            policy=policy,
+        )
         system_prompt = (
             "你是 PSOP Skill 黑盒时序测试 Judge。"
             "只根据给定时间点以前的真实 terminal output 判断语义期望是否满足。"
+            "terminal_outputs_before_cutoff 是按 seq_no 保留的精简 transcript，payload_text 可能被裁剪。"
+            "若证据因裁剪或缺失不足以判断，返回 inconclusive 并说明 missing_evidence。"
             "必须只输出 JSON，字段为 status、confidence、reason、evidence_refs、missing_evidence。"
             "status 只能是 passed、failed、inconclusive。"
         )
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True)
         prompt_hash = hashlib.sha256(f"{system_prompt}\n{user_prompt}".encode("utf-8")).hexdigest()
+        request_snapshot = {
+            "route_key": route_key,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "prompt_payload": prompt_payload,
+        }
         status = "inconclusive"
         confidence = 0.0
         reason = "Judge 未能给出有效结论。"
@@ -637,7 +649,13 @@ class SkillTestService:
             provider = completion.provider
             model = completion.model
             parsed = json.loads(completion.content)
-            raw_response = {"content": completion.content, "parsed": parsed, "usage": completion.usage, "raw": completion.raw_response}
+            raw_response = {
+                "request": request_snapshot,
+                "content": completion.content,
+                "parsed": parsed,
+                "usage": completion.usage,
+                "raw": completion.raw_response,
+            }
             parsed_status = str(parsed.get("status") or "").lower()
             status = parsed_status if parsed_status in {"passed", "failed", "inconclusive"} else "inconclusive"
             confidence = self._coerce_confidence(parsed.get("confidence"))
@@ -645,7 +663,7 @@ class SkillTestService:
             raw_refs = parsed.get("evidence_refs")
             evidence_refs = raw_refs if isinstance(raw_refs, list) else []
         except Exception as exc:
-            raw_response = {"error": str(exc), "error_type": exc.__class__.__name__}
+            raw_response = {"request": request_snapshot, "error": str(exc), "error_type": exc.__class__.__name__}
             reason = f"Judge 调用失败或响应非法：{exc.__class__.__name__}"
             status = "inconclusive"
 
@@ -920,6 +938,169 @@ class SkillTestService:
         except (TypeError, ValueError):
             return 0.0
         return max(0.0, min(1.0, confidence))
+
+    @classmethod
+    def _build_judge_prompt_payload(
+        cls,
+        *,
+        expectation: dict[str, Any],
+        scoped_outputs: list[Any],
+        final_output: str,
+        run_status: str,
+        cutoff: datetime,
+        policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        transcript_budget = cls._coerce_judge_budget(
+            policy.get("transcript_budget_chars"),
+            default=DEFAULT_JUDGE_TRANSCRIPT_BUDGET_CHARS,
+            maximum=150_000,
+        )
+        event_budget = cls._coerce_judge_budget(
+            policy.get("event_budget_chars"),
+            default=DEFAULT_JUDGE_EVENT_BUDGET_CHARS,
+            maximum=40_000,
+        )
+        final_output_budget = cls._coerce_judge_budget(
+            policy.get("final_output_budget_chars"),
+            default=DEFAULT_JUDGE_FINAL_OUTPUT_BUDGET_CHARS,
+            maximum=40_000,
+        )
+        compact_outputs, compaction = cls._compact_judge_terminal_outputs(
+            scoped_outputs,
+            transcript_budget=transcript_budget,
+            event_budget=event_budget,
+        )
+        final_output_text, final_output_truncated = cls._truncate_judge_text(
+            cls._judge_text(final_output),
+            final_output_budget,
+        )
+        compaction.update(
+            {
+                "final_output_budget_chars": final_output_budget,
+                "final_output_chars": len(cls._judge_text(final_output)),
+                "final_output_included_chars": len(final_output_text),
+                "final_output_truncated": final_output_truncated,
+            }
+        )
+        return {
+            "expectation": expectation.get("expectation") or "",
+            "cutoff_occurred_at": cutoff.isoformat(),
+            "terminal_outputs_before_cutoff": compact_outputs,
+            "terminal_output_count_before_cutoff": len(scoped_outputs),
+            "final_output": final_output_text,
+            "run_status": run_status,
+            "input_compaction": compaction,
+        }
+
+    @classmethod
+    def _compact_judge_terminal_outputs(
+        cls,
+        scoped_outputs: list[Any],
+        *,
+        transcript_budget: int,
+        event_budget: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        candidates = [cls._compact_judge_terminal_output(item, event_budget=event_budget) for item in scoped_outputs]
+        included_reversed: list[dict[str, Any]] = []
+        included_chars = 0
+        for candidate in reversed(candidates):
+            candidate_chars = cls._json_chars(candidate)
+            if included_reversed and included_chars + candidate_chars > transcript_budget:
+                continue
+            if not included_reversed and candidate_chars > transcript_budget:
+                static_chars = max(0, candidate_chars - len(str(candidate.get("payload_text") or "")))
+                available_payload_chars = max(0, transcript_budget - static_chars)
+                payload_text, truncated = cls._truncate_judge_text(str(candidate.get("payload_text") or ""), available_payload_chars)
+                candidate = {
+                    **candidate,
+                    "payload_text": payload_text,
+                    "payload_truncated": True,
+                    "truncation_reason": "transcript_budget" if truncated else candidate.get("truncation_reason"),
+                }
+                candidate_chars = cls._json_chars(candidate)
+            if included_chars + candidate_chars <= transcript_budget or not included_reversed:
+                included_reversed.append(candidate)
+                included_chars += candidate_chars
+        included = list(reversed(included_reversed))
+        included_seq_no = {item.get("seq_no") for item in included}
+        omitted_seq_no = [item.get("seq_no") for item in candidates if item.get("seq_no") not in included_seq_no]
+        return included, {
+            "strategy": "recent_outputs_with_per_event_truncation",
+            "transcript_budget_chars": transcript_budget,
+            "event_budget_chars": event_budget,
+            "terminal_output_count": len(scoped_outputs),
+            "included_terminal_output_count": len(included),
+            "omitted_terminal_output_count": max(0, len(scoped_outputs) - len(included)),
+            "omitted_seq_no": omitted_seq_no,
+            "included_chars": included_chars,
+            "truncated_seq_no": [item.get("seq_no") for item in included if item.get("payload_truncated")],
+        }
+
+    @classmethod
+    def _compact_judge_terminal_output(cls, event: Any, *, event_budget: int) -> dict[str, Any]:
+        payload_text = cls._judge_text(cls._event_value(event, "payload_inline"))
+        truncated_text, truncated = cls._truncate_judge_text(payload_text, event_budget)
+        return {
+            "seq_no": cls._event_value(event, "seq_no"),
+            "occurred_at": cls._judge_datetime(cls._event_value(event, "occurred_at")),
+            "event_kind": cls._event_value(event, "event_kind"),
+            "mime_type": cls._event_value(event, "mime_type"),
+            "payload_text": truncated_text,
+            "payload_chars": len(payload_text),
+            "included_payload_chars": len(truncated_text),
+            "payload_truncated": truncated,
+            "truncation_reason": "event_budget" if truncated else "",
+        }
+
+    @staticmethod
+    def _coerce_judge_budget(value: Any, *, default: int, maximum: int) -> int:
+        try:
+            budget = int(value)
+        except (TypeError, ValueError):
+            budget = default
+        return max(1_000, min(maximum, budget))
+
+    @staticmethod
+    def _truncate_judge_text(value: str, max_chars: int) -> tuple[str, bool]:
+        if len(value) <= max_chars:
+            return value, False
+        if max_chars <= 0:
+            return "", bool(value)
+        omitted = len(value) - max_chars
+        marker = f"\n...[truncated {omitted} chars]...\n"
+        if max_chars <= len(marker) + 8:
+            return value[:max_chars], True
+        available = max_chars - len(marker)
+        head_chars = max(1, available // 2)
+        tail_chars = max(1, available - head_chars)
+        return f"{value[:head_chars]}{marker}{value[-tail_chars:]}", True
+
+    @staticmethod
+    def _judge_text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except TypeError:
+            return str(value)
+
+    @staticmethod
+    def _json_chars(value: Any) -> int:
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+    @staticmethod
+    def _judge_datetime(value: Any) -> str:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value or "")
+
+    @staticmethod
+    def _event_value(event: Any, name: str) -> Any:
+        if isinstance(event, dict):
+            return event.get(name)
+        return getattr(event, name, None)
 
     def _build_run_terminal_context(
         self,

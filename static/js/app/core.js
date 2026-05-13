@@ -27,6 +27,7 @@
 
       async boot() {
         this.installButtonTooltips();
+        this.installDangerActionConfirmations();
         try {
           await this.loadPageFragments();
         } catch (error) {
@@ -53,6 +54,84 @@
         document.addEventListener("pointerover", ensureTooltip, true);
         document.addEventListener("focusin", ensureTooltip, true);
         this.buttonTooltipInstalled = true;
+      },
+
+
+      installDangerActionConfirmations() {
+        if (this.dangerActionConfirmationInstalled || typeof document === "undefined") {
+          return;
+        }
+
+        document.addEventListener("click", (event) => this.handleDangerActionClick(event), true);
+        this.dangerActionConfirmationInstalled = true;
+      },
+
+
+      handleDangerActionClick(event) {
+        if (event?.defaultPrevented) {
+          return;
+        }
+        const button = event?.target?.closest?.("button,[role='button']");
+        if (!button || this.isButtonInteractionDisabled(button)) {
+          return;
+        }
+
+        const message = this.describeDangerActionConfirmation(button);
+        if (!message || this.confirmDangerAction(message, button)) {
+          return;
+        }
+
+        event.preventDefault?.();
+        event.stopImmediatePropagation?.();
+      },
+
+
+      isButtonInteractionDisabled(button) {
+        return (
+          button.disabled ||
+          button.getAttribute?.("disabled") !== null && button.getAttribute?.("disabled") !== "" ||
+          button.getAttribute?.("aria-disabled") === "true"
+        );
+      },
+
+
+      describeDangerActionConfirmation(button) {
+        if (!button || button.dataset?.confirmDisabled === "true") {
+          return "";
+        }
+        const explicitMessage = this.normalizeTooltipText(button.dataset?.dangerConfirm || button.dataset?.confirmMessage || "");
+        if (explicitMessage && explicitMessage !== "true") {
+          return explicitMessage;
+        }
+        if (!this.isDangerActionButton(button)) {
+          return "";
+        }
+        const actionLabel = this.describeButtonAction(button) || "执行此操作";
+        const normalizedAction = actionLabel.startsWith("确认") ? actionLabel : `确认${actionLabel}`;
+        return `${normalizedAction}？此操作可能无法撤销。`;
+      },
+
+
+      isDangerActionButton(button) {
+        const clickAction = this.buttonClickAction(button);
+        if (/\bopenDeleteModal\b/.test(clickAction)) {
+          return false;
+        }
+        if (button.dataset?.dangerConfirm === "true") {
+          return true;
+        }
+        if (button.classList?.contains("button-danger")) {
+          return true;
+        }
+        return /\b(delete|remove|archive)[A-Z_]/.test(clickAction);
+      },
+
+
+      confirmDangerAction(message) {
+        if (typeof window === "undefined" || typeof window.confirm !== "function") {
+          return true;
+        }
+        return window.confirm(message);
       },
 
       refreshButtonTooltips(root = (typeof document === "undefined" ? null : document)) {
@@ -202,11 +281,7 @@
       },
 
       describeButtonClickAction(button) {
-        const clickAction =
-          button.getAttribute("@click") ||
-          button.getAttribute("x-on:click") ||
-          button.getAttribute("x-on:click.prevent") ||
-          "";
+        const clickAction = this.buttonClickAction(button);
         const actionTooltips = [
           [/forkSkillTestScenario/, "Fork 测试场景"],
           [/forkSkillDebug/, "Fork 调试运行"],
@@ -224,6 +299,18 @@
         ];
         const matched = actionTooltips.find(([pattern]) => pattern.test(clickAction));
         return matched ? matched[1] : "";
+      },
+
+
+      buttonClickAction(button) {
+        return (
+          button?.getAttribute?.("@click") ||
+          button?.getAttribute?.("x-on:click") ||
+          button?.getAttribute?.("x-on:click.prevent") ||
+          button?.getAttribute?.("@click.stop") ||
+          button?.getAttribute?.("x-on:click.stop") ||
+          ""
+        );
       },
 
 
@@ -348,6 +435,7 @@
         }
         if (this.route.name !== "skill-test-scenario-review") {
           this.stopSkillTestReviewPlayback?.();
+          this.stopSkillTestReviewPolling?.();
         }
         if (this.route.name !== "compiler-artifact") {
           this.destroyCompilerArtifactViewer();

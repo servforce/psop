@@ -148,14 +148,14 @@
               <p class="rounded-md border border-slate-800 bg-slate-900/35 px-3 py-4 text-sm text-slate-400">暂无运行记录</p>
             </template>
             <template x-for="testRun in sortedSkillTestRuns()" :key="testRun.id">
-              <button type="button" class="w-full rounded-md border border-slate-800 bg-slate-900/40 p-3 text-left transition hover:bg-slate-900" @click="navigate(`/admin/skills/${currentSkill.id}/tests/${skillTestCase.id}/runs/${testRun.id}/review`)">
-                <div class="flex items-center justify-between gap-2">
+              <button type="button" class="min-w-0 w-full overflow-hidden rounded-md border border-slate-800 bg-slate-900/40 p-3 text-left transition hover:bg-slate-900" @click="navigate(`/admin/skills/${currentSkill.id}/tests/${skillTestCase.id}/runs/${testRun.id}/review`)">
+                <div class="flex min-w-0 items-center justify-between gap-2">
                   <span class="status-badge" :class="statusBadgeTone(testRun.status)" x-text="formatStatus(testRun.status)"></span>
-                  <span class="mono-field" x-text="skillTestRunActivityLabel(testRun)"></span>
+                  <span class="mono-field min-w-0 truncate text-right" x-text="skillTestRunActivityLabel(testRun)"></span>
                 </div>
-                <div class="mt-2 flex items-center justify-between gap-2">
-                  <span class="mono-field truncate" x-text="testRun.id"></span>
-                  <span class="mono-field shrink-0" x-text="formatAssertionSummary(testRun.result_summary)"></span>
+                <div class="mt-2 min-w-0 space-y-1">
+                  <span class="mono-field block truncate" x-text="testRun.id"></span>
+                  <span class="mono-field block break-words leading-5" x-text="formatAssertionSummary(testRun.result_summary)"></span>
                 </div>
               </button>
             </template>

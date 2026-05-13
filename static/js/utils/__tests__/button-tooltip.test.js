@@ -168,3 +168,79 @@ test("button tooltips refresh generated text when button labels change", () => {
   expect(attrs.title).toBe("运行");
   expect(attrs["aria-label"]).toBe("运行");
 });
+
+test("danger action buttons ask for confirmation before running", () => {
+  const methods = loadCoreMethods();
+  const { element } = createButton({
+    classes: ["button-danger"],
+    childNodes: [
+      createElement({
+        classes: ["material-symbols-outlined"],
+        childNodes: [textNode("delete")]
+      })
+    ]
+  });
+  const event = {
+    target: element,
+    defaultPrevented: false,
+    preventDefault: jest.fn(function preventDefault() {
+      this.defaultPrevented = true;
+    }),
+    stopImmediatePropagation: jest.fn()
+  };
+  methods.confirmDangerAction = jest.fn(() => false);
+
+  methods.handleDangerActionClick(event);
+
+  expect(methods.describeDangerActionConfirmation(element)).toBe("确认删除？此操作可能无法撤销。");
+  expect(methods.confirmDangerAction).toHaveBeenCalledWith("确认删除？此操作可能无法撤销。", element);
+  expect(event.preventDefault).toHaveBeenCalledTimes(1);
+  expect(event.stopImmediatePropagation).toHaveBeenCalledTimes(1);
+});
+
+test("confirmed danger actions continue to their original click handler", () => {
+  const methods = loadCoreMethods();
+  const { element } = createButton({
+    classes: ["button-danger"],
+    childNodes: [textNode("删除场景")]
+  });
+  const event = {
+    target: element,
+    defaultPrevented: false,
+    preventDefault: jest.fn(),
+    stopImmediatePropagation: jest.fn()
+  };
+  methods.confirmDangerAction = jest.fn(() => true);
+
+  methods.handleDangerActionClick(event);
+
+  expect(methods.confirmDangerAction).toHaveBeenCalledWith("确认删除场景？此操作可能无法撤销。", element);
+  expect(event.preventDefault).not.toHaveBeenCalled();
+  expect(event.stopImmediatePropagation).not.toHaveBeenCalled();
+});
+
+test("opening the existing delete modal does not add another confirmation", () => {
+  const methods = loadCoreMethods();
+  const { element } = createButton({
+    classes: ["icon-button-danger"],
+    attrs: { "@click.stop": "openDeleteModal(skill)" },
+    childNodes: [
+      createElement({
+        classes: ["material-symbols-outlined"],
+        childNodes: [textNode("delete")]
+      })
+    ]
+  });
+
+  expect(methods.describeDangerActionConfirmation(element)).toBe("");
+});
+
+test("explicit danger confirmation messages are supported", () => {
+  const methods = loadCoreMethods();
+  const { element } = createButton({
+    dataset: { dangerConfirm: "确认移除此事件？" },
+    childNodes: [textNode("移除")]
+  });
+
+  expect(methods.describeDangerActionConfirmation(element)).toBe("确认移除此事件？");
+});

@@ -86,6 +86,7 @@
           waiting_runtime: "等待运行",
           matched: "已匹配",
           sent: "已发送",
+          output: "已输出",
           triggered: "已触发",
           not_occurred: "未发生",
           inconclusive: "未定",
@@ -113,7 +114,7 @@
         if (["passed"].includes(normalized)) {
           return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
         }
-        if (["compiling", "running", "waiting_input", "waiting_checkpoint", "waiting_runtime", "in_progress", "processing", "matched", "triggered"].includes(normalized)) {
+        if (["compiling", "running", "waiting_input", "waiting_checkpoint", "waiting_runtime", "in_progress", "processing", "matched", "triggered", "output"].includes(normalized)) {
           return "border-sky-500/25 bg-sky-500/10 text-sky-200";
         }
         if (["requested", "pending", "queued", "draft", "retrying", "sent", "inconclusive"].includes(normalized)) {
