@@ -26,6 +26,7 @@
   window.PSOPConsoleCoreMethods = {
 
       async boot() {
+        this.installButtonTooltips();
         try {
           await this.loadPageFragments();
         } catch (error) {
@@ -38,6 +39,191 @@
           await this.loadCurrentRoute();
         });
         await this.loadCurrentRoute();
+      },
+
+      installButtonTooltips() {
+        if (this.buttonTooltipInstalled || typeof document === "undefined") {
+          return;
+        }
+
+        const ensureTooltip = (event) => {
+          this.ensureButtonTooltip(event.target);
+        };
+
+        document.addEventListener("pointerover", ensureTooltip, true);
+        document.addEventListener("focusin", ensureTooltip, true);
+        this.buttonTooltipInstalled = true;
+      },
+
+      refreshButtonTooltips(root = (typeof document === "undefined" ? null : document)) {
+        if (!root?.querySelectorAll) {
+          return;
+        }
+        root.querySelectorAll("button,[role='button']").forEach((button) => {
+          this.ensureButtonTooltip(button);
+        });
+      },
+
+      scheduleButtonTooltipRefresh() {
+        if (typeof window !== "undefined" && window.requestAnimationFrame) {
+          window.requestAnimationFrame(() => this.refreshButtonTooltips());
+          return;
+        }
+        this.refreshButtonTooltips();
+      },
+
+      ensureButtonTooltip(target) {
+        const button = target?.closest?.("button,[role='button']");
+        if (!button || button.dataset?.tooltipDisabled === "true") {
+          return;
+        }
+
+        const tooltip = this.describeButtonAction(button);
+        if (!tooltip) {
+          return;
+        }
+
+        const titleIsAuto = button.dataset?.autoTitle === "true";
+        const ariaIsAuto = button.dataset?.autoAria === "true";
+        if (titleIsAuto || !String(button.getAttribute("title") || "").trim()) {
+          button.setAttribute("title", tooltip);
+          if (button.dataset) {
+            button.dataset.autoTitle = "true";
+          }
+        }
+        if (ariaIsAuto || !String(button.getAttribute("aria-label") || "").trim()) {
+          button.setAttribute("aria-label", tooltip);
+          if (button.dataset) {
+            button.dataset.autoAria = "true";
+          }
+        }
+      },
+
+      describeButtonAction(button) {
+        const explicitDescription =
+          button.dataset?.tooltip ||
+          (button.dataset?.autoAria === "true" ? "" : button.getAttribute("aria-label")) ||
+          (button.dataset?.autoTitle === "true" ? "" : button.getAttribute("title"));
+        if (String(explicitDescription || "").trim()) {
+          return this.normalizeTooltipText(explicitDescription);
+        }
+
+        const visibleText = this.extractButtonVisibleText(button);
+        if (visibleText) {
+          if (button.classList?.contains("breadcrumb-link")) {
+            return `打开 ${visibleText}`;
+          }
+          if (button.classList?.contains("detail-tab") || button.getAttribute("role") === "tab") {
+            return `切换到${visibleText}`;
+          }
+          return visibleText;
+        }
+
+        const iconDescription = this.describeButtonIcon(button);
+        if (iconDescription) {
+          return iconDescription;
+        }
+
+        return this.describeButtonClickAction(button);
+      },
+
+      normalizeTooltipText(value) {
+        return String(value || "").replace(/\s+/g, " ").trim();
+      },
+
+      extractButtonVisibleText(button) {
+        const readText = (node) => {
+          if (!node) {
+            return "";
+          }
+          if (node.nodeType === 3) {
+            return node.textContent || "";
+          }
+          if (node.nodeType !== 1) {
+            return "";
+          }
+          if (
+            node.classList?.contains("material-symbols-outlined") ||
+            node.classList?.contains("material-symbols-rounded") ||
+            node.classList?.contains("material-symbols-sharp") ||
+            node.getAttribute?.("aria-hidden") === "true"
+          ) {
+            return "";
+          }
+          return Array.from(node.childNodes || []).map(readText).join(" ");
+        };
+
+        return this.normalizeTooltipText(Array.from(button.childNodes || []).map(readText).join(" "));
+      },
+
+      describeButtonIcon(button) {
+        const icon = button.querySelector?.(".material-symbols-outlined, .material-symbols-rounded, .material-symbols-sharp");
+        const iconName = this.normalizeTooltipText(icon?.textContent || icon?.getAttribute?.("x-text") || "");
+        const iconTooltips = {
+          account_tree: "查看图预览",
+          add: "新增",
+          add_circle: "创建",
+          archive: "归档",
+          arrow_back: "返回",
+          attach_file: "添加附件",
+          badge: "查看概览",
+          call_split: "Fork 场景",
+          check: "保存",
+          check_circle: "完成",
+          close: "关闭",
+          code_blocks: "查看源码",
+          content_copy: "复制",
+          create_new_folder: "新建文件夹",
+          data_object: "查看 JSON",
+          delete: "删除",
+          done: "完成",
+          drive_folder_upload: "返回上级目录",
+          edit: "编辑",
+          fact_check: "编辑语义事件",
+          format_indent_increase: "格式化",
+          history: "查看历史",
+          hub: "切换菜单",
+          note_add: "新建文件",
+          open_in_new: "打开",
+          pause: "暂停",
+          play_arrow: "运行",
+          play_circle: "运行",
+          refresh: "刷新",
+          replay: "重新播放",
+          restart_alt: "重置",
+          rocket_launch: "发布",
+          save: "保存",
+          science: "测试",
+          send: "发送",
+          terminal: "调试",
+          upload_file: "上传文件"
+        };
+        return iconTooltips[iconName] || "";
+      },
+
+      describeButtonClickAction(button) {
+        const clickAction =
+          button.getAttribute("@click") ||
+          button.getAttribute("x-on:click") ||
+          button.getAttribute("x-on:click.prevent") ||
+          "";
+        const actionTooltips = [
+          [/forkSkillTestScenario/, "Fork 测试场景"],
+          [/forkSkillDebug/, "Fork 调试运行"],
+          [/\bcopyText\b/, "复制"],
+          [/\bsave[A-Z_]/, "保存"],
+          [/\bdelete[A-Z_]/, "删除"],
+          [/\bremove[A-Z_]/, "移除"],
+          [/\bclose[A-Z_]/, "关闭"],
+          [/\breset[A-Z_]/, "重置"],
+          [/\bformat[A-Z_]/, "格式化"],
+          [/\bstart[A-Z_]/, "启动"],
+          [/\bopen[A-Z_]/, "打开"],
+          [/\bnavigate\b/, "打开"],
+          [/\bload[A-Z_]/, "刷新"]
+        ];
+        const matched = actionTooltips.find(([pattern]) => pattern.test(clickAction));
+        return matched ? matched[1] : "";
       },
 
 
@@ -74,6 +260,7 @@
             window.Alpine.initTree(element);
           })
         );
+        this.refreshButtonTooltips();
       },
 
 
@@ -158,6 +345,9 @@
         this.clearNotice();
         if (!["run-live", "skill-run-live", "skill-debug-live"].includes(this.route.name)) {
           this.disconnectRunWebSocket();
+        }
+        if (this.route.name !== "skill-test-scenario-review") {
+          this.stopSkillTestReviewPlayback?.();
         }
         if (this.route.name !== "compiler-artifact") {
           this.destroyCompilerArtifactViewer();
@@ -270,6 +460,7 @@
           this.showNotice("error", error.message || "页面加载失败。");
         } finally {
           this.loadingPage = false;
+          this.scheduleButtonTooltipRefresh();
         }
       },
 

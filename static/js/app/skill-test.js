@@ -44,6 +44,7 @@
           expectation_text: ""
         };
         this.selectedSkillTestTimelineEventId = "";
+        this.selectedSkillTestTimelineEventIds = [];
         this.skillTestTimelineEventDraft = null;
       },
 
@@ -98,6 +99,8 @@
           this.parseSkillTestJsonField("timeline_json", this.defaultSkillTestTimeline(), "时间轴 JSON 必须是对象。")
         );
         this.validateSkillTestTimelineForSave(timeline);
+        this.skillTestCaseForm.duration_ms = timeline.duration_ms;
+        this.skillTestCaseForm.timeline_json = JSON.stringify(timeline, null, 2);
         return timeline;
       },
 
@@ -141,6 +144,43 @@
         return { event_kind: "terminal.text.input.v1", mime_type: "text/plain" };
       },
 
+      skillTestTimelineEventIdPrefix(laneId) {
+        return this.isSkillTestExpectationLane(laneId) ? "expected" : "input";
+      },
+
+      skillTestTimelineEventIdCounts(events) {
+        return (events || []).reduce((counts, event) => {
+          const eventId = typeof event?.id === "string" ? event.id.trim() : "";
+          if (eventId) {
+            counts.set(eventId, (counts.get(eventId) || 0) + 1);
+          }
+          return counts;
+        }, new Map());
+      },
+
+      nextSkillTestTimelineEventId(events, prefix, blockedIds = null) {
+        const usedIds = new Set(
+          (events || [])
+            .map((event) => (typeof event?.id === "string" ? event.id.trim() : ""))
+            .filter(Boolean)
+        );
+        const reservedIds = blockedIds || usedIds;
+        const prefixPattern = new RegExp(`^${prefix}_(\\d+)$`);
+        let nextNumber = 1;
+        for (const eventId of usedIds) {
+          const match = eventId.match(prefixPattern);
+          if (match) {
+            nextNumber = Math.max(nextNumber, Number(match[1]) + 1);
+          }
+        }
+        let candidate = `${prefix}_${nextNumber}`;
+        while (usedIds.has(candidate) || reservedIds.has(candidate)) {
+          nextNumber += 1;
+          candidate = `${prefix}_${nextNumber}`;
+        }
+        return candidate;
+      },
+
 
       normalizeSkillTestTimelineDraft(timeline) {
         if (!timeline || typeof timeline !== "object" || Array.isArray(timeline)) {
@@ -151,6 +191,9 @@
         const durationMs = Math.max(1, Number(draft.duration_ms || this.skillTestCaseForm.duration_ms || defaults.duration_ms));
         const lanes = Array.isArray(draft.lanes) && draft.lanes.length ? draft.lanes : defaults.lanes;
         const events = Array.isArray(draft.events) ? draft.events : [];
+        const originalIdCounts = this.skillTestTimelineEventIdCounts(events);
+        const reservedIds = new Set(originalIdCounts.keys());
+        const normalizedEvents = [];
         return {
           ...draft,
           schema_version: draft.schema_version || "psop-skill-test-timeline/v1",
@@ -162,10 +205,19 @@
               const isExpectation = this.isSkillTestTimelineExpectationEvent(event);
               const laneId = isExpectation ? "expected.semantic" : event.lane_id || "input.text";
               const defaultsForLane = this.skillTestEventDefaultsForLane(laneId);
+              const eventId = typeof event.id === "string" ? event.id.trim() : "";
+              const canReuseEventId = eventId && !normalizedEvents.some((item) => item.id === eventId);
+              const normalizedId = canReuseEventId
+                ? eventId
+                : this.nextSkillTestTimelineEventId(
+                    normalizedEvents,
+                    this.skillTestTimelineEventIdPrefix(laneId),
+                    reservedIds
+                  );
               const normalized = {
                 ...defaultsForLane,
                 ...event,
-                id: event.id || `event_${index + 1}`,
+                id: normalizedId,
                 lane_id: laneId,
                 at_ms: Math.min(durationMs, Math.max(0, Number(event.at_ms || 0))),
                 required: event.required !== false
@@ -182,6 +234,7 @@
                 delete normalized.event_kind;
                 delete normalized.mime_type;
               }
+              normalizedEvents.push(normalized);
               return normalized;
             })
             .sort((left, right) => Number(left.at_ms || 0) - Number(right.at_ms || 0))
@@ -226,7 +279,11 @@
       skillTestTimelineEventsForLane(laneId) {
         return this.skillTestTimelineEvents()
           .map((event, index) => ({ event, index }))
-          .filter((item) => item.event.lane_id === laneId);
+          .filter((item) => item.event.lane_id === laneId)
+          .map((item) => ({
+            ...item,
+            render_key: `${item.event.lane_id}:${item.event.id}:${item.index}`
+          }));
       },
 
 
@@ -305,6 +362,10 @@
         return Boolean(selected?.event?.lane_id === laneId);
       },
 
+      canAddSkillTestTimelineEventToLane(laneId) {
+        return !this.skillTestTimelineLaneHasExpandedEvent(laneId);
+      },
+
 
       skillTestTimelineLaneLabel(lane) {
         return lane?.id === "expected.semantic" ? "语义" : lane?.label || lane?.id || "";
@@ -367,6 +428,17 @@
 
       skillTestTimelineEventTone(event) {
         return this.skillTestTimelineLaneTone(event?.lane_id || "input.text");
+      },
+
+      isSkillTestTimelineEventSelected(event) {
+        return Boolean(event?.id && (this.selectedSkillTestTimelineEventIds || []).includes(event.id));
+      },
+
+      skillTestTimelineEventFrameClass(event) {
+        const selectedTone = this.isSkillTestTimelineEventSelected(event)
+          ? " ring-2 ring-orange-400/70 border-orange-400/80"
+          : "";
+        return `${this.skillTestTimelineEventTone(event)}${selectedTone}`;
       },
 
       skillTestTimelineExpandedEventTone(event) {
@@ -512,10 +584,43 @@
 
       selectSkillTestTimelineEvent(eventId) {
         this.selectedSkillTestTimelineEventId = eventId || "";
+        this.selectedSkillTestTimelineEventIds = eventId ? [eventId] : [];
         this.skillTestTimelineEventDraft = null;
         if (eventId) {
           this.ensureSkillTestTimelineEventDraft();
         }
+      },
+
+      toggleSkillTestTimelineEventSelection(eventId) {
+        if (!eventId) {
+          return;
+        }
+        const selected = new Set(this.selectedSkillTestTimelineEventIds || []);
+        if (selected.has(eventId)) {
+          selected.delete(eventId);
+        } else {
+          selected.add(eventId);
+        }
+        this.selectedSkillTestTimelineEventIds = Array.from(selected);
+        if (!selected.has(this.selectedSkillTestTimelineEventId)) {
+          this.selectedSkillTestTimelineEventId = "";
+          this.skillTestTimelineEventDraft = null;
+        }
+      },
+
+      replaceSkillTestTimelineEventSelection(eventId) {
+        this.selectedSkillTestTimelineEventIds = eventId ? [eventId] : [];
+      },
+
+      handleSkillTestTimelineEventClick(clickEvent, eventId) {
+        if (!eventId || this.wasSkillTestTimelineDragGesture(eventId)) {
+          return;
+        }
+        if (clickEvent?.metaKey || clickEvent?.ctrlKey || clickEvent?.shiftKey) {
+          this.toggleSkillTestTimelineEventSelection(eventId);
+          return;
+        }
+        this.openSkillTestTimelineEventEditor(eventId);
       },
 
       openSkillTestTimelineEventEditor(eventId) {
@@ -527,6 +632,7 @@
 
       collapseSkillTestTimelineEventEditor() {
         this.selectedSkillTestTimelineEventId = "";
+        this.selectedSkillTestTimelineEventIds = [];
         this.skillTestTimelineEventDraft = null;
       },
 
@@ -555,18 +661,21 @@
 
 
       addSkillTestTimelineEventFromLane(pointerEvent, laneId) {
+        if (!this.canAddSkillTestTimelineEventToLane(laneId)) {
+          return;
+        }
         const timeline = this.skillTestTimelineDraft();
         const atMs = this.skillTestTimelineClickAtMs(pointerEvent);
         const isExpectation = this.isSkillTestExpectationLane(laneId);
         const event = isExpectation
           ? {
-              id: `expected_${timeline.events.length + 1}`,
+              id: this.nextSkillTestTimelineEventId(timeline.events, "expected"),
               lane_id: "expected.semantic",
               at_ms: atMs,
               expectation: "描述该时间点以前应满足的语义输出"
             }
           : {
-              id: `input_${timeline.events.length + 1}`,
+              id: this.nextSkillTestTimelineEventId(timeline.events, "input"),
               lane_id: laneId || "input.text",
               at_ms: atMs,
               ...this.skillTestEventDefaultsForLane(laneId || "input.text"),
@@ -583,7 +692,7 @@
         const laneId = this.skillTestCaseForm.event_lane_id || "input.text";
         const defaultsForLane = this.skillTestEventDefaultsForLane(laneId);
         const event = {
-          id: `input_${timeline.events.length + 1}`,
+          id: this.nextSkillTestTimelineEventId(timeline.events, "input"),
           lane_id: laneId,
           at_ms: Math.max(0, Number(this.skillTestCaseForm.event_at_ms || 0)),
           ...defaultsForLane,
@@ -608,7 +717,7 @@
           return;
         }
         const event = {
-          id: `expected_${timeline.events.length + 1}`,
+          id: this.nextSkillTestTimelineEventId(timeline.events, "expected"),
           lane_id: "expected.semantic",
           at_ms: Math.max(0, Number(this.skillTestCaseForm.expectation_at_ms || 0)),
           expectation
@@ -628,6 +737,7 @@
           this.selectedSkillTestTimelineEventId = "";
           this.skillTestTimelineEventDraft = null;
         }
+        this.selectedSkillTestTimelineEventIds = (this.selectedSkillTestTimelineEventIds || []).filter((eventId) => eventId !== removedId);
         this.writeSkillTestTimelineDraft(timeline);
       },
 
@@ -766,13 +876,69 @@
         this.updateSkillTestTimelineEvent(eventIndex, "at_ms", atMs);
       },
 
+      skillTestTimelineSelectedDragEventIds(eventId) {
+        const selectedIds = this.selectedSkillTestTimelineEventIds || [];
+        if (eventId && selectedIds.includes(eventId)) {
+          return selectedIds;
+        }
+        return eventId ? [eventId] : [];
+      },
+
+      setSkillTestTimelineDragGroupAtFromTrack(pointerEvent, trackElement = null) {
+        const dragState = this.skillTestTimelineDragState;
+        if (!dragState?.eventIds?.length) {
+          return;
+        }
+        const pointerAtMs = this.skillTestTimelineClickAtMs(pointerEvent, trackElement);
+        const durationMs = this.skillTestTimelineDurationMs();
+        const initialEvents = dragState.initialEvents || [];
+        if (!initialEvents.length) {
+          return;
+        }
+        const minAtMs = Math.min(...initialEvents.map((event) => Number(event.at_ms || 0)));
+        const maxAtMs = Math.max(...initialEvents.map((event) => Number(event.at_ms || 0)));
+        const minDeltaMs = -minAtMs;
+        const maxDeltaMs = durationMs - maxAtMs;
+        const requestedDeltaMs = pointerAtMs - Number(dragState.anchorStartAtMs || 0);
+        const deltaMs = Math.min(maxDeltaMs, Math.max(minDeltaMs, requestedDeltaMs));
+        const initialById = new Map(initialEvents.map((event) => [event.id, event]));
+        const timeline = this.skillTestTimelineDraft();
+        timeline.events = (timeline.events || []).map((event) => {
+          const initial = initialById.get(event.id);
+          if (!initial) {
+            return event;
+          }
+          return {
+            ...event,
+            at_ms: Math.min(durationMs, Math.max(0, Number(initial.at_ms || 0) + deltaMs))
+          };
+        });
+        this.writeSkillTestTimelineDraft(timeline);
+      },
+
 
       startSkillTestTimelineEventDrag(pointerEvent, eventIndex) {
+        if (pointerEvent.metaKey || pointerEvent.ctrlKey || pointerEvent.shiftKey) {
+          return;
+        }
         const track = pointerEvent.currentTarget.closest("[data-skill-test-timeline-track]");
         const event = this.skillTestTimelineEvents()[eventIndex];
         const eventId = event?.id || "";
+        if (!eventId) {
+          return;
+        }
+        const eventIds = this.skillTestTimelineSelectedDragEventIds(eventId);
+        if (!(this.selectedSkillTestTimelineEventIds || []).includes(eventId)) {
+          this.replaceSkillTestTimelineEventSelection(eventId);
+        }
+        const initialEvents = this.skillTestTimelineEvents()
+          .filter((item) => eventIds.includes(item.id))
+          .map((item) => ({ id: item.id, at_ms: Number(item.at_ms || 0) }));
         this.skillTestTimelineDragState = {
           eventId,
+          eventIds,
+          initialEvents,
+          anchorStartAtMs: Number(event.at_ms || 0),
           startX: pointerEvent.clientX,
           startY: pointerEvent.clientY,
           moved: false
@@ -788,7 +954,7 @@
             return;
           }
           dragState.moved = true;
-          this.setSkillTestTimelineEventAtFromTrack(moveEvent, eventId, track);
+          this.setSkillTestTimelineDragGroupAtFromTrack(moveEvent, track);
         };
         const upHandler = () => {
           const dragState = this.skillTestTimelineDragState;
@@ -1191,6 +1357,7 @@
 
 
       async loadSkillTestRunReview(skillId, scenarioId, scenarioRunId) {
+        this.stopSkillTestReviewPlayback();
         this.busy.skillTestRun = true;
         try {
           const review = await this.apiRequest(`/skill-test-scenario-runs/${scenarioRunId}/review`);
@@ -1198,7 +1365,8 @@
           this.skillTestCase = review.scenario;
           this.skillTestRun = review.scenario_run;
           this.skillTestRuns = window.PSOPRuntimeEvents.mergeById(this.skillTestRuns, [review.scenario_run]);
-          this.skillTestReviewCursor = 100;
+          this.skillTestReviewPlayheadMs = 0;
+          this.skillTestReviewCursor = 0;
           this.skillTestReviewAutoFollow = true;
           if (review.replay?.run) {
             this.liveRun = review.replay.run;
@@ -1210,6 +1378,7 @@
           this.skillTestReview = review;
           this.skillTestCase = review.scenario;
           this.skillTestRun = review.scenario_run;
+          this.applySkillTestReviewInitialPlayhead(review);
         } finally {
           this.busy.skillTestRun = false;
         }
@@ -1232,12 +1401,12 @@
 
 
       currentSkillTestForkCursor() {
-        const cutoff = this.skillTestReviewCutoffTime();
+        const cutoffMs = this.skillTestReviewPlayheadMsValue();
         const anchors = this.skillTestReview?.cursor_anchors || [];
         const anchor =
           [...anchors]
             .reverse()
-            .find((item) => new Date(item.occurred_at).getTime() <= cutoff) || anchors[0] || {};
+            .find((item) => Number(item.time_ms || 0) <= cutoffMs) || anchors[0] || {};
         return {
           time_ms: Math.max(0, Number(anchor.time_ms || 0)),
           terminal_seq: Math.max(0, Number(anchor.terminal_seq || 0)),
@@ -1302,7 +1471,15 @@
 
 
       isOpenSkillTestRun(testRun) {
-        return ["running", "queued", "pending", "waiting_input"].includes(String(testRun?.status || "").toLowerCase());
+        return [
+          "running",
+          "queued",
+          "pending",
+          "waiting_input",
+          "waiting_runtime",
+          "waiting_checkpoint",
+          "waiting_time"
+        ].includes(String(testRun?.status || "").toLowerCase());
       },
 
 
@@ -1367,7 +1544,153 @@
 
 
       skillTestReviewInputSteps() {
-        return this.skillTestReview?.scenario_timeline?.events || [];
+        return this.skillTestReviewTimeline().events || [];
+      },
+
+
+      skillTestReviewTimeline() {
+        const timeline =
+          this.skillTestReview?.scenario_timeline ||
+          this.skillTestRun?.timeline ||
+          this.skillTestCase?.timeline ||
+          this.defaultSkillTestTimeline();
+        return this.normalizeSkillTestTimelineDraft(timeline);
+      },
+
+
+      skillTestReviewTimelineLanes() {
+        const timeline = this.skillTestReviewTimeline();
+        const defaultLaneIds = this.defaultSkillTestTimeline().lanes.map((lane) => lane.id);
+        return (timeline.lanes || [])
+          .slice()
+          .sort((left, right) => {
+            const leftIndex = defaultLaneIds.indexOf(left.id);
+            const rightIndex = defaultLaneIds.indexOf(right.id);
+            return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
+          });
+      },
+
+
+      skillTestReviewTimelineEvents() {
+        return this.skillTestReviewTimeline().events || [];
+      },
+
+
+      skillTestReviewEventsForLane(laneId) {
+        return this.skillTestReviewTimelineEvents()
+          .map((event, index) => ({ event, index }))
+          .filter((item) => item.event.lane_id === laneId)
+          .map((item) => ({
+            ...item,
+            render_key: `review:${item.event.lane_id}:${item.event.id}:${item.index}`
+          }));
+      },
+
+
+      shouldShowSkillTestReviewTimelineLaneGroup(lane, laneIndex) {
+        if (!lane) {
+          return false;
+        }
+        const lanes = this.skillTestReviewTimelineLanes();
+        const group = this.skillTestTimelineLaneGroup(lane.id);
+        return lanes.findIndex((item) => this.skillTestTimelineLaneGroup(item.id) === group) === laneIndex;
+      },
+
+
+      skillTestReviewDurationMs() {
+        return Math.max(1, Number(this.skillTestReviewTimeline().duration_ms || 1800000));
+      },
+
+
+      skillTestReviewLatestRecordedMs(review = this.skillTestReview) {
+        const run = review?.scenario_run || this.skillTestRun || {};
+        const origin =
+          new Date(run.time_origin || run.started_at || run.created_at || review?.scenario_run?.time_origin || 0).getTime();
+        const values = [];
+        (review?.cursor_anchors || []).forEach((anchor) => {
+          const value = Number(anchor?.time_ms);
+          if (Number.isFinite(value)) {
+            values.push(value);
+          }
+        });
+        (review?.driver_events || []).forEach((event) => {
+          const value = Number(event?.at_ms);
+          if (Number.isFinite(value)) {
+            values.push(value);
+          }
+        });
+        (review?.replay?.terminal_events || []).forEach((event) => {
+          const occurredAt = new Date(event?.occurred_at).getTime();
+          if (Number.isFinite(origin) && origin > 0 && Number.isFinite(occurredAt)) {
+            values.push(occurredAt - origin);
+          }
+        });
+        return Math.max(0, ...values);
+      },
+
+
+      skillTestReviewRunElapsedMs(review = this.skillTestReview) {
+        const run = review?.scenario_run || this.skillTestRun || {};
+        const originValue = run.time_origin || run.started_at || run.created_at;
+        const origin = new Date(originValue || 0).getTime();
+        if (!Number.isFinite(origin) || origin <= 0) {
+          return 0;
+        }
+        return Math.max(0, Date.now() - origin);
+      },
+
+
+      skillTestReviewInitialPlayheadMs(review = this.skillTestReview) {
+        const duration = this.skillTestReviewDurationMs();
+        const run = review?.scenario_run || this.skillTestRun || {};
+        if (!this.isOpenSkillTestRun(run)) {
+          return duration;
+        }
+        const latestRecorded = this.skillTestReviewLatestRecordedMs(review);
+        const elapsed = this.skillTestReviewRunElapsedMs(review);
+        return Math.min(duration, Math.max(0, latestRecorded, elapsed));
+      },
+
+
+      applySkillTestReviewInitialPlayhead(review = this.skillTestReview) {
+        this.stopSkillTestReviewPlayback();
+        this.updateSkillTestReviewPlayhead(this.skillTestReviewInitialPlayheadMs(review));
+        this.skillTestReviewAutoFollow = false;
+      },
+
+
+      skillTestReviewPlayheadMsValue() {
+        return Math.min(this.skillTestReviewDurationMs(), Math.max(0, Number(this.skillTestReviewPlayheadMs || 0)));
+      },
+
+
+      skillTestReviewProgressPercent() {
+        return Math.min(100, Math.max(0, (this.skillTestReviewPlayheadMsValue() / this.skillTestReviewDurationMs()) * 100));
+      },
+
+
+      skillTestReviewTimelineEventPercent(event) {
+        return Math.min(100, Math.max(0, (Number(event?.at_ms || 0) / this.skillTestReviewDurationMs()) * 100));
+      },
+
+
+      skillTestReviewTimelineEventLeftStyle(event) {
+        return `left: clamp(2.5rem, ${this.skillTestReviewTimelineEventPercent(event)}%, calc(100% - 2.5rem))`;
+      },
+
+
+      skillTestReviewPlayheadLeftStyle() {
+        return `left: clamp(0.75rem, ${this.skillTestReviewProgressPercent()}%, calc(100% - 0.75rem))`;
+      },
+
+
+      skillTestReviewTicks() {
+        const duration = this.skillTestReviewDurationMs();
+        const tickCount = 6;
+        return Array.from({ length: tickCount + 1 }, (_, index) => ({
+          ms: Math.round((duration * index) / tickCount),
+          percent: (index / tickCount) * 100
+        }));
       },
 
 
@@ -1386,15 +1709,105 @@
       },
 
 
+      isSkillTestReviewEventReached(event) {
+        return this.skillTestReviewPlayheadMsValue() >= Number(event?.at_ms || 0);
+      },
+
+
       skillTestReviewStepStatus(step) {
-        if (step.expectation) {
-          return this.skillTestReviewEvaluationFor(step.id)?.status || "pending";
+        if (!this.isSkillTestReviewEventReached(step)) {
+          return "not_occurred";
+        }
+        if (this.isSkillTestTimelineExpectationEvent(step)) {
+          return this.skillTestReviewEvaluationFor(step.id)?.status || "triggered";
         }
         const events = this.skillTestReviewStepEvents(step.id);
         if (events.some((event) => event.status === "sent")) {
           return "sent";
         }
-        return "waiting";
+        return "sent";
+      },
+
+
+      skillTestReviewStepStatusLabel(step) {
+        return this.formatStatus(this.skillTestReviewStepStatus(step));
+      },
+
+
+      skillTestReviewAssertionVerdictLabel(event) {
+        if (!this.isSkillTestTimelineExpectationEvent(event) || !this.isSkillTestReviewEventReached(event)) {
+          return "";
+        }
+        const status = this.skillTestReviewStepStatus(event);
+        if (status === "passed") {
+          return "符合预期";
+        }
+        if (["failed", "rejected"].includes(status)) {
+          return "不符合预期";
+        }
+        if (status === "inconclusive") {
+          return "未能判定";
+        }
+        return "待判定";
+      },
+
+
+      skillTestReviewEventTooltip(event) {
+        const parts = [
+          `${this.formatSkillTestTimelineMs(event?.at_ms || 0)} · ${this.skillTestTimelineLaneLabel({ id: event?.lane_id })}`,
+          this.skillTestTimelineEventLabel(event),
+          this.skillTestReviewAssertionVerdictLabel(event) || this.skillTestReviewStepStatusLabel(event)
+        ];
+        const evaluation = this.isSkillTestTimelineExpectationEvent(event)
+          ? this.skillTestReviewEvaluationFor(event.id)
+          : null;
+        if (evaluation?.reason) {
+          parts.push(evaluation.reason);
+        }
+        return parts.filter(Boolean).join(" | ");
+      },
+
+
+      skillTestReviewEventFrameTone(event) {
+        const status = this.skillTestReviewStepStatus(event);
+        if (status === "not_occurred") {
+          return "border-slate-600/70 bg-slate-900/75 text-slate-200 ring-1 ring-slate-700/60";
+        }
+        if (status === "passed") {
+          return "border-emerald-500/40 bg-emerald-500/10 text-emerald-100 ring-1 ring-emerald-500/20";
+        }
+        if (status === "failed" || status === "rejected") {
+          return "border-rose-500/45 bg-rose-500/10 text-rose-100 ring-1 ring-rose-500/20";
+        }
+        if (status === "inconclusive") {
+          return "border-amber-500/45 bg-amber-500/10 text-amber-100 ring-1 ring-amber-500/20";
+        }
+        if (this.isSkillTestTimelineExpectationEvent(event)) {
+          return "border-sky-500/45 bg-sky-500/10 text-sky-100 ring-1 ring-sky-500/20";
+        }
+        return "border-orange-500/50 bg-orange-500/10 text-orange-100 ring-1 ring-orange-500/20";
+      },
+
+
+      skillTestReviewEventBadgeTone(event) {
+        return this.statusBadgeTone(this.skillTestReviewStepStatus(event));
+      },
+
+
+      skillTestReviewOriginTime() {
+        const originValue =
+          this.skillTestRun?.time_origin ||
+          this.skillTestRun?.started_at ||
+          this.skillTestRun?.created_at ||
+          this.skillTestReview?.scenario_run?.time_origin ||
+          this.skillTestReview?.scenario_run?.started_at ||
+          this.skillTestReview?.scenario_run?.created_at;
+        const originTime = new Date(originValue || 0).getTime();
+        if (Number.isFinite(originTime) && originTime > 0) {
+          return originTime;
+        }
+        const bounds = this.skillTestReviewTimeBounds();
+        return bounds.start;
       },
 
 
@@ -1411,15 +1824,17 @@
 
 
       skillTestReviewCutoffTime() {
-        const bounds = this.skillTestReviewTimeBounds();
-        const percent = Math.max(0, Math.min(100, Number(this.skillTestReviewCursor || 0))) / 100;
-        return bounds.start + (bounds.end - bounds.start) * percent;
+        return this.skillTestReviewOriginTime() + this.skillTestReviewPlayheadMsValue();
       },
 
 
       filteredSkillTestReviewTerminalEvents() {
+        const events = this.skillTestReview?.replay?.terminal_events || [];
+        if (this.skillTestReviewPlayheadMsValue() >= this.skillTestReviewDurationMs()) {
+          return events;
+        }
         const cutoff = this.skillTestReviewCutoffTime();
-        return (this.skillTestReview?.replay?.terminal_events || []).filter((event) => {
+        return events.filter((event) => {
           const occurredAt = new Date(event.occurred_at).getTime();
           return !Number.isFinite(occurredAt) || occurredAt <= cutoff;
         });
@@ -1432,9 +1847,56 @@
       },
 
 
+      updateSkillTestReviewPlayhead(value) {
+        this.skillTestReviewPlayheadMs = Math.min(this.skillTestReviewDurationMs(), Math.max(0, Number(value || 0)));
+        this.skillTestReviewCursor = this.skillTestReviewProgressPercent();
+        if (this.skillTestReviewPlayheadMsValue() >= this.skillTestReviewDurationMs()) {
+          this.stopSkillTestReviewPlayback();
+        }
+      },
+
+
+      startSkillTestReviewPlayback() {
+        if (!this.skillTestReview) {
+          return;
+        }
+        this.stopSkillTestReviewPlayback();
+        if (this.skillTestReviewPlayheadMsValue() >= this.skillTestReviewDurationMs()) {
+          this.updateSkillTestReviewPlayhead(0);
+        }
+        this.skillTestReviewPlaybackRunning = true;
+        this.skillTestReviewPlaybackTimer = window.setInterval(() => {
+          this.updateSkillTestReviewPlayhead(this.skillTestReviewPlayheadMsValue() + 1000);
+        }, 1000);
+      },
+
+
+      stopSkillTestReviewPlayback() {
+        if (this.skillTestReviewPlaybackTimer) {
+          window.clearInterval(this.skillTestReviewPlaybackTimer);
+          this.skillTestReviewPlaybackTimer = null;
+        }
+        this.skillTestReviewPlaybackRunning = false;
+      },
+
+
+      toggleSkillTestReviewPlayback() {
+        if (this.skillTestReviewPlaybackRunning) {
+          this.stopSkillTestReviewPlayback();
+        } else {
+          this.startSkillTestReviewPlayback();
+        }
+      },
+
+
+      restartSkillTestReviewPlayback() {
+        this.updateSkillTestReviewPlayhead(0);
+        this.startSkillTestReviewPlayback();
+      },
+
+
       skillTestReviewProgressLabel() {
-        const cutoff = new Date(this.skillTestReviewCutoffTime());
-        return `${Math.round(Number(this.skillTestReviewCursor || 0))}% · ${this.formatDateTime(cutoff.toISOString())}`;
+        return `${this.formatSkillTestTimelineMs(this.skillTestReviewPlayheadMsValue())} / ${this.formatSkillTestTimelineMs(this.skillTestReviewDurationMs())}`;
       },
   };
 })();

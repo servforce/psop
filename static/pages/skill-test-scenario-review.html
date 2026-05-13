@@ -13,6 +13,12 @@
         <span class="font-semibold text-slate-100">Review</span>
       </nav>
       <div class="flex shrink-0 items-center gap-2">
+        <button type="button" class="button-secondary h-9 w-9 px-0" @click="toggleSkillTestReviewPlayback()">
+          <span class="material-symbols-outlined text-[18px]" x-text="skillTestReviewPlaybackRunning ? 'pause' : 'play_arrow'"></span>
+        </button>
+        <button type="button" class="button-secondary h-9 w-9 px-0" @click="restartSkillTestReviewPlayback()">
+          <span class="material-symbols-outlined text-[18px]">replay</span>
+        </button>
         <button type="button" class="button-secondary" @click="forkSkillTestScenario()">
           <span class="material-symbols-outlined text-[18px]">call_split</span>
           <span>Fork Scenario</span>
@@ -28,37 +34,69 @@
       </div>
     </div>
 
-    <div class="grid min-h-0 flex-1 grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.35fr)] divide-x divide-slate-800 overflow-hidden">
-      <aside class="flex min-h-0 flex-col overflow-hidden">
-        <div class="border-b border-slate-800 p-3">
-          <div class="flex items-center justify-between gap-3">
+    <div class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(22rem,0.34fr)] divide-x divide-slate-800 overflow-hidden">
+      <section class="flex min-h-0 flex-col overflow-hidden">
+        <div class="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3">
+          <div class="flex min-w-0 items-center gap-2">
             <span class="status-badge" :class="statusBadgeTone(skillTestRun?.status)" x-text="formatStatus(skillTestRun?.status)"></span>
-            <span class="mono-field" x-text="formatAssertionSummary(skillTestRun?.result_summary)"></span>
+            <span class="mono-field truncate" x-text="formatAssertionSummary(skillTestRun?.result_summary)"></span>
           </div>
-          <input type="range" min="0" max="100" step="1" class="mt-3 w-full accent-orange-500" :value="skillTestReviewCursor" @input="updateSkillTestReviewCursor($event.target.value)" />
-          <p class="mono-field mt-2" x-text="skillTestReviewProgressLabel()"></p>
+          <span class="mono-field shrink-0" x-text="skillTestReviewProgressLabel()"></span>
         </div>
 
         <div class="min-h-0 flex-1 overflow-auto p-3">
-          <div class="space-y-3">
-            <template x-for="event in skillTestReviewInputSteps()" :key="event.id">
-              <article class="rounded-md border border-slate-800 bg-slate-900/40 p-3">
-                <div class="flex items-center justify-between gap-2">
-                  <span class="mono-field" x-text="`${event.at_ms || 0}ms`"></span>
-                  <span class="status-badge" :class="statusBadgeTone(skillTestReviewStepStatus(event))" x-text="formatStatus(skillTestReviewStepStatus(event))"></span>
+          <div class="h-full min-h-0 w-full">
+            <template x-for="(lane, laneIndex) in skillTestReviewTimelineLanes()" :key="lane.id">
+              <div class="grid min-h-16 grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] border-b border-slate-800">
+                <div class="flex items-center justify-center border-r border-slate-800/60">
+                  <template x-if="shouldShowSkillTestReviewTimelineLaneGroup(lane, laneIndex)">
+                    <span class="whitespace-nowrap text-sm font-semibold text-slate-300" x-text="skillTestTimelineLaneGroupLabel(lane.id)"></span>
+                  </template>
                 </div>
-                <p class="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500" x-text="event.lane_id"></p>
-                <p class="mt-2 text-sm text-slate-200" x-text="skillTestTimelineEventLabel(event)"></p>
-                <template x-if="event.expectation && skillTestReviewEvaluationFor(event.id)">
-                  <p class="mt-2 text-xs text-slate-400" x-text="skillTestReviewEvaluationFor(event.id).reason"></p>
-                </template>
-              </article>
+                <div class="flex items-center gap-2 border-r border-slate-800/60 px-2 py-2">
+                  <span class="material-symbols-outlined rounded-md border p-1 text-[16px]" :class="skillTestTimelineLaneTone(lane.id)" x-text="skillTestTimelineLaneIcon(lane.id)"></span>
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold leading-5 text-slate-100" x-text="skillTestTimelineLaneLabel(lane)"></p>
+                  </div>
+                </div>
+                <div class="relative min-h-16 overflow-visible px-3">
+                  <div class="absolute inset-x-3 top-1/2 h-px bg-slate-600"></div>
+                  <div class="pointer-events-none absolute inset-y-2 z-10 w-px bg-orange-400 shadow-[0_0_12px_rgba(251,146,60,0.65)]" :style="skillTestReviewPlayheadLeftStyle()"></div>
+                  <template x-for="item in skillTestReviewEventsForLane(lane.id)" :key="item.render_key">
+                    <div class="absolute top-1/2 z-20 flex h-12 w-32 -translate-x-1/2 -translate-y-1/2 items-center gap-2 overflow-hidden rounded-md border px-2 py-1 text-left shadow-sm transition" :class="skillTestReviewEventFrameTone(item.event)" :style="skillTestReviewTimelineEventLeftStyle(item.event)" :data-tooltip="skillTestReviewEventTooltip(item.event)">
+                      <span class="material-symbols-outlined shrink-0 text-[16px]" x-text="skillTestTimelineLaneIcon(item.event.lane_id)"></span>
+                      <span class="min-w-0 flex-1">
+                        <span class="block font-mono text-[10px] leading-4" x-text="formatSkillTestTimelineMs(item.event.at_ms)"></span>
+                        <span class="block truncate text-xs font-semibold" x-text="skillTestTimelineEventLabel(item.event)"></span>
+                        <span class="mt-0.5 inline-flex max-w-full truncate rounded-full border px-1 text-[9px] font-semibold leading-4" :class="skillTestReviewEventBadgeTone(item.event)" x-text="skillTestReviewAssertionVerdictLabel(item.event) || skillTestReviewStepStatusLabel(item.event)"></span>
+                      </span>
+                    </div>
+                  </template>
+                </div>
+              </div>
             </template>
           </div>
         </div>
-      </aside>
 
-      <section class="flex min-h-0 flex-col overflow-hidden">
+        <div class="grid min-h-14 shrink-0 grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] items-center border-t border-slate-800 bg-slate-950/35 pt-2">
+          <div class="flex items-center justify-center border-r border-slate-800/60">
+            <span class="whitespace-nowrap text-sm font-semibold text-slate-300">时间</span>
+          </div>
+          <div class="border-r border-slate-800/60 px-2">
+            <p class="mono-field" x-text="skillTestReviewProgressLabel()"></p>
+          </div>
+          <div class="relative h-12 px-3">
+            <template x-for="tick in skillTestReviewTicks()" :key="tick.ms">
+              <div class="absolute top-0 h-full border-l border-slate-800/80" :style="`left: calc(${tick.percent}% + ${tick.percent === 0 ? '0.75rem' : tick.percent === 100 ? '-0.75rem' : '0rem'})`">
+                <span class="absolute top-0 whitespace-nowrap font-mono text-[10px] text-slate-500" :style="tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'" x-text="formatSkillTestTimelineMs(tick.ms)"></span>
+              </div>
+            </template>
+            <input type="range" min="0" :max="skillTestReviewDurationMs()" step="1000" class="absolute inset-x-3 bottom-1 accent-orange-500" :value="skillTestReviewPlayheadMsValue()" @input="updateSkillTestReviewPlayhead($event.target.value)" />
+          </div>
+        </div>
+      </section>
+
+      <aside class="flex min-h-0 flex-col overflow-hidden bg-slate-950/20">
         <div class="shrink-0 border-b border-slate-800 px-4 py-3">
           <h2 class="text-sm font-semibold text-slate-100">Terminal Transcript</h2>
           <p class="mono-field mt-1" x-text="`${filteredSkillTestReviewTerminalEvents().length} events before cursor`"></p>
@@ -67,7 +105,7 @@
           <template x-if="filteredSkillTestReviewTerminalEvents().length === 0">
             <div class="empty-state py-16">
               <span class="material-symbols-outlined text-[30px] text-slate-400">forum</span>
-              <p class="mt-3 text-sm text-slate-500">当前切面以前暂无终端事件。</p>
+              <p class="mt-3 text-sm text-slate-500">当前时间点以前暂无终端事件。</p>
             </div>
           </template>
           <div class="space-y-4">
@@ -75,7 +113,7 @@
               <article class="rounded-md border border-slate-800 bg-black/25 p-3">
                 <div class="flex items-center justify-between gap-3">
                   <div class="flex min-w-0 items-center gap-3">
-                    <span class="status-badge" :class="event.direction === 'input' ? 'status-badge-success' : 'status-badge-info'" x-text="event.direction === 'input' ? '输入' : '输出'"></span>
+                    <span class="status-badge" :class="terminalDirectionTone(event.direction)" x-text="terminalDirectionLabel(event.direction)"></span>
                     <div class="min-w-0">
                       <p class="truncate text-sm font-semibold text-slate-100" x-text="event.event_kind"></p>
                       <p class="mono-field mt-1" x-text="formatDateTime(event.occurred_at)"></p>
@@ -83,12 +121,12 @@
                   </div>
                   <span class="mono-field" x-text="`#${event.seq_no}`"></span>
                 </div>
-                <pre class="mt-3 whitespace-pre-wrap rounded-md border border-slate-800 bg-black/40 p-3 text-sm text-slate-200" x-text="formatTerminalPayload(event.payload_inline)"></pre>
+                <pre class="mt-3 whitespace-pre-wrap rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="formatTerminalPayload(event.payload_inline)"></pre>
               </article>
             </template>
           </div>
         </div>
-      </section>
+      </aside>
     </div>
   </section>
 </div>

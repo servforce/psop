@@ -1099,12 +1099,12 @@
                             <p class="truncate text-sm font-semibold leading-5 text-slate-100" x-text="skillTestTimelineLaneLabel(lane)"></p>
                           </div>
                         </div>
-                        <div class="relative cursor-crosshair overflow-visible px-3 transition hover:bg-slate-900/35" :class="skillTestTimelineLaneHasExpandedEvent(lane.id) ? 'min-h-[22rem]' : 'min-h-16'" data-skill-test-timeline-track @click="addSkillTestTimelineEventFromLane($event, lane.id)">
+                        <div class="relative overflow-visible px-3 transition" :class="skillTestTimelineLaneHasExpandedEvent(lane.id) ? 'min-h-[22rem]' : 'min-h-16 cursor-crosshair hover:bg-slate-900/35'" data-skill-test-timeline-track @click="canAddSkillTestTimelineEventToLane(lane.id) && addSkillTestTimelineEventFromLane($event, lane.id)">
                           <div class="absolute inset-x-3 top-1/2 h-px bg-slate-600"></div>
-                          <template x-for="item in skillTestTimelineEventsForLane(lane.id)" :key="item.event.id">
+                          <template x-for="item in skillTestTimelineEventsForLane(lane.id)" :key="item.render_key">
                             <div class="absolute top-1/2 z-20 max-w-[calc(100%-1.5rem)]" :class="isSkillTestTimelineEventExpanded(item.event) ? 'w-80 -translate-y-1/2' : 'w-20 -translate-x-1/2 -translate-y-1/2'" :style="isSkillTestTimelineEventExpanded(item.event) ? skillTestTimelineExpandedEventLeftStyle(item.event) : skillTestTimelineEventLeftStyle(item.event)" @click.stop @pointerdown.stop>
                               <template x-if="!isSkillTestTimelineEventExpanded(item.event)">
-                                <button type="button" class="flex h-10 w-full items-center gap-2 overflow-hidden rounded-md border px-2 py-1 text-left shadow-sm transition hover:bg-slate-800" :class="skillTestTimelineEventTone(item.event)" @click.stop="openSkillTestTimelineEventEditor(item.event.id)" @pointerdown.stop.prevent="startSkillTestTimelineEventDrag($event, item.index)">
+                                <button type="button" class="flex h-10 w-full items-center gap-2 overflow-hidden rounded-md border px-2 py-1 text-left shadow-sm transition hover:bg-slate-800" :class="skillTestTimelineEventFrameClass(item.event)" :aria-pressed="isSkillTestTimelineEventSelected(item.event)" data-tooltip="点击编辑；Ctrl/Cmd/Shift 点击多选；拖动已选事件可整体移动时间" @click.stop="handleSkillTestTimelineEventClick($event, item.event.id)" @pointerdown.stop.prevent="startSkillTestTimelineEventDrag($event, item.index)">
                                   <span class="material-symbols-outlined shrink-0 text-[16px]" x-text="skillTestTimelineLaneIcon(item.event.lane_id)"></span>
                                   <span class="min-w-0 flex-1">
                                     <span class="block font-mono text-[10px] leading-4" x-text="formatSkillTestTimelineMs(item.event.at_ms)"></span>

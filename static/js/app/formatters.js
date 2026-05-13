@@ -86,6 +86,9 @@
           waiting_runtime: "等待运行",
           matched: "已匹配",
           sent: "已发送",
+          triggered: "已触发",
+          not_occurred: "未发生",
+          inconclusive: "未定",
           queued: "排队中",
           accepted: "已接受",
           succeeded: "成功",
@@ -110,14 +113,17 @@
         if (["passed"].includes(normalized)) {
           return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
         }
-        if (["compiling", "running", "waiting_input", "waiting_checkpoint", "waiting_runtime", "in_progress", "processing", "matched"].includes(normalized)) {
+        if (["compiling", "running", "waiting_input", "waiting_checkpoint", "waiting_runtime", "in_progress", "processing", "matched", "triggered"].includes(normalized)) {
           return "border-sky-500/25 bg-sky-500/10 text-sky-200";
         }
-        if (["requested", "pending", "queued", "draft", "retrying", "sent"].includes(normalized)) {
+        if (["requested", "pending", "queued", "draft", "retrying", "sent", "inconclusive"].includes(normalized)) {
           return "border-amber-500/25 bg-amber-500/10 text-amber-200";
         }
         if (["failed", "error", "rejected", "cancelled", "canceled", "timeout", "timed_out"].includes(normalized)) {
           return "border-rose-500/30 bg-rose-500/10 text-rose-200";
+        }
+        if (["not_occurred"].includes(normalized)) {
+          return "border-slate-500/45 bg-slate-800/80 text-slate-200";
         }
         if (["archived", "skipped", "unknown"].includes(normalized)) {
           return "border-slate-700 bg-slate-950/40 text-slate-400";
