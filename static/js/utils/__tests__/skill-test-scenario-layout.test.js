@@ -174,6 +174,7 @@ test("scenario review provides scrub and fork actions", () => {
   expect(html).toContain("restartSkillTestReviewPlayback()");
   expect(html).toContain("updateSkillTestReviewPlayhead($event.target.value)");
   expect(html).toContain("filteredSkillTestReviewTerminalEvents()");
+  expect(html).toContain("max-w-full overflow-hidden whitespace-pre-wrap break-all");
   expect(html).toContain("Fork Scenario");
   expect(html).toContain("Fork Debug");
   expect(html).toContain('border-0 p-0 text-xs');
