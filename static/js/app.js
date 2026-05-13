@@ -452,6 +452,9 @@
       skillTestReviewCursor: 100,
       skillTestReviewAutoFollow: true,
       selectedSkillTestTimelineEventId: "",
+      skillTestTimelineEventDraft: null,
+      skillTestTimelineDragState: null,
+      skillTestTimelineLastDrag: null,
       skillTestCaseSearch: "",
       skillTestCaseForm: {
         name: "",

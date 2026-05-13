@@ -312,6 +312,13 @@
           return null;
         }
 
+        const contentType = response.headers.get("content-type") || "";
+        if (!/\bjson\b|\+json\b/i.test(contentType)) {
+          throw new Error(
+            `API 返回了非 JSON 响应：${pathname}。当前 API 地址为 ${this.apiBaseUrl}，请确认前端配置指向后端服务。`
+          );
+        }
+
         return response.json();
       },
 

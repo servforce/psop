@@ -1,10 +1,12 @@
 <div class="h-full min-h-0 overflow-hidden">
   <section class="flex h-full min-h-0 flex-col overflow-hidden border border-slate-800 bg-slate-950">
     <div class="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3">
-      <nav class="breadcrumb-bar min-w-0 flex-1 flex-nowrap gap-1 p-0 text-xs" aria-label="Breadcrumb">
+      <nav class="breadcrumb-bar min-w-0 flex-1 flex-nowrap gap-1 border-0 p-0 text-xs" aria-label="Breadcrumb">
         <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
         <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
         <button type="button" class="breadcrumb-link min-w-0 truncate" @click="navigate(`/admin/skills/${currentSkill.id}`); activeDetailTab = 'test'" x-text="currentSkill.name"></button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link" @click="navigate(`/admin/skills/${currentSkill.id}`); activeDetailTab = 'test'">测试</button>
         <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
         <button type="button" class="breadcrumb-link min-w-0 truncate" @click="navigate(`/admin/skills/${currentSkill.id}/tests/${skillTestCase.id}`)" x-text="skillTestCase.name"></button>
         <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>

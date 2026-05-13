@@ -5,7 +5,7 @@ const path = require("node:path");
 const rootDir = path.resolve(__dirname, "..");
 const host = process.env.HOST || process.env.PSOP_WEB_HOST || "0.0.0.0";
 const port = Number(process.env.PORT || process.env.PSOP_WEB_PORT || 4173);
-const apiBaseUrl = process.env.PSOP_WEB_API_BASE_URL || "/api/v1";
+const apiBaseUrl = process.env.PSOP_WEB_API_BASE_URL || "";
 const serverPort = String(process.env.PSOP_SERVER_PORT || 8001);
 
 const mimeTypes = {
@@ -50,8 +50,13 @@ const server = http.createServer((req, res) => {
   const configuredApiBaseUrl = ${JSON.stringify(apiBaseUrl)};
   const serverPort = ${JSON.stringify(serverPort)};
   const privateHostPattern = /^(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|10\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[0-1])\\.)/;
-  const browserHostApiBaseUrl = window.location.protocol + "//" + window.location.hostname + ":" + serverPort + "/api/v1";
+  const browserApiHost = window.location.hostname === "0.0.0.0" ? "127.0.0.1" : window.location.hostname;
+  const browserHostApiBaseUrl = window.location.protocol + "//" + browserApiHost + ":" + serverPort + "/api/v1";
   let apiBaseUrl = configuredApiBaseUrl || browserHostApiBaseUrl;
+
+  if (!configuredApiBaseUrl || configuredApiBaseUrl.startsWith("/")) {
+    apiBaseUrl = browserHostApiBaseUrl;
+  }
 
   try {
     const configuredUrl = new URL(configuredApiBaseUrl, window.location.origin);
