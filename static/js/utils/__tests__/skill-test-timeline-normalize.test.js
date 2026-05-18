@@ -61,10 +61,13 @@ function createTimelineHarness() {
     selectedSkillTestTimelineEventId: "",
     selectedSkillTestTimelineEventIds: [],
     skillTestTimelineEventDraft: null,
+    skillTestScenarioDetailPanel: "info",
+    selectedSkillTestTimelineLaneId: "",
     skillTestTimelineDragState: null,
     skillTestReviewExpandedEventKey: "",
     skillTestReviewPanelTab: "transcript",
     selectedSkillTestReviewExpectationId: "",
+    selectedSkillTestReviewLaneId: "",
     formatStatus(value) {
       return value || "未知";
     },
@@ -165,11 +168,33 @@ test("saving a timeline writes repaired unique ids back into advanced json", () 
   expect(formIds).toEqual(parsedIds);
 });
 
-test("expanded timeline lane does not add events from blank track clicks", () => {
+test("right-panel event editor keeps blank track clicks available", () => {
   const app = createTimelineHarness();
   app.skillTestCaseForm.timeline_json = JSON.stringify(duplicateSemanticTimeline());
   app.selectedSkillTestTimelineEventId = "expected_9";
   app.selectedSkillTestTimelineEventIds = ["expected_9"];
+  app.skillTestScenarioDetailPanel = "event";
+  app.skillTestCase = { id: "scenario_1" };
+  app.route = { name: "skill-test-scenario" };
+
+  const beforeCount = app.skillTestTimelineEvents().length;
+
+  expect(app.canAddSkillTestTimelineEventToLane("expected.semantic")).toBe(true);
+  expect(app.canAddSkillTestTimelineEventToLane("input.text")).toBe(true);
+
+  app.addSkillTestTimelineEventFromLane({}, "expected.semantic");
+
+  expect(app.skillTestTimelineEvents()).toHaveLength(beforeCount + 1);
+  expect(app.selectedSkillTestTimelineEventId).not.toBe("expected_9");
+  expect(app.skillTestScenarioDetailPanel).toBe("event");
+});
+
+test("inline new-scenario editor still blocks blank track clicks on the expanded lane", () => {
+  const app = createTimelineHarness();
+  app.skillTestCaseForm.timeline_json = JSON.stringify(duplicateSemanticTimeline());
+  app.selectedSkillTestTimelineEventId = "expected_9";
+  app.selectedSkillTestTimelineEventIds = ["expected_9"];
+  app.route = { name: "skill-test-scenario-new" };
 
   const beforeCount = app.skillTestTimelineEvents().length;
 
@@ -223,6 +248,29 @@ test("modifier timeline clicks toggle multi-selection without opening the editor
   expect(app.selectedSkillTestTimelineEventIds).toEqual(["input_1"]);
 });
 
+test("timeline event editor keeps the original channel immutable", () => {
+  const app = createTimelineHarness();
+  app.skillTestCaseForm.timeline_json = JSON.stringify(duplicateSemanticTimeline());
+
+  app.selectSkillTestTimelineEvent("input_1");
+  app.updateSkillTestTimelineEventDraft("lane_id", "input.image");
+
+  expect(app.skillTestTimelineEventDraft.lane_id).toBe("input.text");
+
+  app.skillTestTimelineEventDraft = {
+    ...app.skillTestTimelineEventDraft,
+    lane_id: "input.image"
+  };
+  app.flushSkillTestTimelineEventDraft();
+
+  expect(app.skillTestTimelineEvents().find((event) => event.id === "input_1").lane_id).toBe("input.text");
+
+  const eventIndex = app.skillTestTimelineEvents().findIndex((event) => event.id === "input_1");
+  app.updateSkillTestTimelineEvent(eventIndex, "lane_id", "input.audio");
+
+  expect(app.skillTestTimelineEvents().find((event) => event.id === "input_1").lane_id).toBe("input.text");
+});
+
 test("review playback marks events as they reach the playhead", () => {
   const app = createTimelineHarness();
   app.skillTestReview = {
@@ -240,22 +288,32 @@ test("review playback marks events as they reach the playhead", () => {
       }
     ]
   };
+  app.skillTestReview.scenario_timeline.events.push({
+    id: "input_future",
+    lane_id: "input.text",
+    at_ms: 300000,
+    payload_inline: "稍后的文本输入"
+  });
   app.skillTestReviewPlayheadMs = 0;
 
   expect(app.skillTestReviewDurationMs()).toBe(600000);
   expect(app.skillTestReviewEventsForLane("expected.semantic")).toHaveLength(3);
   expect(app.skillTestReviewStepStatus(app.skillTestReviewEventsForLane("expected.semantic")[0].event)).toBe("not_occurred");
+  expect(app.skillTestReviewEventStatusLabel(app.skillTestReviewEventsForLane("expected.semantic")[0].event)).toBe("未判定");
+  expect(app.skillTestReviewEventStatusLabel(app.skillTestReviewEventsForLane("input.text")[1].event)).toBe("未发送");
 
   app.updateSkillTestReviewPlayhead(190000);
 
   expect(app.skillTestReviewStepStatus(app.skillTestReviewEventsForLane("input.text")[0].event)).toBe("sent");
   expect(app.skillTestReviewStepStatus(app.skillTestReviewEventsForLane("expected.semantic")[0].event)).toBe("passed");
   expect(app.skillTestReviewAssertionVerdictLabel(app.skillTestReviewEventsForLane("expected.semantic")[0].event)).toBe("符合预期");
+  expect(app.skillTestReviewEventStatusLabel(app.skillTestReviewEventsForLane("expected.semantic")[0].event)).toBe("符合预期");
 
   app.skillTestReview.expectation_evaluations[0].status = "inconclusive";
 
   expect(app.skillTestReviewStepStatus(app.skillTestReviewEventsForLane("expected.semantic")[0].event)).toBe("inconclusive");
   expect(app.skillTestReviewAssertionVerdictLabel(app.skillTestReviewEventsForLane("expected.semantic")[0].event)).toBe("未能判定");
+  expect(app.skillTestReviewEventStatusLabel(app.skillTestReviewEventsForLane("expected.semantic")[0].event)).toBe("未能判定");
 });
 
 test("review fork cursor keeps the selected playhead time", () => {
@@ -304,7 +362,17 @@ test("review timeline keeps edge events inside the track lane", () => {
   expect(app.skillTestReviewTimelineEventLeftStyle(latestEvent)).toBe("left: clamp(4rem, 100%, calc(100% - 4rem))");
 });
 
-test("review timeline renders runtime outputs on the actual output lane", () => {
+test("review timeline exposes elapsed time as a lane background fill", () => {
+  const app = createTimelineHarness();
+  app.skillTestReview = {
+    scenario_timeline: duplicateSemanticTimeline()
+  };
+  app.skillTestReviewPlayheadMs = 300000;
+
+  expect(app.skillTestReviewLaneProgressStyle()).toBe("width: 50%");
+});
+
+test("review timeline binds runtime outputs to the next semantic expectation", () => {
   const app = createTimelineHarness();
   app.skillTestReview = {
     scenario_timeline: duplicateSemanticTimeline(),
@@ -337,28 +405,94 @@ test("review timeline renders runtime outputs on the actual output lane", () => 
           event_kind: "terminal.markdown.output.v1",
           occurred_at: "2026-05-13T00:01:30Z",
           payload_inline: { text: "第二步：确认连接件。" }
+        },
+        {
+          id: "output-3",
+          seq_no: 4,
+          direction: "output",
+          event_kind: "terminal.text.output.v1",
+          occurred_at: "2026-05-13T00:04:10Z",
+          payload_inline: "第三步：继续检查伞面。"
         }
       ]
     }
   };
 
   const laneIds = app.skillTestReviewTimelineLanes().map((lane) => lane.id);
-  expect(laneIds.indexOf("actual.output")).toBe(laneIds.indexOf("expected.semantic") + 1);
+  expect(laneIds).not.toContain("actual.output");
+  expect(app.skillTestReviewEventsForLane("actual.output")).toHaveLength(0);
   expect(app.skillTestTimelineLaneLabel({ id: "actual.output" })).toBe("真实");
   expect(app.skillTestTimelineLaneGroup("actual.output")).toBe("output");
 
-  const runtimeOutputs = app.skillTestReviewEventsForLane("actual.output");
-  expect(runtimeOutputs).toHaveLength(2);
-  expect(runtimeOutputs[0].event.at_ms).toBe(45000);
-  expect(runtimeOutputs[0].event.seq_no).toBe(2);
-  expect(app.skillTestTimelineEventLabel(runtimeOutputs[0].event)).toContain("第一步");
-  expect(app.skillTestTimelineEventLabel(runtimeOutputs[1].event)).toContain("第二步");
+  const runtimeOutputs = app.skillTestReviewRuntimeOutputEvents();
+  expect(runtimeOutputs).toHaveLength(3);
+  expect(runtimeOutputs[0].at_ms).toBe(45000);
+  expect(runtimeOutputs[0].seq_no).toBe(2);
+  expect(app.skillTestTimelineEventLabel(runtimeOutputs[0])).toContain("第一步");
+  expect(app.skillTestTimelineEventLabel(runtimeOutputs[1])).toContain("第二步");
+
+  const semanticEvents = app.skillTestReviewEventsForLane("expected.semantic").map((item) => item.event);
+  const firstBoundOutputs = app.skillTestReviewRuntimeOutputsForExpectation(semanticEvents[0]);
+  const secondBoundOutputs = app.skillTestReviewRuntimeOutputsForExpectation(semanticEvents[1]);
+  expect(firstBoundOutputs.map((event) => event.id)).toEqual(["runtime_output_output-1", "runtime_output_output-2"]);
+  expect(secondBoundOutputs.map((event) => event.id)).toEqual(["runtime_output_output-3"]);
+  expect(app.skillTestReviewEventTooltip(semanticEvents[0])).toContain("2 个真实输出");
+  const contentSections = app.skillTestReviewEventContentSections(semanticEvents[0]);
+  expect(contentSections.map((section) => section.title)).toEqual(["语义期望", "真实输出 #1", "真实输出 #2"]);
+  expect(contentSections[0].content).toContain("引导用户进行下一步操作");
+  expect(contentSections[1].content).toContain("第一步：请检查伞骨。");
+  expect(contentSections[2].content).toContain("第二步：确认连接件。");
+  expect(app.skillTestReviewEventMetadata(semanticEvents[0])).toEqual(
+    expect.arrayContaining([{ label: "真实输出", value: "2 个" }])
+  );
 
   app.updateSkillTestReviewPlayhead(44000);
-  expect(app.skillTestReviewStepStatus(runtimeOutputs[0].event)).toBe("not_occurred");
+  expect(app.skillTestReviewStepStatus(runtimeOutputs[0])).toBe("not_occurred");
+  expect(app.skillTestReviewEventStatusLabel(runtimeOutputs[0])).toBe("未输出");
 
   app.updateSkillTestReviewPlayhead(45000);
-  expect(app.skillTestReviewStepStatus(runtimeOutputs[0].event)).toBe("output");
+  expect(app.skillTestReviewStepStatus(runtimeOutputs[0])).toBe("output");
+  expect(app.skillTestReviewEventStatusLabel(runtimeOutputs[0])).toBe("已输出");
+});
+
+test("review lane header opens lane time details and event clicks replace it", () => {
+  const app = createTimelineHarness();
+  app.skillTestReview = {
+    scenario_timeline: duplicateSemanticTimeline(),
+    scenario_run: {
+      status: "running",
+      time_origin: "2026-05-13T00:00:00Z"
+    },
+    driver_events: [{ event_id: "input_1", status: "sent" }],
+    replay: {
+      terminal_events: [
+        {
+          id: "output-1",
+          seq_no: 1,
+          direction: "output",
+          event_kind: "terminal.text.output.v1",
+          occurred_at: "2026-05-13T00:00:45Z",
+          payload_inline: "第一步输出"
+        }
+      ]
+    }
+  };
+  app.updateSkillTestReviewPlayhead(190000);
+
+  app.openSkillTestReviewLaneDetail("expected.semantic");
+
+  expect(app.isSkillTestReviewLaneSelected("expected.semantic")).toBe(true);
+  expect(app.skillTestReviewSelectedLane().id).toBe("expected.semantic");
+  expect(app.skillTestReviewSelectedLaneEvents()).toHaveLength(3);
+  expect(app.skillTestReviewLaneRangeLabel("expected.semantic")).toBe("3m 10s - 6m 2s");
+  expect(app.skillTestReviewLaneReachedCount("expected.semantic")).toBe(1);
+  expect(app.skillTestReviewLaneRuntimeOutputCount("expected.semantic")).toBe(1);
+
+  const event = app.skillTestReviewSelectedLaneEvents()[0].event;
+  app.openSkillTestReviewEvent(event);
+
+  expect(app.selectedSkillTestReviewLaneId).toBe("");
+  expect(app.skillTestReviewExpandedEvent().id).toBe("expected_9");
 });
 
 test("review judge debug exposes saved request and model response", () => {
@@ -429,7 +563,11 @@ test("review timeline events open expanded full content", () => {
   app.openSkillTestReviewEvent(inputEvent);
 
   expect(app.skillTestReviewExpandedEvent().id).toBe("input_1");
-  expect(app.skillTestReviewEventPrimaryContent(app.skillTestReviewExpandedEvent())).toContain("已准备就绪，可以开始");
+  expect(app.skillTestReviewEventContentSections(app.skillTestReviewExpandedEvent())).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ title: "输入内容", content: "已准备就绪，可以开始" })
+    ])
+  );
   expect(app.skillTestReviewEventTooltip(inputEvent)).toContain("点击查看完整内容");
   expect(app.skillTestReviewEventMetadata(inputEvent).map((item) => item.label)).toEqual(
     expect.arrayContaining(["信道", "时间", "状态", "Event ID", "Event Kind", "MIME", "Required"])
@@ -452,7 +590,9 @@ test("opening a semantic review event also selects judge context", () => {
   expect(app.selectedSkillTestReviewExpectationId).toBe("expected_9");
   expect(app.skillTestReviewPanelTab).toBe("judge");
   expect(app.skillTestReviewExpandedEvent().id).toBe("expected_9");
-  expect(app.skillTestReviewEventPrimaryContent(app.skillTestReviewExpandedEvent())).toContain("引导用户进行下一步操作");
+  expect(app.skillTestReviewEventContentSections(app.skillTestReviewExpandedEvent())[0]).toEqual(
+    expect.objectContaining({ title: "语义期望", content: "引导用户进行下一步操作" })
+  );
   expect(app.skillTestReviewExpandedEvaluation(app.skillTestReviewExpandedEvent()).status).toBe("passed");
 });
 

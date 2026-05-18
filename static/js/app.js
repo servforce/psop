@@ -73,6 +73,18 @@
       return { name: "compiler-list", params: {} };
     }
 
+    if (normalized === "/admin/agent-prompts") {
+      return { name: "agent-prompts-list", params: {} };
+    }
+
+    const agentPromptMatch = normalized.match(/^\/admin\/agent-prompts\/([^/]+)$/);
+    if (agentPromptMatch) {
+      return {
+        name: "agent-prompt-detail",
+        params: { definitionId: agentPromptMatch[1] }
+      };
+    }
+
     const compilerArtifactMatch = normalized.match(/^\/admin\/compiler\/artifacts\/([^/]+)$/);
     if (compilerArtifactMatch) {
       return {
@@ -140,6 +152,10 @@
 
   function buildCompilerArtifactPath(artifactId) {
     return `/admin/compiler/artifacts/${artifactId}`;
+  }
+
+  function buildAgentPromptPath(definitionId) {
+    return `/admin/agent-prompts/${definitionId}`;
   }
 
   function generateSkillKey(name) {
@@ -423,6 +439,13 @@
       compilerArtifactNodeJsonError: "",
       bpmnViewer: null,
       compilerArtifactWorkspaceOpen: false,
+      agentPrompts: [],
+      agentPromptDetail: null,
+      agentPromptBindings: [],
+      agentPromptSelectedVersionId: "",
+      agentPromptSelectedFile: "",
+      agentPromptFileDraft: "",
+      agentPromptValidation: null,
       compilerFilters: {
         skill_search: "",
         status: "",
@@ -459,9 +482,12 @@
       skillTestReviewPanelTab: "transcript",
       selectedSkillTestReviewExpectationId: "",
       skillTestReviewExpandedEventKey: "",
+      selectedSkillTestReviewLaneId: "",
       selectedSkillTestTimelineEventId: "",
       selectedSkillTestTimelineEventIds: [],
       skillTestTimelineEventDraft: null,
+      skillTestScenarioDetailPanel: "info",
+      selectedSkillTestTimelineLaneId: "",
       skillTestTimelineDragState: null,
       skillTestTimelineLastDrag: null,
       skillTestCaseSearch: "",
@@ -574,6 +600,10 @@
         compilerRequests: false,
         compilerArtifact: false,
         compilerArtifactSave: false,
+        agentPrompts: false,
+        agentPromptDetail: false,
+        agentPromptSave: false,
+        agentPromptAction: false,
         manualCompile: false,
         invocations: false,
         createInvocation: false,
@@ -606,6 +636,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildAgentPromptPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -623,6 +654,7 @@
       ...window.PSOPConsoleCoreMethods,
       ...window.PSOPConsoleSkillDetailMethods,
       ...window.PSOPConsoleCompilerMethods,
+      ...window.PSOPConsoleAgentPromptMethods,
       ...window.PSOPConsoleSkillTestMethods,
       ...window.PSOPConsoleRuntimeMethods,
       ...window.PSOPConsoleFormatMethods

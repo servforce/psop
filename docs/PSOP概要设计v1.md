@@ -151,7 +151,7 @@ flowchart TB
 - `Sandbox Manager` 按需为高风险节点提供隔离环境
 - `State Store + Trace Store + Object Store` 负责恢复、回放与对象证据存储
 - `Agent Module` 是 PSOP 的智能体能力层，负责 sub-agent、memory、planning 与 tool-use orchestration
-- `Agent Prompt Assets` 是智能体提示词、输入模板、输出约束和测试样例的 repo-backed 版本化资产
+- `Agent Prompt Assets` 是智能体提示词、输入模板、输出约束和测试样例的版本化控制面资产；当前阶段由 DB 管理 draft/published/active 版本，repo 中 `backend/app/agents/*` 仅作为初始化种子与故障兜底
 - `Domain Packs` 是行业术语、流程模式、质量标准和安全边界的可选增强包，不改变正式 `Skill -> EG -> Runtime` 主链路
 - `DeerFlow` 可以作为可借鉴或可复用的 harness 参考实现，但不是产品级模块边界，也不是正式状态主权者
 
@@ -193,6 +193,10 @@ flowchart TB
   - 测试场景在相对时间轴上编排文本、图片、音频、视频等多信道输入，并在语义输出信道上定义期望
   - 测试执行不是模拟 Runtime，而是创建真实 invocation/run/terminal session，按时间轴把输入追加为真实 `terminal_event`，并复用 Runtime Kernel、Replay 与 OTel
   - 语义输出判断以期望事件所在时间点为切面，只判断该时间点以前的真实 terminal output 是否满足期望
+- `Agent Prompts`
+  - 管理平台级 Agent Prompt Pack、版本、发布与启用绑定
+  - 覆盖 skill 创建、skill 编译、runtime execution、skill test judge 等职责场景
+  - Prompt Pack 不拥有 Runtime 正式状态主权；每次调用只通过版本、hash 与 binding metadata 进入审计链路
 - `Observability`
   - 查看 OTel traces、metrics、logs、异常拓扑与慢调用
 
@@ -203,7 +207,7 @@ flowchart TB
 - `Web IDE` 同时承担 Skill Studio 与运行观测控制台职责
 - `Skills Module` 负责 skill 定义、GitLab 绑定、版本与发布；`Compiler` 只负责编译
 - `GitLab` 是 `skill source` 的正式事实源
-- Agent 提示词按 `skill_creation`、`skill_compilation`、`runtime_execution` 等职责分类保存；行业知识通过 `generic`、`industrial_inspection`、`equipment_maintenance` 等 `Domain Pack` 注入
+- Agent 提示词按 `skill_creation`、`skill_compilation`、`runtime_execution`、`skill_test` 等职责分类保存；DB 中的 active binding 是运行时解析事实源，repo-backed 文件只用于 bootstrap/fallback；行业知识通过 `generic`、`industrial_inspection`、`equipment_maintenance` 等 `Domain Pack` 注入
 - `Skills` 发布后自动编译出现实世界协作执行 `EG`，不生成一次输入后自动完成的纯线性执行图
 - `Runtime Kernel` 只加载 compile artifact，不直接解释 skill 源码
 - `Gateway` 统一承接 invocation、模拟 I/O 和外部能力接入

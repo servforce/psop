@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "required": ["status", "confidence", "reason", "evidence_refs", "missing_evidence"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["passed", "failed", "inconclusive"]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "reason": {
+      "type": "string"
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "missing_evidence": {
+      "type": "string"
+    }
+  }
+}
+

@@ -86,6 +86,7 @@
 | 菜单 | 主路由 | 主要对象 | 主要用途 |
 | --- | --- | --- | --- |
 | `Skills` | `/admin/skills` | `skill_id`, `skill_version_id`, `compile_request_id`, `invocation_id` | 创建、编辑、发布、编译并运行 skill |
+| `智能体` | `/admin/agent-prompts` | `agent_prompt_definition_id`, `agent_prompt_version_id`, `usage_key` | 管理 Agent Prompt Pack、版本、发布与启用绑定 |
 | `Replay` | `/admin/replay` | `run_id`, `trace_id` | 回放已运行完成的 skill |
 
 `编译` 与 `运行` 不再作为左侧一级菜单暴露。二者属于具体 Skill 的生命周期能力，必须收敛到 `Skill Detail` 的 table 页中；`/admin/compiler`、`/admin/invocations` 等路径仅保留为深链、兼容与排障入口。
@@ -97,6 +98,8 @@
 /admin/skills
 /admin/skills/:skillId
 /admin/skills/:skillId/versions/:skillVersionId
+/admin/agent-prompts
+/admin/agent-prompts/:definitionId
 /admin/compiler
 /admin/compiler/requests/:compileRequestId
 /admin/compiler/artifacts/:compileArtifactId
@@ -418,7 +421,23 @@
   - 查看 discover 出来的 tools
   - 配置模型路由与 fallback
 
-### 7.8 Issue #1 最小闭环页面要求
+### 7.8 `Agent Prompts`
+
+- 页面目标：把平台级智能体提示词从业务代码中移出，作为可审阅、可发布、可启用和可追溯的 Prompt Pack 资产管理。
+- 导航归属：左侧一级菜单 `智能体`；该页面管理平台级 Agent Prompt Pack，不放入单个 Skill Detail。
+- 列表页 `/admin/agent-prompts`：
+  - 展示 Prompt Pack key、agent id、scenario、active version、content hash、usage binding 与更新时间。
+  - 默认进入时触发后端 seed，确保 repo-backed 初始包可见。
+- 详情页 `/admin/agent-prompts/:definitionId`：
+  - 左栏：版本列表，区分 `draft / published / archived`，标记 active version。
+  - 中栏：文件编辑区，至少支持 `agent.yaml`、`system.md`、`user_template.md/json`、`output_schema.json`。
+  - 右栏：摘要、usage binding、校验结果、发布和启用动作。
+- 交互约束：
+  - `draft` 可编辑，`published` 不可编辑；修改 published 内容必须先创建新 draft。
+  - `publish` 前必须执行服务端校验；`activate` 只允许选择 published version。
+  - 页面采用单层全高面板和细线分区，不使用面板套面板。
+
+### 7.9 Issue #1 最小闭环页面要求
 
 issue #1 的前端最小可验收闭环必须优先打通以下页面路径：
 

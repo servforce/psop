@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.domain.skills.exceptions import SkillsConfigurationError
 
@@ -29,9 +31,13 @@ class AgentPromptPack:
     files: dict[str, str]
     system_prompt: str
     prompt_hash: str
+    definition_key: str | None = None
+    version_id: str | None = None
+    version_label: str | None = None
+    source: str = "repo"
 
     def metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "agent_id": self.agent_id,
             "agent_key": self.key,
             "version": self.version,
@@ -39,6 +45,14 @@ class AgentPromptPack:
             "route_key": self.route_key,
             "prompt_hash": self.prompt_hash,
         }
+        if self.definition_key:
+            metadata["definition_key"] = self.definition_key
+        if self.version_id:
+            metadata["version_id"] = self.version_id
+        if self.version_label:
+            metadata["version_label"] = self.version_label
+        metadata["source"] = self.source
+        return metadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,20 +103,79 @@ class PromptRegistry:
     def load_default_compile_agent(self) -> AgentPromptPack:
         return self.load_agent(DEFAULT_COMPILE_AGENT_REF)
 
+    def load_default_compile_agent_for_session(self, session: Session | None = None) -> AgentPromptPack:
+        return self.load_agent_for_usage(
+            "default.compile_agent",
+            fallback_ref=DEFAULT_COMPILE_AGENT_REF,
+            session=session,
+        )
+
+    def load_agent_for_usage(
+        self,
+        usage_key: str,
+        *,
+        fallback_ref: str,
+        session: Session | None = None,
+    ) -> AgentPromptPack:
+        if session is not None:
+            db_pack = self._load_agent_for_usage_from_db(session, usage_key)
+            if db_pack:
+                return db_pack
+        return self.load_agent(fallback_ref)
+
     def load_agent(self, ref: str) -> AgentPromptPack:
         root_path = self.root / ref
         files = _read_asset_files(root_path)
+        return _build_agent_prompt_pack(
+            key=ref,
+            root_path=root_path,
+            files=files,
+            source="repo",
+        )
+
+    def _load_agent_for_usage_from_db(self, session: Session, usage_key: str) -> AgentPromptPack | None:
+        from app.domain.agent_prompts.models import AgentPromptBinding, AgentPromptDefinition, AgentPromptVersion
+
+        binding = session.scalar(select(AgentPromptBinding).where(AgentPromptBinding.usage_key == usage_key))
+        if not binding or not binding.active_version_id:
+            return None
+        version = session.get(AgentPromptVersion, binding.active_version_id)
+        definition = session.get(AgentPromptDefinition, binding.definition_id)
+        if not version or not definition or version.status != "published":
+            return None
+        files = {str(key): str(value) for key, value in dict(version.files or {}).items()}
+        return _build_agent_prompt_pack(
+            key=f"{definition.key}/{version.version_label}",
+            root_path=self.root,
+            files=files,
+            definition_key=definition.key,
+            version_id=version.id,
+            version_label=version.version_label,
+            source="db",
+        )
+
+
+def _build_agent_prompt_pack(
+    *,
+    key: str,
+    root_path: Path,
+    files: dict[str, str],
+    definition_key: str | None = None,
+    version_id: str | None = None,
+    version_label: str | None = None,
+    source: str = "repo",
+) -> AgentPromptPack:
         spec = _load_yaml_asset(files, root_path, "agent.yaml")
         system_prompt = _required_text(files, root_path, "system.md").strip()
 
         agent_id = _required_string(spec, "agent_id", root_path / "agent.yaml")
-        version = str(spec.get("version") or root_path.name)
-        scenario = str(spec.get("scenario") or ref.split("/", 1)[0])
+        version = str(spec.get("version") or version_label or root_path.name)
+        scenario = str(spec.get("scenario") or key.split("/", 1)[0])
         route_key = str(spec.get("route_key") or "default")
         description = str(spec.get("description") or "")
 
         return AgentPromptPack(
-            key=ref,
+            key=key,
             agent_id=agent_id,
             version=version,
             scenario=scenario,
@@ -113,6 +186,10 @@ class PromptRegistry:
             files=files,
             system_prompt=system_prompt,
             prompt_hash=content_hash(files),
+            definition_key=definition_key,
+            version_id=version_id,
+            version_label=version_label,
+            source=source,
         )
 
 
@@ -236,4 +313,3 @@ def _parse_domain_pack_ref(ref: str) -> tuple[str, str]:
     if len(parts) == 1:
         return parts[0], DEFAULT_DOMAIN_PACK_VERSION
     return parts[0], parts[1]
-

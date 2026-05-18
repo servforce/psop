@@ -352,6 +352,7 @@ class CompilerService:
                 compile_request_id=compile_request.id,
             ):
                 artifact, agent_diagnostics = self._compile_with_agent(
+                    session=session,
                     skill_definition=skill_definition,
                     skill_version=skill_version,
                     document=document,
@@ -668,6 +669,7 @@ class CompilerService:
     def _compile_with_agent(
         self,
         *,
+        session: Session,
         skill_definition: SkillDefinition,
         skill_version: SkillVersion,
         document: SkillDocument,
@@ -707,6 +709,7 @@ class CompilerService:
                         document=document,
                         source=source,
                         repair_diagnostics=repair_diagnostics,
+                        session=session,
                     )
                 except Exception as exc:
                     record_span_exception(span, exc)

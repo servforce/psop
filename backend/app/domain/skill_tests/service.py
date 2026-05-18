@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.compiler.models import ArtifactObject
 from app.domain.jobs.models import RuntimeJob
 from app.domain.jobs.repository import JobRepository
@@ -70,6 +71,7 @@ class SkillTestService:
         repository: SkillTestRepository | None = None,
         runtime_service: RuntimeService | None = None,
         job_repository: JobRepository | None = None,
+        agent_prompt_service: AgentPromptService | None = None,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
@@ -77,6 +79,7 @@ class SkillTestService:
         self.repository = repository or SkillTestRepository()
         self.runtime_service = runtime_service or RuntimeService(settings=settings, inference_gateway=inference_gateway)
         self.job_repository = job_repository or JobRepository()
+        self.agent_prompt_service = agent_prompt_service or AgentPromptService()
 
     def list_scenarios(self, session: Session, skill_id: str) -> list[SkillTestScenarioResponse]:
         self._get_skill(session, skill_id)
@@ -608,7 +611,12 @@ class SkillTestService:
         cutoff: datetime,
     ) -> SkillTestExpectationEvaluation:
         policy = scenario.judge_policy or {}
-        route_key = str(policy.get("route_key") or "skill-test-judge")
+        prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
+            session,
+            usage_key="skill_test.semantic_judge",
+            fallback_ref="skill_test/semantic_judge/v1",
+        )
+        route_key = str(policy.get("route_key") or prompt_pack.route_key or "skill-test-judge")
         prompt_payload = self._build_judge_prompt_payload(
             expectation=expectation,
             scoped_outputs=scoped_outputs,
@@ -617,18 +625,12 @@ class SkillTestService:
             cutoff=cutoff,
             policy=policy,
         )
-        system_prompt = (
-            "你是 PSOP Skill 黑盒时序测试 Judge。"
-            "只根据给定时间点以前的真实 terminal output 判断语义期望是否满足。"
-            "terminal_outputs_before_cutoff 是按 seq_no 保留的精简 transcript，payload_text 可能被裁剪。"
-            "若证据因裁剪或缺失不足以判断，返回 inconclusive 并说明 missing_evidence。"
-            "必须只输出 JSON，字段为 status、confidence、reason、evidence_refs、missing_evidence。"
-            "status 只能是 passed、failed、inconclusive。"
-        )
+        system_prompt = prompt_pack.system_prompt
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True)
         prompt_hash = hashlib.sha256(f"{system_prompt}\n{user_prompt}".encode("utf-8")).hexdigest()
         request_snapshot = {
             "route_key": route_key,
+            "agent_prompt": prompt_pack.metadata(),
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
             "prompt_payload": prompt_payload,

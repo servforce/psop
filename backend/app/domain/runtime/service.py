@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
+from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.jobs.models import RuntimeJob
 from app.domain.jobs.repository import JobRepository
 from app.domain.jobs.schemas import RuntimeJobResponse
@@ -59,11 +60,13 @@ class RuntimeService:
         inference_gateway: LlmInferenceGateway,
         repository: RuntimeRepository | None = None,
         job_repository: JobRepository | None = None,
+        agent_prompt_service: AgentPromptService | None = None,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
         self.repository = repository or RuntimeRepository()
         self.job_repository = job_repository or JobRepository()
+        self.agent_prompt_service = agent_prompt_service or AgentPromptService()
 
     def create_invocation(self, session: Session, payload: CreateInvocationRequest) -> InvocationResponse:
         skill_definition = self.repository.get_skill_definition_by_key(session, payload.skill_key)
@@ -442,7 +445,12 @@ class RuntimeService:
                                 "runtime actor selected",
                                 extra={"node_id": node.get("id"), "node_kind": node.get("kind")},
                             )
-                            observation = self._execute_node(node=node, token=token, artifact_payload=artifact_payload)
+                            observation = self._execute_node(
+                                session=session,
+                                node=node,
+                                token=token,
+                                artifact_payload=artifact_payload,
+                            )
                         except Exception as exc:
                             record_span_exception(actor_span, exc)
                             raise
@@ -1176,6 +1184,7 @@ class RuntimeService:
         system_prompt: str,
         user_prompt: str,
         route_key: str | None = None,
+        agent_prompt: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         system_bytes = system_prompt.encode("utf-8")
         user_bytes = user_prompt.encode("utf-8")
@@ -1190,6 +1199,8 @@ class RuntimeService:
         }
         if route_key:
             summary["route_key"] = route_key
+        if agent_prompt:
+            summary["agent_prompt"] = agent_prompt
         return summary
 
     def _runtime_exception_trace_payload(
@@ -1743,7 +1754,14 @@ class RuntimeService:
             return False
         return True
 
-    def _execute_node(self, *, node: dict[str, Any], token: dict[str, Any], artifact_payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_node(
+        self,
+        *,
+        session: Session,
+        node: dict[str, Any],
+        token: dict[str, Any],
+        artifact_payload: dict[str, Any],
+    ) -> dict[str, Any]:
         kind = node.get("kind")
         actor_name = _actor_name(node.get("actor"))
         if kind == "start" or actor_name == "runtime.start":
@@ -1752,7 +1770,12 @@ class RuntimeService:
             user_input = self._extract_user_input(token.get("input_envelope", {}), artifact_payload)
             return {"user_input": user_input, "summary": "已接收用户输入。"}
         if kind == "llm" or actor_name == "agent.llm":
-            system_prompt, user_prompt = self._render_llm_prompts(node, token, artifact_payload)
+            system_prompt, user_prompt, prompt_metadata = self._render_llm_prompts(
+                session,
+                node,
+                token,
+                artifact_payload,
+            )
             route_key = artifact_payload.get("capability_summary", {}).get("llm_route_key", "default")
             with start_span("gateway.inference", route_key=route_key, node_id=node.get("id")):
                 llm_completion = self.inference_gateway.complete(
@@ -1771,6 +1794,7 @@ class RuntimeService:
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     route_key=route_key,
+                    agent_prompt=prompt_metadata,
                 ),
                 "output": {"content": llm_completion.content},
                 "usage": llm_completion.usage,
@@ -1833,19 +1857,30 @@ class RuntimeService:
             return _get_path(token.get("input_envelope", {}), source.removeprefix("input."))
         return None
 
-    def _render_llm_prompts(self, node: dict[str, Any], token: dict[str, Any], artifact_payload: dict[str, Any]) -> tuple[str, str]:
+    def _render_llm_prompts(
+        self,
+        session: Session,
+        node: dict[str, Any],
+        token: dict[str, Any],
+        artifact_payload: dict[str, Any],
+    ) -> tuple[str, str, dict[str, Any] | None]:
         projection = node.get("projection") if isinstance(node.get("projection"), dict) else {}
         runtime_contract = artifact_payload.get("runtime_contract", {}) if isinstance(artifact_payload.get("runtime_contract"), dict) else {}
         skill = artifact_payload.get("skill", {}) if isinstance(artifact_payload.get("skill"), dict) else {}
         skill_instruction = str(runtime_contract.get("skill_instruction") or "")
-        system_template = str(
-            projection.get("system_template")
-            or f"你正在执行 PSOP Skill：{skill.get('name', 'Unnamed Skill')}。\n请遵循 Skill 执行说明，输出清晰、可执行的中文结果。"
-        )
-        user_template = str(
-            projection.get("user_template")
-            or "用户输入：{{input.user_input}}\n\nSkill 执行说明：\n{{skill.instruction}}"
-        )
+        prompt_metadata = None
+        if projection.get("system_template") and projection.get("user_template"):
+            system_template = str(projection.get("system_template") or "")
+            user_template = str(projection.get("user_template") or "")
+        else:
+            prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
+                session,
+                usage_key="runtime.llm_node_fallback",
+                fallback_ref="runtime_execution/llm_node_fallback/v1",
+            )
+            system_template = str(projection.get("system_template") or prompt_pack.system_prompt)
+            user_template = str(projection.get("user_template") or prompt_pack.files.get("user_template.md") or "")
+            prompt_metadata = prompt_pack.metadata()
         context = {
             "token": token,
             "input": token.get("input_envelope", {}),
@@ -1854,7 +1889,7 @@ class RuntimeService:
                 "instruction": skill_instruction,
             },
         }
-        return _render_template(system_template, context), _render_template(user_template, context)
+        return _render_template(system_template, context), _render_template(user_template, context), prompt_metadata
 
     @staticmethod
     def _parse_evaluation_observation(content: str, *, node: dict[str, Any]) -> dict[str, Any]:

@@ -45,6 +45,7 @@ class DatabaseManager:
             connection.execute(text("SELECT 1"))
 
     def create_schema(self) -> None:
+        from app.domain.agent_prompts import models as agent_prompt_models  # noqa: F401
         from app.domain.skills import models  # noqa: F401
         from app.domain.compiler import models as compiler_models  # noqa: F401
         from app.domain.jobs import models as job_models  # noqa: F401

@@ -162,7 +162,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 不负责 skill 发布、仓库绑定或版本冻结；`/api/compiler/*` 只承载编译相关接口。
 - 编译输入固定来自冻结 `source_commit_sha` 下的 `SKILL.md`、`README.md`、后续扩展目录，以及 `skill_version.manifest_snapshot`；不得读取草稿分支头或工作区临时内容。
 - 如果 GitLab 中存在系统生成的 `skill.yaml`，编译器只能把它作为只读编译视图校验是否与 `manifest_snapshot` 一致，不得以用户可修改文件覆盖数据库中的冻结机器契约。
-- `SkillCompileAgent` 的系统提示词、输入契约、修复契约与输出 schema 必须来自 repo-backed `Agent Prompt Pack`，当前默认包为 `skill_compilation/formal_v5_compile/v1`。
+- `SkillCompileAgent` 的系统提示词、输入契约、修复契约与输出 schema 必须来自版本化 `Agent Prompt Pack`，当前默认 binding 为 `default.compile_agent`，repo-backed `skill_compilation/formal_v5_compile/v1` 仅作为 seed/fallback。
 - 行业差异不拆分编译器；编译器从 `skill.compile_config.domain_pack` 选择可选 `Domain Pack`，当前内置 `generic/v1`、`industrial_inspection/v1`、`equipment_maintenance/v1`，未知值回退到 `generic/v1` 并写入 warning diagnostic。
 - 编译流程分为四阶段：
   - `parse`：读取 published `manifest_snapshot`，其中 `prompt_material.skill_md` 和 `prompt_material.readme` 是发布时冻结的 agent-facing 说明与用户说明；冻结 commit 下的文件可作为一致性校验和兜底读取。
@@ -304,8 +304,9 @@ sandbox       -> 按需创建的进程或容器，不常驻
 ### 6.10 `AgentModule`
 
 - `AgentModule` 是 PSOP 中与智能体相关的正式模块边界，负责 agent runtime、sub-agent、memory、planning、tool-use orchestration 与 harness 抽象。
-- `AgentModule` 负责消费 repo-backed `Agent Prompt Assets` 与可选 `Domain Packs`，但提示词资产本身不是正式运行时状态对象。
-- `Agent Prompt Assets` 第一层按 `skill_creation`、`skill_compilation`、`runtime_execution` 等职责/场景分类；行业知识只能作为 `domain_packs/*/v*` 注入，避免为每个行业复制一套智能体。
+- `AgentModule` 负责消费 DB 管理的 `Agent Prompt Assets` 与可选 `Domain Packs`，但提示词资产本身不是正式运行时状态对象。
+- `Agent Prompt Assets` 第一层按 `skill_creation`、`skill_compilation`、`runtime_execution`、`skill_test` 等职责/场景分类；行业知识只能作为 `domain_packs/*/v*` 注入，避免为每个行业复制一套智能体。
+- `PromptRegistry` 解析顺序固定为：active DB binding -> repo-backed fallback；首次访问可以从 `backend/app/agents/*` seed 初始 definition/version/binding。
 - 可借鉴或复用 DeerFlow 的优秀设计与实现，但 `DeerFlow` 不是产品事实源，也不是需要原样照搬的正式模块。
 - `AgentModule` 只为 `Actor` 执行提供智能体能力，不拥有正式状态主权。
 - 在 issue #1 中，AgentModule 的最小职责是：构造 LLM Prompt View、调用 LLM Inference Gateway、解析模型输出、决定是否需要受控 tool，并把结果归一化为 actor observation。
@@ -330,6 +331,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 输入事件即使发生在 Runtime 尚未进入 `waiting_input` 时，也先落库为终端事实；Runtime 后续在 `Sync` 阶段按 terminal cursor 消费。
 - 输出判断按“时间点以前”执行：每条语义期望只把 `occurred_at <= time_origin + at_ms` 的真实 terminal output 提供给 Judge。
 - Judge 必须通过 `LLM Inference Gateway`，默认 route key 为 `skill-test-judge`；评估结果保存状态、置信度、证据引用、理由、prompt hash 和 raw response。
+- Judge 系统提示词必须来自 `skill_test.semantic_judge` binding；raw response 的 request snapshot 必须记录 prompt pack metadata。
 - Review 支持基于 `time_ms + terminal_seq + snapshot_seq` 的切面 fork：可 fork 新测试场景，也可 fork 到独立调试会话继续手动输入。
 
 ### 6.13 `ObjectStoreService`
@@ -490,7 +492,36 @@ POST /api/gateway/invocations with terminal_context
 - 主链路关联：publish / compile 失败与告警定位
 - `compile.agent.prompt_pack` 与 `compile.agent.domain_pack_fallback` 等诊断通过 `location JSONB` 保存 Agent Prompt Pack / Domain Pack 元数据，不新增数据库迁移。
 
-#### 8.2.7 `skill_invocation`
+#### 8.2.7 `agent_prompt_definition`
+
+- 主键：`id UUID`
+- 关键字段：`key`、`agent_id`、`scenario`、`name`、`description`、`status`、`active_version_id`
+- 状态枚举：`active | archived`
+- 唯一约束：`uk_agent_prompt_definition_key`
+- 索引：`idx_agent_prompt_definition_scenario_status`
+- 审计字段：`created_at`、`updated_at`
+- 主链路关联：平台级 Agent Prompt Pack 定义，不承载 Runtime 正式状态。
+
+#### 8.2.8 `agent_prompt_version`
+
+- 主键：`id UUID`
+- 外键：`definition_id`
+- 关键字段：`version_no`、`version_label`、`status`、`route_key`、`files JSONB`、`content_hash`、`parent_version_id`、`published_at`
+- 状态枚举：`draft | published | archived`
+- 唯一约束：`uk_agent_prompt_version_definition_no`
+- 索引：`idx_agent_prompt_version_definition_status`
+- 发布后版本不可编辑；修改必须创建新的 draft version。
+
+#### 8.2.9 `agent_prompt_binding`
+
+- 主键：`id UUID`
+- 外键：`definition_id`、`active_version_id`
+- 关键字段：`usage_key`、`definition_id`、`active_version_id`
+- 唯一约束：`uk_agent_prompt_binding_usage_key`
+- 典型 usage key：`default.compile_agent`、`skill_test.semantic_judge`、`runtime.llm_node_fallback`
+- 主链路关联：业务调用只按 usage key 解析当前 active Prompt Pack。
+
+#### 8.2.10 `skill_invocation`
 
 - 主键：`id UUID`
 - 外键：`skill_definition_id`、`skill_version_id`、`compile_artifact_id`
@@ -823,7 +854,28 @@ POST /api/gateway/invocations with terminal_context
 - compiler response DTO 不新增单独 prompt 字段；prompt/domain 追溯通过 artifact payload 的 `compiler_metadata` 与 diagnostics 的 `location` 暴露。
 - `retry` 必须保留历史 request，不覆盖原记录。
 
-### 9.6 `/api/gateway/invocations/*`
+### 9.6 `/api/agent-prompts/*`
+
+| Method | Path | 用途 | Request | Response |
+| --- | --- | --- | --- | --- |
+| `GET` | `/api/agent-prompts` | Prompt Pack 列表 | 无 | `agent prompt summary list` |
+| `POST` | `/api/agent-prompts` | 创建 Prompt Pack 与初始 draft | `{ key, agent_id, scenario, name, description?, route_key?, files? }` | `agent prompt detail` |
+| `GET` | `/api/agent-prompts/{definition_id}` | Prompt Pack 详情 | `query: version_id?` | `agent prompt detail` |
+| `POST` | `/api/agent-prompts/{definition_id}/versions` | 基于指定或最新版本创建 draft | `{ version_label?, parent_version_id?, files? }` | `agent prompt detail` |
+| `PUT` | `/api/agent-prompts/{definition_id}/versions/{version_id}/files` | 保存 draft 文件 | `{ files }` | `agent prompt version detail` |
+| `POST` | `/api/agent-prompts/{definition_id}/versions/{version_id}/validate` | 校验 Prompt Pack | 无 | `{ valid, errors, metadata }` |
+| `POST` | `/api/agent-prompts/{definition_id}/versions/{version_id}/publish` | 发布 draft 为不可变版本 | 无 | `agent prompt version detail` |
+| `POST` | `/api/agent-prompts/{definition_id}/versions/{version_id}/activate` | 将 published 版本设为 active binding | `{ usage_key? }` | `agent prompt detail` |
+| `GET` | `/api/agent-prompt-bindings` | 查看 usage key 绑定 | 无 | `agent prompt binding list` |
+| `PUT` | `/api/agent-prompt-bindings/{usage_key}` | 更新 usage key 绑定 | `{ definition_id, active_version_id }` | `agent prompt binding` |
+
+状态要求：
+
+- DB 是 Prompt Pack 运行时事实源；repo 文件只作为初始化种子和 fallback。
+- `draft` 可编辑，`published` 不可编辑，`active` 通过 binding 指向某个 published version。
+- 校验至少覆盖 `agent.yaml` 可解析、`agent_id/scenario/route_key` 非空、`system.md` 非空与 content hash 稳定生成。
+
+### 9.7 `/api/gateway/invocations/*`
 
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |

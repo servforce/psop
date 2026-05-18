@@ -6,6 +6,7 @@ from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.compiler.service import CompilerService
 from app.domain.runtime.service import RuntimeService
 from app.domain.skill_tests.service import SkillTestService
@@ -40,6 +41,10 @@ def get_db_session(request: Request) -> Generator[Session, None, None]:
     database_manager: DatabaseManager = get_database_manager(request)
     with database_manager.session() as session:
         yield session
+
+
+def get_agent_prompt_service(_: Request) -> AgentPromptService:
+    return AgentPromptService()
 
 
 def get_skills_service(request: Request) -> SkillsService:

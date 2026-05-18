@@ -1084,9 +1084,10 @@
           <div class="min-h-0 flex-1 overflow-hidden">
             <form class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_minmax(22rem,0.34fr)] divide-x divide-slate-800" @submit.prevent="createSkillTestCase()">
               <section class="flex min-h-0 flex-col overflow-hidden">
-                <div class="min-h-0 flex-1 overflow-auto p-3">
-                  <div class="h-full min-h-0 w-full">
-                    <template x-for="(lane, laneIndex) in skillTestTimelineLanes()" :key="lane.id">
+                <div class="min-h-0 flex-1 overflow-hidden p-3">
+                  <div class="flex h-full min-h-0 w-full flex-col">
+                    <div class="min-h-0 flex-1 overflow-y-auto overflow-x-visible pr-1">
+                      <template x-for="(lane, laneIndex) in skillTestTimelineLanes()" :key="lane.id">
                       <div class="grid grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] border-b border-slate-800" :class="skillTestTimelineLaneHasExpandedEvent(lane.id) ? 'min-h-[22rem]' : 'min-h-16'">
                         <div class="flex items-center justify-center border-r border-slate-800/60">
                           <template x-if="shouldShowSkillTestTimelineLaneGroup(lane, laneIndex)">
@@ -1100,7 +1101,6 @@
                           </div>
                         </div>
                         <div class="relative overflow-visible px-3 transition" :class="skillTestTimelineLaneHasExpandedEvent(lane.id) ? 'min-h-[22rem]' : 'min-h-16 cursor-crosshair hover:bg-slate-900/35'" data-skill-test-timeline-track @click="canAddSkillTestTimelineEventToLane(lane.id) && addSkillTestTimelineEventFromLane($event, lane.id)">
-                          <div class="absolute inset-x-3 top-1/2 h-px bg-slate-600"></div>
                           <template x-for="item in skillTestTimelineEventsForLane(lane.id)" :key="item.render_key">
                             <div class="absolute top-1/2 z-20 max-w-[calc(100%-1.5rem)]" :class="isSkillTestTimelineEventExpanded(item.event) ? 'w-80 -translate-y-1/2' : 'w-20 -translate-x-1/2 -translate-y-1/2'" :style="isSkillTestTimelineEventExpanded(item.event) ? skillTestTimelineExpandedEventLeftStyle(item.event) : skillTestTimelineEventLeftStyle(item.event)" @click.stop @pointerdown.stop>
                               <template x-if="!isSkillTestTimelineEventExpanded(item.event)">
@@ -1128,17 +1128,7 @@
                                     </label>
                                     <label class="field-block">
                                       <span class="field-label">信道</span>
-                                      <template x-if="isSkillTestTimelineExpectationEvent(skillTestTimelineEditorEvent(item.event))">
-                                        <input class="input-field h-10 px-3 py-0 text-xs leading-normal" value="语义" disabled />
-                                      </template>
-                                      <template x-if="!isSkillTestTimelineExpectationEvent(skillTestTimelineEditorEvent(item.event))">
-                                        <select class="input-field h-10 px-3 py-0 text-xs leading-normal" :value="skillTestTimelineEditorEvent(item.event).lane_id" @change="updateSkillTestTimelineEventDraft('lane_id', $event.target.value)">
-                                          <option value="input.text">文本</option>
-                                          <option value="input.image">图片</option>
-                                          <option value="input.audio">音频</option>
-                                          <option value="input.video">视频</option>
-                                        </select>
-                                      </template>
+                                      <input class="input-field h-10 cursor-not-allowed px-3 py-0 text-xs leading-normal text-slate-400" :value="skillTestTimelineLaneLabel({ id: skillTestTimelineEditorEvent(item.event).lane_id })" disabled />
                                     </label>
                                   </div>
                                   <template x-if="skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event))">
@@ -1170,9 +1160,10 @@
                           </template>
                         </div>
                       </div>
-                    </template>
+                      </template>
+                    </div>
 
-                    <div class="grid min-h-14 grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] items-center pt-2">
+                    <div class="grid min-h-14 shrink-0 grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] items-center border-t border-slate-800 bg-slate-950/35 pt-2">
                       <div class="flex items-center justify-center border-r border-slate-800/60">
                         <span class="whitespace-nowrap text-sm font-semibold text-slate-300">时间</span>
                       </div>

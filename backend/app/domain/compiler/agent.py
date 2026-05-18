@@ -12,11 +12,13 @@ from app.agents.registry import (
     DomainPackResolution,
     PromptRegistry,
 )
+from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.compiler.formal_v5 import FormalDiagnostic
 from app.domain.skills.manifest import SkillDocument
 from app.domain.skills.models import SkillDefinition, SkillVersion
 from app.gateway.inference import LlmInferenceGateway
 from app.gateway.gitlab import SkillSourceBundle
+from sqlalchemy.orm import Session
 
 
 @dataclass(slots=True)
@@ -37,10 +39,12 @@ class SkillCompileAgent:
         *,
         prompt_registry: PromptRegistry | None = None,
         domain_pack_registry: DomainPackRegistry | None = None,
+        agent_prompt_service: AgentPromptService | None = None,
     ) -> None:
         self.inference_gateway = inference_gateway
         self.prompt_registry = prompt_registry or PromptRegistry()
         self.domain_pack_registry = domain_pack_registry or DomainPackRegistry()
+        self.agent_prompt_service = agent_prompt_service or AgentPromptService(prompt_registry=self.prompt_registry)
 
     def compile(
         self,
@@ -50,8 +54,13 @@ class SkillCompileAgent:
         document: SkillDocument,
         source: SkillSourceBundle,
         repair_diagnostics: list[FormalDiagnostic] | None = None,
+        session: Session | None = None,
     ) -> CompileAgentCandidate:
-        prompt_pack = self.prompt_registry.load_default_compile_agent()
+        prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
+            session,
+            usage_key="default.compile_agent",
+            fallback_ref="skill_compilation/formal_v5_compile/v1",
+        )
         domain_resolution = self.domain_pack_registry.resolve(_domain_pack_ref(document))
         compiler_metadata = _compiler_metadata(prompt_pack, domain_resolution)
         context_diagnostics = _context_diagnostics(compiler_metadata, domain_resolution)

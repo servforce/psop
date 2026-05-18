@@ -12,6 +12,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildAgentPromptPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -274,6 +275,7 @@
           save: "保存",
           science: "测试",
           send: "发送",
+          smart_toy: "智能体",
           terminal: "调试",
           upload_file: "上传文件"
         };
@@ -320,6 +322,8 @@
           ["skill-detail-page", "/pages/skill-detail.html"],
           ["compiler-list-page", "/pages/compiler-list.html"],
           ["compiler-artifact-page", "/pages/compiler-artifact-detail.html"],
+          ["agent-prompts-list-page", "/pages/agent-prompts-list.html"],
+          ["agent-prompt-detail-page", "/pages/agent-prompt-detail.html"],
           ["invocations-list-page", "/pages/invocations-list.html"],
           ["run-live-page", "/pages/run-live.html"],
           ["skill-test-scenario-page", "/pages/skill-test-scenario-detail.html"],
@@ -516,6 +520,18 @@
           if (this.route.name === "compiler-artifact") {
             this.currentSkill = null;
             await this.loadCompilerArtifact(this.route.params.artifactId);
+            return;
+          }
+
+          if (this.route.name === "agent-prompts-list") {
+            this.currentSkill = null;
+            await this.loadAgentPrompts();
+            return;
+          }
+
+          if (this.route.name === "agent-prompt-detail") {
+            this.currentSkill = null;
+            await this.loadAgentPromptDetail(this.route.params.definitionId);
             return;
           }
 
@@ -736,6 +752,12 @@
         if (this.route.name === "compiler-artifact") {
           return "EG Artifact";
         }
+        if (this.route.name === "agent-prompts-list") {
+          return "智能体";
+        }
+        if (this.route.name === "agent-prompt-detail") {
+          return this.agentPromptDetail?.name || "Agent Prompt Pack";
+        }
         if (this.route.name === "invocations-list") {
           return "运行";
         }
@@ -747,6 +769,10 @@
         }
 
         return "Skills";
+      },
+
+      agentPromptPath(definitionId) {
+        return buildAgentPromptPath(definitionId);
       },
 
 
