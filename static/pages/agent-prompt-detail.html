@@ -36,11 +36,11 @@
         </div>
       </aside>
 
-      <main class="flex min-h-0 flex-col">
-        <div class="flex h-12 shrink-0 items-center justify-between border-b border-slate-800 px-3">
-          <div class="flex min-w-0 items-center gap-2 overflow-x-auto">
+      <main class="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        <div class="flex h-12 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-slate-800 px-3">
+          <div class="scrollbar-none flex min-w-0 flex-1 items-center gap-2 overflow-x-auto overflow-y-hidden">
             <template x-for="file in agentPromptFileNames()" :key="file">
-              <button type="button" class="rounded-md px-2 py-1 text-xs transition hover:bg-slate-800" :class="file === agentPromptSelectedFile ? 'bg-slate-800 text-slate-100' : 'text-slate-400'" @click="selectAgentPromptFile(file)" x-text="file"></button>
+              <button type="button" class="shrink-0 rounded-md px-2 py-1 text-xs transition hover:bg-slate-800" :class="file === agentPromptSelectedFile ? 'bg-slate-800 text-slate-100' : 'text-slate-400'" @click="selectAgentPromptFile(file)" x-text="file"></button>
             </template>
           </div>
           <div class="flex shrink-0 items-center gap-2">
@@ -124,4 +124,3 @@
     </section>
   </div>
 </div>
-

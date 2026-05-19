@@ -387,6 +387,17 @@
   }
 }
 
+@layer utilities {
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 .psop-dark .bg-white {
   background-color: rgb(15 23 42 / 0.78) !important;
 }

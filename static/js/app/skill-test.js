@@ -2173,8 +2173,6 @@
         const asset = event.asset_id ? this.skillTestAssetById(event.asset_id) : null;
         const assetLabel = asset ? this.skillTestAssetLabel(asset) : event.asset_id ? this.skillTestTimelineEventAssetLabel(event) : "";
         const pairs = [
-          ["信道", this.skillTestTimelineLaneLabel({ id: event.lane_id })],
-          ["时间", this.formatSkillTestTimelineMs(event.at_ms || 0)],
           ["状态", this.skillTestReviewEventStatusLabel(event)],
           [
             "真实输出",

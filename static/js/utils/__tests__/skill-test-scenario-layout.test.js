@@ -331,4 +331,6 @@ test("agent prompt management routes and pages are exposed", () => {
   expect(detailHtml).toContain("新建 Draft");
   expect(detailHtml).toContain("Usage Bindings");
   expect(detailHtml).toContain("selectedAgentPromptVersion()?.status !== 'draft'");
+  expect(detailHtml).toContain('main class="flex min-h-0 min-w-0 flex-col overflow-hidden"');
+  expect(detailHtml).toContain("scrollbar-none flex min-w-0 flex-1 items-center gap-2 overflow-x-auto overflow-y-hidden");
 });

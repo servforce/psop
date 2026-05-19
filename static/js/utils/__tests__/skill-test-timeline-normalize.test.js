@@ -569,9 +569,9 @@ test("review timeline events open expanded full content", () => {
     ])
   );
   expect(app.skillTestReviewEventTooltip(inputEvent)).toContain("点击查看完整内容");
-  expect(app.skillTestReviewEventMetadata(inputEvent).map((item) => item.label)).toEqual(
-    expect.arrayContaining(["信道", "时间", "状态", "Event ID", "Event Kind", "MIME", "Required"])
-  );
+  const metadataLabels = app.skillTestReviewEventMetadata(inputEvent).map((item) => item.label);
+  expect(metadataLabels).toEqual(expect.arrayContaining(["状态", "Event ID", "Event Kind", "MIME", "Required"]));
+  expect(metadataLabels).not.toEqual(expect.arrayContaining(["信道", "时间"]));
 
   app.closeSkillTestReviewEvent();
   expect(app.skillTestReviewExpandedEvent()).toBeNull();
