@@ -66,6 +66,8 @@ function createTimelineHarness() {
     skillTestTimelineDragState: null,
     skillTestReviewExpandedEventKey: "",
     skillTestReviewPanelTab: "transcript",
+    skillTestReviewDetailTab: "transcript",
+    skillTestScenarioInfoTab: "basic",
     selectedSkillTestReviewExpectationId: "",
     selectedSkillTestReviewLaneId: "",
     formatStatus(value) {
@@ -166,6 +168,15 @@ test("saving a timeline writes repaired unique ids back into advanced json", () 
 
   expect(new Set(parsedIds).size).toBe(parsedIds.length);
   expect(formIds).toEqual(parsedIds);
+});
+
+test("timeline event icons use lane defaults and schedule icon for trigger events", () => {
+  const app = createTimelineHarness();
+
+  expect(app.skillTestTimelineEventIcon({ lane_id: "input.text", event_kind: "terminal.text.input.v1" })).toBe("text_fields");
+  expect(app.skillTestTimelineEventIcon({ lane_id: "expected.semantic" })).toBe("fact_check");
+  expect(app.skillTestTimelineEventIcon({ lane_id: "input.text", event_kind: "terminal.schedule.trigger.v1" })).toBe("schedule");
+  expect(app.skillTestTimelineEventIcon({ lane_id: "input.text", trigger_event_id: "expected_1" })).toBe("schedule");
 });
 
 test("right-panel event editor keeps blank track clicks available", () => {
@@ -538,7 +549,7 @@ test("review judge debug exposes saved request and model response", () => {
   const event = app.skillTestReviewEventsForLane("expected.semantic")[0].event;
   app.selectSkillTestReviewEvent(event);
 
-  expect(app.skillTestReviewPanelTab).toBe("judge");
+  expect(app.skillTestReviewPanelTab).toBe("transcript");
   expect(app.selectedSkillTestReviewExpectationId).toBe("expected_9");
   expect(app.isSkillTestReviewExpectationSelected(event)).toBe(true);
   expect(app.selectedSkillTestReviewEvaluation().judge_model).toBe("judge-test");
@@ -588,7 +599,8 @@ test("opening a semantic review event also selects judge context", () => {
   app.openSkillTestReviewEvent(event);
 
   expect(app.selectedSkillTestReviewExpectationId).toBe("expected_9");
-  expect(app.skillTestReviewPanelTab).toBe("judge");
+  expect(app.skillTestReviewPanelTab).toBe("transcript");
+  expect(app.skillTestReviewDetailTab).toBe("content");
   expect(app.skillTestReviewExpandedEvent().id).toBe("expected_9");
   expect(app.skillTestReviewEventContentSections(app.skillTestReviewExpandedEvent())[0]).toEqual(
     expect.objectContaining({ title: "语义期望", content: "引导用户进行下一步操作" })

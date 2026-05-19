@@ -272,10 +272,11 @@
           replay: "重新播放",
           restart_alt: "重置",
           rocket_launch: "发布",
+          schedule: "时钟事件",
           save: "保存",
           science: "测试",
           send: "发送",
-          smart_toy: "智能体",
+          smart_toy: "基本原则",
           terminal: "调试",
           upload_file: "上传文件"
         };
@@ -753,7 +754,7 @@
           return "EG Artifact";
         }
         if (this.route.name === "agent-prompts-list") {
-          return "智能体";
+          return "基本原则";
         }
         if (this.route.name === "agent-prompt-detail") {
           return this.agentPromptDetail?.name || "Agent Prompt Pack";

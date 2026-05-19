@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PSOP Studio</title>
+    <title>PSOP Arena</title>
     <link rel="stylesheet" href="/css/material-symbols.css" />
     <link rel="stylesheet" href="/node_modules/bpmn-js/dist/assets/diagram-js.css" />
     <link rel="stylesheet" href="/node_modules/bpmn-js/dist/assets/bpmn-js.css" />
@@ -43,7 +43,7 @@
                   <span class="material-symbols-outlined text-[20px]">hub</span>
                 </button>
                 <p class="truncate text-sm font-semibold text-slate-100" x-show="!sidebarCollapsed" x-transition.opacity>
-                  PSOP Studio
+                  PSOP Arena
                 </p>
               </div>
             </div>
@@ -63,11 +63,11 @@
                 type="button"
                 class="sidebar-link"
                 :class="[['agent-prompts-list', 'agent-prompt-detail'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
-                title="智能体"
+                title="基本原则"
                 @click="navigate('/admin/agent-prompts')"
               >
                 <span class="material-symbols-outlined text-[20px]">smart_toy</span>
-                <span x-show="!sidebarCollapsed" x-transition.opacity>智能体</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>基本原则</span>
               </button>
             </nav>
         </aside>

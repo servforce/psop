@@ -47,6 +47,7 @@
         this.selectedSkillTestTimelineEventIds = [];
         this.skillTestTimelineEventDraft = null;
         this.skillTestScenarioDetailPanel = "info";
+        this.skillTestScenarioInfoTab = "basic";
         this.selectedSkillTestTimelineLaneId = "";
       },
 
@@ -420,6 +421,7 @@
         this.selectedSkillTestTimelineLaneId = "";
         this.collapseSkillTestTimelineEventEditor();
         this.skillTestScenarioDetailPanel = "info";
+        this.skillTestScenarioInfoTab = this.skillTestScenarioInfoTab || "basic";
       },
 
       openSkillTestTimelineLaneDetail(laneId) {
@@ -462,6 +464,37 @@
           return "terminal";
         }
         return "text_fields";
+      },
+
+      isSkillTestTimelineTriggerEvent(event) {
+        if (!event) {
+          return false;
+        }
+        const eventKind = String(event.event_kind || event.kind || event.type || "").toLowerCase();
+        if (/(trigger|schedule|timer|clock)/.test(eventKind)) {
+          return true;
+        }
+        return [
+          "trigger_event_id",
+          "trigger_event",
+          "trigger_id",
+          "source_event_id",
+          "depends_on_event_id",
+          "scheduled_by_event_id"
+        ].some((key) => {
+          const value = event[key];
+          if (Array.isArray(value)) {
+            return value.length > 0;
+          }
+          return value !== undefined && value !== null && String(value).trim() !== "";
+        });
+      },
+
+      skillTestTimelineEventIcon(event) {
+        if (this.isSkillTestTimelineTriggerEvent(event)) {
+          return "schedule";
+        }
+        return this.skillTestTimelineLaneIcon(event?.lane_id);
       },
 
 
@@ -1444,6 +1477,7 @@
           this.skillTestReviewCursor = 0;
           this.skillTestReviewAutoFollow = true;
           this.skillTestReviewPanelTab = "transcript";
+          this.skillTestReviewDetailTab = "transcript";
           this.selectedSkillTestReviewExpectationId = "";
           this.skillTestReviewExpandedEventKey = "";
           this.selectedSkillTestReviewLaneId = "";
@@ -1480,12 +1514,14 @@
         }
         if (this.skillTestReviewExpandedEventKey && !this.skillTestReviewEventByKey(this.skillTestReviewExpandedEventKey)) {
           this.skillTestReviewExpandedEventKey = "";
+          this.skillTestReviewDetailTab = "transcript";
         }
         if (
           this.selectedSkillTestReviewLaneId &&
           !this.skillTestReviewTimelineLanes().some((lane) => lane.id === this.selectedSkillTestReviewLaneId)
         ) {
           this.selectedSkillTestReviewLaneId = "";
+          this.skillTestReviewDetailTab = "transcript";
         }
         this.skillTestReviewPlayheadMs = Math.min(this.skillTestReviewDurationMs(), Math.max(0, Number(previousPlayhead || 0)));
         this.skillTestReviewCursor = this.skillTestReviewProgressPercent();
@@ -2025,7 +2061,6 @@
           return;
         }
         this.selectedSkillTestReviewExpectationId = event.id;
-        this.skillTestReviewPanelTab = "judge";
       },
 
 
@@ -2040,11 +2075,13 @@
         }
         this.selectedSkillTestReviewLaneId = laneId;
         this.skillTestReviewExpandedEventKey = "";
+        this.skillTestReviewDetailTab = "events";
       },
 
 
       closeSkillTestReviewLaneDetail() {
         this.selectedSkillTestReviewLaneId = "";
+        this.skillTestReviewDetailTab = "transcript";
       },
 
 
@@ -2057,11 +2094,13 @@
           this.selectSkillTestReviewEvent(event);
         }
         this.skillTestReviewExpandedEventKey = this.skillTestReviewEventKey(event);
+        this.skillTestReviewDetailTab = "content";
       },
 
 
       closeSkillTestReviewEvent() {
         this.skillTestReviewExpandedEventKey = "";
+        this.skillTestReviewDetailTab = "transcript";
       },
 
 

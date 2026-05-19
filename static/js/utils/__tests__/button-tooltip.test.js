@@ -136,6 +136,32 @@ test("button tooltips describe icon-only actions", () => {
   expect(attrs["aria-label"]).toBe("删除");
 });
 
+test("button tooltips cover schedule and basic-principle icons", () => {
+  const methods = loadCoreMethods();
+  const scheduleButton = createButton({
+    childNodes: [
+      createElement({
+        classes: ["material-symbols-outlined"],
+        childNodes: [textNode("schedule")]
+      })
+    ]
+  });
+  const principleButton = createButton({
+    childNodes: [
+      createElement({
+        classes: ["material-symbols-outlined"],
+        childNodes: [textNode("smart_toy")]
+      })
+    ]
+  });
+
+  methods.ensureButtonTooltip(scheduleButton.element);
+  methods.ensureButtonTooltip(principleButton.element);
+
+  expect(scheduleButton.attrs.title).toBe("时钟事件");
+  expect(principleButton.attrs.title).toBe("基本原则");
+});
+
 test("button tooltips keep explicit accessibility labels", () => {
   const methods = loadCoreMethods();
   const { attrs, element } = createButton({
