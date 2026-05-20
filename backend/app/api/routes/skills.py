@@ -1,20 +1,28 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, status
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_skills_service
+from app.domain.skills.exceptions import SkillValidationError
 from app.domain.skills.schemas import (
     CreateSkillRepositoryFileRequest,
     CreateSkillRepositoryFolderRequest,
     CreateSkillRequest,
     DeleteSkillRequest,
+    DeleteSkillRawMaterialResponse,
+    GenerateSkillDraftRequest,
     PublishSkillRequest,
     PublishSkillResponse,
     SaveSkillRepositoryFileRequest,
     SaveSkillSourceRequest,
     SkillDetailResponse,
     SkillPublishRecordResponse,
+    SkillRawMaterialDetailResponse,
+    SkillRawMaterialGenerationResponse,
+    SkillRawMaterialResponse,
     SkillRepositoryFileResponse,
     SkillRepositoryTreeResponse,
     SkillSourceResponse,
@@ -161,3 +169,102 @@ def list_publish_records(
     service: SkillsService = Depends(get_skills_service),
 ) -> list[SkillPublishRecordResponse]:
     return service.list_publish_records(session, skill_id=skill_id)
+
+
+@router.post("/{skill_id}/raw-materials", response_model=SkillRawMaterialDetailResponse, status_code=201)
+async def create_raw_material(
+    skill_id: str,
+    file: UploadFile | None = File(default=None),
+    source_url: str | None = Form(default=None),
+    name: str | None = Form(default=None),
+    description: str = Form(default=""),
+    material_kind: str | None = Form(default=None),
+    source_note: str | None = Form(default=None),
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> SkillRawMaterialDetailResponse:
+    has_file = file is not None
+    has_url = bool(source_url and source_url.strip())
+    if has_file == has_url:
+        raise SkillValidationError("请上传文件或填写参考 URL，且二者只能选择一个。")
+
+    if file is not None:
+        content = await file.read()
+        return service.upload_raw_material(
+            session,
+            skill_id=skill_id,
+            filename=file.filename or "raw-material",
+            content=content,
+            mime_type=file.content_type or "application/octet-stream",
+            name=name,
+            description=description,
+            material_kind=material_kind,
+            source_note=source_note or "",
+        )
+
+    return service.create_raw_material_from_url(
+        session,
+        skill_id=skill_id,
+        source_url=source_url or "",
+        name=name,
+        description=description,
+        material_kind=material_kind,
+    )
+
+
+@router.get("/{skill_id}/raw-materials", response_model=list[SkillRawMaterialResponse])
+def list_raw_materials(
+    skill_id: str,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> list[SkillRawMaterialResponse]:
+    return service.list_raw_materials(session, skill_id=skill_id)
+
+
+@router.post(
+    "/{skill_id}/raw-materials/generate-skill-draft",
+    response_model=SkillRawMaterialGenerationResponse,
+)
+def generate_skill_draft_from_raw_materials(
+    skill_id: str,
+    payload: GenerateSkillDraftRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> SkillRawMaterialGenerationResponse:
+    return service.generate_skill_draft_from_raw_materials(session, skill_id=skill_id, payload=payload)
+
+
+@router.get("/{skill_id}/raw-materials/{material_id}", response_model=SkillRawMaterialDetailResponse)
+def get_raw_material(
+    skill_id: str,
+    material_id: str,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> SkillRawMaterialDetailResponse:
+    return service.get_raw_material(session, skill_id=skill_id, material_id=material_id)
+
+
+@router.get("/{skill_id}/raw-materials/{material_id}/content")
+def get_raw_material_content(
+    skill_id: str,
+    material_id: str,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> Response:
+    material_content = service.get_raw_material_content(session, skill_id=skill_id, material_id=material_id)
+    encoded_filename = quote(material_content.filename)
+    return Response(
+        content=material_content.content,
+        media_type=material_content.mime_type,
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}"},
+    )
+
+
+@router.delete("/{skill_id}/raw-materials/{material_id}", response_model=DeleteSkillRawMaterialResponse)
+def delete_raw_material(
+    skill_id: str,
+    material_id: str,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> DeleteSkillRawMaterialResponse:
+    return service.delete_raw_material(session, skill_id=skill_id, material_id=material_id)

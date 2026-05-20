@@ -23,8 +23,25 @@ class LlmCompletion:
     usage: dict[str, int | dict[str, object]] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class LlmAttachment:
+    filename: str
+    media_type: str
+    content_base64: str
+
+
 class LlmInferenceGateway(Protocol):
     def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
+        ...
+
+    def complete_multimodal(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        attachments: list[LlmAttachment],
+        route_key: str = "default",
+    ) -> LlmCompletion:
         ...
 
 
@@ -204,6 +221,156 @@ class OpenAICompatibleInferenceGateway:
                 usage=usage,
             )
 
+    def complete_multimodal(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        attachments: list[LlmAttachment],
+        route_key: str = "default",
+    ) -> LlmCompletion:
+        if not self.api_key:
+            raise SkillsConfigurationError("未配置 LLM API Key，无法执行真实运行链路。")
+
+        model = route_key if route_key and route_key != "default" else self.default_model
+        content_parts: list[dict[str, object]] = [{"type": "text", "text": user_prompt}]
+        for attachment in attachments:
+            if attachment.media_type.startswith("image/"):
+                content_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{attachment.media_type};base64,{attachment.content_base64}",
+                        },
+                    }
+                )
+            elif attachment.media_type.startswith("audio/"):
+                content_parts.append(
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": attachment.content_base64,
+                            "format": _audio_format(attachment.filename, attachment.media_type),
+                        },
+                    }
+                )
+            else:
+                content_parts.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"附件 `{attachment.filename}` 的 MIME 为 `{attachment.media_type}`，"
+                            "当前 OpenAI-compatible 网关只以文本方式传递其元数据。"
+                        ),
+                    }
+                )
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content_parts},
+            ],
+            "temperature": 0.2,
+        }
+        return self._post_chat_completion(
+            payload=payload,
+            model=model,
+            route_key=route_key,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+
+    def _post_chat_completion(
+        self,
+        *,
+        payload: dict[str, object],
+        model: str,
+        route_key: str,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> LlmCompletion:
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        timeout = httpx.Timeout(self.timeout_seconds, connect=min(15.0, self.timeout_seconds))
+        started_at = time.perf_counter()
+        with start_span(
+            "gateway.inference",
+            provider=self.provider,
+            model=model,
+            route_key=route_key,
+            api_base_url=self.api_base_url,
+            llm_input_system_prompt_length=len(system_prompt),
+            llm_input_user_prompt_length=len(user_prompt),
+        ) as span:
+            try:
+                with httpx.Client(timeout=timeout, headers=headers) as client:
+                    response = client.post(f"{self.api_base_url}/chat/completions", json=payload)
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                set_span_attributes(span, {"http.status_code": response.status_code, "duration_ms": elapsed_ms})
+            except httpx.HTTPError as exc:
+                error_type = exc.__class__.__name__
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                set_span_attributes(span, {"duration_ms": elapsed_ms, "error.type": error_type})
+                record_span_exception(span, exc)
+                raise SkillsGatewayError(
+                    f"调用 LLM Inference Gateway 失败：{error_type}。",
+                    details={
+                        "error_type": error_type,
+                        "error": str(exc),
+                        "provider": self.provider,
+                        "api_base_url": self.api_base_url,
+                        "model": model,
+                        "route_key": route_key,
+                        "timeout_seconds": self.timeout_seconds,
+                    },
+                ) from exc
+
+            if response.status_code >= 400:
+                span.add_event("llm.output", attributes={"llm.error_body": response.text})
+                raise SkillsGatewayError(
+                    "LLM Inference Gateway 返回错误响应。",
+                    details={
+                        "status_code": response.status_code,
+                        "body": response.text,
+                        "provider": self.provider,
+                        "api_base_url": self.api_base_url,
+                        "model": model,
+                        "route_key": route_key,
+                    },
+                )
+
+            data = response.json()
+            usage = _normalize_usage(data.get("usage"))
+            try:
+                content = str(data["choices"][0]["message"]["content"])
+            except (KeyError, IndexError, TypeError) as exc:
+                raise SkillsGatewayError(
+                    "LLM Inference Gateway 响应缺少 message content。",
+                    details={
+                        "provider": self.provider,
+                        "api_base_url": self.api_base_url,
+                        "model": model,
+                        "route_key": route_key,
+                    },
+                ) from exc
+            set_span_attributes(
+                span,
+                {
+                    "llm.output.content_length": len(content),
+                    "llm.usage.input_tokens": usage.get("input_tokens"),
+                    "llm.usage.output_tokens": usage.get("output_tokens"),
+                    "llm.usage.total_tokens": usage.get("total_tokens"),
+                },
+            )
+            span.add_event("llm.output", attributes={"llm.content": content})
+            return LlmCompletion(
+                content=content,
+                provider=self.provider,
+                model=model,
+                raw_response=data,
+                usage=usage,
+            )
+
 
 def _normalize_usage(raw_usage: object) -> dict[str, int | dict[str, object]]:
     if not isinstance(raw_usage, dict):
@@ -242,3 +409,12 @@ def _first_present(payload: dict[str, object], *keys: str) -> object:
         if key in payload:
             return payload[key]
     return None
+
+
+def _audio_format(filename: str, media_type: str) -> str:
+    lower_name = filename.lower()
+    if lower_name.endswith(".wav") or media_type == "audio/wav":
+        return "wav"
+    if lower_name.endswith(".mp3") or media_type == "audio/mpeg":
+        return "mp3"
+    return lower_name.rsplit(".", 1)[-1] if "." in lower_name else "mp3"

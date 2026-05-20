@@ -104,3 +104,67 @@ class SkillPublishRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
 
     skill_definition: Mapped["SkillDefinition"] = relationship(back_populates="publish_records")
+
+
+class SkillRawMaterial(Base):
+    __tablename__ = "skill_raw_material"
+    __table_args__ = (
+        Index("idx_skill_raw_material_definition_created_at", "skill_definition_id", "created_at"),
+        Index("idx_skill_raw_material_definition_status", "skill_definition_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    skill_definition_id: Mapped[str] = mapped_column(
+        ForeignKey("skill_definition.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    artifact_object_id: Mapped[str] = mapped_column(
+        ForeignKey("artifact_object.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    material_kind: Mapped[str] = mapped_column(String(64), default="file", nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), default="application/octet-stream", nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    source_note: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="ready", nullable=False)
+    size_bytes: Mapped[int] = mapped_column(default=0, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    parse_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    extracted_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    processing_metadata: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=now_utc,
+        onupdate=now_utc,
+        nullable=False,
+    )
+
+
+class SkillRawMaterialGeneration(Base):
+    __tablename__ = "skill_raw_material_generation"
+    __table_args__ = (
+        Index("idx_skill_raw_material_generation_definition_created_at", "skill_definition_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    skill_definition_id: Mapped[str] = mapped_column(
+        ForeignKey("skill_definition.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    material_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    user_description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="running", nullable=False)
+    prompt_hash: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    prompt_metadata: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    raw_response: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    generated_files: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    generation_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    review_notes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    material_usage: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    committed_commit_sha: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)

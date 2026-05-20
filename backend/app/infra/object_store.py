@@ -57,6 +57,14 @@ class ObjectStoreService:
             metadata=normalized_metadata,
         )
 
+    def download_bytes(self, *, bucket: str, object_key: str) -> bytes:
+        client = self._get_client()
+        response = client.get_object(Bucket=bucket, Key=object_key)
+        body = response.get("Body")
+        if body is None:
+            return b""
+        return body.read()
+
     def _get_client(self):
         if self._client is None:
             import boto3

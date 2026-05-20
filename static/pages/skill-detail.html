@@ -13,6 +13,10 @@
           <span class="material-symbols-outlined text-[15px]">badge</span>
           <span>信息</span>
         </button>
+        <button type="button" class="detail-tab" :class="activeDetailTab === 'materials' ? 'detail-tab-active' : ''" @click="selectDetailTab('materials')">
+          <span class="material-symbols-outlined text-[15px]">inventory_2</span>
+          <span>素材</span>
+        </button>
         <button type="button" class="detail-tab" :class="activeDetailTab === 'source' ? 'detail-tab-active' : ''" @click="selectDetailTab('source')">
           <span class="material-symbols-outlined text-[15px]">code_blocks</span>
           <span>源码</span>
@@ -341,6 +345,295 @@
             </template>
           </div>
         </template>
+      </div>
+    </template>
+
+    <template x-if="activeDetailTab === 'materials'">
+      <div class="panel-body !p-0">
+        <section class="flex h-full min-h-0 flex-col overflow-hidden bg-slate-950">
+          <div class="grid min-h-0 flex-1 lg:grid-cols-[minmax(18rem,0.82fr)_minmax(0,1.18fr)]">
+            <section class="min-h-0 overflow-hidden border-b border-slate-800 bg-slate-950 lg:border-b-0 lg:border-r">
+              <div class="flex flex-col gap-3 border-b border-slate-800 bg-slate-950/70 px-3 py-2 md:flex-row md:items-center md:justify-between">
+                <div class="min-w-0">
+                  <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">素材</p>
+                  <p class="mt-1 truncate text-sm text-slate-300">
+                    <span x-text="rawMaterials.length"></span>
+                    <span> 个素材</span>
+                    <span class="text-slate-600"> / </span>
+                    <span x-text="selectedRawMaterialIds.length"></span>
+                    <span> 个已选择</span>
+                  </p>
+                </div>
+                <div class="flex shrink-0 items-center gap-2">
+                  <button type="button" class="topbar-icon-button h-9 w-9" title="上传文件" aria-label="上传文件" @click="openRawMaterialUploadModal('file')">
+                    <span class="material-symbols-outlined text-[18px]">upload_file</span>
+                  </button>
+                  <button type="button" class="topbar-icon-button h-9 w-9" title="添加参考 URL" aria-label="添加参考 URL" @click="openRawMaterialUploadModal('url')">
+                    <span class="material-symbols-outlined text-[18px]">link</span>
+                  </button>
+                  <button type="button" class="topbar-icon-button h-9 w-9" title="生成 Skill" aria-label="生成 Skill" :disabled="selectedRawMaterialIds.length === 0" @click="openRawMaterialGenerateModal()">
+                    <span class="material-symbols-outlined text-[18px]">auto_fix_high</span>
+                  </button>
+                  <button type="button" class="topbar-icon-button h-9 w-9" title="刷新素材" aria-label="刷新素材" :disabled="busy.rawMaterials" @click="loadRawMaterials(currentSkill.id, true)">
+                    <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterials ? 'animate-spin' : ''">sync</span>
+                  </button>
+                </div>
+              </div>
+
+              <template x-if="busy.rawMaterials && rawMaterialsLoadedSkillId !== currentSkill.id">
+                <div class="empty-state py-14">
+                  <span class="material-symbols-outlined text-[30px] text-slate-500">sync</span>
+                  <p class="mt-3 text-sm text-slate-500">正在加载素材...</p>
+                </div>
+              </template>
+
+              <template x-if="!busy.rawMaterials && rawMaterials.length === 0">
+                <div class="empty-state py-14">
+                  <span class="material-symbols-outlined text-[30px] text-slate-500">inventory_2</span>
+                  <p class="mt-3 text-sm text-slate-500">暂无素材。</p>
+                </div>
+              </template>
+
+              <div class="min-h-0 overflow-auto">
+                <template x-for="material in rawMaterials" :key="material.id">
+                  <article class="group grid grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-center gap-2 border-b border-slate-800 px-3 py-3 transition hover:bg-slate-900/70" :class="rawMaterialDetail?.id === material.id ? 'bg-slate-900 shadow-[inset_3px_0_0_rgba(249,115,22,0.85)]' : ''">
+                    <label class="flex items-center justify-center" title="选择素材">
+                      <input type="checkbox" class="size-4 rounded border-slate-700 bg-slate-950 text-orange-500 focus:ring-orange-500/40" :checked="isRawMaterialSelected(material)" :disabled="material.status !== 'ready'" @change="toggleRawMaterialSelection(material)" />
+                    </label>
+                    <button type="button" class="min-w-0 text-left" @click="openRawMaterialDetail(material)">
+                      <div class="flex min-w-0 items-center gap-2">
+                        <span class="material-symbols-outlined text-[18px] text-slate-400" x-text="rawMaterialKindIcon(material.material_kind)"></span>
+                        <span class="truncate text-sm font-semibold text-slate-100" x-text="material.name"></span>
+                        <span class="status-badge shrink-0" :class="statusBadgeTone(material.status)" x-text="formatStatus(material.status)"></span>
+                      </div>
+                      <div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                        <span x-text="rawMaterialKindLabel(material.material_kind)"></span>
+                        <span class="mono-field" x-text="material.mime_type"></span>
+                        <span class="mono-field" x-text="formatBytes(material.size_bytes)"></span>
+                      </div>
+                      <p class="mt-1 truncate text-xs text-slate-400" x-text="material.parse_summary || material.error_message || material.filename"></p>
+                    </button>
+                    <button type="button" class="topbar-icon-button h-8 w-8 opacity-70 transition group-hover:opacity-100" title="移除素材" aria-label="移除素材" :disabled="busy.rawMaterialDelete" @click="deleteRawMaterial(material)">
+                      <span class="material-symbols-outlined text-[17px]">delete</span>
+                    </button>
+                  </article>
+                </template>
+              </div>
+            </section>
+
+            <section class="min-h-0 overflow-hidden bg-slate-950">
+              <template x-if="!rawMaterialDetail && !busy.rawMaterialDetail">
+                <div class="empty-state min-h-[32rem]">
+                  <span class="material-symbols-outlined text-[34px] text-slate-500">preview</span>
+                  <p class="mt-3 text-sm text-slate-500">选择一个素材查看详情。</p>
+                </div>
+              </template>
+
+              <template x-if="busy.rawMaterialDetail">
+                <div class="empty-state min-h-[32rem]">
+                  <span class="material-symbols-outlined animate-spin text-[30px] text-slate-500">sync</span>
+                  <p class="mt-3 text-sm text-slate-500">正在加载素材详情...</p>
+                </div>
+              </template>
+
+              <template x-if="rawMaterialDetail && !busy.rawMaterialDetail">
+                <div class="flex h-full min-h-0 flex-col">
+                  <div class="flex min-h-14 shrink-0 items-center border-b border-slate-800 bg-slate-950/70 px-3 py-1.5">
+                    <div class="flex w-full min-w-0 items-center gap-2.5">
+                      <span class="flex size-7 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-orange-200">
+                        <span class="material-symbols-outlined text-[17px]" x-text="rawMaterialKindIcon(rawMaterialDetail.material_kind)"></span>
+                      </span>
+                      <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5 xl:flex-nowrap xl:overflow-hidden">
+                        <p class="min-w-0 max-w-full truncate text-sm font-semibold leading-5 text-slate-100 xl:max-w-[14rem]" x-text="rawMaterialDetail.name"></p>
+                        <dl class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-4 xl:flex-1 xl:flex-nowrap xl:overflow-hidden">
+                          <div class="inline-flex min-w-0 items-baseline gap-1.5">
+                            <dt class="font-semibold uppercase tracking-[0.16em] text-slate-500">类型</dt>
+                            <dd class="font-semibold text-slate-100" x-text="rawMaterialKindLabel(rawMaterialDetail.material_kind)"></dd>
+                          </div>
+                          <div class="inline-flex min-w-0 items-baseline gap-1.5">
+                            <dt class="font-semibold uppercase tracking-[0.16em] text-slate-500">大小</dt>
+                            <dd class="mono-field" x-text="formatBytes(rawMaterialDetail.size_bytes)"></dd>
+                          </div>
+                          <div class="inline-flex min-w-0 items-baseline gap-1.5 xl:flex-1">
+                            <dt class="font-semibold uppercase tracking-[0.16em] text-slate-500">MIME</dt>
+                            <dd class="mono-field truncate" x-text="rawMaterialDetail.mime_type"></dd>
+                          </div>
+                          <div class="inline-flex min-w-0 items-baseline gap-1.5">
+                            <dt class="font-semibold uppercase tracking-[0.16em] text-slate-500">创建</dt>
+                            <dd class="mono-field truncate" x-text="formatDateTime(rawMaterialDetail.created_at)"></dd>
+                          </div>
+                        </dl>
+                      </div>
+                      <span class="status-badge shrink-0" :class="statusBadgeTone(rawMaterialDetail.status)" x-text="formatStatus(rawMaterialDetail.status)"></span>
+                    </div>
+                  </div>
+
+                  <div class="grid min-h-0 flex-1 xl:grid-cols-2 xl:divide-x xl:divide-slate-800">
+                    <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+                      <div class="flex h-10 items-center border-b border-slate-800 px-3">
+                        <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">解析结果</p>
+                      </div>
+                      <div class="min-h-0 overflow-y-auto overflow-x-hidden px-3 py-3">
+                        <p class="text-sm leading-6 text-slate-200" x-text="rawMaterialDetail.parse_summary || '暂无解析摘要。'"></p>
+                        <template x-if="rawMaterialDetail.error_message">
+                          <p class="mt-3 border-l-2 border-rose-400 bg-rose-500/10 px-3 py-2 text-sm text-rose-200" x-text="rawMaterialDetail.error_message"></p>
+                        </template>
+                        <pre class="mt-5 whitespace-pre-wrap font-mono text-xs leading-6 text-slate-300" x-text="rawMaterialDetail.extracted_text || '暂无可提取文本。'"></pre>
+                      </div>
+                    </section>
+
+                    <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+                      <div class="flex h-10 items-center justify-between border-b border-slate-800 px-3">
+                        <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">原文件预览</p>
+                        <a class="topbar-icon-button h-7 w-7" :href="rawMaterialContentUrl(rawMaterialDetail)" target="_blank" rel="noreferrer noopener" title="打开原文件" aria-label="打开原文件">
+                          <span class="material-symbols-outlined text-[16px]">open_in_new</span>
+                        </a>
+                      </div>
+                      <div class="min-h-0 overflow-auto">
+                        <template x-if="canPreviewRawMaterial('image')">
+                          <img class="max-h-[34rem] w-full object-contain" :src="rawMaterialContentUrl(rawMaterialDetail)" :alt="rawMaterialDetail.name" />
+                        </template>
+                        <template x-if="canPreviewRawMaterial('audio')">
+                          <audio class="mt-8 w-full" controls :src="rawMaterialContentUrl(rawMaterialDetail)"></audio>
+                        </template>
+                        <template x-if="canPreviewRawMaterial('video')">
+                          <video class="max-h-[34rem] w-full bg-black" controls :src="rawMaterialContentUrl(rawMaterialDetail)"></video>
+                        </template>
+                        <template x-if="canPreviewRawMaterial('pdf')">
+                          <iframe class="h-[34rem] w-full border-0 bg-white" :src="rawMaterialContentUrl(rawMaterialDetail)" title="PDF 预览"></iframe>
+                        </template>
+                        <template x-if="canPreviewRawMaterial('document')">
+                          <iframe class="h-full min-h-[18rem] w-full border-0 bg-white" :src="rawMaterialContentUrl(rawMaterialDetail)" :title="(rawMaterialDetail.name || '素材') + ' 预览'" sandbox referrerpolicy="no-referrer"></iframe>
+                        </template>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </template>
+            </section>
+          </div>
+
+          <template x-if="rawMaterialUploadModalOpen">
+            <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-8 backdrop-blur-sm">
+              <section class="modal-panel max-w-3xl">
+                <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                  <div>
+                    <p class="panel-kicker" x-text="rawMaterialUploadMode === 'file' ? '文件素材' : '参考 URL'"></p>
+                    <h3 class="panel-title">新增素材</h3>
+                  </div>
+                  <button type="button" class="icon-button" title="关闭" aria-label="关闭" :disabled="busy.rawMaterialUpload" @click="closeRawMaterialUploadModal()">
+                    <span class="material-symbols-outlined text-[18px]">close</span>
+                  </button>
+                </div>
+                <form class="space-y-4 px-5 py-5" @submit.prevent="submitRawMaterial()">
+                  <div class="inline-flex overflow-hidden rounded-md border border-slate-200 bg-white">
+                    <button type="button" class="px-3 py-2 text-sm font-semibold transition" :class="rawMaterialUploadMode === 'file' ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-50'" @click="rawMaterialUploadMode = 'file'">
+                      <span>文件</span>
+                    </button>
+                    <button type="button" class="border-l border-slate-200 px-3 py-2 text-sm font-semibold transition" :class="rawMaterialUploadMode === 'url' ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-50'" @click="rawMaterialUploadMode = 'url'">
+                      <span>URL</span>
+                    </button>
+                  </div>
+
+                  <template x-if="rawMaterialUploadMode === 'file'">
+                    <label class="field-block">
+                      <span class="field-label">素材文件</span>
+                      <input x-ref="rawMaterialFileInput" type="file" class="input-field" @change="handleRawMaterialFileChange($event)" />
+                    </label>
+                  </template>
+                  <template x-if="rawMaterialUploadMode === 'url'">
+                    <label class="field-block">
+                      <span class="field-label">参考 URL</span>
+                      <input x-model.trim="rawMaterialUploadForm.source_url" type="url" class="input-field" placeholder="https://example.com/reference" />
+                    </label>
+                  </template>
+
+                  <div class="grid gap-4 md:grid-cols-2">
+                    <label class="field-block">
+                      <span class="field-label">名称</span>
+                      <input x-model.trim="rawMaterialUploadForm.name" class="input-field" placeholder="可留空，默认使用文件名或 URL 标题" />
+                    </label>
+                    <label class="field-block">
+                      <span class="field-label">类型</span>
+                      <input x-model.trim="rawMaterialUploadForm.material_kind" class="input-field" placeholder="可留空，由系统识别" />
+                    </label>
+                  </div>
+                  <label class="field-block">
+                    <span class="field-label">描述</span>
+                    <textarea x-model.trim="rawMaterialUploadForm.description" class="textarea-field h-24" placeholder="补充这份素材的用途或重点。"></textarea>
+                  </label>
+                  <template x-if="rawMaterialUploadMode === 'file'">
+                    <label class="field-block">
+                      <span class="field-label">来源说明</span>
+                      <input x-model.trim="rawMaterialUploadForm.source_note" class="input-field" placeholder="例如：现场 SOP、供应商手册、专家访谈纪要" />
+                    </label>
+                  </template>
+
+                  <div class="flex justify-end gap-3 border-t border-slate-200 pt-4">
+                    <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.rawMaterialUpload" @click="closeRawMaterialUploadModal()">
+                      <span class="material-symbols-outlined text-[18px]">close</span>
+                      <span>取消</span>
+                    </button>
+                    <button type="submit" class="button-primary" title="保存素材" aria-label="保存素材" :disabled="busy.rawMaterialUpload">
+                      <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterialUpload ? 'animate-spin' : ''" x-text="busy.rawMaterialUpload ? 'progress_activity' : 'add'"></span>
+                      <span x-text="busy.rawMaterialUpload ? '保存中...' : '保存素材'"></span>
+                    </button>
+                  </div>
+                </form>
+              </section>
+            </div>
+          </template>
+
+          <template x-if="rawMaterialGenerateModalOpen">
+            <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-8 backdrop-blur-sm">
+              <section class="modal-panel max-w-3xl">
+                <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                  <div>
+                    <p class="panel-kicker">Skill 生成</p>
+                    <h3 class="panel-title">基于素材生成源码草稿</h3>
+                  </div>
+                  <button type="button" class="icon-button" title="关闭" aria-label="关闭" :disabled="busy.rawMaterialGenerate" @click="closeRawMaterialGenerateModal()">
+                    <span class="material-symbols-outlined text-[18px]">close</span>
+                  </button>
+                </div>
+                <form class="space-y-4 px-5 py-5" @submit.prevent="generateSkillDraftFromRawMaterials()">
+                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                    <p class="field-label">已选择素材</p>
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      <template x-for="material in selectedRawMaterials()" :key="material.id">
+                        <span class="inline-flex max-w-full items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700">
+                          <span class="material-symbols-outlined text-[15px]" x-text="rawMaterialKindIcon(material.material_kind)"></span>
+                          <span class="truncate" x-text="material.name"></span>
+                        </span>
+                      </template>
+                    </div>
+                  </div>
+                  <label class="field-block">
+                    <span class="field-label">生成描述</span>
+                    <textarea x-model.trim="rawMaterialGenerateForm.user_description" class="textarea-field h-36" placeholder="请描述希望生成的 Skill 目标、使用场景、边界和输出风格。" required></textarea>
+                  </label>
+                  <template x-if="rawMaterialGenerationResult">
+                    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm leading-6 text-emerald-900">
+                      <p class="font-semibold">已提交 GitLab draft</p>
+                      <p class="mt-1 mono-field" x-text="rawMaterialGenerationResult.committed_commit_sha"></p>
+                      <p class="mt-2" x-text="rawMaterialGenerationResult.generation_reason"></p>
+                    </div>
+                  </template>
+                  <div class="flex justify-end gap-3 border-t border-slate-200 pt-4">
+                    <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.rawMaterialGenerate" @click="closeRawMaterialGenerateModal()">
+                      <span class="material-symbols-outlined text-[18px]">close</span>
+                      <span>取消</span>
+                    </button>
+                    <button type="submit" class="button-primary" title="生成源码草稿" aria-label="生成源码草稿" :disabled="busy.rawMaterialGenerate || !rawMaterialGenerateForm.user_description">
+                      <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterialGenerate ? 'animate-spin' : ''" x-text="busy.rawMaterialGenerate ? 'progress_activity' : 'auto_fix_high'"></span>
+                      <span x-text="busy.rawMaterialGenerate ? '生成中...' : '生成源码草稿'"></span>
+                    </button>
+                  </div>
+                </form>
+              </section>
+            </div>
+          </template>
+        </section>
       </div>
     </template>
 

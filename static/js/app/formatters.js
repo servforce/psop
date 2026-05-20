@@ -71,10 +71,27 @@
       },
 
 
+      formatBytes(value) {
+        const bytes = Number(value || 0);
+        if (!Number.isFinite(bytes) || bytes <= 0) {
+          return "0 B";
+        }
+        const units = ["B", "KB", "MB", "GB"];
+        let size = bytes;
+        let unitIndex = 0;
+        while (size >= 1024 && unitIndex < units.length - 1) {
+          size /= 1024;
+          unitIndex += 1;
+        }
+        return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+      },
+
+
       formatStatus(value) {
         const statusMap = {
           active: "启用",
           archived: "已归档",
+          ready: "已就绪",
           draft: "草稿",
           published: "已发布",
           requested: "已请求",
@@ -108,7 +125,7 @@
 
       statusBadgeTone(value) {
         const normalized = String(value || "").toLowerCase();
-        if (["active", "published", "succeeded", "success", "accepted"].includes(normalized)) {
+        if (["active", "published", "succeeded", "success", "accepted", "ready"].includes(normalized)) {
           return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
         }
         if (["passed"].includes(normalized)) {

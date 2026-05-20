@@ -132,3 +132,56 @@ class PublishSkillResponse(BaseModel):
     published_version: SkillVersionSummaryResponse
     published_commit_sha: str
     compile_request: CompileRequestResponse | None = None
+
+
+class SkillRawMaterialResponse(BaseModel):
+    id: str
+    skill_definition_id: str
+    artifact_object_id: str
+    name: str
+    description: str
+    material_kind: str
+    mime_type: str
+    filename: str
+    source_note: str
+    status: str
+    size_bytes: int
+    checksum: str
+    parse_summary: str
+    processing_metadata: dict[str, Any]
+    error_message: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillRawMaterialDetailResponse(SkillRawMaterialResponse):
+    extracted_text: str
+
+
+class DeleteSkillRawMaterialResponse(BaseModel):
+    deleted: bool
+    material_id: str
+
+
+class GenerateSkillDraftRequest(BaseModel):
+    material_ids: list[str] = Field(min_length=1)
+    user_description: str = Field(min_length=1, max_length=10000)
+    base_commit_sha: str | None = Field(default=None, min_length=1)
+
+
+class SkillRawMaterialGenerationResponse(BaseModel):
+    id: str
+    skill_definition_id: str
+    material_ids: list[str]
+    user_description: str
+    status: str
+    prompt_hash: str
+    prompt_metadata: dict[str, Any]
+    raw_response: dict[str, Any]
+    generated_files: dict[str, str]
+    generation_reason: str
+    review_notes: list[str]
+    material_usage: list[dict[str, Any]]
+    committed_commit_sha: str
+    error_message: str
+    created_at: datetime

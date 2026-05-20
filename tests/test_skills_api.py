@@ -9,9 +9,10 @@ from fastapi.testclient import TestClient
 
 from app.app import create_app
 from app.core.config import Settings
+from app.domain.skills import raw_materials
 from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.exceptions import SkillsGatewayError
-from app.gateway.inference import LlmCompletion
+from app.gateway.inference import LlmAttachment, LlmCompletion
 from app.infra.object_store import StoredObject
 from app.gateway.gitlab import GitLabProjectInfo, RepositoryFile, RepositoryTreeEntry, SkillSourceBundle
 
@@ -182,6 +183,28 @@ class FakeGitLabGateway:
         project.head_commit_sha = self._next_commit_sha()
         return project.head_commit_sha
 
+    def commit_repository_files(
+        self,
+        *,
+        project_id: str,
+        branch: str,
+        files: dict[str, str],
+        commit_message: str,
+    ) -> str:
+        project = self.projects[project_id]
+        assert branch == project.default_branch
+        assert commit_message
+        for file_path, content in files.items():
+            project.files[file_path] = content
+            if file_path == "README.md":
+                project.readme_content = content
+            if file_path == "SKILL.md":
+                project.skill_md_content = content
+            if file_path == "skill.yaml":
+                project.skill_yaml_content = content
+        project.head_commit_sha = self._next_commit_sha()
+        return project.head_commit_sha
+
     def update_project_name(self, project_id: str, name: str) -> None:
         self.projects[project_id].name = name
 
@@ -203,6 +226,38 @@ class FakeInferenceGateway:
         )
         if "SKILL 编译智能体" in system_prompt:
             content = json.dumps(build_test_formal_v5_artifact(), ensure_ascii=False)
+        elif "generate_psop_skill_source_from_raw_materials" in user_prompt:
+            try:
+                material_id = str(json.loads(user_prompt)["raw_materials"][0]["id"])
+            except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+                material_id = "material-1"
+            content = json.dumps(
+                {
+                    "directory_tree": (
+                        "README.md\n"
+                        "SKILL.md\n"
+                        "prompts/system.md\n"
+                        "references/README.md\n"
+                        "examples/input.md\n"
+                        "examples/expected-output.md\n"
+                        "tests/checklist.md"
+                    ),
+                    "files": {
+                        "README.md": "# Generated Skill\n\n基于原始素材生成的 Skill 草稿。\n",
+                        "SKILL.md": "# Generated Skill\n\n请根据素材帮助用户完成任务。\n",
+                        "prompts/system.md": "你是一个基于素材工作的 PSOP Skill 智能体。\n",
+                        "references/README.md": "# References\n\n- 原始素材摘要已用于生成。\n",
+                        "examples/input.md": "# Input\n\n用户给出现场问题。\n",
+                        "examples/expected-output.md": "# Expected Output\n\n给出结构化行动建议。\n",
+                        "tests/checklist.md": "# Checklist\n\n- [ ] README 已说明用途\n- [ ] SKILL 已包含执行步骤\n",
+                        "skill.yaml": "skill:\n  identity:\n    key: should-be-ignored\n",
+                    },
+                    "review_notes": ["需要人工复核边界条件。"],
+                    "generation_reason": "素材包含创建 Skill 所需的任务说明与示例。",
+                    "material_usage": [{"material_id": material_id, "usage": "提炼流程与示例"}],
+                },
+                ensure_ascii=False,
+            )
         elif route_key == "skill-test-judge":
             content = json.dumps(
                 {
@@ -249,10 +304,42 @@ class FakeInferenceGateway:
             },
         )
 
+    def complete_multimodal(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        attachments: list[LlmAttachment],
+        route_key: str = "default",
+    ) -> LlmCompletion:
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "route_key": route_key,
+                "attachments": ",".join(attachment.filename for attachment in attachments),
+            }
+        )
+        return LlmCompletion(
+            content=json.dumps(
+                {
+                    "summary": "视觉或音视频素材已由 LLM Gateway 解析。",
+                    "extracted_text": "素材包含可用于创建 Skill 的多模态线索。",
+                    "signals": [{"kind": "multimodal", "confidence": 0.9}],
+                },
+                ensure_ascii=False,
+            ),
+            provider="fake-openai-compatible",
+            model="fake-model",
+            raw_response={"id": "fake-multimodal-response"},
+            usage={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
+        )
+
 
 class FakeObjectStore:
     def __init__(self) -> None:
         self.uploads: list[dict[str, object]] = []
+        self.objects: dict[tuple[str, str], bytes] = {}
 
     def upload_bytes(
         self,
@@ -270,6 +357,7 @@ class FakeObjectStore:
                 "metadata": metadata or {},
             }
         )
+        self.objects[("test-bucket", object_key)] = content
         return StoredObject(
             bucket="test-bucket",
             object_key=object_key,
@@ -278,6 +366,9 @@ class FakeObjectStore:
             checksum=f"sha256-{len(content)}",
             metadata=metadata or {},
         )
+
+    def download_bytes(self, *, bucket: str, object_key: str) -> bytes:
+        return self.objects[(bucket, object_key)]
 
 
 class FailingObjectStore(FakeObjectStore):
@@ -541,6 +632,267 @@ def test_get_and_save_skill_source() -> None:
     assert after_snapshot["prompt_material"]["skill_md"] != before_skill_md
     assert after_snapshot["prompt_material"]["skill_md"] == saved_payload["skill_md_content"]
     assert after_snapshot["prompt_material"]["readme"] == saved_payload["readme_content"]
+
+
+def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
+    client, _, fake_inference = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "raw-material-skill",
+                "name": "Raw Material Skill",
+                "description": "Create skills from source materials.",
+            },
+        ).json()
+        skill_id = created["id"]
+
+        upload_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={
+                "name": "作业指南",
+                "description": "现场作业流程素材",
+                "material_kind": "markdown",
+                "source_note": "operator upload",
+            },
+            files={"file": ("guide.md", b"# Guide\n\nUse lockout before repair.\n", "text/markdown")},
+        )
+        image_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "设备照片", "material_kind": "image"},
+            files={"file": ("panel.png", b"not-really-a-png", "image/png")},
+        )
+        list_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
+        material_id = upload_response.json()["id"]
+        detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
+        content_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/content")
+        delete_response = client.delete(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
+        after_delete_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
+        deleted_detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
+
+    assert upload_response.status_code == 201
+    upload_payload = upload_response.json()
+    assert upload_payload["status"] == "ready"
+    assert upload_payload["filename"] == "guide.md"
+    assert upload_payload["source_note"] == "operator upload"
+    assert "Guide" in upload_payload["extracted_text"]
+
+    assert image_response.status_code == 201
+    assert image_response.json()["status"] == "ready"
+    assert image_response.json()["processing_metadata"]["processor"] == "llm_multimodal"
+    assert any(call.get("attachments") == "panel.png" for call in fake_inference.calls)
+
+    assert list_response.status_code == 200
+    assert {item["id"] for item in list_response.json()} == {material_id, image_response.json()["id"]}
+
+    assert detail_response.status_code == 200
+    assert "lockout" in detail_response.json()["extracted_text"]
+    assert content_response.status_code == 200
+    assert content_response.content == b"# Guide\n\nUse lockout before repair.\n"
+
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"deleted": True, "material_id": material_id}
+    assert {item["id"] for item in after_delete_response.json()} == {image_response.json()["id"]}
+    assert deleted_detail_response.status_code == 404
+
+
+def test_skill_raw_material_url_upload_fetches_reference(monkeypatch) -> None:
+    class FakeHttpResponse:
+        content = b"<html><body><h1>Reference</h1><p>Calibrate sensor before use.</p></body></html>"
+        headers = {"content-type": "text/html; charset=utf-8"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeHttpClient:
+        def __init__(self, *_, **__) -> None:
+            pass
+
+        def __enter__(self) -> "FakeHttpClient":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def get(self, url: str) -> FakeHttpResponse:
+            assert url == "https://example.test/reference"
+            return FakeHttpResponse()
+
+    monkeypatch.setattr(raw_materials.httpx, "Client", FakeHttpClient)
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "url-material-skill",
+                "name": "URL Material Skill",
+                "description": "Create skills from reference URLs.",
+            },
+        ).json()
+        response = client.post(
+            f"/api/v1/skills/{created['id']}/raw-materials",
+            data={
+                "source_url": "https://example.test/reference",
+                "name": "参考页面",
+                "description": "在线参考资料",
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["material_kind"] == "url"
+    assert payload["source_note"] == "https://example.test/reference"
+    assert "Reference" in payload["extracted_text"]
+    assert "Calibrate sensor" in payload["extracted_text"]
+
+
+def test_skill_raw_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
+    monkeypatch.setattr(raw_materials, "_extract_pdf_text", lambda content: "PDF extracted procedure text.")
+    monkeypatch.setattr(raw_materials, "_extract_video_frame", lambda content, filename: b"fake-jpeg-frame")
+    client, _, fake_inference = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "multimodal-material-skill",
+                "name": "Multimodal Material Skill",
+                "description": "Create skills from PDFs and media.",
+            },
+        ).json()
+        skill_id = created["id"]
+        pdf_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "PDF SOP", "material_kind": "pdf"},
+            files={"file": ("sop.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+        audio_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "Audio Notes", "material_kind": "audio"},
+            files={"file": ("notes.wav", b"RIFF fake wav", "audio/wav")},
+        )
+        video_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "Video Walkthrough", "material_kind": "video"},
+            files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
+        )
+        list_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
+
+    assert pdf_response.status_code == 201
+    assert pdf_response.json()["status"] == "ready"
+    assert "PDF extracted procedure text" in pdf_response.json()["extracted_text"]
+
+    assert audio_response.status_code == 201
+    assert audio_response.json()["status"] == "ready"
+    assert audio_response.json()["processing_metadata"]["processor"] == "llm_multimodal"
+
+    assert video_response.status_code == 201
+    assert video_response.json()["status"] == "ready"
+    assert video_response.json()["processing_metadata"]["processor"] == "llm_multimodal"
+    assert len(list_response.json()) == 3
+    assert any(call.get("attachments") == "notes.wav" for call in fake_inference.calls)
+    assert any(call.get("attachments") == "walkthrough-frame.jpg" for call in fake_inference.calls)
+
+
+def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_publish_or_compile() -> None:
+    client, fake_gateway, fake_inference = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "generated-skill",
+                "name": "Generated Skill",
+                "description": "Generate source from materials.",
+            },
+        ).json()
+        skill_id = created["id"]
+        material_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "流程说明"},
+            files={"file": ("workflow.md", b"# Workflow\n\nAsk, inspect, then advise.\n", "text/markdown")},
+        )
+        material_id = material_response.json()["id"]
+
+        generate_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
+            json={
+                "material_ids": [material_id],
+                "user_description": "请基于素材生成一个现场支持 Skill。",
+                "base_commit_sha": created["latest_draft_head_sha"],
+            },
+        )
+        detail_response = client.get(f"/api/v1/skills/{skill_id}")
+        source_response = client.get(f"/api/v1/skills/{skill_id}/source")
+        publishes_response = client.get(f"/api/v1/skills/{skill_id}/publishes")
+
+    assert generate_response.status_code == 200
+    payload = generate_response.json()
+    assert payload["status"] == "succeeded"
+    assert payload["material_ids"] == [material_id]
+    assert payload["committed_commit_sha"].startswith("commit-")
+    assert set(payload["generated_files"]) >= {
+        "README.md",
+        "SKILL.md",
+        "prompts/system.md",
+        "references/README.md",
+        "examples/input.md",
+        "examples/expected-output.md",
+        "tests/checklist.md",
+    }
+    assert "skill.yaml" not in payload["generated_files"]
+    assert payload["material_usage"][0]["material_id"] == material_id
+    assert fake_gateway.projects[created["gitlab_project_id"]].files["README.md"].startswith("# Generated Skill")
+    assert "should-be-ignored" not in fake_gateway.projects[created["gitlab_project_id"]].files["skill.yaml"]
+    assert detail_response.json()["latest_draft_head_sha"] == payload["committed_commit_sha"]
+    prompt_material = detail_response.json()["current_draft_version"]["manifest_snapshot"]["prompt_material"]
+    assert prompt_material["readme"].startswith("# Generated Skill")
+    assert prompt_material["skill_md"].startswith("# Generated Skill")
+    assert source_response.json()["head_commit_sha"] == payload["committed_commit_sha"]
+    assert publishes_response.json() == []
+    assert any("generate_psop_skill_source_from_raw_materials" in call["user_prompt"] for call in fake_inference.calls)
+
+
+def test_generate_skill_draft_from_raw_materials_rejects_stale_head() -> None:
+    client, fake_gateway, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "stale-generation",
+                "name": "Stale Generation",
+                "description": "Reject stale source generation.",
+            },
+        ).json()
+        skill_id = created["id"]
+        source_payload = client.get(f"/api/v1/skills/{skill_id}/source").json()
+        material_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "素材"},
+            files={"file": ("notes.txt", b"Build a safe checklist.\n", "text/plain")},
+        )
+        fake_gateway.commit_skill_source(
+            project_id=created["gitlab_project_id"],
+            branch=created["default_branch"],
+            readme_content=source_payload["readme_content"],
+            skill_md_content=source_payload["skill_md_content"],
+            skill_yaml_content=source_payload["skill_yaml_content"],
+            commit_message="External edit",
+        )
+        response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
+            json={
+                "material_ids": [material_response.json()["id"]],
+                "user_description": "生成草稿。",
+                "base_commit_sha": source_payload["head_commit_sha"],
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "skill_source_conflict"
 
 
 def test_repository_tree_file_and_folder_operations() -> None:

@@ -91,6 +91,16 @@ class GitLabSkillSourceGateway(Protocol):
     ) -> str:
         ...
 
+    def commit_repository_files(
+        self,
+        *,
+        project_id: str,
+        branch: str,
+        files: dict[str, str],
+        commit_message: str,
+    ) -> str:
+        ...
+
     def commit_skill_source(
         self,
         *,
@@ -398,6 +408,38 @@ class HttpGitLabSkillSourceGateway:
             },
         )
         return self.get_branch_head(project_id, branch)
+
+    def commit_repository_files(
+        self,
+        *,
+        project_id: str,
+        branch: str,
+        files: dict[str, str],
+        commit_message: str,
+    ) -> str:
+        actions = []
+        for file_path, content in files.items():
+            action = "update" if self._repository_file_exists(project_id, branch, file_path) else "create"
+            actions.append({"action": action, "file_path": file_path, "content": content})
+        self._request(
+            "POST",
+            f"/projects/{quote(project_id, safe='')}/repository/commits",
+            json={
+                "branch": branch,
+                "commit_message": commit_message,
+                "actions": actions,
+            },
+        )
+        return self.get_branch_head(project_id, branch)
+
+    def _repository_file_exists(self, project_id: str, ref: str, file_path: str) -> bool:
+        try:
+            self._get_file_content(project_id, ref, file_path)
+            return True
+        except SkillsGatewayError as exc:
+            if exc.details.get("status_code") == 404:
+                return False
+            raise
 
     def commit_skill_source(
         self,

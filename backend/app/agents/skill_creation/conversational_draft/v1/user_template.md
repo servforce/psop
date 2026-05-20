@@ -1,11 +1,10 @@
-请根据用户意图生成一个 PSOP Skill 草稿包。
+请根据以下输入构建 PSOP Skill source 草稿。
 
-必须包含：
-- 目录树
-- 每个必需文件的完整内容
-- 需要用户确认的问题或审阅提示
+请重点关注：
+- 用户想创建的 Skill 目标
+- 当前 Skill source 中可复用或需要替换的内容
+- 原始素材中的任务步骤、判断标准、安全约束、异常情况和运行时参考知识
+- 哪些内容应进入 SKILL.md，哪些内容应进入 prompts/system.md，哪些内容应进入 references/
+- 需要人工确认的不确定点
 
-可选上下文：
-- domain_pack 行业术语、流程模式和质量标准
-- 用户已有 README.md / SKILL.md / skill.yaml
-
+请输出完整 JSON object。

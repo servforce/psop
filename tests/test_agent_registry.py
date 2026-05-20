@@ -16,7 +16,8 @@ def test_prompt_registry_loads_agent_prompt_packs() -> None:
     assert "SKILL 编译智能体" in compile_pack.system_prompt
     assert compile_pack.prompt_hash
     assert creation_pack.agent_id == "psop.skill_creation.conversational_draft"
-    assert "Skill 创建共创智能体" in creation_pack.system_prompt
+    assert "Skill 构建智能体" in creation_pack.system_prompt
+    assert "references/ 只放运行时有用的参考内容" in creation_pack.system_prompt
 
 
 def test_domain_pack_registry_loads_initial_packs() -> None:
@@ -54,4 +55,3 @@ def test_unknown_domain_pack_falls_back_to_generic() -> None:
     assert resolution.requested_ref == "unknown_domain"
     assert resolution.pack.key == "generic/v1"
     assert resolution.fallback_reason
-

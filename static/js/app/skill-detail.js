@@ -112,8 +112,11 @@
             description: detail.description
           };
           this.resetLazyDetailState(skillId);
-          if (!["overview", "source", "publish", "compiler", "debug", "runtime", "test"].includes(this.activeDetailTab)) {
+          if (!["overview", "source", "materials", "publish", "compiler", "debug", "runtime", "test"].includes(this.activeDetailTab)) {
             this.activeDetailTab = "overview";
+          }
+          if (this.activeDetailTab === "materials") {
+            await this.loadRawMaterials(detail.id);
           }
           if (this.activeDetailTab === "compiler") {
             await this.loadCompilerRequests(detail.id);
@@ -141,6 +144,25 @@
         this.repositoryEntries = [];
         this.selectedRepositoryFile = null;
         this.repositoryEditing = false;
+        this.rawMaterialsLoadedSkillId = null;
+        this.rawMaterials = [];
+        this.rawMaterialDetail = null;
+        this.selectedRawMaterialIds = [];
+        this.rawMaterialUploadMode = "file";
+        this.rawMaterialUploadFile = null;
+        this.rawMaterialUploadForm = {
+          name: "",
+          description: "",
+          material_kind: "",
+          source_note: "",
+          source_url: ""
+        };
+        this.rawMaterialUploadModalOpen = false;
+        this.rawMaterialGenerateModalOpen = false;
+        this.rawMaterialGenerateForm = {
+          user_description: ""
+        };
+        this.rawMaterialGenerationResult = null;
         this.publishRecordsLoadedSkillId = null;
         this.publishRecords = [];
         this.sourceForm = {
@@ -211,6 +233,297 @@
         } finally {
           this.busy.publishRecords = false;
         }
+      },
+
+
+      async loadRawMaterials(skillId, force = false) {
+        if (!force && this.rawMaterialsLoadedSkillId === skillId) {
+          return;
+        }
+
+        this.busy.rawMaterials = true;
+        try {
+          this.rawMaterials = await this.apiRequest(`/skills/${skillId}/raw-materials`);
+          this.rawMaterialsLoadedSkillId = skillId;
+          this.selectedRawMaterialIds = this.selectedRawMaterialIds.filter((materialId) =>
+            this.rawMaterials.some((material) => material.id === materialId)
+          );
+          if (this.rawMaterialDetail && !this.rawMaterials.some((material) => material.id === this.rawMaterialDetail.id)) {
+            this.rawMaterialDetail = null;
+          }
+          if (!this.rawMaterialDetail && this.rawMaterials.length > 0) {
+            await this.openRawMaterialDetail(this.rawMaterials[0]);
+          }
+        } finally {
+          this.busy.rawMaterials = false;
+        }
+      },
+
+
+      async openRawMaterialDetail(material) {
+        if (!this.currentSkill || !material?.id) {
+          return;
+        }
+
+        this.busy.rawMaterialDetail = true;
+        try {
+          this.rawMaterialDetail = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`);
+        } finally {
+          this.busy.rawMaterialDetail = false;
+        }
+      },
+
+
+      handleRawMaterialFileChange(event) {
+        const file = event?.target?.files?.[0] || null;
+        this.rawMaterialUploadFile = file;
+        if (file && !this.rawMaterialUploadForm.name) {
+          this.rawMaterialUploadForm.name = file.name;
+        }
+      },
+
+
+      openRawMaterialUploadModal(mode = "file") {
+        this.rawMaterialUploadMode = mode;
+        this.rawMaterialUploadFile = null;
+        this.rawMaterialUploadForm = {
+          name: "",
+          description: "",
+          material_kind: "",
+          source_note: "",
+          source_url: ""
+        };
+        this.rawMaterialUploadModalOpen = true;
+      },
+
+
+      closeRawMaterialUploadModal() {
+        if (this.busy.rawMaterialUpload) {
+          return;
+        }
+        this.rawMaterialUploadModalOpen = false;
+      },
+
+
+      async submitRawMaterial() {
+        if (!this.currentSkill) {
+          return;
+        }
+        if (this.rawMaterialUploadMode === "file" && !this.rawMaterialUploadFile) {
+          this.showCenterToast("error", "请选择要上传的素材文件。");
+          return;
+        }
+        if (this.rawMaterialUploadMode === "url" && !this.rawMaterialUploadForm.source_url.trim()) {
+          this.showCenterToast("error", "请输入参考 URL。");
+          return;
+        }
+
+        const formData = new FormData();
+        if (this.rawMaterialUploadMode === "file") {
+          formData.append("file", this.rawMaterialUploadFile);
+        } else {
+          formData.append("source_url", this.rawMaterialUploadForm.source_url.trim());
+        }
+        ["name", "description", "material_kind", "source_note"].forEach((key) => {
+          const value = this.rawMaterialUploadForm[key];
+          if (value) {
+            formData.append(key, value);
+          }
+        });
+
+        this.busy.rawMaterialUpload = true;
+        this.clearNotice();
+        try {
+          const created = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials`, {
+            method: "POST",
+            body: formData
+          });
+          this.rawMaterialUploadFile = null;
+          this.rawMaterialUploadForm = {
+            name: "",
+            description: "",
+            material_kind: "",
+            source_note: "",
+            source_url: ""
+          };
+          if (this.$refs.rawMaterialFileInput) {
+            this.$refs.rawMaterialFileInput.value = "";
+          }
+          this.rawMaterialUploadModalOpen = false;
+          await this.loadRawMaterials(this.currentSkill.id, true);
+          await this.openRawMaterialDetail(created);
+          this.showNotice(created.status === "ready" ? "success" : "error", created.status === "ready" ? "素材已保存并解析完成。" : "素材已保存，但解析失败。");
+        } catch (error) {
+          this.showNotice("error", error.message || "保存素材失败。");
+        } finally {
+          this.busy.rawMaterialUpload = false;
+        }
+      },
+
+
+      async deleteRawMaterial(material) {
+        if (!this.currentSkill || !material?.id) {
+          return;
+        }
+
+        this.busy.rawMaterialDelete = true;
+        this.clearNotice();
+        try {
+          await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`, {
+            method: "DELETE"
+          });
+          this.selectedRawMaterialIds = this.selectedRawMaterialIds.filter((materialId) => materialId !== material.id);
+          if (this.rawMaterialDetail?.id === material.id) {
+            this.rawMaterialDetail = null;
+          }
+          await this.loadRawMaterials(this.currentSkill.id, true);
+          this.showNotice("success", "素材已移除。");
+        } catch (error) {
+          this.showNotice("error", error.message || "移除素材失败。");
+        } finally {
+          this.busy.rawMaterialDelete = false;
+        }
+      },
+
+
+      toggleRawMaterialSelection(material) {
+        if (!material || material.status !== "ready") {
+          return;
+        }
+        if (this.selectedRawMaterialIds.includes(material.id)) {
+          this.selectedRawMaterialIds = this.selectedRawMaterialIds.filter((materialId) => materialId !== material.id);
+          return;
+        }
+        this.selectedRawMaterialIds = [...this.selectedRawMaterialIds, material.id];
+      },
+
+
+      isRawMaterialSelected(material) {
+        return Boolean(material?.id && this.selectedRawMaterialIds.includes(material.id));
+      },
+
+
+      selectedRawMaterials() {
+        return this.rawMaterials.filter((material) => this.selectedRawMaterialIds.includes(material.id));
+      },
+
+
+      openRawMaterialGenerateModal() {
+        if (this.selectedRawMaterialIds.length === 0) {
+          this.showCenterToast("error", "请选择至少一个已解析素材。");
+          return;
+        }
+        this.rawMaterialGenerateForm = {
+          user_description: ""
+        };
+        this.rawMaterialGenerationResult = null;
+        this.rawMaterialGenerateModalOpen = true;
+      },
+
+
+      closeRawMaterialGenerateModal() {
+        if (this.busy.rawMaterialGenerate) {
+          return;
+        }
+        this.rawMaterialGenerateModalOpen = false;
+      },
+
+
+      async generateSkillDraftFromRawMaterials() {
+        if (!this.currentSkill || this.selectedRawMaterialIds.length === 0) {
+          return;
+        }
+        if (!this.rawMaterialGenerateForm.user_description.trim()) {
+          this.showCenterToast("error", "请输入生成描述。");
+          return;
+        }
+
+        this.busy.rawMaterialGenerate = true;
+        this.clearNotice();
+        try {
+          const skillId = this.currentSkill.id;
+          const result = await this.apiRequest(`/skills/${skillId}/raw-materials/generate-skill-draft`, {
+            method: "POST",
+            body: JSON.stringify({
+              material_ids: this.selectedRawMaterialIds,
+              user_description: this.rawMaterialGenerateForm.user_description.trim(),
+              base_commit_sha: this.currentSkill.latest_draft_head_sha
+            })
+          });
+          this.rawMaterialGenerationResult = result;
+          this.sourceLoadedSkillId = null;
+          this.repositoryLoadedSkillId = null;
+          this.currentSkill = await this.apiRequest(`/skills/${skillId}`);
+          await this.loadRawMaterials(skillId, true);
+          this.showNotice("success", "Skill 草稿已生成并提交到 GitLab draft。");
+        } catch (error) {
+          this.showNotice("error", error.message || "生成 Skill 草稿失败。");
+        } finally {
+          this.busy.rawMaterialGenerate = false;
+        }
+      },
+
+
+      rawMaterialKindLabel(value) {
+        const labels = {
+          text: "文本",
+          markdown: "Markdown",
+          pdf: "PDF",
+          image: "图片",
+          audio: "音频",
+          video: "视频",
+          url: "URL",
+          file: "文件"
+        };
+        return labels[value] || value || "素材";
+      },
+
+
+      rawMaterialKindIcon(value) {
+        const icons = {
+          text: "description",
+          markdown: "article",
+          pdf: "picture_as_pdf",
+          image: "image",
+          audio: "graphic_eq",
+          video: "movie",
+          url: "link",
+          file: "attach_file"
+        };
+        return icons[value] || "draft";
+      },
+
+
+      rawMaterialContentUrl(material) {
+        if (!this.currentSkill || !material?.id) {
+          return "";
+        }
+        return `${this.apiBaseUrl}/skills/${encodeURIComponent(this.currentSkill.id)}/raw-materials/${encodeURIComponent(material.id)}/content`;
+      },
+
+
+      canPreviewRawMaterial(kind, material = this.rawMaterialDetail) {
+        const mimeType = String(material?.mime_type || "");
+        if (kind === "image") {
+          return mimeType.startsWith("image/");
+        }
+        if (kind === "audio") {
+          return mimeType.startsWith("audio/");
+        }
+        if (kind === "video") {
+          return mimeType.startsWith("video/");
+        }
+        if (kind === "pdf") {
+          return mimeType === "application/pdf";
+        }
+        if (kind === "document") {
+          return Boolean(material?.id) &&
+            !this.canPreviewRawMaterial("image", material) &&
+            !this.canPreviewRawMaterial("audio", material) &&
+            !this.canPreviewRawMaterial("video", material) &&
+            !this.canPreviewRawMaterial("pdf", material);
+        }
+        return false;
       },
 
 
@@ -686,6 +999,9 @@
           if (this.activeDetailTab === "source") {
             await this.loadRepositoryTree(this.currentSkill.id, this.repositoryPath);
           }
+          if (this.activeDetailTab === "materials") {
+            await this.loadRawMaterials(this.currentSkill.id, true);
+          }
           if (this.activeDetailTab === "publish") {
             await this.loadPublishRecords(this.currentSkill.id);
           }
@@ -735,6 +1051,9 @@
         try {
           if (tabName === "source") {
             await this.loadRepositoryTree(this.currentSkill.id, this.repositoryPath);
+          }
+          if (tabName === "materials") {
+            await this.loadRawMaterials(this.currentSkill.id);
           }
           if (tabName === "publish") {
             await this.loadPublishRecords(this.currentSkill.id);

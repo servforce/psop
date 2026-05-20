@@ -35,7 +35,7 @@ DEFAULT_AGENT_PROMPT_SEEDS = [
     {
         "definition_key": "skill_creation.conversational_draft",
         "ref": "skill_creation/conversational_draft/v1",
-        "name": "Skill 创建共创智能体",
+        "name": "Skill 构建智能体",
         "usage_keys": ["default.skill_creation_agent"],
     },
     {

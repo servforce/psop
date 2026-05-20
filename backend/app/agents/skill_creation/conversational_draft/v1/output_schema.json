@@ -3,7 +3,9 @@
   "required": [
     "directory_tree",
     "files",
-    "review_notes"
+    "review_notes",
+    "generation_reason",
+    "material_usage"
   ],
   "properties": {
     "directory_tree": {
@@ -17,7 +19,36 @@
       "items": {
         "type": "string"
       }
+    },
+    "generation_reason": {
+      "type": "string"
+    },
+    "material_usage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "material_id",
+          "usage"
+        ],
+        "properties": {
+          "material_id": {
+            "type": "string"
+          },
+          "usage": {
+            "type": "string"
+          },
+          "key_points": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "inference_notes": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }
-

@@ -54,6 +54,8 @@ def get_skills_service(request: Request) -> SkillsService:
         gitlab_gateway=get_gitlab_gateway(request),
         compiler_service=compiler_service,
         inference_gateway=get_inference_gateway(request),
+        object_store=get_object_store(request),
+        agent_prompt_service=get_agent_prompt_service(request),
     )
 
 

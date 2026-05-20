@@ -3,7 +3,13 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.domain.skills.models import SkillDefinition, SkillPublishRecord, SkillVersion
+from app.domain.skills.models import (
+    SkillDefinition,
+    SkillPublishRecord,
+    SkillRawMaterial,
+    SkillRawMaterialGeneration,
+    SkillVersion,
+)
 
 
 class SkillsRepository:
@@ -72,3 +78,42 @@ class SkillsRepository:
         if current is None:
             return 1
         return int(current) + 1
+
+    def list_raw_materials(self, session: Session, skill_definition_id: str) -> list[SkillRawMaterial]:
+        query = (
+            select(SkillRawMaterial)
+            .where(
+                SkillRawMaterial.skill_definition_id == skill_definition_id,
+                SkillRawMaterial.status != "archived",
+            )
+            .order_by(SkillRawMaterial.created_at.desc())
+        )
+        return list(session.scalars(query).all())
+
+    def get_raw_material(self, session: Session, material_id: str) -> SkillRawMaterial | None:
+        return session.get(SkillRawMaterial, material_id)
+
+    def list_raw_materials_by_ids(
+        self,
+        session: Session,
+        *,
+        skill_definition_id: str,
+        material_ids: list[str],
+    ) -> list[SkillRawMaterial]:
+        if not material_ids:
+            return []
+        query = select(SkillRawMaterial).where(
+            SkillRawMaterial.skill_definition_id == skill_definition_id,
+            SkillRawMaterial.id.in_(material_ids),
+            SkillRawMaterial.status != "archived",
+        )
+        return list(session.scalars(query).all())
+
+    def add_raw_material_generation(
+        self,
+        session: Session,
+        generation: SkillRawMaterialGeneration,
+    ) -> SkillRawMaterialGeneration:
+        session.add(generation)
+        session.flush()
+        return generation
