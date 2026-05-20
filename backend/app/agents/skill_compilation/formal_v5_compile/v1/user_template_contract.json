@@ -1,0 +1,16 @@
+{
+  "format": "json",
+  "producer": "backend.app.domain.compiler.agent.SkillCompileAgent",
+  "required_sections": [
+    "task",
+    "skill",
+    "manifest_snapshot",
+    "source",
+    "agent_prompt",
+    "domain_pack",
+    "allowed_runtime",
+    "workflow_compilation_contract",
+    "repair_diagnostics"
+  ]
+}
+

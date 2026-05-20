@@ -1,0 +1,12 @@
+agent_id: psop.runtime_execution.llm_node_fallback
+version: v1
+scenario: runtime_execution
+route_key: default
+description: Render fallback prompts for runtime LLM nodes when the EG node has no explicit projection.
+inputs:
+  - Session Token
+  - input envelope
+  - skill metadata and instruction
+outputs:
+  - clear executable Chinese result for the current LLM node
+

@@ -1,0 +1,268 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70">
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2">
+        <button type="button" class="button-secondary h-9 w-9 shrink-0" title="返回编译列表" aria-label="返回编译列表" @click="navigate('/admin/compiler')">
+          <span class="material-symbols-outlined text-[18px]">arrow_back</span>
+          <span>返回编译列表</span>
+        </button>
+        <div class="min-w-0 flex-1 basis-64">
+          <p class="truncate text-sm font-semibold text-slate-100">EG Artifact</p>
+          <p class="mono-field mt-0.5 truncate" x-text="compilerArtifact.id"></p>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">状态</span>
+          <span class="status-badge" :class="statusBadgeTone(compilerArtifact.status)" x-text="formatStatus(compilerArtifact.status)"></span>
+        </div>
+        <div class="flex min-w-0 shrink items-center gap-2">
+          <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Formal</span>
+          <span class="mono-field max-w-[14rem] truncate" x-text="compilerArtifact.formal_revision"></span>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">节点</span>
+          <span class="text-sm font-semibold text-slate-100" x-text="compilerArtifactNodeCount()"></span>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">工作流步骤</span>
+          <span class="text-sm font-semibold text-slate-100" x-text="compilerArtifactWorkflowCount()"></span>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">创建时间</span>
+          <span class="mono-field whitespace-nowrap" x-text="formatDateTime(compilerArtifact.created_at)"></span>
+        </div>
+        <div class="ml-auto inline-flex shrink-0 overflow-hidden rounded-md border border-slate-800 bg-slate-950/60">
+          <button
+            type="button"
+            class="topbar-icon-button h-9 w-9 rounded-none border-0"
+            :class="compilerArtifactView === 'graph' ? 'bg-orange-500/10 text-orange-200' : ''"
+            title="图预览"
+            aria-label="图预览"
+            @click="selectCompilerArtifactView('graph')"
+          >
+            <span class="material-symbols-outlined text-[18px]">account_tree</span>
+          </button>
+          <button
+            type="button"
+            class="topbar-icon-button h-9 w-9 rounded-none border-0 border-l border-slate-800"
+            :class="compilerArtifactView === 'json' ? 'bg-orange-500/10 text-orange-200' : ''"
+            title="JSON 文本"
+            aria-label="JSON 文本"
+            @click="selectCompilerArtifactView('json')"
+          >
+            <span class="material-symbols-outlined text-[18px]">data_object</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-hidden">
+      <template x-if="compilerArtifactView === 'graph'">
+        <div class="relative h-full min-h-0 overflow-hidden">
+          <div class="relative h-full min-h-0">
+            <div
+              id="eg-bpmn-canvas"
+              class="eg-bpmn-viewer h-full min-h-[32rem] bg-slate-950"
+              x-effect="compilerArtifact && compilerArtifactView === 'graph' && queueCompilerArtifactGraphRender()"
+            ></div>
+            <template x-if="compilerArtifactGraphError">
+              <div class="absolute inset-x-4 top-4 rounded-md border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100" x-text="compilerArtifactGraphError"></div>
+            </template>
+          </div>
+
+          <template x-if="compilerArtifactNodeDrawerOpen && selectedArtifactNode()">
+            <aside class="absolute inset-y-0 right-0 z-30 flex w-full max-w-[30rem] flex-col border-l border-slate-800 bg-slate-950/95 shadow-[0_0_48px_rgba(0,0,0,0.45)] backdrop-blur">
+              <div class="flex shrink-0 items-start justify-between gap-3 border-b border-slate-800 px-4 py-2.5">
+                <div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.16em]" :class="artifactNodeKindClass(selectedArtifactNode().kind)" x-text="selectedArtifactNode().kind"></span>
+                    <span class="mono-field" x-text="selectedArtifactNode().id"></span>
+                  </div>
+                  <p class="mt-2 text-sm font-semibold text-slate-100" x-text="selectedArtifactWorkflowStep()?.title || selectedArtifactNode().label || selectedArtifactNode().id"></p>
+                  <p class="mt-1 text-xs leading-5 text-slate-400" x-text="selectedArtifactWorkflowStep()?.goal || '该节点未提供 workflow step goal。'"></p>
+                </div>
+                <button type="button" class="topbar-icon-button shrink-0" title="关闭节点详情" aria-label="关闭节点详情" @click="closeCompilerArtifactNodeDrawer()">
+                  <span class="material-symbols-outlined text-[18px]">close</span>
+                </button>
+              </div>
+
+              <div class="flex h-8 shrink-0 border-b border-slate-800">
+                <button type="button" class="node-drawer-tab" :class="compilerArtifactNodeEditorTab === 'form' ? 'node-drawer-tab-active' : ''" @click="selectCompilerArtifactNodeEditorTab('form')">表单</button>
+                <button type="button" class="node-drawer-tab" :class="compilerArtifactNodeEditorTab === 'json' ? 'node-drawer-tab-active' : ''" @click="selectCompilerArtifactNodeEditorTab('json')">JSON</button>
+              </div>
+
+              <div class="min-h-0 flex-1 overflow-y-auto">
+                <template x-if="compilerArtifactNodeEditorTab === 'form'">
+                  <form class="divide-y divide-slate-800" @submit.prevent="saveCompilerArtifactNodeForm()">
+                    <section class="px-4 py-3">
+                      <p class="field-label mb-2">基础信息</p>
+                      <div class="grid grid-cols-2 gap-3">
+                        <label class="field-block">
+                          <span class="field-label">节点 ID</span>
+                          <input x-model="compilerArtifactNodeForm.id" class="input-field h-9 px-3 py-0 font-mono text-xs" readonly />
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">类型</span>
+                          <select x-model="compilerArtifactNodeForm.kind" class="select-field h-9">
+                            <option value="start">start</option>
+                            <option value="input">input</option>
+                            <option value="llm">llm</option>
+                            <option value="tool">tool</option>
+                            <option value="terminal">terminal</option>
+                            <option value="approval">approval</option>
+                            <option value="timer">timer</option>
+                            <option value="skill">skill</option>
+                          </select>
+                        </label>
+                        <label class="field-block col-span-2">
+                          <span class="field-label">节点标签</span>
+                          <input x-model="compilerArtifactNodeForm.label" class="input-field h-9 px-3 py-0" placeholder="用于图中显示的短标签" />
+                        </label>
+                      </div>
+                    </section>
+
+                    <section class="px-4 py-3">
+                      <p class="field-label mb-2">工作流文案</p>
+                      <div class="space-y-3">
+                        <label class="field-block">
+                          <span class="field-label">标题</span>
+                          <input x-model="compilerArtifactNodeForm.workflow_title" class="input-field h-9 px-3 py-0" placeholder="面向执行人员展示的步骤标题" />
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">目标说明</span>
+                          <textarea x-model="compilerArtifactNodeForm.workflow_goal" rows="2" class="textarea-field auto-grow-field min-h-20 px-3 py-2" placeholder="说明该节点在业务流程中要完成什么"></textarea>
+                        </label>
+                      </div>
+                    </section>
+
+                    <section class="px-4 py-3">
+                      <p class="field-label mb-2">执行配置</p>
+                      <div class="space-y-3">
+                        <label class="field-block">
+                          <span class="field-label">Actor</span>
+                          <input x-model="compilerArtifactNodeForm.actor_name" class="input-field h-9 px-3 py-0 font-mono text-xs" placeholder="例如 agent.llm / runtime.input / capability.demo_tool" />
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">Guard phase_is</span>
+                          <input x-model="compilerArtifactNodeForm.guard_phase_is" class="input-field h-9 px-3 py-0 font-mono text-xs" placeholder="节点启用阶段标记" />
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">System Prompt</span>
+                          <textarea x-model="compilerArtifactNodeForm.projection_system_template" rows="3" class="textarea-field auto-grow-field min-h-24 px-3 py-2 font-mono text-xs" placeholder="LLM 节点的 system_template"></textarea>
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">User Prompt</span>
+                          <textarea x-model="compilerArtifactNodeForm.projection_user_template" rows="4" class="textarea-field auto-grow-field min-h-28 px-3 py-2 font-mono text-xs" placeholder="LLM 节点的 user_template"></textarea>
+                        </label>
+                      </div>
+                    </section>
+
+                    <section class="px-4 py-3">
+                      <p class="field-label mb-2">状态写回</p>
+                      <div class="grid grid-cols-2 gap-3">
+                        <label class="field-block col-span-2">
+                          <span class="field-label">写入路径</span>
+                          <input x-model="compilerArtifactNodeForm.merge_path" class="input-field h-9 px-3 py-0 font-mono text-xs" placeholder="Session Token path，例如 phase" />
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">来源</span>
+                          <input x-model="compilerArtifactNodeForm.merge_from" class="input-field h-9 px-3 py-0 font-mono text-xs" placeholder="observation.path" />
+                        </label>
+                        <label class="field-block">
+                          <span class="field-label">固定值</span>
+                          <input x-model="compilerArtifactNodeForm.merge_value" class="input-field h-9 px-3 py-0 font-mono text-xs" placeholder="JSON 或字符串" />
+                        </label>
+                      </div>
+                      <p class="mt-3 text-xs leading-5 text-slate-500">如果“来源”和“固定值”同时填写，保存时优先使用来源。</p>
+                    </section>
+                  </form>
+                </template>
+
+                <template x-if="compilerArtifactNodeEditorTab === 'json'">
+                  <div class="px-4 py-3">
+                    <label class="field-block">
+                      <span class="field-label">节点 JSON</span>
+                      <div class="json-editor-shell-auto rounded-none border-x-0">
+                        <pre class="json-highlight-layer px-3 py-3" aria-hidden="true" x-html="jsonHighlightHtml(compilerArtifactNodeJsonDraft)"></pre>
+                        <textarea
+                          x-model="compilerArtifactNodeJsonDraft"
+                          class="json-editor-input px-3 py-3"
+                          spellcheck="false"
+                        ></textarea>
+                      </div>
+                    </label>
+                    <p class="mt-2 text-xs leading-5 text-rose-300" x-show="compilerArtifactNodeJsonError" x-text="compilerArtifactNodeJsonError"></p>
+                  </div>
+                </template>
+              </div>
+
+              <div class="flex shrink-0 justify-end gap-2 border-t border-slate-800 px-3 py-2">
+                <template x-if="compilerArtifactNodeEditorTab === 'form'">
+                  <div class="flex gap-2">
+                    <button type="button" class="button-secondary" title="重置表单" aria-label="重置表单" @click="resetCompilerArtifactNodeForm()">
+                      <span class="material-symbols-outlined text-[18px]">restart_alt</span>
+                      <span>重置表单</span>
+                    </button>
+                    <button type="button" class="button-primary" title="保存表单" aria-label="保存表单" :disabled="busy.compilerArtifactSave" @click="saveCompilerArtifactNodeForm()">
+                      <span class="material-symbols-outlined text-[18px]" x-text="busy.compilerArtifactSave ? 'sync' : 'save'"></span>
+                      <span>保存表单</span>
+                    </button>
+                  </div>
+                </template>
+                <template x-if="compilerArtifactNodeEditorTab === 'json'">
+                  <div class="flex gap-2">
+                    <button type="button" class="button-secondary" title="格式化 JSON" aria-label="格式化 JSON" @click="formatCompilerArtifactNodeJsonDraft()">
+                      <span class="material-symbols-outlined text-[18px]">format_indent_increase</span>
+                      <span>格式化 JSON</span>
+                    </button>
+                    <button type="button" class="button-secondary" title="重置 JSON" aria-label="重置 JSON" @click="resetCompilerArtifactNodeJsonDraft()">
+                      <span class="material-symbols-outlined text-[18px]">restart_alt</span>
+                      <span>重置 JSON</span>
+                    </button>
+                    <button type="button" class="button-primary" title="保存 JSON" aria-label="保存 JSON" :disabled="busy.compilerArtifactSave" @click="saveCompilerArtifactNode()">
+                      <span class="material-symbols-outlined text-[18px]" x-text="busy.compilerArtifactSave ? 'sync' : 'save'"></span>
+                      <span>保存 JSON</span>
+                    </button>
+                  </div>
+                </template>
+              </div>
+            </aside>
+          </template>
+        </div>
+      </template>
+
+      <template x-if="compilerArtifactView === 'json'">
+        <div class="flex h-full min-h-0 flex-col bg-slate-950">
+          <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/60 px-4 py-3">
+            <div class="min-w-0">
+              <p class="text-xs leading-5 text-slate-400">编辑 EG artifact JSON 后保存；保存时会进行 JSON 语法与 formal-v5 结构校验。</p>
+              <p class="mt-1 text-xs leading-5 text-rose-300" x-show="compilerArtifactJsonError" x-text="compilerArtifactJsonError"></p>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+              <button type="button" class="button-secondary" title="格式化 JSON" aria-label="格式化 JSON" @click="formatCompilerArtifactJsonDraft()">
+                <span class="material-symbols-outlined text-[18px]">format_indent_increase</span>
+                <span>格式化 JSON</span>
+              </button>
+              <button type="button" class="button-secondary" title="重置" aria-label="重置" @click="resetCompilerArtifactJsonDraft()">
+                <span class="material-symbols-outlined text-[18px]">restart_alt</span>
+                <span>重置</span>
+              </button>
+              <button type="button" class="button-primary" title="保存" aria-label="保存" :disabled="busy.compilerArtifactSave" @click="saveCompilerArtifactJson()">
+                <span class="material-symbols-outlined text-[18px]" x-text="busy.compilerArtifactSave ? 'sync' : 'save'"></span>
+                <span>保存</span>
+              </button>
+            </div>
+          </div>
+          <div class="json-editor-shell min-h-0 flex-1 rounded-none border-0">
+            <pre class="json-highlight-layer px-5 py-5" aria-hidden="true" x-html="jsonHighlightHtml(compilerArtifactJsonDraft)"></pre>
+            <textarea
+              x-model="compilerArtifactJsonDraft"
+              class="json-editor-input px-5 py-5"
+              spellcheck="false"
+              @scroll="syncJsonHighlightScroll($event)"
+            ></textarea>
+          </div>
+        </div>
+      </template>
+    </div>
+  </section>
+</div>

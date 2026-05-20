@@ -1,0 +1,417 @@
+<div class="h-full min-h-0 overflow-hidden">
+  <section class="flex h-full min-h-0 flex-col overflow-hidden border border-slate-800 bg-slate-950">
+    <div class="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3">
+      <nav class="breadcrumb-bar min-w-0 flex-1 flex-nowrap gap-1 border-0 p-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link min-w-0 truncate" @click="navigate(`/admin/skills/${currentSkill.id}`); activeDetailTab = 'test'" x-text="currentSkill.name"></button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link" @click="navigate(`/admin/skills/${currentSkill.id}`); activeDetailTab = 'test'">测试</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link min-w-0 truncate" @click="navigate(`/admin/skills/${currentSkill.id}/tests/${skillTestCase.id}`)" x-text="skillTestCase.name"></button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <span class="font-semibold text-slate-100">Review</span>
+      </nav>
+      <div class="flex shrink-0 items-center gap-2">
+        <button type="button" class="topbar-icon-button" title="播放/暂停" aria-label="播放/暂停" data-tooltip="播放/暂停" @click="toggleSkillTestReviewPlayback()">
+          <span class="material-symbols-outlined text-[18px]" x-text="skillTestReviewPlaybackRunning ? 'pause' : 'play_arrow'"></span>
+        </button>
+        <button type="button" class="topbar-icon-button" title="重新播放" aria-label="重新播放" data-tooltip="重新播放" @click="restartSkillTestReviewPlayback()">
+          <span class="material-symbols-outlined text-[18px]">replay</span>
+        </button>
+        <button type="button" class="topbar-icon-button" title="Fork Scenario" aria-label="Fork Scenario" data-tooltip="Fork Scenario" @click="forkSkillTestScenario()">
+          <span class="material-symbols-outlined text-[18px]">call_split</span>
+          <span class="sr-only">Fork Scenario</span>
+        </button>
+        <button type="button" class="topbar-icon-button text-orange-200 hover:text-orange-100" title="Fork Debug" aria-label="Fork Debug" data-tooltip="Fork Debug" @click="forkSkillDebug()">
+          <span class="material-symbols-outlined text-[18px]">terminal</span>
+          <span class="sr-only">Fork Debug</span>
+        </button>
+        <button type="button" class="topbar-icon-button text-rose-200 hover:text-rose-100" title="终止运行" aria-label="终止运行" data-tooltip="终止运行" x-show="isOpenSkillTestRun(skillTestRun)" :disabled="busy.skillTestCancel" @click="cancelSkillTestRun()">
+          <span class="material-symbols-outlined text-[18px]" x-text="busy.skillTestCancel ? 'hourglass_empty' : 'stop_circle'"></span>
+          <span class="sr-only">终止运行</span>
+        </button>
+        <button type="button" class="topbar-icon-button" title="Replay" aria-label="Replay" data-tooltip="Replay" x-show="skillTestRun?.run_id" @click="navigate(`/admin/skills/${currentSkill.id}/runs/${skillTestRun.run_id}/replay`)">
+          <span class="material-symbols-outlined text-[18px]">history</span>
+          <span class="sr-only">Replay</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(22rem,0.34fr)] divide-x divide-slate-800 overflow-hidden">
+      <section class="flex min-h-0 flex-col overflow-hidden">
+        <div class="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3">
+          <div class="flex min-w-0 items-center gap-2">
+            <span class="status-badge" :class="statusBadgeTone(skillTestRun?.status)" x-text="formatStatus(skillTestRun?.status)"></span>
+            <span class="mono-field truncate" x-text="formatAssertionSummary(skillTestRun?.result_summary)"></span>
+          </div>
+          <span class="mono-field shrink-0" x-text="skillTestReviewProgressLabel()"></span>
+        </div>
+
+        <div class="min-h-0 flex-1 overflow-y-auto overflow-x-visible">
+          <template x-for="(lane, laneIndex) in skillTestReviewTimelineLanes()" :key="lane.id">
+            <div class="grid min-h-16 grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] border-b border-slate-800">
+              <div class="flex items-center justify-center border-r border-slate-800/60">
+                <template x-if="shouldShowSkillTestReviewTimelineLaneGroup(lane, laneIndex)">
+                  <span class="whitespace-nowrap text-sm font-semibold text-slate-300" x-text="skillTestTimelineLaneGroupLabel(lane.id)"></span>
+                </template>
+              </div>
+              <button type="button" class="flex items-center gap-2 border-r border-slate-800/60 px-2 py-2 text-left transition" :class="isSkillTestReviewLaneSelected(lane.id) ? 'bg-orange-500/10 ring-1 ring-inset ring-orange-500/30' : 'hover:bg-slate-900/45'" :aria-pressed="isSkillTestReviewLaneSelected(lane.id)" @click.stop="openSkillTestReviewLaneDetail(lane.id)">
+                <span class="material-symbols-outlined rounded-md border p-1 text-[16px]" :class="skillTestTimelineLaneTone(lane.id)" x-text="skillTestTimelineLaneIcon(lane.id)"></span>
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-semibold leading-5 text-slate-100" x-text="skillTestTimelineLaneLabel(lane)"></p>
+                </div>
+              </button>
+              <div class="relative min-h-16 overflow-visible px-3">
+                <div class="pointer-events-none absolute inset-y-0 left-0 z-0 border-r border-orange-400/40 bg-orange-500/10 transition-all duration-150" :style="skillTestReviewLaneProgressStyle()"></div>
+                <template x-for="item in skillTestReviewEventsForLane(lane.id)" :key="item.render_key">
+                  <button type="button" class="absolute top-1/2 z-20 flex h-14 w-20 -translate-x-1/2 -translate-y-1/2 items-center gap-2 overflow-hidden rounded-md border px-2 py-1 text-left shadow-sm transition" :class="`${skillTestReviewEventFrameTone(item.event)} ${isSkillTestReviewExpectationSelected(item.event) ? 'ring-2 ring-orange-300/80' : ''}`" :style="skillTestReviewTimelineEventLeftStyle(item.event)" :data-tooltip="skillTestReviewEventTooltip(item.event)" :aria-pressed="isSkillTestReviewExpectationSelected(item.event)" @click.stop="openSkillTestReviewEvent(item.event)">
+                    <template x-if="isSkillTestTimelineExpectationEvent(item.event)">
+                      <span class="pointer-events-none absolute inset-y-[-0.6rem] left-1/2 z-0 w-px -translate-x-1/2 bg-sky-400/55 shadow-[0_0_8px_rgba(56,189,248,0.65)]"></span>
+                    </template>
+                    <span class="material-symbols-outlined relative z-10 shrink-0 text-[16px]" x-text="skillTestTimelineEventIcon(item.event)"></span>
+                    <span class="flex min-w-0 flex-1 flex-col justify-center pr-3 pb-3">
+                      <span class="block font-mono text-[10px] leading-3" x-text="formatSkillTestTimelineMs(item.event.at_ms)"></span>
+                      <span class="block truncate text-xs font-semibold leading-4" x-text="skillTestTimelineEventLabel(item.event)"></span>
+                    </span>
+                    <span class="pointer-events-none absolute bottom-1 right-1 z-10 inline-flex max-w-[calc(100%-0.5rem)] shrink-0 justify-center whitespace-nowrap rounded-full border px-1.5 text-[9px] font-semibold leading-3" :class="skillTestReviewEventBadgeTone(item.event)" x-text="skillTestReviewEventStatusLabel(item.event)"></span>
+                    <template x-if="skillTestReviewRuntimeOutputsForExpectation(item.event).length > 0">
+                      <span class="pointer-events-none absolute right-1 top-1 z-10 flex max-w-[2.75rem] flex-wrap justify-end gap-0.5">
+                        <template x-for="outputEvent in skillTestReviewRuntimeOutputsForExpectation(item.event)" :key="outputEvent.id">
+                          <span class="h-1.5 w-1.5 rounded-full border border-cyan-200/80 bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.65)]"></span>
+                        </template>
+                      </span>
+                    </template>
+                  </button>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div class="grid min-h-14 shrink-0 grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] items-center border-t border-slate-800 bg-slate-950/35 pt-2">
+          <div class="flex items-center justify-center border-r border-slate-800/60">
+            <span class="whitespace-nowrap text-sm font-semibold text-slate-300">时间</span>
+          </div>
+          <div class="border-r border-slate-800/60 px-2">
+            <p class="mono-field" x-text="skillTestReviewProgressLabel()"></p>
+          </div>
+          <div class="relative h-12 px-3">
+            <template x-for="tick in skillTestReviewTicks()" :key="tick.ms">
+              <div class="absolute top-0 h-full border-l border-slate-800/80" :style="`left: calc(${tick.percent}% + ${tick.percent === 0 ? '0.75rem' : tick.percent === 100 ? '-0.75rem' : '0rem'})`">
+                <span class="absolute top-0 whitespace-nowrap font-mono text-[10px] text-slate-500" :style="tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'" x-text="formatSkillTestTimelineMs(tick.ms)"></span>
+              </div>
+            </template>
+            <input type="range" min="0" :max="skillTestReviewDurationMs()" step="1000" class="absolute inset-x-3 bottom-1 accent-orange-500" :value="skillTestReviewPlayheadMsValue()" @input="updateSkillTestReviewPlayhead($event.target.value)" />
+          </div>
+        </div>
+      </section>
+
+      <aside class="flex min-h-0 flex-col overflow-hidden bg-slate-950/20" data-skill-test-info-panel>
+        <div class="min-h-0 flex-1 overflow-hidden" data-skill-test-review-content>
+          <template x-if="skillTestReviewSelectedLane() && !skillTestReviewExpandedEvent()">
+            <section class="flex h-full min-h-0 flex-col overflow-hidden" data-skill-test-info-subject="lane">
+              <header class="flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-slate-800 px-3 py-2" data-info-panel-header>
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="material-symbols-outlined rounded-md border p-1 text-[18px]" :class="skillTestTimelineLaneTone(skillTestReviewSelectedLane().id)" x-text="skillTestTimelineLaneIcon(skillTestReviewSelectedLane().id)"></span>
+                  <div class="min-w-0">
+                    <h2 class="truncate text-base font-semibold leading-5 text-slate-100" x-text="`${skillTestTimelineLaneLabel(skillTestReviewSelectedLane())}信道`"></h2>
+                  </div>
+                </div>
+                <button type="button" class="topbar-icon-button" title="关闭" aria-label="关闭" data-tooltip="关闭" @click="closeSkillTestReviewLaneDetail()">
+                  <span class="material-symbols-outlined text-[16px]">close</span>
+                </button>
+              </header>
+
+              <section class="grid shrink-0 grid-cols-2 border-b border-slate-800 text-xs" data-info-panel-basic>
+                <div class="border-b border-r border-slate-800 px-3 py-2">
+                  <p class="field-label">信道 ID</p>
+                  <p class="mono-field mt-0.5 break-all" x-text="skillTestReviewSelectedLane().id"></p>
+                </div>
+                <div class="border-b border-r border-slate-800 px-3 py-2">
+                  <p class="field-label">方向</p>
+                  <p class="mono-field mt-0.5" x-text="skillTestTimelineLaneGroupLabel(skillTestReviewSelectedLane().id)"></p>
+                </div>
+                <div class="border-b border-slate-800 px-3 py-2">
+                  <p class="field-label">事件数</p>
+                  <p class="mono-field mt-0.5" x-text="`${skillTestReviewSelectedLaneEvents().length} 个事件`"></p>
+                </div>
+                <div class="border-b border-r border-slate-800 px-3 py-2">
+                  <p class="field-label">时间范围</p>
+                  <p class="mono-field mt-0.5" x-text="skillTestReviewLaneRangeLabel(skillTestReviewSelectedLane().id)"></p>
+                </div>
+                <div class="border-b border-slate-800 px-3 py-2">
+                  <p class="field-label">当前时间</p>
+                  <p class="mono-field mt-0.5" x-text="skillTestReviewProgressLabel()"></p>
+                </div>
+                <div class="border-r border-slate-800 px-3 py-2">
+                  <p class="field-label">已到达</p>
+                  <p class="mono-field mt-0.5" x-text="`${skillTestReviewLaneReachedCount(skillTestReviewSelectedLane().id)} 个事件`"></p>
+                </div>
+                <div class="px-3 py-2">
+                  <p class="field-label">真实输出</p>
+                  <p class="mono-field mt-0.5" x-text="`${skillTestReviewLaneRuntimeOutputCount(skillTestReviewSelectedLane().id)} 个`"></p>
+                </div>
+              </section>
+
+              <section class="flex min-h-0 flex-1 flex-col overflow-hidden" data-info-panel-detail>
+                <div class="flex h-9 shrink-0 items-center border-b border-slate-800 bg-slate-950/40">
+                  <button type="button" class="detail-tab detail-tab-active">事件</button>
+                </div>
+                <div class="min-h-0 flex-1 overflow-auto divide-y divide-slate-800">
+                  <template x-if="skillTestReviewSelectedLaneEvents().length === 0">
+                    <p class="px-3 py-4 text-sm text-slate-400">该信道暂无事件。</p>
+                  </template>
+                  <template x-for="item in skillTestReviewSelectedLaneEvents()" :key="item.render_key">
+                    <button type="button" class="min-w-0 w-full p-3 text-left transition hover:bg-slate-900/45" @click="openSkillTestReviewEvent(item.event)">
+                      <div class="flex items-center justify-between gap-2">
+                        <span class="mono-field" x-text="formatSkillTestTimelineMs(item.event.at_ms)"></span>
+                        <span class="status-badge" :class="skillTestReviewEventBadgeTone(item.event)" x-text="skillTestReviewEventStatusLabel(item.event)"></span>
+                      </div>
+                      <p class="mt-2 truncate text-xs leading-5 text-slate-200" x-text="skillTestTimelineEventLabel(item.event)"></p>
+                    </button>
+                  </template>
+                </div>
+              </section>
+            </section>
+          </template>
+
+          <template x-if="skillTestReviewExpandedEvent()">
+            <section class="flex h-full min-h-0 flex-col overflow-hidden" data-skill-test-info-subject="event">
+              <header class="flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-slate-800 px-3 py-2" data-info-panel-header>
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="material-symbols-outlined rounded-md border p-1 text-[18px]" :class="skillTestTimelineLaneTone(skillTestReviewExpandedEvent().lane_id)" x-text="skillTestTimelineEventIcon(skillTestReviewExpandedEvent())"></span>
+                  <div class="min-w-0">
+                    <h2 class="truncate text-base font-semibold leading-5 text-slate-100" x-text="skillTestTimelineEventLabel(skillTestReviewExpandedEvent()) || skillTestTimelineLaneLabel({ id: skillTestReviewExpandedEvent().lane_id }) || '事件详情'"></h2>
+                    <p class="mono-field mt-0.5 truncate" x-text="`${skillTestTimelineLaneLabel({ id: skillTestReviewExpandedEvent().lane_id })} · ${formatSkillTestTimelineMs(skillTestReviewExpandedEvent().at_ms || 0)}`"></p>
+                  </div>
+                </div>
+                <button type="button" class="topbar-icon-button" title="关闭" aria-label="关闭" data-tooltip="关闭" @click="closeSkillTestReviewEvent()">
+                  <span class="material-symbols-outlined text-[16px]">close</span>
+                </button>
+              </header>
+
+              <section class="grid shrink-0 grid-cols-2 border-b border-slate-800 text-xs" data-info-panel-basic>
+                <template x-for="meta in skillTestReviewEventMetadata(skillTestReviewExpandedEvent())" :key="meta.label">
+                  <div class="border-b border-slate-800 px-3 py-2 odd:border-r">
+                    <p class="field-label" x-text="meta.label"></p>
+                    <p class="mono-field mt-0.5 break-words" x-text="meta.value"></p>
+                  </div>
+                </template>
+              </section>
+
+              <section class="flex min-h-0 flex-1 flex-col overflow-hidden" data-info-panel-detail>
+                <div class="flex h-9 shrink-0 items-center overflow-x-auto border-b border-slate-800 bg-slate-950/40">
+                  <button type="button" class="detail-tab" :class="skillTestReviewDetailTab === 'content' ? 'detail-tab-active' : ''" @click="skillTestReviewDetailTab = 'content'">内容</button>
+                  <button type="button" class="detail-tab" x-show="isSkillTestTimelineExpectationEvent(skillTestReviewExpandedEvent())" :class="skillTestReviewDetailTab === 'judge' ? 'detail-tab-active' : ''" @click="skillTestReviewDetailTab = 'judge'">Judge</button>
+                  <button type="button" class="detail-tab" :class="skillTestReviewDetailTab === 'raw' ? 'detail-tab-active' : ''" @click="skillTestReviewDetailTab = 'raw'">Raw JSON</button>
+                </div>
+                <div class="min-h-0 flex-1 overflow-auto">
+                  <section class="p-3" x-show="skillTestReviewDetailTab === 'content'">
+                    <p class="field-label">事件内容</p>
+                    <div class="mt-3 space-y-3 border-t border-slate-800 pt-3">
+                      <template x-if="skillTestTimelineEventUsesAsset(skillTestReviewExpandedEvent()) && skillTestTimelineAssetPreviewUrl(skillTestReviewExpandedEvent())">
+                        <article class="space-y-3 border-l border-sky-400/60 bg-slate-900/35 px-3 py-3" data-skill-test-asset-preview>
+                          <div class="flex items-center justify-between gap-3">
+                            <p class="text-xs font-semibold text-slate-100">内容预览</p>
+                            <span class="mono-field min-w-0 truncate text-right" x-text="skillTestTimelineAssetPreviewMeta(skillTestReviewExpandedEvent())"></span>
+                          </div>
+                          <template x-if="skillTestTimelineAssetPreviewKind(skillTestReviewExpandedEvent()) === 'image'">
+                            <img class="max-h-72 w-full border border-slate-800 bg-slate-950 object-contain" :src="skillTestTimelineAssetPreviewUrl(skillTestReviewExpandedEvent())" :alt="skillTestTimelineEventAssetLabel(skillTestReviewExpandedEvent())" />
+                          </template>
+                          <template x-if="skillTestTimelineAssetPreviewKind(skillTestReviewExpandedEvent()) === 'audio'">
+                            <audio class="w-full" controls preload="metadata" :src="skillTestTimelineAssetPreviewUrl(skillTestReviewExpandedEvent())"></audio>
+                          </template>
+                          <template x-if="skillTestTimelineAssetPreviewKind(skillTestReviewExpandedEvent()) === 'video'">
+                            <video class="max-h-72 w-full border border-slate-800 bg-black object-contain" controls preload="metadata" :src="skillTestTimelineAssetPreviewUrl(skillTestReviewExpandedEvent())"></video>
+                          </template>
+                        </article>
+                      </template>
+                      <template x-for="section in skillTestReviewEventContentSections(skillTestReviewExpandedEvent())" :key="section.id">
+                        <article class="border-l border-sky-400/60 bg-slate-900/35 px-3 py-3">
+                          <div class="flex items-center justify-between gap-3">
+                            <p class="text-xs font-semibold text-slate-100" x-text="section.title"></p>
+                            <span class="mono-field shrink-0" x-show="section.meta" x-text="section.meta"></span>
+                          </div>
+                          <pre class="mt-2 max-w-full overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-slate-200" x-text="section.content"></pre>
+                        </article>
+                      </template>
+                    </div>
+                  </section>
+
+                  <section class="space-y-3 p-3" x-show="skillTestReviewDetailTab === 'judge'">
+                    <template x-if="skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent())">
+                      <div>
+                        <div class="flex items-center justify-between gap-3">
+                          <p class="text-sm font-semibold text-slate-100">Judge 结论</p>
+                          <span class="status-badge" :class="statusBadgeTone(skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent()).status)" x-text="formatStatus(skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent()).status)"></span>
+                        </div>
+                        <div class="mt-3 grid grid-cols-2 border-y border-slate-800 text-xs">
+                          <div class="border-r border-slate-800 p-3">
+                            <p class="field-label">Confidence</p>
+                            <p class="mono-field mt-1" x-text="Number(skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent()).confidence || 0).toFixed(2)"></p>
+                          </div>
+                          <div class="p-3">
+                            <p class="field-label">Model</p>
+                            <p class="mono-field mt-1 break-words" x-text="skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent()).judge_model || 'N/A'"></p>
+                          </div>
+                        </div>
+                        <p class="mt-3 whitespace-pre-wrap break-words border-l border-orange-400/60 bg-orange-500/10 px-3 py-3 text-sm leading-6 text-slate-200" x-text="skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent()).reason || '暂无 Judge 结论。'"></p>
+                      </div>
+                    </template>
+                    <template x-if="!skillTestReviewExpandedEvaluation(skillTestReviewExpandedEvent())">
+                      <p class="px-3 py-4 text-sm text-slate-400">暂无 Judge 结论。</p>
+                    </template>
+                  </section>
+
+                  <section class="p-3" x-show="skillTestReviewDetailTab === 'raw'">
+                    <p class="field-label">原始事件 JSON</p>
+                    <pre class="mt-3 max-w-full overflow-auto whitespace-pre-wrap break-all border-t border-slate-800 pt-3 text-xs leading-5 text-slate-200" x-text="skillTestReviewExpandedEventRawJson(skillTestReviewExpandedEvent())"></pre>
+                  </section>
+                </div>
+              </section>
+            </section>
+          </template>
+
+          <template x-if="!skillTestReviewSelectedLane() && !skillTestReviewExpandedEvent()">
+            <section class="flex h-full min-h-0 flex-col overflow-hidden" data-skill-test-info-subject="run">
+              <header class="flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-slate-800 px-3 py-2" data-info-panel-header>
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="material-symbols-outlined rounded-md border border-orange-500/30 bg-orange-500/10 p-1 text-[18px] text-orange-200">science</span>
+                  <div class="min-w-0">
+                    <h2 class="truncate text-base font-semibold leading-5 text-slate-100" x-text="skillTestCase.name"></h2>
+                  </div>
+                </div>
+              </header>
+
+              <section class="grid shrink-0 grid-cols-2 border-b border-slate-800 text-xs" data-info-panel-basic>
+                <div class="border-b border-r border-slate-800 px-3 py-2">
+                  <p class="field-label">状态</p>
+                  <p class="mono-field mt-0.5" x-text="formatStatus(skillTestRun?.status)"></p>
+                </div>
+                <div class="border-b border-slate-800 px-3 py-2">
+                  <p class="field-label">当前时间</p>
+                  <p class="mono-field mt-0.5" x-text="skillTestReviewProgressLabel()"></p>
+                </div>
+                <div class="border-r border-slate-800 px-3 py-2">
+                  <p class="field-label">终端事件</p>
+                  <p class="mono-field mt-0.5" x-text="`${filteredSkillTestReviewTerminalEvents().length} events before cursor`"></p>
+                </div>
+                <div class="px-3 py-2">
+                  <p class="field-label">判定摘要</p>
+                  <p class="mono-field mt-0.5 break-words" x-text="formatAssertionSummary(skillTestRun?.result_summary)"></p>
+                </div>
+              </section>
+
+              <section class="flex min-h-0 flex-1 flex-col overflow-hidden" data-info-panel-detail>
+                <div class="flex h-9 shrink-0 items-center overflow-x-auto border-b border-slate-800 bg-slate-950/40">
+                  <button type="button" class="detail-tab" :class="skillTestReviewPanelTab === 'transcript' ? 'detail-tab-active' : ''" @click="skillTestReviewPanelTab = 'transcript'">Transcript</button>
+                  <button type="button" class="detail-tab" :class="skillTestReviewPanelTab === 'judge' ? 'detail-tab-active' : ''" @click="skillTestReviewPanelTab = 'judge'">Judge</button>
+                </div>
+
+                <section class="min-h-0 flex-1 overflow-auto" x-show="skillTestReviewPanelTab === 'transcript'">
+                  <template x-if="filteredSkillTestReviewTerminalEvents().length === 0">
+                    <div class="empty-state py-16">
+                      <span class="material-symbols-outlined text-[30px] text-slate-400">forum</span>
+                      <p class="mt-3 text-sm text-slate-500">当前时间点以前暂无终端事件。</p>
+                    </div>
+                  </template>
+                  <div class="divide-y divide-slate-800">
+                    <template x-for="event in filteredSkillTestReviewTerminalEvents()" :key="event.id || event.seq_no">
+                      <article class="min-w-0 p-3">
+                        <div class="flex items-center justify-between gap-3">
+                          <div class="flex min-w-0 items-center gap-3">
+                            <span class="status-badge" :class="terminalDirectionTone(event.direction)" x-text="terminalDirectionLabel(event.direction)"></span>
+                            <div class="min-w-0">
+                              <p class="truncate text-xs leading-5 text-slate-200" x-text="event.event_kind"></p>
+                              <p class="mono-field mt-1" x-text="formatDateTime(event.occurred_at)"></p>
+                            </div>
+                          </div>
+                          <span class="mono-field" x-text="`#${event.seq_no}`"></span>
+                        </div>
+                        <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all border-l border-sky-400/60 bg-slate-900/35 px-3 py-3 text-xs leading-5 text-slate-200" x-text="formatTerminalPayload(event.payload_inline)"></pre>
+                      </article>
+                    </template>
+                  </div>
+                </section>
+
+                <section x-show="skillTestReviewPanelTab === 'judge'" class="min-h-0 flex-1 overflow-auto">
+                  <template x-if="!selectedSkillTestReviewExpectationEvent()">
+                    <div class="empty-state py-16">
+                      <span class="material-symbols-outlined text-[30px] text-slate-400">rule</span>
+                      <p class="mt-3 text-sm text-slate-500">请选择时间轴中的语义断言事件。</p>
+                    </div>
+                  </template>
+                  <template x-if="selectedSkillTestReviewExpectationEvent()">
+                    <div class="divide-y divide-slate-800">
+                      <section class="p-3">
+                        <div class="flex items-start justify-between gap-3">
+                          <div class="min-w-0">
+                            <p class="truncate text-sm font-semibold text-slate-100" x-text="selectedSkillTestReviewExpectationEvent().id"></p>
+                            <p class="mono-field mt-1" x-text="formatSkillTestTimelineMs(selectedSkillTestReviewExpectationEvent().at_ms)"></p>
+                          </div>
+                          <span class="status-badge shrink-0" :class="statusBadgeTone(selectedSkillTestReviewEvaluation()?.status || skillTestReviewStepStatus(selectedSkillTestReviewExpectationEvent()))" x-text="skillTestReviewEventStatusLabel(selectedSkillTestReviewExpectationEvent())"></span>
+                        </div>
+                        <p class="mt-3 whitespace-pre-wrap break-words border-l border-orange-400/60 bg-orange-500/10 px-3 py-3 text-sm leading-6 text-slate-100" x-text="selectedSkillTestReviewExpectationEvent().expectation"></p>
+                        <div class="mt-3 grid grid-cols-2 border-y border-slate-800 text-xs">
+                          <div class="border-b border-r border-slate-800 p-3">
+                            <p class="field-label">Confidence</p>
+                            <p class="mono-field mt-1" x-text="selectedSkillTestReviewEvaluation() ? Number(selectedSkillTestReviewEvaluation().confidence || 0).toFixed(2) : 'N/A'"></p>
+                          </div>
+                          <div class="border-b border-slate-800 p-3">
+                            <p class="field-label">Model</p>
+                            <p class="mono-field mt-1 truncate" x-text="selectedSkillTestReviewEvaluation()?.judge_model || 'N/A'"></p>
+                          </div>
+                          <div class="border-r border-slate-800 p-3">
+                            <p class="field-label">Provider</p>
+                            <p class="mono-field mt-1 truncate" x-text="selectedSkillTestReviewEvaluation()?.judge_provider || 'N/A'"></p>
+                          </div>
+                          <div class="p-3">
+                            <p class="field-label">Prompt Hash</p>
+                            <p class="mono-field mt-1 truncate" x-text="selectedSkillTestReviewEvaluation()?.prompt_hash || 'N/A'"></p>
+                          </div>
+                        </div>
+                        <p class="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-slate-300" x-text="selectedSkillTestReviewEvaluation()?.reason || '暂无 Judge 结论。'"></p>
+                      </section>
+
+                      <details open class="p-3">
+                        <summary class="cursor-pointer text-sm font-semibold text-slate-100">大模型输入 Payload</summary>
+                        <p class="mt-2 text-xs text-slate-400" x-text="selectedSkillTestReviewJudgeInputNotice()"></p>
+                        <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all border-t border-slate-800 pt-3 text-xs leading-5 text-slate-200" x-text="formatSkillTestReviewDebugJson(selectedSkillTestReviewJudgePromptPayload())"></pre>
+                      </details>
+
+                      <details class="p-3" x-show="selectedSkillTestReviewJudgeRequest()">
+                        <summary class="cursor-pointer text-sm font-semibold text-slate-100">System Prompt</summary>
+                        <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all border-t border-slate-800 pt-3 text-xs leading-5 text-slate-200" x-text="selectedSkillTestReviewJudgeRequest()?.system_prompt || ''"></pre>
+                      </details>
+
+                      <details class="p-3" x-show="selectedSkillTestReviewJudgeRequest()">
+                        <summary class="cursor-pointer text-sm font-semibold text-slate-100">User Prompt</summary>
+                        <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all border-t border-slate-800 pt-3 text-xs leading-5 text-slate-200" x-text="selectedSkillTestReviewJudgeRequest()?.user_prompt || ''"></pre>
+                      </details>
+
+                      <details open class="p-3">
+                        <summary class="cursor-pointer text-sm font-semibold text-slate-100">大模型原始输出</summary>
+                        <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all border-t border-slate-800 pt-3 text-xs leading-5 text-slate-200" x-text="selectedSkillTestReviewJudgeRawOutput() || '暂无原始输出'"></pre>
+                      </details>
+
+                      <details open class="p-3">
+                        <summary class="cursor-pointer text-sm font-semibold text-slate-100">解析结果</summary>
+                        <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all border-t border-slate-800 pt-3 text-xs leading-5 text-slate-200" x-text="formatSkillTestReviewDebugJson(selectedSkillTestReviewJudgeParsedOutput())"></pre>
+                      </details>
+
+                      <details class="p-3">
+                        <summary class="cursor-pointer text-sm font-semibold text-slate-100">Usage / Provider Raw</summary>
+                        <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all border-t border-slate-800 pt-3 text-xs leading-5 text-slate-200" x-text="formatSkillTestReviewDebugJson({ usage: selectedSkillTestReviewJudgeUsage(), raw: selectedSkillTestReviewJudgeProviderRaw() })"></pre>
+                      </details>
+                    </div>
+                  </template>
+                </section>
+              </section>
+            </section>
+          </template>
+        </div>
+      </aside>
+    </div>
+  </section>
+</div>

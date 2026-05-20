@@ -1,7 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.api.dependencies import get_app_settings
 from app.api.schemas import HealthResponse, ServiceInfoResponse
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 
 
 root_router = APIRouter(tags=["system"])
@@ -37,20 +38,20 @@ def build_health(settings: Settings) -> HealthResponse:
 
 
 @root_router.get("/", response_model=ServiceInfoResponse)
-async def service_info() -> ServiceInfoResponse:
-    return build_service_info(get_settings())
+async def service_info(settings: Settings = Depends(get_app_settings)) -> ServiceInfoResponse:
+    return build_service_info(settings)
 
 
 @root_router.get("/healthz", response_model=HealthResponse)
-async def healthz() -> HealthResponse:
-    return build_health(get_settings())
+async def healthz(settings: Settings = Depends(get_app_settings)) -> HealthResponse:
+    return build_health(settings)
 
 
 @router.get("", response_model=ServiceInfoResponse)
-async def api_service_info() -> ServiceInfoResponse:
-    return build_service_info(get_settings())
+async def api_service_info(settings: Settings = Depends(get_app_settings)) -> ServiceInfoResponse:
+    return build_service_info(settings)
 
 
 @router.get("/health", response_model=HealthResponse)
-async def api_health() -> HealthResponse:
-    return build_health(get_settings())
+async def api_health(settings: Settings = Depends(get_app_settings)) -> HealthResponse:
+    return build_health(settings)

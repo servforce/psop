@@ -1,0 +1,136 @@
+<div class="h-full overflow-hidden border border-slate-800 bg-slate-900/40">
+  <div class="flex h-full min-h-0 flex-col divide-y divide-slate-800">
+    <header class="flex h-14 shrink-0 items-center justify-between gap-3 px-4">
+      <nav class="breadcrumb-bar min-w-0 flex-1 border-0 p-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/agent-prompts')">基本原则</button>
+        <span class="breadcrumb-separator">›</span>
+        <span class="truncate font-semibold text-slate-100" x-text="agentPromptDetail?.name"></span>
+      </nav>
+      <div class="flex shrink-0 items-center gap-2">
+        <button type="button" class="topbar-icon-button text-orange-200 hover:text-orange-100" title="新建 Draft" aria-label="新建 Draft" data-tooltip="新建 Draft" :disabled="busy.agentPromptAction" @click="createAgentPromptDraft()">
+          <span class="material-symbols-outlined text-[18px]">add</span>
+          <span class="sr-only">新建 Draft</span>
+        </button>
+        <button type="button" class="topbar-icon-button" title="刷新" aria-label="刷新" data-tooltip="刷新" :disabled="busy.agentPromptDetail" @click="loadAgentPromptDetail(agentPromptDetail.id, agentPromptSelectedVersionId)">
+          <span class="material-symbols-outlined text-[18px]">refresh</span>
+        </button>
+      </div>
+    </header>
+
+    <section class="grid min-h-0 flex-1 grid-cols-[12rem_minmax(0,1fr)_22rem] divide-x divide-slate-800">
+      <aside class="min-h-0 overflow-auto">
+        <div class="border-b border-slate-800 px-3 py-3">
+          <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Versions</p>
+        </div>
+        <div class="divide-y divide-slate-800">
+          <template x-for="version in agentPromptDetail.versions" :key="version.id">
+            <button type="button" class="w-full px-3 py-3 text-left transition hover:bg-slate-900/60" :class="version.id === agentPromptSelectedVersionId ? 'bg-orange-500/10' : ''" @click="selectAgentPromptVersion(version.id)">
+              <div class="flex items-center justify-between gap-2">
+                <span class="truncate text-sm font-semibold text-slate-100" x-text="version.version_label"></span>
+                <span class="rounded-full border px-2 py-0.5 text-[11px]" :class="agentPromptStatusClass(version.status)" x-text="agentPromptStatusLabel(version.status)"></span>
+              </div>
+              <p class="mono-field mt-2 truncate" x-text="shortPromptHash(version.content_hash)"></p>
+              <p class="mt-1 text-[11px] text-orange-200" x-show="version.id === agentPromptDetail.active_version_id">Active</p>
+            </button>
+          </template>
+        </div>
+      </aside>
+
+      <main class="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        <div class="flex h-12 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-slate-800 px-3">
+          <div class="scrollbar-none flex min-w-0 flex-1 items-center gap-2 overflow-x-auto overflow-y-hidden">
+            <template x-for="file in agentPromptFileNames()" :key="file">
+              <button type="button" class="shrink-0 rounded-md px-2 py-1 text-xs transition hover:bg-slate-800" :class="file === agentPromptSelectedFile ? 'bg-slate-800 text-slate-100' : 'text-slate-400'" @click="selectAgentPromptFile(file)" x-text="file"></button>
+            </template>
+          </div>
+          <div class="flex shrink-0 items-center gap-2">
+            <span class="mono-field" x-text="agentPromptSelectedFileLanguage()"></span>
+            <button type="button" class="topbar-icon-button" title="保存 Prompt 文件" aria-label="保存 Prompt 文件" data-tooltip="保存 Prompt 文件" :disabled="busy.agentPromptSave || selectedAgentPromptVersion()?.status !== 'draft'" @click="saveAgentPromptFileDraft()">
+              <span class="material-symbols-outlined text-[16px]">save</span>
+              <span class="sr-only">保存</span>
+            </button>
+          </div>
+        </div>
+        <textarea class="min-h-0 flex-1 resize-none border-0 bg-black/20 p-4 font-mono text-xs leading-6 text-slate-100 outline-none placeholder:text-slate-600" :readonly="selectedAgentPromptVersion()?.status !== 'draft'" :value="agentPromptFileDraft" @input="updateAgentPromptFileDraft($event.target.value)" placeholder="选择一个 Prompt Pack 文件"></textarea>
+      </main>
+
+      <aside class="flex min-h-0 flex-col overflow-hidden bg-slate-950/20" data-agent-prompt-info-panel>
+        <section class="flex h-full min-h-0 flex-col overflow-hidden" data-agent-prompt-info-subject="prompt">
+          <header class="flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-slate-800 px-3 py-2" data-info-panel-header>
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="material-symbols-outlined rounded-md border border-orange-500/30 bg-orange-500/10 p-1 text-[18px] text-orange-200">smart_toy</span>
+              <div class="min-w-0">
+                <h2 class="truncate text-base font-semibold leading-5 text-slate-100" x-text="agentPromptDetail.name"></h2>
+                <p class="mono-field mt-0.5 truncate" x-text="agentPromptDetail.key"></p>
+              </div>
+            </div>
+            <span class="status-badge shrink-0" :class="agentPromptStatusClass(selectedAgentPromptVersion()?.status)" x-text="agentPromptStatusLabel(selectedAgentPromptVersion()?.status)"></span>
+          </header>
+
+          <section class="grid shrink-0 grid-cols-2 border-b border-slate-800 text-xs" data-info-panel-basic>
+            <div class="border-b border-r border-slate-800 px-3 py-2">
+              <p class="field-label">Scenario</p>
+              <p class="mt-0.5 truncate text-xs font-semibold text-slate-100" x-text="agentPromptDetail.scenario"></p>
+            </div>
+            <div class="border-b border-slate-800 px-3 py-2">
+              <p class="field-label">Route</p>
+              <p class="mono-field mt-0.5 truncate" x-text="selectedAgentPromptVersion()?.route_key"></p>
+            </div>
+            <div class="border-r border-slate-800 px-3 py-2">
+              <p class="field-label">Version</p>
+              <p class="mono-field mt-0.5" x-text="selectedAgentPromptVersion()?.version_label"></p>
+            </div>
+            <div class="px-3 py-2">
+              <p class="field-label">Hash</p>
+              <p class="mono-field mt-0.5 truncate" x-text="shortPromptHash(selectedAgentPromptVersion()?.content_hash)"></p>
+            </div>
+          </section>
+
+          <section class="flex min-h-0 flex-1 flex-col overflow-hidden" data-info-panel-detail>
+            <div class="flex h-9 shrink-0 items-center overflow-x-auto border-b border-slate-800 bg-slate-950/40">
+              <button type="button" class="detail-tab detail-tab-active">版本</button>
+            </div>
+            <div class="min-h-0 flex-1 overflow-auto divide-y divide-slate-800">
+              <section class="p-3">
+                <div class="flex items-center justify-between gap-2">
+                  <h2 class="text-sm font-semibold text-slate-100">版本动作</h2>
+                </div>
+                <div class="mt-3 grid grid-cols-3 gap-2">
+                  <button type="button" class="button-secondary h-8 px-2 text-xs" :disabled="busy.agentPromptAction" @click="validateAgentPromptVersion()">校验</button>
+                  <button type="button" class="button-secondary h-8 px-2 text-xs" :disabled="busy.agentPromptAction || selectedAgentPromptVersion()?.status !== 'draft'" @click="publishAgentPromptVersion()">发布</button>
+                  <button type="button" class="button-primary h-8 px-2 text-xs" :disabled="busy.agentPromptAction || selectedAgentPromptVersion()?.status !== 'published'" @click="activateAgentPromptVersion()">启用</button>
+                </div>
+                <template x-if="agentPromptValidation">
+                  <div class="mt-3 border-t border-slate-800 pt-3">
+                    <p class="text-xs font-semibold" :class="agentPromptValidation.valid ? 'text-emerald-200' : 'text-rose-200'" x-text="agentPromptValidation.valid ? '校验通过' : '校验未通过'"></p>
+                    <template x-for="error in agentPromptValidation.errors" :key="`${error.path}-${error.field || ''}-${error.message}`">
+                      <p class="mt-2 text-xs leading-5 text-rose-200" x-text="`${error.path || ''} ${error.field || ''} ${error.message || ''}`"></p>
+                    </template>
+                  </div>
+                </template>
+              </section>
+
+              <section class="p-3">
+                <h2 class="text-sm font-semibold text-slate-100">Usage Bindings</h2>
+                <div class="mt-3 divide-y divide-slate-800 border-t border-slate-800">
+                  <template x-for="binding in agentPromptDetail.bindings" :key="binding.id">
+                    <div class="flex items-center justify-between gap-3 py-3">
+                      <div class="min-w-0">
+                        <p class="mono-field truncate" x-text="binding.usage_key"></p>
+                        <p class="mt-1 text-xs text-slate-400" x-text="binding.active_version_label || '未启用'"></p>
+                      </div>
+                      <button type="button" class="button-secondary h-8 px-2 text-xs" :disabled="busy.agentPromptAction || selectedAgentPromptVersion()?.status !== 'published'" @click="activateAgentPromptVersion(binding.usage_key)">绑定</button>
+                    </div>
+                  </template>
+                  <template x-if="agentPromptDetail.bindings.length === 0">
+                    <p class="py-3 text-xs text-slate-500">暂无 binding，启用时将创建默认 binding。</p>
+                  </template>
+                </div>
+              </section>
+            </div>
+          </section>
+        </section>
+      </aside>
+    </section>
+  </div>
+</div>

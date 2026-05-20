@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "required": [
+    "formal_revision",
+    "schema",
+    "nodes",
+    "init",
+    "halt",
+    "policies",
+    "dependency_graph_for_view",
+    "runtime_contract"
+  ],
+  "properties": {
+    "formal_revision": {
+      "const": "psop-eg-formal/v5"
+    },
+    "nodes": {
+      "type": "array"
+    },
+    "runtime_contract": {
+      "type": "object"
+    }
+  }
+}
+

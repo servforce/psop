@@ -1,0 +1,67 @@
+<div class="h-full overflow-hidden border border-slate-800 bg-slate-900/40">
+  <div class="flex h-full min-h-0 flex-col divide-y divide-slate-800">
+    <header class="flex h-14 shrink-0 items-center justify-between gap-3 px-4">
+      <div class="min-w-0">
+        <nav class="breadcrumb-bar border-0 p-0 text-xs" aria-label="Breadcrumb">
+          <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">PSOP</button>
+          <span class="breadcrumb-separator">›</span>
+          <span class="truncate font-semibold text-slate-100">基本原则</span>
+        </nav>
+      </div>
+      <button type="button" class="topbar-icon-button" title="刷新" aria-label="刷新" data-tooltip="刷新" :disabled="busy.agentPrompts" @click="loadAgentPrompts()">
+        <span class="material-symbols-outlined text-[18px]">refresh</span>
+        <span class="sr-only">刷新</span>
+      </button>
+    </header>
+
+    <section class="grid shrink-0 grid-cols-4 divide-x divide-slate-800 text-xs text-slate-400">
+      <div class="px-4 py-3">
+        <p>Prompt Packs</p>
+        <p class="mt-1 text-lg font-semibold text-slate-100" x-text="agentPrompts.length"></p>
+      </div>
+      <div class="px-4 py-3">
+        <p>Bindings</p>
+        <p class="mt-1 text-lg font-semibold text-slate-100" x-text="agentPromptBindings.length"></p>
+      </div>
+      <div class="px-4 py-3">
+        <p>Published</p>
+        <p class="mt-1 text-lg font-semibold text-slate-100" x-text="agentPrompts.filter((item) => item.active_version_id).length"></p>
+      </div>
+      <div class="px-4 py-3">
+        <p>Scenarios</p>
+        <p class="mt-1 text-lg font-semibold text-slate-100" x-text="new Set(agentPrompts.map((item) => item.scenario)).size"></p>
+      </div>
+    </section>
+
+    <section class="min-h-0 flex-1 overflow-auto divide-y divide-slate-800">
+      <template x-if="agentPrompts.length === 0 && !busy.agentPrompts">
+        <div class="px-4 py-10 text-sm text-slate-400">暂无 Agent Prompt Pack。</div>
+      </template>
+      <template x-for="prompt in agentPrompts" :key="prompt.id">
+        <button type="button" class="grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-4 px-4 py-3 text-left transition hover:bg-slate-900/60" @click="navigate(agentPromptPath(prompt.id))">
+          <div class="min-w-0">
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="material-symbols-outlined rounded-md border border-orange-500/30 bg-orange-500/10 p-1 text-[18px] text-orange-200">smart_toy</span>
+              <div class="min-w-0">
+                <p class="truncate text-sm font-semibold text-slate-100" x-text="prompt.name"></p>
+                <p class="mono-field mt-1 truncate" x-text="prompt.key"></p>
+              </div>
+            </div>
+          </div>
+          <div class="min-w-0">
+            <p class="text-xs text-slate-400">场景</p>
+            <p class="mt-1 truncate text-sm text-slate-200" x-text="prompt.scenario"></p>
+          </div>
+          <div class="min-w-0">
+            <p class="text-xs text-slate-400">绑定</p>
+            <p class="mono-field mt-1 truncate" x-text="agentPromptActiveBindingLabels(prompt)"></p>
+          </div>
+          <div class="min-w-0 text-right">
+            <p class="text-xs text-slate-400" x-text="prompt.active_version_label || '未启用'"></p>
+            <p class="mono-field mt-1 truncate" x-text="shortPromptHash(prompt.active_content_hash)"></p>
+          </div>
+        </button>
+      </template>
+    </section>
+  </div>
+</div>

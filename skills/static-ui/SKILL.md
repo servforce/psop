@@ -12,9 +12,9 @@
   - 静态资源：`/assets/*`、`/pages/*`、`/node_modules/*` -> `static/` 下同名目录
   - SPA：`/dashboard`、`/tasks`、`/symbols/...` 等路由会 fallback 到 `index.html`
 - 交互框架：提供统一的“应用壳（App Shell）”布局，包含顶部状态栏 + 左侧菜单 + 主体内容区
-  - 顶部状态栏：展示当前页面标题、全局状态（例如：同步状态/连接状态）、右侧操作区（例如：用户/设置入口）
-  - 左侧菜单：固定宽度，可滚动；至少包含 3 个一级菜单项；支持高亮当前项
-  - 主体内容区：通过左侧菜单切换路由（无需刷新页面），并 `fetch('pages/<route>.html')` 动态加载页面片段；注入 DOM 后调用 `Alpine.initTree(...)` 激活新页面
+  - 顶部状态栏：固定高度（默认 `h-14`），展示当前页面标题、全局状态（例如：同步状态/连接状态）、右侧操作区（例如：用户/设置入口）
+  - 左侧菜单：固定宽度；顶部品牌区高度必须与顶部状态栏一致（默认 `h-14`）；侧边栏自身高度必须为 `100%` / `h-dvh`，不随着右侧内容滚动；菜单列表在侧边栏内部独立滚动；至少包含 3 个一级菜单项；支持高亮当前项
+  - 主体内容区：通过左侧菜单切换路由（无需刷新页面），并 `fetch('pages/<route>.html')` 动态加载页面片段；注入 DOM 后调用 `Alpine.initTree(...)` 激活新页面；主体区域必须 `flex-1 min-h-0 overflow-hidden`，页面片段应自适应充满可视区域
 - 工具链尽量轻：不使用 Vite/webpack 等打包器；只在 `static/` 下用 Node + PostCSS 编译 Tailwind 输入样式
 - 依赖管理：以 `static/package.json`/`static/package-lock.json` 为唯一事实来源；新增依赖必须同时更新 lockfile（用 `npm install`），不要手写改 lockfile
 
@@ -105,13 +105,17 @@ static/
 - 用途：将 `static/index.html` 作为“Layout Cookbook/风格对齐页”，用于快速复制页面骨架与响应式写法；不承担复杂业务逻辑
 - 总体原则（与现有界面一致）：
   - 无外边距：页面主体默认贴边（主内容区不要默认 `p-*` / `mx-auto` / `max-w-*`），用“全高面板”贴边承载
-  - 固定头 + 滚动体：工具条/筛选区 `shrink-0`，内容区 `flex-1 min-h-0 overflow-auto`
-  - 用边框/分割线组织层级：面板用 `border` + `divide-y`；列表用 `divide-y`；尽量少用大阴影/大圆角做分隔
-  - 响应式优先：工具条 `flex-wrap`；按钮“图标常显、文案按断点隐藏（`hidden sm:inline`）”；输入控件 `max-w-full`
+  - 单层页级面板：页面只允许一个主要的页级全高面板；禁止出现“面板套面板 / 卡片再套卡片”的默认结构。面板内部的分区、摘要、筛选、列表、详情等内容，优先使用 `border-b`、`border-r`、`divide-y`、`divide-x` 等细线分隔，而不是继续包一层带边框/圆角/阴影的面板
+  - 充满可视区域：App Shell、主内容区、页面根容器、页级面板都应形成 `h-full min-h-0 flex flex-col` 链路；内容区使用 `flex-1 min-h-0 overflow-auto`，确保页面片段自适应吃满剩余可视高度与宽度
+  - 固定头 + 滚动体：工具条/筛选区 `shrink-0`，内容区 `flex-1 min-h-0 overflow-auto`；避免让 `body` 或整个右侧区域因局部列表变长而滚动
+  - 用边框/分割线组织层级：页级面板用 `border` + `divide-y`；内部内容用细线分隔；列表用 `divide-y`；尽量少用大阴影/大圆角做分隔
+  - 响应式优先：普通工具条可 `flex-wrap`；列表页搜索栏必须优先保持单行；按钮“图标常显、文案按断点隐藏（`hidden sm:inline`）”；输入控件 `max-w-full`
 - 常用页面布局建议（基于项目实际代码风格）：
   1) 工具条 + 可滚动列表（如 `tasks` / `symbols` / `signals` / `alerts` 等列表页）
-     - 面板：`border border-slate-800 bg-slate-900/40 overflow-hidden h-full flex flex-col min-h-0 divide-y divide-slate-800`
-     - 工具条：`px-4 py-3 flex flex-wrap items-center justify-between gap-3`
+     - 页级面板：`border border-slate-800 bg-slate-900/40 overflow-hidden h-full flex flex-col min-h-0 divide-y divide-slate-800`；这是该页面的唯一主要面板，内部不要再套同级别 `border + rounded + shadow` 的面板
+     - 搜索/筛选栏：`shrink-0 px-4 py-3 flex items-center gap-2 overflow-x-auto whitespace-nowrap`；搜索输入可 `flex-1 min-w-48`，筛选控件 `shrink-0`，尽量将所有搜索条件放在同一行
+     - 搜索控件数量：列表页只保留高价值筛选项，默认不超过 3–4 个；避免把大量搜索控件铺满工具条。复杂筛选应放入“更多筛选”弹层/抽屉，而不是常驻主工具条
+     - 即时搜索：去除“搜索”和“重置”按钮；控件值变化即触发查询（输入框用 `@input.debounce.300ms`，select/date/tag 用 `@change` 或对应组件的变更回调）。清空某个控件即视为重置该条件
      - 列表：`flex-1 min-h-0 overflow-auto divide-y divide-slate-800`；行：`p-4 hover:bg-slate-900/50`；行内：`flex-col sm:flex-row` 自适应
   2) 筛选条 + 自适应网格（网格页通用骨架）
      - 工具条放筛选控件（tag select / select / datetime / query），用 `flex flex-wrap gap-2`
@@ -139,6 +143,7 @@ static/
   <script src="node_modules/plotly.js/dist/plotly-basic.min.js"></script>
   <script src="node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
   <script defer src="node_modules/alpinejs/dist/cdn.min.js"></script>
+  ```
 
 ---
 
@@ -154,19 +159,24 @@ static/
   * 后续改色时，项目内优先修改 `docs/ui/theme.md`；不要把项目主题差异直接堆回本节默认值
   * 其它地方如出现颜色 class，应优先引用“Base / Primary / Danger / Warning / Info / Overlay”这些语义槽位，而不是分散定义
 
-  * Base（中性基底 / Slate）：
+  * Base（中性基底 / Neutral Gray）：
 
-    * 页面背景：bg-slate-950
-    * 面板背景：bg-slate-900/40（列表/面板主体），bg-slate-950/20（更弱的底）
-    * 顶栏背景：bg-slate-950/70（可 backdrop-blur）
+    * 页面背景：bg-slate-950（项目内重映射为 neutral gray，不带青绿色调）
+    * 面板背景：bg-slate-900/40（列表/面板主体），bg-slate-950/20（更弱的底；项目内重映射为 neutral gray）
+    * 顶栏背景：bg-slate-950/70（可 backdrop-blur；项目内重映射为 neutral gray）
     * 边框/分割线：border-slate-800、divide-slate-800
     * Hover：hover:bg-slate-900/50
     * 文字：主文 text-slate-200，次级 text-slate-300，弱化 text-slate-400 / text-slate-500，占位 placeholder-slate-500
-  * Primary（Emerald，主交互）：
+  * Primary（Orange，主交互）：
 
-    * 实心按钮：bg-emerald-500 text-slate-950 hover:bg-emerald-400
-    * 选中/强调（弱底）：bg-emerald-500/10 text-emerald-200 border-emerald-500/30
-    * Focus ring：focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/30
+    * 实心按钮：bg-orange-500 text-slate-950 hover:bg-orange-400
+    * 选中/强调（弱底）：bg-orange-500/10 text-orange-200 border-orange-500/30
+    * Focus ring：focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500/30
+    * 状态点：bg-orange-400
+  * Success（Emerald / Green，成功）：
+
+    * 成功/已发布/启用/已接受等代表成功含义的状态，必须使用绿色语义，不得使用 Primary Orange：bg-emerald-500/10 text-emerald-200 border-emerald-500/25
+    * 成功提示块：bg-emerald-500/10 text-emerald-100 border-emerald-500/25
     * 状态点：bg-emerald-400
   * Danger（Rose，危险/错误）：
 
@@ -200,27 +210,31 @@ static/
     * 数值统计：在容器上加 tabular-nums（如列表列/指标卡），避免数字跳动
 * 布局与层级（无边距 / 面板化）：
 
-  * App Shell：顶部栏固定高度（h-14），侧边栏固定宽度（展开 w-48，折叠 w-14）；顶部栏 sticky top-0，主内容区独立滚动
+  * App Shell：外层使用 `h-dvh overflow-hidden flex`；顶部栏固定高度（默认 `h-14`）；左侧品牌区高度必须与顶部栏一致（默认同为 `h-14`）；侧边栏固定宽度（展开 `w-48`，折叠 `w-14`），并使用 `h-full shrink-0 flex flex-col overflow-hidden`，其中品牌区 `shrink-0`、菜单列表 `flex-1 min-h-0 overflow-y-auto`；主内容区使用 `flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col` 并独立滚动
   * 主内容区默认“无外边距/无卡片外框”：不要默认使用外层 rounded-*/shadow/mx-auto/max-w-*；页面主体用一个“全高面板”贴边承载，通过 border/divide-y/半透明背景区分结构
+  * 禁止面板套面板：页级全高面板内部默认不再嵌套同视觉重量的面板；需要组织内容时优先使用细线分割（`border-b` / `border-r` / `divide-y` / `divide-x`）、弱背景条或紧凑 tile，避免“卡片海”和重复圆角边框
   * 全高面板推荐结构（需贯穿各视图一致）：
 
     * 容器：border border-slate-800 bg-slate-900/40 overflow-hidden h-full flex flex-col min-h-0 divide-y divide-slate-800
-    * 顶部工具条：shrink-0 px-4 py-3（可 flex flex-wrap）
-    * 内容区：flex-1 min-h-0 overflow-auto raelyn-scrollbar（列表用 divide-y；网格用 p-4 + grid）
+    * 顶部工具条：shrink-0 px-4 py-3（普通操作区可 `flex flex-wrap`；列表页搜索栏应使用单行 `flex items-center gap-2 overflow-x-auto whitespace-nowrap`）
+    * 内容区：flex-1 min-h-0 overflow-auto raelyn-scrollbar（列表用 divide-y；网格用 p-4 + grid；详情/分栏用 border/divide 细线分区）
   * “小卡片/Tile”仅用于面板内部的局部信息块（如统计卡、视频卡、弹窗），圆角更小（优先 rounded-md，必要时 rounded-lg），不作为页面默认外框
 * 组件风格（保持一致即可）：
 
-  * 按钮：Primary（bg-emerald-500 text-slate-950）、Secondary（border border-slate-700 bg-slate-950/20）、Danger（bg-rose-500/20 text-rose-200）三类；hover/disabled/焦点 ring 一致（focus:ring-emerald-500/30）
-  * 表单：input/select 默认使用 rounded-md border border-slate-700 bg-slate-950/30；focus 使用 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/30；错误态用 rose 文案与边框
+  * 按钮：Primary（bg-orange-500 text-slate-950）、Secondary（border border-slate-700 bg-slate-950/20）、Danger（bg-rose-500/20 text-rose-200）三类；hover/disabled/焦点 ring 一致（focus:ring-orange-500/30）
+  * 表单：input/select 默认使用 rounded-md border border-slate-700 bg-slate-950/30；focus 使用 focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500/30；错误态用 rose 文案与边框
+  * 列表页搜索栏：所有常驻搜索/筛选控件必须尽量在一行展示；不要堆叠多行筛选表单；不要提供独立“搜索”与“重置”按钮。控件值变化应立即驱动搜索状态并刷新列表，输入类控件使用防抖，筛选类控件直接触发。需要全量重置时可提供一个低优先级的“清空条件”文本动作或让用户逐项清空，但不要把它作为主按钮常驻
   * 多行文本输入：textarea、提示词编辑区、cookies 编辑区这类“大段文本编辑面板”不要直接沿用最深底色；优先使用更浅一层的 slate 背景，并把正文降到更柔和的 slate-300 左右，而不是高对比纯白，placeholder 保持 slate-400/500，caret 与 focus 反馈可以继续更亮，以减少长时间阅读/编辑的视觉疲劳
   * 贴边编辑器（Edge-to-edge editor）：适用于提示词、Markdown、JSON、cookies、长文本说明等“大段文本编辑”区域；外层面板负责边框、圆角、分割线，编辑器内容区默认与面板贴边，不再额外包一层 `p-*`
   * 贴边编辑器结构：头部/说明/错误提示作为独立分区放在编辑器上方，使用 `border-b` 分隔；编辑器本体优先 `block w-full rounded-none border-0`，仅保留文本阅读所需的 `px-4 py-3`
   * 贴边编辑器禁忌：不要给编辑器外再套一层 `p-4`；不要同时保留“外层面板边框 + textarea 自身边框 + rounded-lg”；视觉目标是“面板即编辑器表面”，不是“面板里再嵌一张卡片”
   * 贴边编辑器优先级：当“无边距面板化”与“通用表单控件样式”冲突时，普通 input/select 保持 `rounded-md border`，大段文本编辑器优先使用贴边编辑器模式，不套用通用 textarea 卡片样式
   * 贴边编辑器推荐配方：外层 `rounded-lg border border-slate-800 bg-slate-950/20 overflow-hidden`；头部 `px-4 py-3 border-b border-slate-800`；错误行 `px-4 py-3 text-xs text-rose-200 border-b border-rose-900/60`；textarea `block w-full h-64 rounded-none border-0 px-4 py-3 text-xs font-mono leading-5 resize-none focus:outline-none`
-  * 多选：优先使用 tag select 控件（“已选标签 + 搜索输入 + 下拉选项”），而不是原生 multi-select；需支持 Enter 添加第一个匹配项、Backspace 删除最后一个 tag、Esc 关闭下拉；窄屏可换行（flex-wrap）且不溢出（max-w-full）
+  * 可复制字段：所有支持复制的短文本/ID/URL/路径等字段，必须统一使用“不可编辑文本框 + 右侧复制按钮”的组合展示，不使用普通文本、pill、info-chip 或裸链接旁挂复制按钮。文本框使用 `readonly`，不可用 `disabled`（保留聚焦、选择与复制能力）；按钮紧贴文本框右侧，按钮高度必须与文本框一致，图标使用 Material Symbols 的 `content_copy` / `check`
+  * 可复制字段推荐结构：外层 `flex items-stretch min-w-0`；文本框 `h-11 flex-1 min-w-0 rounded-l-md rounded-r-none border border-r-0 ... font-mono select-all`；按钮 `h-11 w-11 shrink-0 rounded-l-none rounded-r-md ...`。长 URL/路径仍放入 readonly input 中，通过横向光标/全选处理，不改成多行正文
+  * 多选：优先使用 tag select 控件（“已选标签 + 搜索输入 + 下拉选项”），而不是原生 multi-select；需支持 Enter 添加第一个匹配项、Backspace 删除最后一个 tag、Esc 关闭下拉；列表页搜索栏中的 tag select 默认保持单行紧凑展示，必要时在控件内部横向滚动或收纳，而不是撑高整条搜索栏
   * 列表/表格：优先用 divide-y divide-slate-800；行 p-4 hover:bg-slate-900/50；空状态/加载态需要占位（如 暂无数据、加载中…）
-  * 徽标/状态：pill badge 统一 rounded-full border bg-slate-950/30 text-[11px]；状态点用小圆点 + 文本
+  * 徽标/状态：pill badge 统一 `rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]`；状态标签必须按状态语义区分 tone，不使用单一主色覆盖所有状态。成功/已发布/启用/已接受等代表成功含义的状态必须用 Emerald / Green，不得用 Primary Orange；运行中/编译中用 Sky，待处理/排队/草稿用 Amber，失败/拒绝/取消/超时用 Rose，归档/跳过/未知用 Slate。状态点同样按语义用对应色
   * 弹窗：遮罩 bg-black/60；内容容器 rounded-lg border border-slate-800 bg-slate-900 shadow-lg p-4
 * 交互细节：
 
@@ -266,14 +280,21 @@ static/
 ### 路由与 App Shell
 
 * App Shell 必须包含：顶部状态栏 + 左侧菜单 + 主体内容区
+* 顶部状态栏高度必须与左侧菜单顶部品牌区高度一致（默认同为 `h-14`）
+* 左侧菜单栏必须为 `h-full` / `h-dvh`，不随右侧主内容滚动；菜单列表只在侧栏内部滚动
 * 左侧菜单切换路由无需刷新页面
 * 主体内容区必须通过 `fetch('pages/<route>.html')` 动态加载页面片段
 * 页面片段注入 DOM 后必须调用 `Alpine.initTree(...)` 激活新页面
 * `assets/js/components/frame.js` 的路由切换逻辑里：在 `innerHTML` 赋值后应**立即**对注入容器执行 `Alpine.initTree(container)`，确保新 DOM 被 Alpine 识别（不要延后到下一次交互才初始化）。
 * 左侧菜单至少包含 3 个一级菜单项，并支持高亮当前项
+* App Shell、主内容区、页面根容器与页级面板必须形成完整的 `h-full min-h-0 flex flex-col` 链路，页面内容应自适应充满可视区域
 
 ### 页面片段规范
 
+* 页面片段根容器必须优先使用 `h-full min-h-0 flex flex-col`，并让页级面板吃满可视区域
+* 页面应使用单层页级面板；内部区块通过细线、分割线、弱背景和紧凑 tile 组织信息，避免默认面板套面板
+* 列表页搜索/筛选栏必须单行展示常驻控件，去除“搜索/重置”主按钮，并在控件值变化时即时触发搜索
+* 所有支持复制的字段必须使用 readonly 文本框 + 右侧等高复制按钮；不得用普通文本/链接/徽标旁挂复制按钮替代
 * `pages/*.html` 必须是片段：不要包含 `<!doctype> / <html> / <head> / <body> / <script>`
 * 如页面需要交互：顶层容器使用 `x-data="xxxPage"` 并在 `assets/js/init-alpine.js` 注册对应组件
 * 新增/改动路由与菜单：更新 `assets/js/components/frame.js` 的 `menuItems` 与路由映射逻辑
@@ -299,4 +320,3 @@ static/
 
 * 只修改/新增必要文件；不要引入新框架或打包器
 * 输出时必须标明文件路径；并仅给出你修改/新增文件的完整内容
-

@@ -4,8 +4,8 @@ const postcss = require("postcss");
 const loadPostcssConfig = require("../postcss.config.js");
 
 const rootDir = path.resolve(__dirname, "..");
-const inputFile = path.join(rootDir, "assets/css/style.css");
-const outputFile = path.join(rootDir, "assets/css/style.compiled.css");
+const inputFile = path.join(rootDir, "css/style.css");
+const outputFile = path.join(rootDir, "css/style.compiled.css");
 const watchMode = process.argv.includes("--watch");
 
 async function compileCss() {
@@ -39,7 +39,7 @@ compileCss().catch((error) => {
 
 if (watchMode) {
   console.log("[build:css] 进入监听模式");
-  fs.watch(path.join(rootDir, "assets"), { recursive: true }, async (_eventType, fileName) => {
+  fs.watch(path.join(rootDir, "css"), { recursive: true }, async (_eventType, fileName) => {
     if (!fileName || !fileName.endsWith(".css")) {
       return;
     }

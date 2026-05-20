@@ -1,0 +1,75 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
+      <nav class="breadcrumb-bar border-0 pb-0" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-950" @click="navigate('/admin/invocations')">运行</button>
+      </nav>
+    </div>
+
+    <div class="grid gap-5 border-b border-slate-200 bg-slate-50/80 p-5 xl:grid-cols-[18rem_1fr_auto]">
+      <label class="field-block">
+        <span class="field-label">Skill</span>
+        <select x-model="invocationForm.skill_key" class="input-field">
+          <option value="">请选择 Skill</option>
+          <template x-for="skill in skills.filter((item) => item.latest_published_commit_sha)" :key="skill.id">
+            <option :value="skill.key" x-text="skill.name"></option>
+          </template>
+        </select>
+      </label>
+      <label class="field-block">
+        <span class="field-label">连接说明（可选）</span>
+        <input x-model="invocationForm.user_input" class="input-field" placeholder="可选：补充终端环境或现场背景" @keydown.enter.prevent="createInvocation()" />
+      </label>
+      <div class="flex items-end">
+        <button type="button" class="button-primary" title="建立真实运行连接" aria-label="建立真实运行连接" :disabled="busy.createInvocation" @click="createInvocation()">
+          <span class="material-symbols-outlined text-[18px]">play_circle</span>
+          <span x-text="busy.createInvocation ? '连接中...' : '建立连接'"></span>
+        </button>
+      </div>
+    </div>
+
+    <div class="grid min-w-[56rem] grid-cols-[1fr_120px_180px_180px] gap-4 border-b border-slate-200 bg-white px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+      <span>Invocation</span>
+      <span>状态</span>
+      <span>Artifact</span>
+      <span>创建时间</span>
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-auto">
+      <template x-if="invocations.length === 0">
+        <div class="empty-state h-full min-h-80">
+          <span class="material-symbols-outlined text-[32px] text-slate-400">play_circle</span>
+          <p class="mt-3 text-base font-medium text-slate-950">暂无运行记录</p>
+          <p class="mt-2 text-sm text-slate-500">提交上方表单后会创建 invocation 和 run。</p>
+        </div>
+      </template>
+
+      <template x-if="invocations.length > 0">
+        <div class="divide-y divide-slate-200">
+          <template x-for="invocation in invocations" :key="invocation.id">
+            <article
+              class="grid min-w-[56rem] grid-cols-[1fr_120px_180px_180px] items-center gap-4 bg-white px-5 py-4 transition"
+              :class="invocation.run_id ? 'cursor-pointer hover:bg-slate-900/60' : 'cursor-default opacity-80'"
+              :role="invocation.run_id ? 'button' : null"
+              :tabindex="invocation.run_id ? 0 : -1"
+              :aria-label="invocation.run_id ? '打开运行现场' : '暂无运行现场'"
+              @click="invocation.run_id && navigate(`/admin/runs/${invocation.run_id}/live`)"
+              @keydown.enter.prevent="invocation.run_id && navigate(`/admin/runs/${invocation.run_id}/live`)"
+              @keydown.space.prevent="invocation.run_id && navigate(`/admin/runs/${invocation.run_id}/live`)"
+            >
+              <div class="min-w-0">
+                <p class="mono-field truncate" x-text="invocation.id"></p>
+                <p class="mt-1 truncate text-xs text-slate-500" x-text="JSON.stringify(invocation.input_envelope)"></p>
+              </div>
+              <div><span class="status-badge" :class="statusBadgeTone(invocation.status)" x-text="formatStatus(invocation.status)"></span></div>
+              <div class="mono-field" x-text="formatShortId(invocation.compile_artifact_id)"></div>
+              <div class="mono-field" x-text="formatDateTime(invocation.created_at)"></div>
+            </article>
+          </template>
+        </div>
+      </template>
+    </div>
+  </section>
+</div>

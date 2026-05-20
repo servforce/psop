@@ -3,8 +3,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const rootDir = path.resolve(__dirname, "..");
-const host = "127.0.0.1";
-const port = Number(process.env.PORT || 4173);
+const host = process.env.HOST || process.env.PSOP_WEB_HOST || "0.0.0.0";
+const port = Number(process.env.PORT || process.env.PSOP_WEB_PORT || 4173);
+const apiBaseUrl = process.env.PSOP_WEB_API_BASE_URL || "";
+const serverPort = String(process.env.PSOP_SERVER_PORT || 8001);
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -40,6 +42,36 @@ function resolveFilePath(requestPath) {
 }
 
 const server = http.createServer((req, res) => {
+  const requestPath = decodeURIComponent((req.url || "/").split("?")[0]);
+
+  if (requestPath === "/js/runtime-config.js") {
+    res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+    res.end(`(function () {
+  const configuredApiBaseUrl = ${JSON.stringify(apiBaseUrl)};
+  const serverPort = ${JSON.stringify(serverPort)};
+  const privateHostPattern = /^(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|10\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[0-1])\\.)/;
+  const browserApiHost = window.location.hostname === "0.0.0.0" ? "127.0.0.1" : window.location.hostname;
+  const browserHostApiBaseUrl = window.location.protocol + "//" + browserApiHost + ":" + serverPort + "/api/v1";
+  let apiBaseUrl = configuredApiBaseUrl || browserHostApiBaseUrl;
+
+  if (!configuredApiBaseUrl || configuredApiBaseUrl.startsWith("/")) {
+    apiBaseUrl = browserHostApiBaseUrl;
+  }
+
+  try {
+    const configuredUrl = new URL(configuredApiBaseUrl, window.location.origin);
+    if (privateHostPattern.test(configuredUrl.hostname) && configuredUrl.hostname !== window.location.hostname) {
+      apiBaseUrl = browserHostApiBaseUrl;
+    }
+  } catch {
+    apiBaseUrl = browserHostApiBaseUrl;
+  }
+
+  window.__PSOP_API_BASE_URL = apiBaseUrl;
+})();\n`);
+    return;
+  }
+
   const filePath = resolveFilePath(req.url || "/");
 
   if (!filePath) {
@@ -55,4 +87,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, host, () => {
   console.log(`[dev] static scaffold available at http://${host}:${port}`);
+  console.log(`[dev] API base URL injected as ${apiBaseUrl}`);
 });

@@ -1,0 +1,17 @@
+agent_id: psop.skill_compilation.formal_v5_compile
+version: v1
+scenario: skill_compilation
+route_key: default
+description: Compile frozen PSOP Skill source into formal-v5 EG candidates.
+inputs:
+  - skill metadata
+  - frozen manifest snapshot
+  - frozen README.md and SKILL.md
+  - optional domain pack guidance
+outputs:
+  - formal-v5 EG candidate JSON object
+constraints:
+  formal_revision: psop-eg-formal/v5
+  artifact_version: psop-eg-formal-v5/llm-compiler-mvp-v1
+  json_only: true
+

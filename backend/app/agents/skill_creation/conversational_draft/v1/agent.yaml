@@ -1,0 +1,9 @@
+agent_id: psop.skill_creation.conversational_draft
+version: v1
+scenario: skill_creation
+route_key: default
+description: Build reviewable PSOP Skill source drafts from user intent and raw materials.
+outputs:
+  - README.md draft
+  - SKILL.md draft
+  - prompt and test scaffolding
