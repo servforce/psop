@@ -4,7 +4,9 @@ import hashlib
 import json
 import posixpath
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from math import isfinite
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -35,6 +37,10 @@ from app.domain.skill_tests.schemas import (
     SkillTestScenarioReviewResponse,
     SkillTestScenarioRunResponse,
     SkillTestScenarioRunSummary,
+    SkillTestStageActualOutputResponse,
+    SkillTestStageHumanReviewResponse,
+    SkillTestStageJudgeResultResponse,
+    SkillTestStageOutputResponse,
     SkillTestScenarioUpdateRequest,
     StartSkillTestScenarioRunRequest,
 )
@@ -52,13 +58,38 @@ TERMINAL_RUNTIME_STATUSES = {"succeeded", "failed", "cancelled"}
 DEFAULT_JUDGE_TRANSCRIPT_BUDGET_CHARS = 60_000
 DEFAULT_JUDGE_EVENT_BUDGET_CHARS = 8_000
 DEFAULT_JUDGE_FINAL_OUTPUT_BUDGET_CHARS = 8_000
+
+
+@dataclass(frozen=True, slots=True)
+class SkillTestAssetContent:
+    content: bytes
+    mime_type: str
+    filename: str
+
+
 DEFAULT_TIMELINE_LANES = [
+    {"id": "sensor.gps", "kind": "input", "label": "GPS", "event_kind": "sensor.gps.reading.v1", "mime_type": "application/json"},
+    {
+        "id": "sensor.pose3d",
+        "kind": "input",
+        "label": "三轴定位",
+        "event_kind": "sensor.pose3d.reading.v1",
+        "mime_type": "application/json",
+    },
     {"id": "input.text", "kind": "input", "label": "文本", "event_kind": "terminal.text.input.v1"},
     {"id": "input.image", "kind": "input", "label": "图片", "event_kind": "terminal.image.input.v1"},
     {"id": "input.audio", "kind": "input", "label": "音频", "event_kind": "terminal.audio.input.v1"},
     {"id": "input.video", "kind": "input", "label": "视频", "event_kind": "terminal.video.input.v1"},
-    {"id": "expected.semantic", "kind": "output", "label": "语义输出"},
+    {"id": "expected.semantic", "kind": "output", "label": "文本"},
 ]
+SENSOR_LANE_REQUIRED_FIELDS = {
+    "sensor.gps": ("latitude", "longitude"),
+    "sensor.pose3d": ("x", "y", "z"),
+}
+SENSOR_LANE_NUMERIC_FIELDS = {
+    "sensor.gps": ("latitude", "longitude", "altitude", "accuracy_m"),
+    "sensor.pose3d": ("x", "y", "z", "roll", "pitch", "yaw"),
+}
 
 
 class SkillTestService:
@@ -219,6 +250,27 @@ class SkillTestService:
         self._get_scenario(session, skill_id, scenario_id)
         return [self._build_asset_response(item) for item in self.repository.list_assets(session, scenario_id)]
 
+    def get_asset_content(
+        self,
+        session: Session,
+        skill_id: str,
+        scenario_id: str,
+        asset_id: str,
+    ) -> SkillTestAssetContent:
+        scenario = self._get_scenario(session, skill_id, scenario_id)
+        asset = self.repository.get_asset(session, asset_id)
+        if not asset or asset.scenario_id != scenario.id:
+            raise SkillNotFoundError("未找到测试资源。", details={"asset_id": asset_id})
+        artifact_object = self.repository.get_artifact_object(session, asset.artifact_object_id)
+        if not artifact_object:
+            raise SkillNotFoundError("未找到测试资源对象。", details={"artifact_object_id": asset.artifact_object_id})
+        content = self.object_store.download_bytes(bucket=artifact_object.bucket, object_key=artifact_object.object_key)
+        return SkillTestAssetContent(
+            content=content,
+            mime_type=asset.mime_type or artifact_object.media_type or "application/octet-stream",
+            filename=asset.filename or "asset.bin",
+        )
+
     def delete_asset(
         self,
         session: Session,
@@ -310,6 +362,36 @@ class SkillTestService:
         session.commit()
         return self._build_run_response(scenario_run)
 
+    def cancel_run(self, session: Session, scenario_run_id: str, *, reason: str = "cancelled by user") -> SkillTestScenarioRunResponse:
+        scenario_run = self._get_scenario_run(session, scenario_run_id)
+        self._sync_scenario_run_from_runtime(session, scenario_run)
+        if scenario_run.status in {"passed", "failed"}:
+            raise SkillValidationError("测试运行已结束，不能终止。", details={"scenario_run_id": scenario_run_id, "status": scenario_run.status})
+        if scenario_run.status == "cancelled":
+            self._cancel_driver_job(session, scenario_run, reason=reason)
+            session.commit()
+            return self._build_run_response(scenario_run)
+
+        if scenario_run.run_id:
+            self.runtime_service.cancel_run(session, scenario_run.run_id, reason=reason or "cancelled by user")
+            self._sync_scenario_run_from_runtime(session, scenario_run)
+        else:
+            scenario_run.status = "cancelled"
+            scenario_run.driver_status = "cancelled"
+            scenario_run.ended_at = scenario_run.ended_at or now_utc()
+
+        scenario_run.status = "cancelled"
+        scenario_run.driver_status = "cancelled"
+        scenario_run.ended_at = scenario_run.ended_at or now_utc()
+        scenario_run.result_summary = {
+            **(scenario_run.result_summary or {}),
+            "status": "cancelled",
+            "reason": reason or "cancelled by user",
+        }
+        self._cancel_driver_job(session, scenario_run, reason=reason)
+        session.commit()
+        return self._build_run_response(scenario_run)
+
     def process_driver_job(self, session: Session, job_id: str) -> SkillTestScenarioRunResponse:
         job = self.job_repository.get_runtime_job(session, job_id)
         if not job:
@@ -336,6 +418,9 @@ class SkillTestService:
             raise SkillNotFoundError("未找到测试场景关联 Run。", details={"run_id": scenario_run.run_id})
 
         self._sync_scenario_run_from_runtime(session, scenario_run, run=run)
+        if scenario_run.status == "cancelled" or scenario_run.driver_status == "cancelled":
+            session.commit()
+            return self._build_run_response(scenario_run)
         input_events = self._timeline_input_events(scenario_run.timeline)
         now = now_utc()
         cursor = max(0, min(scenario_run.driver_cursor, len(input_events)))
@@ -357,6 +442,23 @@ class SkillTestService:
             event = input_events[cursor]
             scheduled_at = self._scenario_time(scenario_run, int(event.get("at_ms") or 0))
             if scheduled_at > now:
+                if sent_any:
+                    run = self._process_runtime_after_timeline_batch(session, scenario_run) or run
+                    now = now_utc()
+                    if run.status in TERMINAL_RUNTIME_STATUSES and cursor < len(input_events):
+                        scenario_run.status = "failed"
+                        scenario_run.driver_status = "failed"
+                        scenario_run.ended_at = scenario_run.ended_at or now
+                        scenario_run.result_summary = {
+                            **(scenario_run.result_summary or {}),
+                            "status": "failed",
+                            "reason": "runtime_ended_before_required_inputs_sent",
+                            "remaining_input_event_ids": [item["id"] for item in input_events[cursor:]],
+                        }
+                        session.commit()
+                        return self._build_run_response(scenario_run)
+                    if scheduled_at <= now:
+                        continue
                 scenario_run.driver_status = "waiting_time"
                 scenario_run.driver_cursor = cursor
                 self._ensure_driver_job_pending(session, scenario_run, available_at=scheduled_at)
@@ -382,26 +484,12 @@ class SkillTestService:
             cursor += 1
             scenario_run.driver_cursor = cursor
             sent_any = True
-            run = self.repository.get_run(session, scenario_run.run_id) or run
-            self._sync_scenario_run_from_runtime(session, scenario_run, run=run)
             now = now_utc()
-            if run.status in TERMINAL_RUNTIME_STATUSES and cursor < len(input_events):
-                scenario_run.status = "failed"
-                scenario_run.driver_status = "failed"
-                scenario_run.ended_at = scenario_run.ended_at or now
-                scenario_run.result_summary = {
-                    **(scenario_run.result_summary or {}),
-                    "status": "failed",
-                    "reason": "runtime_ended_before_required_inputs_sent",
-                    "remaining_input_event_ids": [item["id"] for item in input_events[cursor:]],
-                }
-                session.commit()
-                return self._build_run_response(scenario_run)
 
         scenario_run.driver_status = "completed"
         scenario_run.driver_cursor = cursor
         if sent_any:
-            self._sync_scenario_run_from_runtime(session, scenario_run)
+            self._process_runtime_after_timeline_batch(session, scenario_run)
         session.commit()
         return self.evaluate_run(session, scenario_run.id)
 
@@ -411,15 +499,22 @@ class SkillTestService:
         self._sync_scenario_run_from_runtime(session, scenario_run)
         replay = self.runtime_service.build_replay(session, scenario_run.run_id) if scenario_run.run_id else None
         evaluations = self.repository.list_expectation_evaluations(session, scenario_run.id)
+        cursor_anchors = self._build_cursor_anchors(scenario_run, replay)
         return SkillTestScenarioReviewResponse(
             scenario=self._build_scenario_response(session, scenario),
             scenario_run=self._build_run_response(scenario_run),
             replay=replay.model_dump(mode="json") if replay else None,
             scenario_timeline=scenario_run.timeline or scenario.timeline,
             replay_timeline=[item.model_dump(mode="json") for item in replay.timeline] if replay else [],
-            cursor_anchors=self._build_cursor_anchors(scenario_run, replay),
+            cursor_anchors=cursor_anchors,
             driver_events=list(scenario_run.driver_events or []),
             expectation_evaluations=[self._build_evaluation_response(item) for item in evaluations],
+            stage_outputs=self._build_stage_outputs(
+                scenario_run=scenario_run,
+                replay=replay,
+                evaluations=evaluations,
+                cursor_anchors=cursor_anchors,
+            ),
         )
 
     def evaluate_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRunResponse:
@@ -509,6 +604,13 @@ class SkillTestService:
             status="active",
         )
         session.add(scenario)
+        session.flush()
+        scenario.timeline = self._copy_referenced_assets_for_fork(
+            session,
+            source_scenario=source_scenario,
+            target_scenario=scenario,
+            timeline=timeline,
+        )
         session.commit()
         return self._build_scenario_response(session, scenario)
 
@@ -596,6 +698,7 @@ class SkillTestService:
                 external_event_id=f"skill-test-scenario-run:{scenario_run.id}:timeline:{event['id']}",
                 occurred_at=scheduled_at,
             ),
+            process_after_append=False,
         )
 
     def _evaluate_expectation(
@@ -715,6 +818,12 @@ class SkillTestService:
         session.add(job)
         return job
 
+    def _cancel_driver_job(self, session: Session, scenario_run: SkillTestScenarioRun, *, reason: str = "cancelled by user") -> None:
+        job = self.job_repository.get_runtime_job_by_dedupe_key(session, f"job:skill-test-timeline-driver:{scenario_run.id}")
+        if job and job.status not in {"succeeded", "failed", "cancelled"}:
+            job.status = "cancelled"
+            job.last_error = reason or "cancelled by user"
+
     def _sync_scenario_run_from_runtime(
         self,
         session: Session,
@@ -731,6 +840,11 @@ class SkillTestService:
             scenario_run.status = "cancelled"
             scenario_run.driver_status = "cancelled"
             scenario_run.ended_at = scenario_run.ended_at or runtime_run.ended_at or now_utc()
+            scenario_run.result_summary = {
+                **(scenario_run.result_summary or {}),
+                "status": "cancelled",
+                "reason": runtime_run.exit_reason or "runtime_cancelled",
+            }
         elif runtime_run.status == "failed":
             scenario_run.status = "failed"
             scenario_run.ended_at = scenario_run.ended_at or runtime_run.ended_at or now_utc()
@@ -744,6 +858,18 @@ class SkillTestService:
             scenario_run.ended_at = scenario_run.ended_at or runtime_run.ended_at
         else:
             scenario_run.status = runtime_run.status if runtime_run.status in OPEN_SCENARIO_RUN_STATUSES else "running"
+
+    def _process_runtime_after_timeline_batch(self, session: Session, scenario_run: SkillTestScenarioRun) -> Run | None:
+        if not scenario_run.run_id:
+            return None
+        run = self.repository.get_run(session, scenario_run.run_id)
+        if not run:
+            return None
+        if not self.settings.runtime_worker_enabled and run.status not in TERMINAL_RUNTIME_STATUSES:
+            self.runtime_service.process_run(session, run.id)
+            run = self.repository.get_run(session, scenario_run.run_id) or run
+        self._sync_scenario_run_from_runtime(session, scenario_run, run=run)
+        return run
 
     def _get_open_scenario_run(self, session: Session, scenario: SkillTestScenario) -> SkillTestScenarioRun | None:
         for item in self.repository.list_open_runs(session, scenario.id):
@@ -780,14 +906,24 @@ class SkillTestService:
         if not version or version.skill_definition_id != skill_id:
             raise SkillValidationError("指定编译产物不属于当前 Skill。", details={"compile_artifact_id": artifact_id})
 
+    @staticmethod
+    def _normalize_timeline_lanes(lanes: Any) -> list[dict[str, Any]]:
+        raw_lanes = [dict(item) for item in lanes if isinstance(item, dict) and item.get("id")] if isinstance(lanes, list) else []
+        raw_by_id: dict[str, dict[str, Any]] = {}
+        for item in raw_lanes:
+            lane_id = str(item["id"])
+            raw_by_id.setdefault(lane_id, {**item, "id": lane_id})
+        default_ids = {item["id"] for item in DEFAULT_TIMELINE_LANES}
+        normalized = [{**raw_by_id.get(item["id"], {}), **item} for item in DEFAULT_TIMELINE_LANES]
+        normalized.extend({**item, "id": str(item["id"])} for item in raw_lanes if str(item["id"]) not in default_ids)
+        return normalized
+
     def _normalize_timeline(self, value: dict[str, Any] | None, *, duration_ms: int) -> dict[str, Any]:
         raw = value if isinstance(value, dict) else {}
         normalized_duration = int(raw.get("duration_ms") or duration_ms or DEFAULT_TIMELINE_DURATION_MS)
         if normalized_duration < 1:
             raise SkillValidationError("测试场景时长必须大于 0。", details={"duration_ms": normalized_duration})
-        lanes = raw.get("lanes")
-        if not isinstance(lanes, list) or not lanes:
-            lanes = DEFAULT_TIMELINE_LANES
+        lanes = self._normalize_timeline_lanes(raw.get("lanes"))
         lane_ids = {str(item.get("id")) for item in lanes if isinstance(item, dict) and item.get("id")}
         events = raw.get("events")
         normalized_events: list[dict[str, Any]] = []
@@ -829,6 +965,12 @@ class SkillTestService:
         else:
             normalized["event_kind"] = str(event.get("event_kind") or self._default_event_kind_for_lane(lane_id))
             normalized["mime_type"] = str(event.get("mime_type") or self._default_mime_for_lane(lane_id))
+            if self._is_sensor_lane(lane_id):
+                normalized["payload_inline"] = self._normalize_sensor_payload(
+                    lane_id=lane_id,
+                    payload=event.get("payload_inline"),
+                    event_id=event_id,
+                )
         return normalized
 
     @staticmethod
@@ -868,6 +1010,43 @@ class SkillTestService:
     def _is_expectation_event(event: dict[str, Any]) -> bool:
         return event.get("lane_id") == "expected.semantic" or "expectation" in event
 
+    @staticmethod
+    def _is_sensor_lane(lane_id: str) -> bool:
+        return lane_id in SENSOR_LANE_REQUIRED_FIELDS
+
+    def _normalize_sensor_payload(self, *, lane_id: str, payload: Any, event_id: str) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise SkillValidationError(
+                "传感器事件 payload_inline 必须是对象。",
+                details={"event_id": event_id, "lane_id": lane_id},
+            )
+        normalized = dict(payload)
+        for field_name in SENSOR_LANE_REQUIRED_FIELDS[lane_id]:
+            if field_name not in normalized or normalized[field_name] in ("", None):
+                raise SkillValidationError(
+                    "传感器事件缺少必填数值字段。",
+                    details={"event_id": event_id, "lane_id": lane_id, "field": field_name},
+                )
+        for field_name in SENSOR_LANE_NUMERIC_FIELDS[lane_id]:
+            if field_name not in normalized or normalized[field_name] in ("", None):
+                continue
+            try:
+                normalized[field_name] = float(normalized[field_name])
+            except (TypeError, ValueError):
+                raise SkillValidationError(
+                    "传感器事件字段必须是数值。",
+                    details={"event_id": event_id, "lane_id": lane_id, "field": field_name},
+                ) from None
+            if not isfinite(normalized[field_name]):
+                raise SkillValidationError(
+                    "传感器事件字段必须是有限数值。",
+                    details={"event_id": event_id, "lane_id": lane_id, "field": field_name},
+                )
+        timestamp = normalized.get("timestamp")
+        if timestamp is not None:
+            normalized["timestamp"] = str(timestamp)
+        return normalized
+
     def _timeline_input_events(self, timeline: dict[str, Any]) -> list[dict[str, Any]]:
         return [item for item in timeline.get("events", []) if isinstance(item, dict) and not self._is_expectation_event(item)]
 
@@ -883,6 +1062,17 @@ class SkillTestService:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value
+
+    @classmethod
+    def _coerce_datetime(cls, value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return cls._aware_datetime(value)
+        if isinstance(value, str) and value.strip():
+            try:
+                return cls._aware_datetime(datetime.fromisoformat(value.replace("Z", "+00:00")))
+            except ValueError:
+                return None
+        return None
 
     def _payload_for_asset_event(self, event: dict[str, Any], asset: SkillTestAsset) -> dict[str, Any]:
         raw_payload = event.get("payload_inline")
@@ -915,6 +1105,10 @@ class SkillTestService:
 
     @staticmethod
     def _default_event_kind_for_lane(lane_id: str) -> str:
+        if lane_id == "sensor.gps":
+            return "sensor.gps.reading.v1"
+        if lane_id == "sensor.pose3d":
+            return "sensor.pose3d.reading.v1"
         if "image" in lane_id:
             return "terminal.image.input.v1"
         if "audio" in lane_id:
@@ -925,6 +1119,8 @@ class SkillTestService:
 
     @staticmethod
     def _default_mime_for_lane(lane_id: str) -> str:
+        if lane_id in SENSOR_LANE_REQUIRED_FIELDS:
+            return "application/json"
         if "image" in lane_id:
             return "image/*"
         if "audio" in lane_id:
@@ -1147,16 +1343,16 @@ class SkillTestService:
         }
 
     def _fork_timeline(self, timeline: dict[str, Any], *, time_ms: int) -> dict[str, Any]:
-        duration_ms = max(1000, int(timeline.get("duration_ms") or DEFAULT_TIMELINE_DURATION_MS) - time_ms)
+        duration_ms = max(1000, int(timeline.get("duration_ms") or DEFAULT_TIMELINE_DURATION_MS))
         events: list[dict[str, Any]] = []
         for item in timeline.get("events", []):
             if not isinstance(item, dict):
                 continue
             at_ms = int(item.get("at_ms") or 0)
-            if at_ms < time_ms:
+            if at_ms > time_ms:
                 continue
             shifted = dict(item)
-            shifted["at_ms"] = at_ms - time_ms
+            shifted["at_ms"] = at_ms
             shifted["id"] = f"fork_{shifted.get('id') or uuid.uuid4()}"
             events.append(shifted)
         return self._normalize_timeline(
@@ -1169,6 +1365,158 @@ class SkillTestService:
             duration_ms=duration_ms,
         )
 
+    def _copy_referenced_assets_for_fork(
+        self,
+        session: Session,
+        *,
+        source_scenario: SkillTestScenario,
+        target_scenario: SkillTestScenario,
+        timeline: dict[str, Any],
+    ) -> dict[str, Any]:
+        asset_ids = []
+        seen_asset_ids = set()
+        for event in timeline.get("events", []):
+            if not isinstance(event, dict) or not event.get("asset_id"):
+                continue
+            asset_id = str(event["asset_id"])
+            if asset_id in seen_asset_ids:
+                continue
+            seen_asset_ids.add(asset_id)
+            asset_ids.append(asset_id)
+        if not asset_ids:
+            return timeline
+
+        asset_id_map: dict[str, str] = {}
+        for asset_id in asset_ids:
+            asset = self.repository.get_asset(session, asset_id)
+            if not asset or asset.skill_definition_id != source_scenario.skill_definition_id:
+                raise SkillValidationError("Fork 时间轴引用的测试资源不存在。", details={"asset_id": asset_id})
+            forked_asset_id = str(uuid.uuid4())
+            asset_id_map[asset_id] = forked_asset_id
+            session.add(
+                SkillTestAsset(
+                    id=forked_asset_id,
+                    skill_definition_id=target_scenario.skill_definition_id,
+                    scenario_id=target_scenario.id,
+                    artifact_object_id=asset.artifact_object_id,
+                    name=asset.name,
+                    description=asset.description,
+                    lane_id=asset.lane_id,
+                    filename=asset.filename,
+                    mime_type=asset.mime_type,
+                    size_bytes=asset.size_bytes,
+                    checksum=asset.checksum,
+                )
+            )
+
+        remapped_events = []
+        for event in timeline.get("events", []):
+            if not isinstance(event, dict):
+                continue
+            remapped = dict(event)
+            asset_id = str(remapped.get("asset_id") or "")
+            if asset_id in asset_id_map:
+                remapped["asset_id"] = asset_id_map[asset_id]
+            remapped_events.append(remapped)
+        return self._normalize_timeline(
+            {
+                **timeline,
+                "events": remapped_events,
+            },
+            duration_ms=int(timeline.get("duration_ms") or target_scenario.duration_ms),
+        )
+
+    def _build_stage_outputs(
+        self,
+        *,
+        scenario_run: SkillTestScenarioRun,
+        replay,
+        evaluations: list[SkillTestExpectationEvaluation],
+        cursor_anchors: list[dict[str, Any]],
+    ) -> list[SkillTestStageOutputResponse]:
+        stage_events = sorted(
+            self._timeline_expectation_events(scenario_run.timeline),
+            key=lambda item: (int(item.get("at_ms") or 0), str(item.get("id") or "")),
+        )
+        evaluation_by_id = {item.expectation_id: item for item in evaluations}
+        output_events = []
+        if replay:
+            output_events = sorted(
+                [item for item in replay.terminal_events if getattr(item, "direction", "") == "output"],
+                key=lambda item: (self._terminal_event_at_ms(scenario_run, item), int(getattr(item, "seq_no", 0) or 0)),
+            )
+
+        previous_stage_ms = -1
+        stage_outputs: list[SkillTestStageOutputResponse] = []
+        for stage_event in stage_events:
+            stage_id = str(stage_event["id"])
+            stage_time_ms = int(stage_event.get("at_ms") or 0)
+            actual_outputs = [
+                self._build_stage_actual_output(scenario_run, item)
+                for item in output_events
+                if previous_stage_ms < self._terminal_event_at_ms(scenario_run, item) <= stage_time_ms
+            ]
+            stage_outputs.append(
+                SkillTestStageOutputResponse(
+                    stage_id=stage_id,
+                    event_id=stage_id,
+                    time_ms=stage_time_ms,
+                    expectation=str(stage_event.get("expectation") or ""),
+                    actual_outputs=actual_outputs,
+                    judge_result=self._build_stage_judge_result(evaluation_by_id.get(stage_id)),
+                    human_review=SkillTestStageHumanReviewResponse(),
+                    cursor=self._cursor_for_time_ms(stage_time_ms, cursor_anchors),
+                )
+            )
+            previous_stage_ms = stage_time_ms
+        return stage_outputs
+
+    def _build_stage_actual_output(self, scenario_run: SkillTestScenarioRun, event: Any) -> SkillTestStageActualOutputResponse:
+        seq_no = self._event_value(event, "seq_no")
+        event_id = str(self._event_value(event, "id") or f"terminal_output_{seq_no or uuid.uuid4()}")
+        return SkillTestStageActualOutputResponse(
+            id=f"stage_output_{event_id}",
+            terminal_event_id=event_id,
+            seq_no=int(seq_no) if seq_no is not None else None,
+            at_ms=self._terminal_event_at_ms(scenario_run, event),
+            occurred_at=self._coerce_datetime(self._event_value(event, "occurred_at")),
+            event_kind=str(self._event_value(event, "event_kind") or ""),
+            mime_type=str(self._event_value(event, "mime_type") or ""),
+            payload_inline=self._event_value(event, "payload_inline"),
+        )
+
+    @staticmethod
+    def _build_stage_judge_result(evaluation: SkillTestExpectationEvaluation | None) -> SkillTestStageJudgeResultResponse:
+        if not evaluation:
+            return SkillTestStageJudgeResultResponse()
+        return SkillTestStageJudgeResultResponse(
+            status=evaluation.status,
+            confidence=evaluation.confidence,
+            reason=evaluation.reason,
+            evidence_refs=evaluation.evidence_refs,
+            judge_provider=evaluation.judge_provider,
+            judge_model=evaluation.judge_model,
+            prompt_hash=evaluation.prompt_hash,
+            evaluation_id=evaluation.id,
+            created_at=evaluation.created_at,
+        )
+
+    def _terminal_event_at_ms(self, scenario_run: SkillTestScenarioRun, event: Any) -> int:
+        origin = self._aware_datetime(scenario_run.time_origin or scenario_run.started_at or scenario_run.created_at)
+        occurred_at = self._coerce_datetime(self._event_value(event, "occurred_at"))
+        if not occurred_at:
+            return 0
+        return max(0, int((self._aware_datetime(occurred_at) - origin).total_seconds() * 1000))
+
+    def _cursor_for_time_ms(self, time_ms: int, cursor_anchors: list[dict[str, Any]]) -> dict[str, int]:
+        cutoff_ms = max(0, int(time_ms or 0))
+        eligible = [item for item in cursor_anchors if int(item.get("time_ms") or 0) <= cutoff_ms]
+        return {
+            "time_ms": cutoff_ms,
+            "terminal_seq": max([int(item.get("terminal_seq") or 0) for item in eligible] or [0]),
+            "snapshot_seq": max([int(item.get("snapshot_seq") or 0) for item in eligible] or [0]),
+        }
+
     def _build_cursor_anchors(self, scenario_run: SkillTestScenarioRun, replay) -> list[dict[str, Any]]:
         if not replay:
             return []
@@ -1176,17 +1524,19 @@ class SkillTestService:
         snapshots = sorted(replay.snapshots, key=lambda item: item.seq_no)
         anchors: list[dict[str, Any]] = []
         latest_snapshot_seq = 0
+        latest_terminal_seq = 0
         for item in replay.timeline:
             occurred_at = self._aware_datetime(item.occurred_at)
             while snapshots and self._aware_datetime(snapshots[0].created_at) <= occurred_at:
                 latest_snapshot_seq = snapshots.pop(0).seq_no
             payload = item.payload if isinstance(item.payload, dict) else {}
-            terminal_seq = int(payload.get("seq_no") or 0) if item.event_type == "terminal.event.appended" else 0
+            if item.event_type == "terminal.event.appended":
+                latest_terminal_seq = max(latest_terminal_seq, int(payload.get("seq_no") or 0))
             anchors.append(
                 {
                     "time_ms": max(0, int((occurred_at - origin).total_seconds() * 1000)),
                     "occurred_at": item.occurred_at.isoformat(),
-                    "terminal_seq": terminal_seq,
+                    "terminal_seq": latest_terminal_seq,
                     "snapshot_seq": latest_snapshot_seq,
                     "event_type": item.event_type,
                 }

@@ -101,7 +101,7 @@
       },
 
 
-      async loadSkillDetail(skillId) {
+      async loadSkillDetail(skillId, options = {}) {
         this.busy.detail = true;
         try {
           const detail = await this.apiRequest(`/skills/${skillId}`);
@@ -128,7 +128,7 @@
           if (this.activeDetailTab === "debug") {
             await this.loadInvocations(detail.key);
           }
-          if (this.activeDetailTab === "test") {
+          if (this.activeDetailTab === "test" && options.loadTestCases !== false) {
             await this.loadSkillTestCases(detail.id);
           }
         } finally {

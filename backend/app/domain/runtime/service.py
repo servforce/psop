@@ -656,6 +656,7 @@ class RuntimeService:
         payload: AppendTerminalEventRequest,
         *,
         idempotency_key: str | None = None,
+        process_after_append: bool = True,
     ) -> TerminalEventAppendResponse:
         run = self.repository.get_run(session, run_id)
         if not run:
@@ -699,7 +700,7 @@ class RuntimeService:
         )
         if payload.direction == "input":
             self._ensure_runtime_job_pending(session, run)
-        if run.status == "waiting_input":
+        if run.status == "waiting_input" and process_after_append:
             session.commit()
             self.process_run(session, run.id)
             event = session.get(TerminalEvent, event.id) or event

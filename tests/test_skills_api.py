@@ -1539,7 +1539,28 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
             data={"name": "伞骨图片", "description": "测试图片", "lane_id": "input.image"},
             files={"file": ("umbrella.png", b"fake-image", "image/png")},
         )
+        uploaded_asset = upload_response.json()
+        patched_timeline = copy.deepcopy(scenario["timeline"])
+        patched_timeline["events"].append(
+            {
+                "id": "fault_photo",
+                "lane_id": "input.image",
+                "at_ms": 0,
+                "event_kind": "terminal.image.input.v1",
+                "mime_type": "image/*",
+                "asset_id": uploaded_asset["id"],
+                "payload_inline": "伞骨近照",
+            }
+        )
+        patch_response = client.patch(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}",
+            json={"timeline": patched_timeline},
+        )
+        scenario = patch_response.json()
         assets_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets")
+        asset_content_response = client.get(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets/{uploaded_asset['id']}/content"
+        )
         old_case_response = client.get(f"/api/v1/skills/{created['id']}/test-cases")
         old_runs_response = client.get("/api/v1/skill-test-runs/not-found")
 
@@ -1558,33 +1579,51 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
             f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-scenario",
             json={"cursor": cursor, "name": "从切面继续的场景"},
         )
+        forked = fork_response.json()
+        fork_assets_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios/{forked['id']}/assets")
+        fork_asset_content_response = client.get(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{forked['id']}/assets/{fork_assets_response.json()[0]['id']}/content"
+        )
         fork_debug_response = client.post(
             f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-debug",
             json={"cursor": cursor},
         )
 
     assert scenario_response.status_code == 201
+    lane_ids = [lane["id"] for lane in scenario["timeline"]["lanes"]]
+    assert lane_ids[:2] == ["sensor.gps", "sensor.pose3d"]
+    assert scenario["timeline"]["lanes"][-1] == {"id": "expected.semantic", "kind": "output", "label": "文本"}
     assert scenario["timeline"]["schema_version"] == "psop-skill-test-timeline/v1"
     assert upload_response.status_code == 201
+    assert patch_response.status_code == 200
     assert upload_response.json()["mime_type"] == "image/png"
     assert assets_response.json()[0]["id"] == upload_response.json()["id"]
+    assert asset_content_response.status_code == 200
+    assert asset_content_response.content == b"fake-image"
+    assert asset_content_response.headers["content-type"] == "image/png"
+    assert "umbrella.png" in asset_content_response.headers["content-disposition"]
     assert old_case_response.status_code == 404
     assert old_runs_response.status_code == 404
 
     assert start_response.status_code == 202
     assert scenario_run["driver_status"] == "completed"
-    assert scenario_run["driver_cursor"] == 1
+    assert scenario_run["driver_cursor"] == 2
     assert scenario_run["result_summary"]["total"] == 1
     assert scenario_run["result_summary"]["passed"] == 1
     assert scenario_run["status"] == "passed"
-    assert [event["event_id"] for event in scenario_run["driver_events"]] == ["initial_fault_context"]
+    assert sorted(event["event_id"] for event in scenario_run["driver_events"]) == ["fault_photo", "initial_fault_context"]
 
     terminal_events = terminal_events_response.json()
     scripted_inputs = [event for event in terminal_events if event["direction"] == "input"]
-    assert [event["payload_inline"] for event in scripted_inputs] == ["请检查这把伞如何修复"]
-    assert scripted_inputs[0]["external_event_id"] == (
+    text_inputs = [event for event in scripted_inputs if event["event_kind"] == "terminal.text.input.v1"]
+    image_inputs = [event for event in scripted_inputs if event["event_kind"] == "terminal.image.input.v1"]
+    assert [event["payload_inline"] for event in text_inputs] == ["请检查这把伞如何修复"]
+    assert text_inputs[0]["external_event_id"] == (
         f"skill-test-scenario-run:{scenario_run['id']}:timeline:initial_fault_context"
     )
+    assert image_inputs[0]["payload_inline"]["asset_id"] == upload_response.json()["id"]
+    assert image_inputs[0]["payload_inline"]["name"] == "伞骨图片"
+    assert image_inputs[0]["payload_inline"]["caption"] == "伞骨近照"
     assert any(event["direction"] == "output" and "测试任务已完成" in str(event["payload_inline"]) for event in terminal_events)
     assert any(job["job_type"] == "skill_test_timeline_driver" and job["status"] == "succeeded" for job in jobs_response.json())
     assert any(call["route_key"] == "skill-test-judge" for call in fake_inference.calls)
@@ -1612,9 +1651,18 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert runs_response.json()[0]["id"] == scenario_run["id"]
 
     assert fork_response.status_code == 201
-    forked = fork_response.json()
     assert forked["fork_seed"]["source_scenario_run_id"] == scenario_run["id"]
     assert forked["fork_seed"]["terminal_seq"] == cursor["terminal_seq"]
+    forked_image_event = next(event for event in forked["timeline"]["events"] if event["id"] == "fork_fault_photo")
+    forked_assets = fork_assets_response.json()
+    assert fork_assets_response.status_code == 200
+    assert forked_image_event["asset_id"] != upload_response.json()["id"]
+    assert forked_assets[0]["id"] == forked_image_event["asset_id"]
+    assert forked_assets[0]["name"] == "伞骨图片"
+    assert forked_assets[0]["filename"] == "umbrella.png"
+    assert forked_assets[0]["artifact_object_id"] == upload_response.json()["artifact_object_id"]
+    assert fork_asset_content_response.status_code == 200
+    assert fork_asset_content_response.content == b"fake-image"
     assert fork_debug_response.status_code == 201
     assert fork_debug_response.json()["terminal_context"]["operator_mode"] == "debug"
     assert fork_debug_response.json()["terminal_context"]["debug_context"]["kind"] == "skill_debug"
@@ -1690,18 +1738,209 @@ def test_skill_test_scenario_fork_uses_selected_timeline_time() -> None:
         )
 
     assert scenario_response.status_code == 201
+    lane_ids = [lane["id"] for lane in scenario["timeline"]["lanes"]]
+    assert lane_ids[:2] == ["sensor.gps", "sensor.pose3d"]
+    assert scenario["timeline"]["lanes"][-1]["label"] == "文本"
     assert start_response.status_code == 202
     assert fork_response.status_code == 201
 
     forked = fork_response.json()
-    assert forked["duration_ms"] == 6000
+    assert forked["duration_ms"] == 10000
+    assert forked["timeline"]["duration_ms"] == 10000
     assert forked["fork_seed"]["time_ms"] == 4000
     assert forked["fork_seed"]["terminal_seq"] == 7
     assert [(event["id"], event["at_ms"]) for event in forked["timeline"]["events"]] == [
-        ("fork_late_input", 4000),
-        ("fork_expect_after_late", 5000),
+        ("fork_early_input", 1000),
+        ("fork_middle_input", 3000),
     ]
-    assert [event["payload_inline"] for event in forked["timeline"]["events"] if event["lane_id"] == "input.text"] == ["后续输入"]
+    assert [event["payload_inline"] for event in forked["timeline"]["events"] if event["lane_id"] == "input.text"] == ["早期输入", "中段输入"]
+
+
+def test_skill_test_scenario_run_can_be_cancelled() -> None:
+    client, _, _ = create_test_client()
+
+    timeline = {
+        "schema_version": "psop-skill-test-timeline/v1",
+        "duration_ms": 60000,
+        "lanes": [
+            {"id": "input.text", "kind": "input", "label": "文本"},
+            {"id": "expected.semantic", "kind": "output", "label": "文本"},
+        ],
+        "events": [
+            {
+                "id": "delayed_input",
+                "lane_id": "input.text",
+                "at_ms": 60000,
+                "payload_inline": "一分钟后才发送的输入",
+            },
+            {
+                "id": "expect_delayed",
+                "lane_id": "expected.semantic",
+                "at_ms": 60000,
+                "expectation": "系统应处理延迟输入。",
+            },
+        ],
+    }
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "skill-test-scenario-cancel",
+                "name": "Skill Test Scenario Cancel",
+                "description": "Validate cancelling a running skill test scenario.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Scenario cancel publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        scenario_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios",
+            json={"name": "可终止运行场景", "duration_ms": 60000, "timeline": timeline},
+        )
+        scenario = scenario_response.json()
+        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        scenario_run = start_response.json()
+        cancel_response = client.post(
+            f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/cancel",
+            json={"reason": "用户终止测试"},
+        )
+        runtime_run_response = client.get(f"/api/v1/runs/{scenario_run['run_id']}")
+        terminal_session_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}")
+        jobs_response = client.get("/api/v1/runtime/jobs", params={"job_type": "skill_test_timeline_driver"})
+        review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
+        second_cancel_response = client.post(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/cancel", json={})
+
+    assert scenario_response.status_code == 201
+    assert start_response.status_code == 202
+    assert scenario_run["driver_status"] == "waiting_time"
+    assert cancel_response.status_code == 200
+    cancelled = cancel_response.json()
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["driver_status"] == "cancelled"
+    assert cancelled["ended_at"]
+    assert cancelled["result_summary"]["status"] == "cancelled"
+    assert cancelled["result_summary"]["reason"] == "用户终止测试"
+    assert runtime_run_response.json()["status"] == "cancelled"
+    assert runtime_run_response.json()["exit_reason"] == "用户终止测试"
+    assert terminal_session_response.json()["terminal_session"]["status"] == "closed"
+    driver_jobs = [job for job in jobs_response.json() if job["payload"].get("scenario_run_id") == scenario_run["id"]]
+    assert driver_jobs[0]["status"] == "cancelled"
+    assert review_response.json()["scenario_run"]["status"] == "cancelled"
+    assert second_cancel_response.status_code == 200
+    assert second_cancel_response.json()["status"] == "cancelled"
+
+
+def test_skill_test_scenario_sensor_timeline_review_stage_outputs_and_fork() -> None:
+    client, _, _ = create_test_client()
+
+    timeline = {
+        "schema_version": "psop-skill-test-timeline/v1",
+        "duration_ms": 5000,
+        "events": [
+            {
+                "id": "gps_start",
+                "lane_id": "sensor.gps",
+                "at_ms": 0,
+                "payload_inline": {"latitude": "31.2304", "longitude": "121.4737", "accuracy_m": "3.5"},
+            },
+            {
+                "id": "pose_start",
+                "lane_id": "sensor.pose3d",
+                "at_ms": 0,
+                "payload_inline": {"x": "1.1", "y": "2.2", "z": "3.3", "yaw": "90"},
+            },
+            {
+                "id": "operator_context",
+                "lane_id": "input.text",
+                "at_ms": 0,
+                "payload_inline": "现场已到达目标设备。",
+            },
+            {
+                "id": "stage_confirm_arrival",
+                "lane_id": "expected.semantic",
+                "at_ms": 5000,
+                "expectation": "系统应基于定位和现场输入确认到达目标设备。",
+            },
+        ],
+    }
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "skill-test-sensors",
+                "name": "Skill Test Sensors",
+                "description": "Validate sensor lanes in skill test timelines.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Sensor scenario publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+
+        scenario_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios",
+            json={"name": "传感器输入阶段场景", "duration_ms": 5000, "timeline": timeline},
+        )
+        scenario = scenario_response.json()
+        patched_timeline = copy.deepcopy(scenario["timeline"])
+        next(event for event in patched_timeline["events"] if event["lane_id"] == "sensor.gps")["payload_inline"]["accuracy_m"] = 2.5
+        patch_response = client.patch(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}",
+            json={"timeline": patched_timeline},
+        )
+        reloaded_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}")
+
+        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        scenario_run = start_response.json()
+        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}/events")
+        review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
+        stage_output = review_response.json()["stage_outputs"][0]
+        fork_response = client.post(
+            f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-scenario",
+            json={"cursor": stage_output["cursor"], "name": "从到达确认阶段继续"},
+        )
+
+    assert scenario_response.status_code == 201
+    lane_ids = [lane["id"] for lane in scenario["timeline"]["lanes"]]
+    assert lane_ids[:2] == ["sensor.gps", "sensor.pose3d"]
+    assert scenario["timeline"]["lanes"][-1]["label"] == "文本"
+    gps_event = next(event for event in scenario["timeline"]["events"] if event["lane_id"] == "sensor.gps")
+    pose_event = next(event for event in scenario["timeline"]["events"] if event["lane_id"] == "sensor.pose3d")
+    assert gps_event["event_kind"] == "sensor.gps.reading.v1"
+    assert gps_event["mime_type"] == "application/json"
+    assert gps_event["payload_inline"]["latitude"] == 31.2304
+    assert pose_event["event_kind"] == "sensor.pose3d.reading.v1"
+
+    assert patch_response.status_code == 200
+    assert reloaded_response.json()["timeline"]["events"][0]["payload_inline"]["accuracy_m"] == 2.5
+
+    assert start_response.status_code == 202
+    terminal_events = terminal_events_response.json()
+    sensor_events = [event for event in terminal_events if event["event_kind"].startswith("sensor.")]
+    assert [event["event_kind"] for event in sensor_events] == ["sensor.gps.reading.v1", "sensor.pose3d.reading.v1"]
+    assert sensor_events[0]["payload_inline"]["accuracy_m"] == 2.5
+    assert sensor_events[1]["payload_inline"]["yaw"] == 90.0
+
+    assert review_response.status_code == 200
+    assert stage_output["stage_id"] == "stage_confirm_arrival"
+    assert stage_output["time_ms"] == 5000
+    assert stage_output["expectation"] == "系统应基于定位和现场输入确认到达目标设备。"
+    assert stage_output["actual_outputs"]
+    assert stage_output["judge_result"]["status"] == "passed"
+    assert stage_output["human_review"] == {"status": "pending", "reviewer": None, "reason": "", "updated_at": None}
+    assert stage_output["cursor"]["time_ms"] == 5000
+    assert stage_output["cursor"]["terminal_seq"] >= 3
+
+    assert fork_response.status_code == 201
+    assert fork_response.json()["fork_seed"]["time_ms"] == 5000
+    assert fork_response.json()["fork_seed"]["terminal_seq"] == stage_output["cursor"]["terminal_seq"]
 
 
 def test_skill_test_judge_prompt_compacts_large_outputs() -> None:

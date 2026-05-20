@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_skill_test_service
 from app.domain.runtime.schemas import InvocationResponse
 from app.domain.skill_tests.schemas import (
+    CancelSkillTestScenarioRunRequest,
     DeleteSkillTestAssetResponse,
     ForkSkillDebugRequest,
     ForkSkillTestScenarioRequest,
@@ -108,6 +111,23 @@ def list_test_scenario_assets(
     return service.list_assets(session, skill_id, scenario_id)
 
 
+@router.get("/skills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}/content")
+def get_test_scenario_asset_content(
+    skill_id: str,
+    scenario_id: str,
+    asset_id: str,
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> Response:
+    asset_content = service.get_asset_content(session, skill_id, scenario_id, asset_id)
+    encoded_filename = quote(asset_content.filename)
+    return Response(
+        content=asset_content.content,
+        media_type=asset_content.mime_type,
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}"},
+    )
+
+
 @router.delete(
     "/skills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}",
     response_model=DeleteSkillTestAssetResponse,
@@ -150,6 +170,16 @@ def get_test_scenario_run(
     service: SkillTestService = Depends(get_skill_test_service),
 ) -> SkillTestScenarioRunResponse:
     return service.get_run(session, scenario_run_id)
+
+
+@router.post("/skill-test-scenario-runs/{scenario_run_id}/cancel", response_model=SkillTestScenarioRunResponse)
+def cancel_test_scenario_run(
+    scenario_run_id: str,
+    payload: CancelSkillTestScenarioRunRequest | None = None,
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> SkillTestScenarioRunResponse:
+    return service.cancel_run(session, scenario_run_id, reason=(payload.reason if payload else "cancelled by user"))
 
 
 @router.get("/skill-test-scenario-runs/{scenario_run_id}/review", response_model=SkillTestScenarioReviewResponse)

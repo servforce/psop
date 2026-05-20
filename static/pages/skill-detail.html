@@ -1406,7 +1406,7 @@
                                 </button>
                               </template>
                               <template x-if="isSkillTestTimelineEventExpanded(item.event)">
-                                <article class="space-y-2 rounded-md border p-3 shadow-xl shadow-black/50" :class="skillTestTimelineExpandedEventTone(skillTestTimelineEditorEvent(item.event))">
+                                <article class="space-y-2 rounded-md border p-2 shadow-xl shadow-black/50" :class="skillTestTimelineExpandedEventTone(skillTestTimelineEditorEvent(item.event))">
                                   <div class="flex items-center justify-between gap-2">
                                     <div class="flex min-w-0 items-center gap-2">
                                       <span class="material-symbols-outlined shrink-0 text-[16px]" x-text="skillTestTimelineLaneIcon(skillTestTimelineEditorEvent(item.event).lane_id)"></span>
@@ -1414,30 +1414,59 @@
                                     </div>
                                     <span class="font-mono text-[10px]" x-text="formatSkillTestTimelineMs(skillTestTimelineEditorEvent(item.event).at_ms)"></span>
                                   </div>
-                                  <div class="grid grid-cols-[5.25rem_minmax(0,1fr)] gap-2">
+                                  <div class="grid grid-cols-[4.75rem_minmax(0,1fr)] gap-2">
                                     <label class="field-block">
                                       <span class="field-label">时间 s</span>
-                                      <input type="number" min="0" step="1" class="number-no-spinner input-field h-10 px-3 py-0 text-xs leading-normal" :value="skillTestTimelineEventSeconds(skillTestTimelineEditorEvent(item.event))" @input="updateSkillTestTimelineEventDraft('at_ms', Math.max(0, Math.round(Number($event.target.value || 0))) * 1000)" />
+                                      <input type="number" min="0" step="1" class="number-no-spinner input-field h-9 px-3 py-0 text-xs leading-normal" :value="skillTestTimelineEventSeconds(skillTestTimelineEditorEvent(item.event))" @input="updateSkillTestTimelineEventDraft('at_ms', Math.max(0, Math.round(Number($event.target.value || 0))) * 1000)" />
                                     </label>
                                     <label class="field-block">
                                       <span class="field-label">信道</span>
-                                      <input class="input-field h-10 cursor-not-allowed px-3 py-0 text-xs leading-normal text-slate-400" :value="skillTestTimelineLaneLabel({ id: skillTestTimelineEditorEvent(item.event).lane_id })" disabled />
+                                      <input class="input-field h-9 cursor-not-allowed px-3 py-0 text-xs leading-normal text-slate-400" :value="skillTestTimelineLaneLabel({ id: skillTestTimelineEditorEvent(item.event).lane_id })" disabled />
                                     </label>
                                   </div>
                                   <template x-if="skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event))">
                                     <label class="field-block">
                                       <span class="field-label">上传文件</span>
-                                      <span class="flex h-10 cursor-pointer items-center overflow-hidden rounded-md border border-slate-700 bg-slate-950 px-3 text-xs text-slate-100 transition hover:border-orange-500/40 hover:bg-slate-900">
-                                        <span class="shrink-0 rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-300">选择文件</span>
+                                      <span class="flex h-8 cursor-pointer items-center overflow-hidden rounded-md border border-slate-700 bg-slate-950 px-2 text-xs text-slate-100 transition hover:border-orange-500/40 hover:bg-slate-900">
+                                        <span class="shrink-0 rounded border border-slate-700 px-1.5 py-0.5 text-[11px] font-semibold text-slate-300">选择文件</span>
                                         <span class="ml-2 min-w-0 truncate" :class="skillTestTimelineEditorEvent(item.event).asset_id ? 'text-slate-100' : 'text-slate-500'" x-text="skillTestTimelineEventAssetLabel(skillTestTimelineEditorEvent(item.event))"></span>
                                       </span>
                                       <input type="file" class="sr-only" :accept="skillTestTimelineAcceptForLane(skillTestTimelineEditorEvent(item.event).lane_id)" :disabled="busy.skillTestData" @change="handleSkillTestTimelineEventFile($event)" />
                                     </label>
                                   </template>
-                                  <label class="field-block">
-                                    <span class="field-label" x-text="isSkillTestTimelineExpectationEvent(skillTestTimelineEditorEvent(item.event)) ? '语义期望' : skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event)) ? '说明' : '输入内容'"></span>
-                                    <textarea class="input-field h-20 resize-none text-xs" :value="skillTestTimelineEventTextValue(skillTestTimelineEditorEvent(item.event))" :placeholder="skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event)) ? '可选：描述该文件输入的上下文' : ''" @input="updateSkillTestTimelineEventDraft(isSkillTestTimelineExpectationEvent(skillTestTimelineEditorEvent(item.event)) ? 'expectation' : 'payload_inline', $event.target.value)"></textarea>
-                                  </label>
+                                  <template x-if="skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event)) && skillTestTimelineAssetPreviewUrl(skillTestTimelineEditorEvent(item.event))">
+                                    <div class="space-y-2" data-skill-test-asset-preview>
+                                      <div class="flex items-center justify-between gap-2">
+                                        <p class="field-label">内容预览</p>
+                                        <span class="mono-field min-w-0 truncate text-right" x-text="skillTestTimelineAssetPreviewMeta(skillTestTimelineEditorEvent(item.event))"></span>
+                                      </div>
+                                      <template x-if="skillTestTimelineAssetPreviewKind(skillTestTimelineEditorEvent(item.event)) === 'image'">
+                                        <img class="max-h-44 w-full border border-slate-800 bg-slate-950 object-contain" :src="skillTestTimelineAssetPreviewUrl(skillTestTimelineEditorEvent(item.event))" :alt="skillTestTimelineEventAssetLabel(skillTestTimelineEditorEvent(item.event))" />
+                                      </template>
+                                      <template x-if="skillTestTimelineAssetPreviewKind(skillTestTimelineEditorEvent(item.event)) === 'audio'">
+                                        <audio class="w-full" controls preload="metadata" :src="skillTestTimelineAssetPreviewUrl(skillTestTimelineEditorEvent(item.event))"></audio>
+                                      </template>
+                                      <template x-if="skillTestTimelineAssetPreviewKind(skillTestTimelineEditorEvent(item.event)) === 'video'">
+                                        <video class="max-h-44 w-full border border-slate-800 bg-black object-contain" controls preload="metadata" :src="skillTestTimelineAssetPreviewUrl(skillTestTimelineEditorEvent(item.event))"></video>
+                                      </template>
+                                    </div>
+                                  </template>
+                                  <template x-if="isSkillTestSensorLane(skillTestTimelineEditorEvent(item.event).lane_id)">
+                                    <div class="grid grid-cols-2 gap-2" data-skill-test-sensor-fields>
+                                      <template x-for="field in skillTestSensorFields(skillTestTimelineEditorEvent(item.event).lane_id)" :key="field.key">
+                                        <label class="field-block">
+                                          <span class="field-label" x-text="field.required ? `${field.label} *` : field.label"></span>
+                                          <input class="input-field h-9 px-3 py-0 text-xs leading-normal" :type="field.type" :step="field.type === 'number' ? 'any' : undefined" :value="skillTestSensorFieldValue(skillTestTimelineEditorEvent(item.event), field.key)" @input="updateSkillTestTimelineSensorField(field.key, $event.target.value)" />
+                                        </label>
+                                      </template>
+                                    </div>
+                                  </template>
+                                  <template x-if="!isSkillTestSensorLane(skillTestTimelineEditorEvent(item.event).lane_id)">
+                                    <label class="field-block">
+                                      <span class="field-label" x-text="isSkillTestTimelineExpectationEvent(skillTestTimelineEditorEvent(item.event)) ? '阶段期望' : skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event)) ? '说明' : '输入内容'"></span>
+                                      <textarea class="input-field h-16 resize-none text-xs" :value="skillTestTimelineEventTextValue(skillTestTimelineEditorEvent(item.event))" :placeholder="skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event)) ? '可选：描述该文件输入的上下文' : ''" @input="updateSkillTestTimelineEventDraft(isSkillTestTimelineExpectationEvent(skillTestTimelineEditorEvent(item.event)) ? 'expectation' : 'payload_inline', $event.target.value)"></textarea>
+                                    </label>
+                                  </template>
                                   <div class="flex items-center justify-end gap-2">
                                     <button type="button" class="button-danger h-8 px-3 text-xs" @click.stop="removeSkillTestTimelineEvent(item.index)">
                                       <span class="material-symbols-outlined text-[16px]">delete</span>
@@ -1469,7 +1498,7 @@
                       <div class="relative h-12 px-3">
                         <template x-for="tick in skillTestTimelineTicks()" :key="tick.ms">
                           <div class="absolute top-0 h-full border-l border-slate-800/80" :style="`left: calc(${tick.percent}% + ${tick.percent === 0 ? '0.75rem' : tick.percent === 100 ? '-0.75rem' : '0rem'})`">
-                            <span class="absolute left-1 top-0 whitespace-nowrap font-mono text-[10px] text-slate-500" x-text="formatSkillTestTimelineMs(tick.ms)"></span>
+                            <span class="absolute top-0 whitespace-nowrap font-mono text-[10px] text-slate-500" :style="tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'" x-text="formatSkillTestTimelineMs(tick.ms)"></span>
                           </div>
                         </template>
                         <input type="range" min="0" :max="skillTestTimelineDurationMs()" class="absolute inset-x-3 bottom-1 accent-orange-500" :value="skillTestTimelineSelectedAtMs()" :disabled="!skillTestTimelineSelectedEvent()" @input="updateSkillTestTimelineSelectedAtMs($event.target.value)" />

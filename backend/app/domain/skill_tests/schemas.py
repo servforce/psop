@@ -76,6 +76,10 @@ class StartSkillTestScenarioRunRequest(BaseModel):
     terminal_context_override: dict[str, Any] | None = None
 
 
+class CancelSkillTestScenarioRunRequest(BaseModel):
+    reason: str = Field(default="cancelled by user", max_length=500)
+
+
 class SkillTestScenarioRunResponse(BaseModel):
     id: str
     skill_definition_id: str
@@ -115,6 +119,53 @@ class SkillTestExpectationEvaluationResponse(BaseModel):
     created_at: datetime
 
 
+class SkillTestForkCursor(BaseModel):
+    time_ms: int = Field(default=0, ge=0)
+    terminal_seq: int = Field(default=0, ge=0)
+    snapshot_seq: int = Field(default=0, ge=0)
+
+
+class SkillTestStageActualOutputResponse(BaseModel):
+    id: str
+    terminal_event_id: str | None = None
+    seq_no: int | None = None
+    at_ms: int
+    occurred_at: datetime | None = None
+    event_kind: str = ""
+    mime_type: str = ""
+    payload_inline: Any | None = None
+
+
+class SkillTestStageJudgeResultResponse(BaseModel):
+    status: str = "pending"
+    confidence: float = 0.0
+    reason: str = ""
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    judge_provider: str = ""
+    judge_model: str = ""
+    prompt_hash: str = ""
+    evaluation_id: str | None = None
+    created_at: datetime | None = None
+
+
+class SkillTestStageHumanReviewResponse(BaseModel):
+    status: str = "pending"
+    reviewer: str | None = None
+    reason: str = ""
+    updated_at: datetime | None = None
+
+
+class SkillTestStageOutputResponse(BaseModel):
+    stage_id: str
+    event_id: str
+    time_ms: int
+    expectation: str
+    actual_outputs: list[SkillTestStageActualOutputResponse] = Field(default_factory=list)
+    judge_result: SkillTestStageJudgeResultResponse
+    human_review: SkillTestStageHumanReviewResponse = Field(default_factory=SkillTestStageHumanReviewResponse)
+    cursor: SkillTestForkCursor
+
+
 class SkillTestScenarioReviewResponse(BaseModel):
     scenario: SkillTestScenarioResponse
     scenario_run: SkillTestScenarioRunResponse
@@ -124,12 +175,7 @@ class SkillTestScenarioReviewResponse(BaseModel):
     cursor_anchors: list[dict[str, Any]]
     driver_events: list[dict[str, Any]]
     expectation_evaluations: list[SkillTestExpectationEvaluationResponse]
-
-
-class SkillTestForkCursor(BaseModel):
-    time_ms: int = Field(default=0, ge=0)
-    terminal_seq: int = Field(default=0, ge=0)
-    snapshot_seq: int = Field(default=0, ge=0)
+    stage_outputs: list[SkillTestStageOutputResponse] = Field(default_factory=list)
 
 
 class ForkSkillTestScenarioRequest(BaseModel):

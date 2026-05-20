@@ -322,22 +322,23 @@
 
 ### 7.4.4 `Skill Test Scenario` `/admin/skills/:skillId/tests/new` 与 `/admin/skills/:skillId/tests/:scenarioId`
 
-- 页面目标：围绕当前 skill 管理黑盒时序测试场景，而不是交互式调试入口。测试场景描述“在什么时间向智能体输入什么事实，以及在某个时间点以前应看到什么语义输出”。
+- 页面目标：围绕当前 skill 管理黑盒时序测试场景，而不是交互式调试入口。测试场景描述“在什么时间向智能体输入什么事实，以及在某个时间点以前应看到什么文本输出”。
 - 导航归属：`Skill Detail -> 测试` tab；场景列表在 tab 内展示，新建和编辑使用深链。
 - 列表核心区块：
   - scenario 列表：名称、最近运行状态、最近 run、语义评估摘要、更新时间
   - 新建场景入口、运行场景入口、最近运行 review 入口
 - 场景编辑器核心区块：
   - 右侧基础信息：场景名称、描述；目标运行产物默认使用 latest published ready artifact，不在普通表单中暴露版本/artifact 选择
-  - 主体时间轴：输入分组包含文本、图片、音频、视频信道；输出分组包含单一语义信道；底部时间行以分钟配置总时长，默认 30 分钟
+  - 主体时间轴：输入分组包含 GPS、三轴定位、文本、图片、音频、视频信道；输出分组包含单一阶段文本信道；底部时间行以分钟配置总时长，默认 30 分钟
   - 事件创建：用户点击某个信道的时间位置即可新增事件；拖动事件可改变 `at_ms`，右侧属性面板编辑内容
   - 多模态输入：图片、音频、视频事件可在事件属性中直接上传并绑定资源，也可选择已有场景资源
-  - 语义输出：输出事件只配置时间点与 `expectation`，不配置时间窗口；判断语义为“该时间点以前已经满足”
+  - 传感器输入：GPS 事件编辑 `{ latitude, longitude, altitude?, accuracy_m?, timestamp? }`，三轴定位事件编辑 `{ x, y, z, roll?, pitch?, yaw?, timestamp? }`
+  - 阶段输出：`expected.semantic` 的每个事件代表一个现实任务阶段，只配置阶段时间点与 `expectation`；判断语义为“该阶段时间点以前已经满足”
   - 高级 JSON：保留 `timeline` 与 `judge_policy` 的 JSON 编辑入口，但默认流程不要求用户手写 JSON
 - 状态要求：
   - `timeline.schema_version` 固定为 `psop-skill-test-timeline/v1`
-  - 输入事件保存 `id`、`lane_id`、`at_ms`、`event_kind`、`mime_type`、`payload_inline` 或 `asset_id`
-  - 输出期望事件保存 `id`、`lane_id="expected.semantic"`、`at_ms`、`expectation`
+  - 输入事件保存 `id`、`lane_id`、`at_ms`、`event_kind`、`mime_type`、`payload_inline` 或 `asset_id`；sensor lane 的 `payload_inline` 必须是结构化对象
+  - 输出期望事件保存 `id`、`lane_id="expected.semantic"`、`at_ms`、`expectation`，其中 `id` 即阶段 id
   - 场景资源上传进入对象存储，并以 `skill_test_asset.artifact_object_id` 被 timeline 事件引用
   - 新建场景时如果存在本地暂存资源，前端先创建 scenario，再上传资源并 patch timeline 中的临时 `asset_id`
 
@@ -345,13 +346,14 @@
 
 - 页面目标：回看一次黑盒时序测试的真实执行，并把预设 timeline、真实 replay、driver events 与语义评估结果叠加展示。
 - 核心区块：
-  - 预设 timeline：展示各信道输入事件和语义输出期望，标识 scheduled/sent/passed/failed/inconclusive
+  - 预设 timeline：展示各信道输入事件和阶段输出期望，标识 scheduled/sent/passed/failed/inconclusive
   - Review 时间：拖动时间轴游标后，右侧 transcript 只展示该切面以前发生的真实 terminal events
   - 真实 transcript：以 terminal/chat 风格展示真实 input/output，并支持根据 Judge 证据引用高亮
-  - 评估结果：展示每条语义期望的状态、置信度、理由、证据引用和 raw response 摘要
-  - Fork 操作：当前切面可 `Fork Scenario` 或 `Fork Debug`；也可打开真实 Run Replay
+  - 阶段详情：点击阶段输出事件后展示阶段 id、阶段时间、阶段期望、真实输出、Judge 结果与人工判定占位
+  - 评估结果：展示每条阶段期望的状态、置信度、理由、证据引用和 raw response 摘要
+  - Fork 操作：当前切面可 `Fork Scenario` 或 `Fork Debug`；选中阶段事件时优先使用该阶段 `stage_outputs[].cursor`，Fork Scenario 的时间轴总时长默认保持原测试场景不变，并保留切面时间点及以前的 timeline 事件，也可打开真实 Run Replay
 - 状态要求：
-  - Review 优先消费 `/api/skill-test-scenario-runs/{scenario_run_id}/review`
+  - Review 优先消费 `/api/skill-test-scenario-runs/{scenario_run_id}/review`，并使用其中的 `stage_outputs[]` 驱动阶段详情
   - 游标以 `time_ms`、`terminal_seq`、`snapshot_seq` 三元组表示，保证 fork 使用精确 Session Token Snapshot 与 terminal prefix
   - Review 不模拟运行结果，只基于已持久化的 replay timeline、terminal events、trace events、snapshots 与 evaluation records
 

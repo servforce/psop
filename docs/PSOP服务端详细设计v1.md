@@ -326,13 +326,13 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 - 管理 skill 级黑盒时序测试场景、场景资源、场景运行、时间轴 driver 与语义期望评估。
 - 测试执行必须创建真实 `skill_invocation / run / terminal_session`，并复用 Terminal Gateway、RuntimeKernel、Replay 与 OTel；测试层不模拟 Runtime，也不直接写 Session Token。
-- 测试场景使用 `timeline.schema_version = psop-skill-test-timeline/v1` 描述相对时间轴：输入信道包含文本、图片、音频、视频，输出信道包含语义期望。
+- 测试场景使用 `timeline.schema_version = psop-skill-test-timeline/v1` 描述相对时间轴：输入信道包含 GPS、三轴空间定位、文本、图片、音频与视频，输出信道包含阶段型文本期望。
 - 场景运行创建真实 invocation/run 后写入 `runtime_job.job_type = skill_test_timeline_driver`；driver 按 `event.at_ms` 到点调用 `RuntimeService.append_terminal_event(...)` 追加真实 terminal input。
 - 输入事件即使发生在 Runtime 尚未进入 `waiting_input` 时，也先落库为终端事实；Runtime 后续在 `Sync` 阶段按 terminal cursor 消费。
-- 输出判断按“时间点以前”执行：每条语义期望只把 `occurred_at <= time_origin + at_ms` 的真实 terminal output 提供给 Judge。
+- 输出判断按“阶段时间点以前”执行：每条 `expected.semantic` 事件代表一个现实任务阶段，Judge 只消费 `occurred_at <= time_origin + at_ms` 的真实 terminal output。
 - Judge 必须通过 `LLM Inference Gateway`，默认 route key 为 `skill-test-judge`；评估结果保存状态、置信度、证据引用、理由、prompt hash 和 raw response。
 - Judge 系统提示词必须来自 `skill_test.semantic_judge` binding；raw response 的 request snapshot 必须记录 prompt pack metadata。
-- Review 支持基于 `time_ms + terminal_seq + snapshot_seq` 的切面 fork：可 fork 新测试场景，也可 fork 到独立调试会话继续手动输入。
+- Review 输出 `stage_outputs[]`，聚合阶段 id、阶段期望、阶段窗口内真实输出、Judge 结果、人工判定占位与阶段 cursor；基于 `time_ms + terminal_seq + snapshot_seq` 的切面 fork 可 fork 新测试场景，也可 fork 到独立调试会话继续手动输入。
 
 ### 6.13 `ObjectStoreService`
 
@@ -1007,11 +1007,13 @@ POST /api/gateway/invocations with terminal_context
   "schema_version": "psop-skill-test-timeline/v1",
   "duration_ms": 1800000,
   "lanes": [
+    { "id": "sensor.gps", "kind": "input", "label": "GPS", "event_kind": "sensor.gps.reading.v1", "mime_type": "application/json" },
+    { "id": "sensor.pose3d", "kind": "input", "label": "三轴定位", "event_kind": "sensor.pose3d.reading.v1", "mime_type": "application/json" },
     { "id": "input.text", "kind": "input", "label": "文本", "event_kind": "terminal.text.input.v1" },
     { "id": "input.image", "kind": "input", "label": "图片", "event_kind": "terminal.image.input.v1" },
     { "id": "input.audio", "kind": "input", "label": "音频", "event_kind": "terminal.audio.input.v1" },
     { "id": "input.video", "kind": "input", "label": "视频", "event_kind": "terminal.video.input.v1" },
-    { "id": "expected.semantic", "kind": "output", "label": "语义输出" }
+    { "id": "expected.semantic", "kind": "output", "label": "文本" }
   ],
   "events": [
     {
@@ -1021,6 +1023,24 @@ POST /api/gateway/invocations with terminal_context
       "event_kind": "terminal.text.input.v1",
       "mime_type": "text/plain",
       "payload_inline": "现场描述文本",
+      "required": true
+    },
+    {
+      "id": "gps_start",
+      "lane_id": "sensor.gps",
+      "at_ms": 0,
+      "event_kind": "sensor.gps.reading.v1",
+      "mime_type": "application/json",
+      "payload_inline": { "latitude": 31.2304, "longitude": 121.4737, "altitude": 12.5, "accuracy_m": 3.5 },
+      "required": true
+    },
+    {
+      "id": "pose_start",
+      "lane_id": "sensor.pose3d",
+      "at_ms": 0,
+      "event_kind": "sensor.pose3d.reading.v1",
+      "mime_type": "application/json",
+      "payload_inline": { "x": 1.1, "y": 2.2, "z": 3.3, "roll": 0, "pitch": 0, "yaw": 90 },
       "required": true
     },
     {
@@ -1054,7 +1074,7 @@ POST /api/gateway/invocations with terminal_context
 | `POST` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/runs` | 启动一次场景运行 | `{ timeline_override?, terminal_context_override? }` | `skill test scenario run detail` |
 | `GET` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/runs` | 场景运行历史 | 无 | `skill test scenario run list` |
 | `GET` | `/api/skill-test-scenario-runs/{scenario_run_id}` | 场景运行详情 | 无 | `skill test scenario run detail` |
-| `GET` | `/api/skill-test-scenario-runs/{scenario_run_id}/review` | 场景运行 Review | 无 | `scenario + scenario_run + replay + driver_events + expectation_evaluations + cursor_anchors` |
+| `GET` | `/api/skill-test-scenario-runs/{scenario_run_id}/review` | 场景运行 Review | 无 | `scenario + scenario_run + replay + driver_events + expectation_evaluations + cursor_anchors + stage_outputs` |
 | `POST` | `/api/skill-test-scenario-runs/{scenario_run_id}/evaluate` | 重新评估语义期望 | 无 | `skill test scenario run detail` |
 | `POST` | `/api/skill-test-scenario-runs/{scenario_run_id}/fork-scenario` | 从 Review 切面 fork 新测试场景 | `{ cursor: { time_ms, terminal_seq, snapshot_seq }, name?, description? }` | `skill test scenario detail` |
 | `POST` | `/api/skill-test-scenario-runs/{scenario_run_id}/fork-debug` | 从 Review 切面 fork 调试会话 | `{ cursor: { time_ms, terminal_seq, snapshot_seq } }` | `skill invocation detail` |
@@ -1064,8 +1084,8 @@ POST /api/gateway/invocations with terminal_context
 - 启动场景运行时创建真实 `skill_invocation / run / terminal_session / run_capability_binding`，`terminal_context.operator_mode = test`，`test_context.kind = skill_blackbox_timeline_test`。
 - 服务端写入 `skill_test_timeline_driver` job；driver 以 scenario run 的 `time_origin` 为原点，按输入事件的 `at_ms` 到点追加真实 terminal input。
 - driver 追加输入时使用幂等 `external_event_id = skill-test-scenario-run:{scenario_run_id}:timeline:{event_id}`，并记录 `scheduled_at / actual_sent_at / drift_ms / terminal_event_id / terminal_seq`。
-- 输出期望评估只向 Judge 提供时间切面以前的真实 terminal output；Judge 失败、JSON 不合法或证据不足均落为 `inconclusive`，默认按失败计入。
-- `fork-scenario` 保存 `fork_seed` 并把切面以后的 timeline 事件平移到新场景；`fork-debug` 使用指定 snapshot 与 terminal prefix 创建真实 debug invocation。
+- 输出期望评估只向 Judge 提供阶段切面以前的真实 terminal output；Review 的 `stage_outputs[].actual_outputs` 只绑定上一阶段之后、当前阶段以前的真实输出；Judge 失败、JSON 不合法或证据不足均落为 `inconclusive`，默认按失败计入。
+- `fork-scenario` 保存 `fork_seed`，保留原场景默认时间轴总时长，并把切面时间点及以前的 timeline 事件以原 `at_ms` 放入新场景；若这些事件引用图片、音频、视频等测试资源，服务端会复制对应 `SkillTestAsset` 记录并把 fork 后 timeline 的 `asset_id` 重写为新场景内的资源 ID。`fork-debug` 使用指定 snapshot 与 terminal prefix 创建真实 debug invocation。请求结构保持 `{ cursor: { time_ms, terminal_seq, snapshot_seq } }`，前端可从阶段事件反推 cursor。
 
 ### 9.12 `/api/terminal/devices/*` post-MVP reserved
 

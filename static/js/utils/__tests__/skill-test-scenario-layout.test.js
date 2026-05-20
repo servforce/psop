@@ -9,8 +9,10 @@ const agentPromptDetailPath = path.join(__dirname, "../../../pages/agent-prompt-
 const indexPath = path.join(__dirname, "../../../index.html");
 const appPath = path.join(__dirname, "../../app.js");
 const corePath = path.join(__dirname, "../../app/core.js");
+const skillDetailAppPath = path.join(__dirname, "../../app/skill-detail.js");
 const agentPromptsAppPath = path.join(__dirname, "../../app/agent-prompts.js");
 const skillTestAppPath = path.join(__dirname, "../../app/skill-test.js");
+const compiledCssPath = path.join(__dirname, "../../../css/style.compiled.css");
 
 test("skill test tab exposes timeline scenario management", () => {
   const skillDetailHtml = fs.readFileSync(skillDetailPath, "utf8");
@@ -60,7 +62,14 @@ test("skill test tab exposes timeline scenario management", () => {
   expect(skillDetailHtml).toContain("handleSkillTestTimelineEventFile");
   expect(skillDetailHtml).toContain("上传文件");
   expect(skillDetailHtml).toContain("skillTestTimelineEventAssetLabel");
+  expect(skillDetailHtml).toContain("data-skill-test-asset-preview");
+  expect(skillDetailHtml).toContain("skillTestTimelineAssetPreviewUrl");
+  expect(skillDetailHtml).toContain("skillTestTimelineAssetPreviewKind");
   expect(appJs).toContain("未上传文件");
+  expect(appJs).toContain("skillTestTimelineAssetPreviewUrl(event)");
+  expect(appJs).toContain("/content");
+  expect(skillDetailHtml).toContain("data-skill-test-sensor-fields");
+  expect(skillDetailHtml).toContain("updateSkillTestTimelineSensorField");
   expect(skillDetailHtml).toContain("isSkillTestTimelineExpectationEvent(skillTestTimelineEditorEvent(item.event)) ? 'expectation' : 'payload_inline'");
   expect(appJs).toContain("isSkillTestTimelineExpectationEvent(event)");
   expect(appJs).toContain("validateSkillTestTimelineForSave");
@@ -68,6 +77,7 @@ test("skill test tab exposes timeline scenario management", () => {
   expect(appJs).toContain("canAddSkillTestTimelineEventToLane");
   expect(appJs).toContain("skillTestTimelineEventDraft");
   expect(appJs).toContain("selectedSkillTestTimelineEventIds");
+  expect(appJs).toContain("handleSkillTestTimelineKeyboardShortcut");
   expect(appJs).toContain("setSkillTestTimelineDragGroupAtFromTrack");
   expect(appJs).toContain("saveSkillTestTimelineEventEditor");
   expect(appJs).toContain("flushSkillTestTimelineEventDraft");
@@ -88,7 +98,7 @@ test("skill test tab exposes timeline scenario management", () => {
   expect(skillDetailHtml).not.toContain("输入脚本步骤");
   expect(appJs).toContain("/test-scenarios");
   expect(shellJs).toContain("skill-test-scenario-review");
-  expect(appJs).toContain('label: "语义"');
+  expect(appJs).toContain('label: "文本"');
   expect(appJs).toContain('target_version_selector: "latest"');
   expect(appJs).toContain("target_compile_artifact_id: null");
   expect(appJs).not.toContain("/test-cases");
@@ -98,8 +108,14 @@ test("skill test tab exposes timeline scenario management", () => {
 test("scenario detail page provides lanes, assets, and runs", () => {
   const html = fs.readFileSync(scenarioPath, "utf8");
   const appJs = fs.readFileSync(skillTestAppPath, "utf8");
+  const coreJs = fs.readFileSync(corePath, "utf8");
+  const skillDetailJs = fs.readFileSync(skillDetailAppPath, "utf8");
+  const compiledCss = fs.readFileSync(compiledCssPath, "utf8");
 
   expect(html).toContain("运行场景");
+  expect(coreJs).toContain("loadSkillDetail(this.route.params.skillId, { loadTestCases: false })");
+  expect(coreJs).toContain("loadSkillTestCaseDetail(this.route.params.skillId, this.route.params.scenarioId)");
+  expect(skillDetailJs).toContain('this.activeDetailTab === "test" && options.loadTestCases !== false');
   expect(html).toContain("data-skill-test-scenario-actions");
   expect(html).toContain('class="topbar-icon-button text-orange-200 hover:text-orange-100" title="运行场景"');
   expect(html).toContain('class="topbar-icon-button" title="保存场景"');
@@ -137,6 +153,10 @@ test("scenario detail page provides lanes, assets, and runs", () => {
   expect(html).toContain("data-info-panel-header");
   expect(html).toContain("data-info-panel-basic");
   expect(html).toContain("data-info-panel-detail");
+  expect(html).not.toContain('x-text="skillTestTimelineSelectedEditorEvent().id"></h2>');
+  expect(html).not.toContain('<p class="mono-field mt-0.5 truncate" x-text="skillTestTimelineSelectedLane().id"></p>');
+  expect(html).not.toContain('<p class="mono-field mt-0.5 truncate" x-text="skillTestCase.id"></p>');
+  expect(html).not.toContain('type="submit" class="topbar-icon-button text-orange-200 hover:text-orange-100" title="保存场景"');
   expect(html).toContain("skillTestScenarioInfoTab === 'basic'");
   expect(html).toContain("skillTestScenarioInfoTab === 'runs'");
   expect(html).toContain("skillTestScenarioInfoTab === 'json'");
@@ -144,7 +164,9 @@ test("scenario detail page provides lanes, assets, and runs", () => {
   expect(html).toContain("skillTestTimelineLaneRangeLabel");
   expect(html).toContain("skillTestTimelineLaneAssetCount");
   expect(html).toContain("openSkillTestScenarioInfoPanel()");
-  expect(html).toContain("Event Kind");
+  expect(html).toContain("事件类型");
+  expect(html).toContain("MIME 类型");
+  expect(html).toContain("必填");
   expect(html).toContain("skillTestTimelineSelectedEditorEvent().event_kind || 'N/A'");
   expect(html).toContain("skillTestTimelineSelectedEditorEvent().mime_type || 'N/A'");
   expect(html).toContain("时间 s");
@@ -187,14 +209,34 @@ test("scenario detail page provides lanes, assets, and runs", () => {
   expect(html).toContain("handleSkillTestTimelineEventFile");
   expect(html).toContain("上传文件");
   expect(html).toContain("skillTestTimelineEventAssetLabel");
+  expect(html).toContain("data-skill-test-asset-preview");
+  expect(html).toContain("内容预览");
+  expect(html).toContain("skillTestTimelineAssetPreviewUrl");
+  expect(html).toContain("skillTestTimelineAssetPreviewKind");
   expect(appJs).toContain("未上传文件");
+  expect(html).toContain("data-skill-test-sensor-fields");
+  expect(html).toContain("updateSkillTestTimelineSensorField");
   expect(html).toContain("isSkillTestTimelineExpectationEvent(skillTestTimelineSelectedEditorEvent()) ? 'expectation' : 'payload_inline'");
-  expect(appJs).toContain("请填写语义输出事件的期望内容。");
+  expect(appJs).toContain("请填写文本输出事件的期望内容。");
   expect(appJs).toContain("skillTestTimelineEventIdPrefix");
   expect(html).not.toContain("或选择已有资源");
   expect(html).not.toContain("未绑定资源");
   expect(appJs).toContain('id: "input.audio"');
   expect(appJs).toContain('id: "input.video"');
+  expect(appJs).toContain('id: "sensor.gps"');
+  expect(appJs).toContain('id: "sensor.pose3d"');
+  expect(appJs).toContain('label: "纬度"');
+  expect(appJs).toContain('label: "经度"');
+  expect(appJs).toContain('label: "精度（米）"');
+  expect(appJs).toContain('label: "横滚角"');
+  expect(appJs).toContain("sensor.gps.reading.v1");
+  expect(appJs).toContain("sensor.pose3d.reading.v1");
+  expect(compiledCss).toContain(".border-lime-500\\/25");
+  expect(compiledCss).toContain(".bg-lime-500\\/10");
+  expect(compiledCss).toContain(".text-lime-200");
+  expect(compiledCss).toContain(".border-fuchsia-500\\/25");
+  expect(compiledCss).toContain(".bg-fuchsia-500\\/10");
+  expect(compiledCss).toContain(".text-fuchsia-200");
   expect(html).toContain(">时间</span>");
   expect(html).not.toContain(">时间轴</span>");
   expect(html).not.toContain('x-text="lane.id"');
@@ -211,6 +253,8 @@ test("scenario detail page provides lanes, assets, and runs", () => {
 
 test("scenario review provides scrub and fork actions", () => {
   const html = fs.readFileSync(reviewPath, "utf8");
+  const detailHtml = fs.readFileSync(scenarioPath, "utf8");
+  const skillDetailHtml = fs.readFileSync(skillDetailPath, "utf8");
   const indexHtml = fs.readFileSync(indexPath, "utf8");
   const appJs = fs.readFileSync(skillTestAppPath, "utf8");
 
@@ -233,12 +277,18 @@ test("scenario review provides scrub and fork actions", () => {
   expect(html).toContain("skillTestReviewExpandedEvent()");
   expect(html).toContain("closeSkillTestReviewEvent()");
   expect(html).toContain("skillTestReviewEventContentSections(skillTestReviewExpandedEvent())");
+  expect(html).toContain("data-skill-test-asset-preview");
+  expect(html).toContain("skillTestTimelineAssetPreviewUrl(skillTestReviewExpandedEvent())");
+  expect(html).toContain("skillTestTimelineAssetPreviewKind(skillTestReviewExpandedEvent())");
   expect(html).toContain('data-skill-test-info-subject="run"');
   expect(html).toContain('data-skill-test-info-subject="lane"');
   expect(html).toContain('data-skill-test-info-subject="event"');
   expect(html).toContain("data-info-panel-header");
   expect(html).toContain("data-info-panel-basic");
   expect(html).toContain("data-info-panel-detail");
+  expect(html).not.toContain('<p class="mono-field mt-0.5 truncate" x-text="skillTestReviewSelectedLane().id"></p>');
+  expect(html).not.toContain("skillTestReviewExpandedEvent().id || skillTestReviewExpandedEvent().seq_no || 'runtime event'");
+  expect(html).not.toContain('<p class="mono-field mt-0.5 truncate" x-text="skillTestRun?.id"></p>');
   expect(html).toContain("skillTestReviewDetailTab === 'content'");
   expect(html).toContain("skillTestReviewDetailTab === 'judge'");
   expect(html).toContain("skillTestReviewDetailTab === 'raw'");
@@ -272,6 +322,8 @@ test("scenario review provides scrub and fork actions", () => {
   expect(html).not.toContain("backdrop-blur-sm");
   expect(html).toContain("absolute top-1/2 z-20 flex h-14 w-20 -translate-x-1/2 -translate-y-1/2");
   expect(html).toContain("tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'");
+  expect(detailHtml).toContain("tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'");
+  expect(skillDetailHtml).toContain("tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'");
   expect(html).toContain("toggleSkillTestReviewPlayback()");
   expect(html).toContain('data-tooltip="播放/暂停"');
   expect(html).toContain("restartSkillTestReviewPlayback()");
@@ -287,6 +339,10 @@ test("scenario review provides scrub and fork actions", () => {
   expect(html).toContain("selectedSkillTestReviewJudgeParsedOutput()");
   expect(html).toContain("Fork Scenario");
   expect(html).toContain("Fork Debug");
+  expect(html).toContain("终止运行");
+  expect(html).toContain("cancelSkillTestRun()");
+  expect(appJs).toContain("async cancelSkillTestRun()");
+  expect(appJs).toContain("/cancel");
   expect(html).toContain('border-0 p-0 text-xs');
   expect(html).toContain(">测试</button>");
   expect(appJs).toContain("startSkillTestReviewPlayback");
@@ -307,6 +363,9 @@ test("scenario review provides scrub and fork actions", () => {
   expect(appJs).toContain("not_occurred");
   expect(appJs).toContain("selectedSkillTestReviewJudgeRequest");
   expect(appJs).toContain("selectedSkillTestReviewJudgeInputNotice");
+  expect(appJs).toContain("skillTestReviewStageOutputs");
+  expect(appJs).toContain("selectedSkillTestStageOutput");
+  expect(appJs).toContain("人工判定");
   expect(appJs).toContain("/fork-scenario");
   expect(appJs).toContain("/fork-debug");
   expect(indexHtml).toContain("skill-test-scenario-page");
@@ -326,6 +385,7 @@ test("frontend scripts are split and no longer reference the assets layer", () =
   expect(indexHtml).toContain('/js/app/runtime.js');
   expect(indexHtml).toContain('/js/app/formatters.js');
   expect(indexHtml).toContain('/css/style.compiled.css');
+  expect(indexHtml).toContain('@keydown.window="handleSkillTestTimelineKeyboardShortcut($event)"');
   expect(indexHtml).not.toContain('/assets/js');
   expect(indexHtml).not.toContain('/assets/css');
   expect(indexHtml).not.toContain('/assets/fonts');

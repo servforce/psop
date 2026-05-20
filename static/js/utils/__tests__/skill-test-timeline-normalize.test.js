@@ -70,6 +70,7 @@ function createTimelineHarness() {
     skillTestScenarioInfoTab: "basic",
     selectedSkillTestReviewExpectationId: "",
     selectedSkillTestReviewLaneId: "",
+    confirmDangerAction: jest.fn(() => true),
     formatStatus(value) {
       return value || "未知";
     },
@@ -100,7 +101,7 @@ function duplicateSemanticTimeline() {
     duration_ms: 600000,
     lanes: [
       { id: "input.text", kind: "input", label: "文本" },
-      { id: "expected.semantic", kind: "output", label: "语义" }
+      { id: "expected.semantic", kind: "output", label: "文本" }
     ],
     events: [
       {
@@ -119,7 +120,7 @@ function duplicateSemanticTimeline() {
         id: "expected_10",
         lane_id: "expected.semantic",
         at_ms: 362000,
-        expectation: "描述该时间点以前应满足的语义输出"
+        expectation: "描述该时间点以前应满足的文本输出"
       },
       {
         id: "expected_9",
@@ -154,7 +155,7 @@ test("timeline normalization repairs duplicate semantic event ids for rendering"
   expect(laneItems.map((item) => app.skillTestTimelineEventLabel(item.event))).toEqual([
     "引导用户进行下一步操作",
     "重复 ID 的历史语义输出",
-    "描述该时间点以前应满足的语义输出"
+    "描述该时间点以前应满足的文本输出"
   ]);
 });
 
@@ -174,9 +175,87 @@ test("timeline event icons use lane defaults and schedule icon for trigger event
   const app = createTimelineHarness();
 
   expect(app.skillTestTimelineEventIcon({ lane_id: "input.text", event_kind: "terminal.text.input.v1" })).toBe("text_fields");
+  expect(app.skillTestTimelineEventIcon({ lane_id: "sensor.gps", event_kind: "sensor.gps.reading.v1" })).toBe("location_on");
+  expect(app.skillTestTimelineEventIcon({ lane_id: "sensor.pose3d", event_kind: "sensor.pose3d.reading.v1" })).toBe("view_in_ar");
   expect(app.skillTestTimelineEventIcon({ lane_id: "expected.semantic" })).toBe("fact_check");
   expect(app.skillTestTimelineEventIcon({ lane_id: "input.text", event_kind: "terminal.schedule.trigger.v1" })).toBe("schedule");
   expect(app.skillTestTimelineEventIcon({ lane_id: "input.text", trigger_event_id: "expected_1" })).toBe("schedule");
+});
+
+test("default timeline and sensor events normalize structured payloads", () => {
+  const app = createTimelineHarness();
+  const defaultLaneIds = app.defaultSkillTestTimeline().lanes.map((lane) => lane.id);
+
+  expect(defaultLaneIds.slice(0, 2)).toEqual(["sensor.gps", "sensor.pose3d"]);
+  expect(app.defaultSkillTestTimeline().lanes.find((lane) => lane.id === "expected.semantic").label).toBe("文本");
+  expect(app.skillTestTimelineLaneLabel({ id: "expected.semantic", label: "语义" })).toBe("文本");
+
+  app.skillTestCaseForm.timeline_json = JSON.stringify({
+    schema_version: "psop-skill-test-timeline/v1",
+    duration_ms: 600000,
+    lanes: [
+      { id: "input.text", kind: "input", label: "文本" },
+      { id: "expected.semantic", kind: "output", label: "语义" },
+      { id: "custom.telemetry", kind: "input", label: "自定义" }
+    ],
+    events: [
+      {
+        id: "gps_1",
+        lane_id: "sensor.gps",
+        at_ms: 1000,
+        payload_inline: { latitude: "31.23", longitude: "121.47", accuracy_m: "2.5" }
+      },
+      {
+        id: "pose_1",
+        lane_id: "sensor.pose3d",
+        at_ms: 2000,
+        payload_inline: { x: "1", y: "2", z: "3", yaw: "90" }
+      }
+    ]
+  });
+
+  const laneIds = app.skillTestTimelineLanes().map((lane) => lane.id);
+  expect(laneIds.slice(0, 2)).toEqual(["sensor.gps", "sensor.pose3d"]);
+  expect(laneIds).toContain("custom.telemetry");
+  expect(app.skillTestTimelineLanes().find((lane) => lane.id === "expected.semantic").label).toBe("文本");
+  const events = app.skillTestTimelineEvents();
+  expect(events[0]).toEqual(
+    expect.objectContaining({
+      lane_id: "sensor.gps",
+      event_kind: "sensor.gps.reading.v1",
+      mime_type: "application/json",
+      payload_inline: expect.objectContaining({ latitude: 31.23, longitude: 121.47, accuracy_m: 2.5 })
+    })
+  );
+  expect(events[1].payload_inline).toEqual(expect.objectContaining({ x: 1, y: 2, z: 3, yaw: 90 }));
+  expect(app.skillTestTimelineEventLabel(events[0])).toBe("31.23, 121.47");
+  expect(app.skillTestTimelineEventLabel(events[1])).toBe("x 1 / y 2 / z 3");
+});
+
+test("sensor event editor updates payload fields without converting the lane", () => {
+  const app = createTimelineHarness();
+  app.skillTestCaseForm.timeline_json = JSON.stringify({
+    schema_version: "psop-skill-test-timeline/v1",
+    duration_ms: 600000,
+    events: [
+      {
+        id: "gps_1",
+        lane_id: "sensor.gps",
+        at_ms: 1000,
+        payload_inline: { latitude: 0, longitude: 0 }
+      }
+    ]
+  });
+
+  app.selectSkillTestTimelineEvent("gps_1");
+  app.updateSkillTestTimelineSensorField("latitude", "31.2304");
+  app.updateSkillTestTimelineSensorField("longitude", "121.4737");
+  app.updateSkillTestTimelineSensorField("accuracy_m", "2.5");
+  app.flushSkillTestTimelineEventDraft();
+
+  const event = app.skillTestTimelineEvents()[0];
+  expect(event.lane_id).toBe("sensor.gps");
+  expect(event.payload_inline).toEqual({ latitude: 31.2304, longitude: 121.4737, accuracy_m: 2.5 });
 });
 
 test("right-panel event editor keeps blank track clicks available", () => {
@@ -259,6 +338,75 @@ test("modifier timeline clicks toggle multi-selection without opening the editor
   expect(app.selectedSkillTestTimelineEventIds).toEqual(["input_1"]);
 });
 
+test("backspace key confirms and removes selected timeline events outside editable fields", () => {
+  const app = createTimelineHarness();
+  app.skillTestCaseForm.timeline_json = JSON.stringify(duplicateSemanticTimeline());
+  app.route = { name: "skill-test-scenario" };
+  app.selectedSkillTestTimelineEventId = "input_1";
+  app.selectedSkillTestTimelineEventIds = ["input_1", "expected_9"];
+  app.skillTestTimelineEventDraft = { id: "input_1", payload_inline: "draft text" };
+  app.skillTestScenarioDetailPanel = "event";
+
+  const keyboardEvent = {
+    key: "Backspace",
+    target: { nodeType: 1, tagName: "DIV", closest: jest.fn(() => null) },
+    preventDefault: jest.fn(),
+    stopPropagation: jest.fn()
+  };
+
+  expect(app.handleSkillTestTimelineKeyboardShortcut(keyboardEvent)).toBe(true);
+  expect(keyboardEvent.preventDefault).toHaveBeenCalled();
+  expect(keyboardEvent.stopPropagation).toHaveBeenCalled();
+  expect(app.confirmDangerAction).toHaveBeenCalledWith("确认删除事件？此操作可能无法撤销。");
+  expect(app.skillTestTimelineEvents().map((event) => event.id)).not.toEqual(expect.arrayContaining(["input_1", "expected_9"]));
+  expect(app.selectedSkillTestTimelineEventId).toBe("");
+  expect(app.selectedSkillTestTimelineEventIds).toEqual([]);
+  expect(app.skillTestTimelineEventDraft).toBeNull();
+  expect(app.skillTestScenarioDetailPanel).toBe("info");
+});
+
+test("backspace key keeps timeline events when deletion is canceled", () => {
+  const app = createTimelineHarness();
+  app.skillTestCaseForm.timeline_json = JSON.stringify(duplicateSemanticTimeline());
+  app.route = { name: "skill-test-scenario" };
+  app.selectedSkillTestTimelineEventId = "input_1";
+  app.selectedSkillTestTimelineEventIds = ["input_1"];
+  app.confirmDangerAction = jest.fn(() => false);
+
+  const keyboardEvent = {
+    key: "Backspace",
+    target: { nodeType: 1, tagName: "DIV", closest: jest.fn(() => null) },
+    preventDefault: jest.fn(),
+    stopPropagation: jest.fn()
+  };
+
+  expect(app.handleSkillTestTimelineKeyboardShortcut(keyboardEvent)).toBe(false);
+  expect(keyboardEvent.preventDefault).toHaveBeenCalled();
+  expect(keyboardEvent.stopPropagation).toHaveBeenCalled();
+  expect(app.confirmDangerAction).toHaveBeenCalledWith("确认删除事件？此操作可能无法撤销。");
+  expect(app.skillTestTimelineEvents().map((event) => event.id)).toContain("input_1");
+});
+
+test("backspace key keeps timeline events while editing form fields", () => {
+  const app = createTimelineHarness();
+  app.skillTestCaseForm.timeline_json = JSON.stringify(duplicateSemanticTimeline());
+  app.route = { name: "skill-test-scenario" };
+  app.selectedSkillTestTimelineEventId = "input_1";
+  app.selectedSkillTestTimelineEventIds = ["input_1"];
+
+  const keyboardEvent = {
+    key: "Backspace",
+    target: { nodeType: 1, tagName: "TEXTAREA", closest: jest.fn(() => null) },
+    preventDefault: jest.fn(),
+    stopPropagation: jest.fn()
+  };
+
+  expect(app.handleSkillTestTimelineKeyboardShortcut(keyboardEvent)).toBe(false);
+  expect(keyboardEvent.preventDefault).not.toHaveBeenCalled();
+  expect(app.confirmDangerAction).not.toHaveBeenCalled();
+  expect(app.skillTestTimelineEvents().map((event) => event.id)).toContain("input_1");
+});
+
 test("timeline event editor keeps the original channel immutable", () => {
   const app = createTimelineHarness();
   app.skillTestCaseForm.timeline_json = JSON.stringify(duplicateSemanticTimeline());
@@ -280,6 +428,34 @@ test("timeline event editor keeps the original channel immutable", () => {
   app.updateSkillTestTimelineEvent(eventIndex, "lane_id", "input.audio");
 
   expect(app.skillTestTimelineEvents().find((event) => event.id === "input_1").lane_id).toBe("input.text");
+});
+
+test("multimodal timeline events resolve preview urls from bound assets", () => {
+  const app = createTimelineHarness();
+  app.apiBaseUrl = "/api/v1";
+  app.currentSkill = { id: "skill-1" };
+  app.skillTestCase = { id: "scenario-1", skill_definition_id: "skill-1" };
+  app.skillTestDataObjects = [
+    {
+      id: "asset-1",
+      skill_definition_id: "skill-1",
+      scenario_id: "scenario-1",
+      name: "现场图片",
+      filename: "site.png",
+      mime_type: "image/png",
+      size_bytes: 9
+    }
+  ];
+  app.formatBytes = (value) => `${value} B`;
+
+  const event = { id: "image_1", lane_id: "input.image", asset_id: "asset-1", mime_type: "image/*" };
+
+  expect(app.skillTestTimelineEventAsset(event).filename).toBe("site.png");
+  expect(app.skillTestTimelineAssetPreviewKind(event)).toBe("image");
+  expect(app.skillTestTimelineAssetPreviewUrl(event)).toBe(
+    "/api/v1/skills/skill-1/test-scenarios/scenario-1/assets/asset-1/content"
+  );
+  expect(app.skillTestTimelineAssetPreviewMeta(event)).toBe("image/png · 9 B");
 });
 
 test("review playback marks events as they reach the playhead", () => {
@@ -353,6 +529,94 @@ test("review fork cursor keeps the selected playhead time", () => {
     terminal_seq: 9,
     snapshot_seq: 5
   });
+});
+
+test("running skill test review can be cancelled without local state guesswork", async () => {
+  const app = createTimelineHarness();
+  app.busy = { skillTestCancel: false };
+  app.skillTestRun = { id: "run-1", status: "running" };
+  app.skillTestRuns = [];
+  app.skillTestReview = { scenario_run: app.skillTestRun };
+  app.confirmDangerAction = jest.fn(() => true);
+  app.stopSkillTestReviewPlayback = jest.fn();
+  app.stopSkillTestReviewPolling = jest.fn();
+  app.showNotice = jest.fn();
+  app.refreshSkillTestRunReview = jest.fn(async () => ({ scenario_run: { id: "run-1", status: "cancelled" } }));
+  app.apiRequest = jest.fn(async () => ({ id: "run-1", status: "cancelled", driver_status: "cancelled" }));
+
+  await app.cancelSkillTestRun();
+
+  expect(app.apiRequest).toHaveBeenCalledWith(
+    "/skill-test-scenario-runs/run-1/cancel",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ reason: "用户终止测试" })
+    })
+  );
+  expect(app.skillTestRun.status).toBe("cancelled");
+  expect(app.refreshSkillTestRunReview).toHaveBeenCalledWith("run-1", { force: true });
+  expect(app.stopSkillTestReviewPolling).toHaveBeenCalled();
+  expect(app.showNotice).toHaveBeenCalledWith("success", "已终止测试运行。");
+  expect(app.busy.skillTestCancel).toBe(false);
+});
+
+test("review stage output drives expanded details and fork cursor", () => {
+  const app = createTimelineHarness();
+  app.skillTestReview = {
+    scenario_timeline: duplicateSemanticTimeline(),
+    cursor_anchors: [{ time_ms: 190000, terminal_seq: 4, snapshot_seq: 3 }],
+    stage_outputs: [
+      {
+        stage_id: "expected_9",
+        event_id: "expected_9",
+        time_ms: 190000,
+        expectation: "引导用户进行下一步操作",
+        actual_outputs: [
+          {
+            id: "stage_output_1",
+            at_ms: 45000,
+            seq_no: 2,
+            event_kind: "terminal.text.output.v1",
+            mime_type: "text/plain",
+            payload_inline: "第一步：请检查伞骨。"
+          }
+        ],
+        judge_result: {
+          status: "passed",
+          confidence: 0.93,
+          reason: "满足阶段期望。"
+        },
+        human_review: {
+          status: "pending",
+          reviewer: null,
+          reason: "",
+          updated_at: null
+        },
+        cursor: { time_ms: 190000, terminal_seq: 4, snapshot_seq: 3 }
+      }
+    ]
+  };
+
+  app.updateSkillTestReviewPlayhead(50000);
+  const event = app.skillTestReviewEventsForLane("expected.semantic")[0].event;
+  app.openSkillTestReviewEvent(event);
+
+  expect(app.skillTestReviewPlayheadMsValue()).toBe(50000);
+  expect(app.currentSkillTestForkCursor()).toEqual({ time_ms: 190000, terminal_seq: 4, snapshot_seq: 3 });
+  expect(app.skillTestReviewRuntimeOutputsForExpectation(event)).toHaveLength(1);
+  expect(app.skillTestReviewEventContentSections(event).map((section) => section.title)).toEqual([
+    "阶段期望",
+    "阶段切面",
+    "真实输出 #1",
+    "智能体判定",
+    "人工判定"
+  ]);
+  expect(app.skillTestReviewEventMetadata(event)).toEqual(
+    expect.arrayContaining([
+      { label: "阶段 ID", value: "expected_9" },
+      { label: "人工判定", value: "pending" }
+    ])
+  );
 });
 
 test("review timeline keeps edge events inside the track lane", () => {
@@ -449,7 +713,7 @@ test("review timeline binds runtime outputs to the next semantic expectation", (
   expect(secondBoundOutputs.map((event) => event.id)).toEqual(["runtime_output_output-3"]);
   expect(app.skillTestReviewEventTooltip(semanticEvents[0])).toContain("2 个真实输出");
   const contentSections = app.skillTestReviewEventContentSections(semanticEvents[0]);
-  expect(contentSections.map((section) => section.title)).toEqual(["语义期望", "真实输出 #1", "真实输出 #2"]);
+  expect(contentSections.map((section) => section.title)).toEqual(["阶段期望", "真实输出 #1", "真实输出 #2"]);
   expect(contentSections[0].content).toContain("引导用户进行下一步操作");
   expect(contentSections[1].content).toContain("第一步：请检查伞骨。");
   expect(contentSections[2].content).toContain("第二步：确认连接件。");
@@ -499,11 +763,13 @@ test("review lane header opens lane time details and event clicks replace it", (
   expect(app.skillTestReviewLaneReachedCount("expected.semantic")).toBe(1);
   expect(app.skillTestReviewLaneRuntimeOutputCount("expected.semantic")).toBe(1);
 
+  app.updateSkillTestReviewPlayhead(120000);
   const event = app.skillTestReviewSelectedLaneEvents()[0].event;
   app.openSkillTestReviewEvent(event);
 
   expect(app.selectedSkillTestReviewLaneId).toBe("");
   expect(app.skillTestReviewExpandedEvent().id).toBe("expected_9");
+  expect(app.skillTestReviewPlayheadMsValue()).toBe(120000);
 });
 
 test("review judge debug exposes saved request and model response", () => {
@@ -581,7 +847,7 @@ test("review timeline events open expanded full content", () => {
   );
   expect(app.skillTestReviewEventTooltip(inputEvent)).toContain("点击查看完整内容");
   const metadataLabels = app.skillTestReviewEventMetadata(inputEvent).map((item) => item.label);
-  expect(metadataLabels).toEqual(expect.arrayContaining(["状态", "Event ID", "Event Kind", "MIME", "Required"]));
+  expect(metadataLabels).toEqual(expect.arrayContaining(["状态", "事件 ID", "事件类型", "MIME 类型", "必填"]));
   expect(metadataLabels).not.toEqual(expect.arrayContaining(["信道", "时间"]));
 
   app.closeSkillTestReviewEvent();
@@ -603,7 +869,7 @@ test("opening a semantic review event also selects judge context", () => {
   expect(app.skillTestReviewDetailTab).toBe("content");
   expect(app.skillTestReviewExpandedEvent().id).toBe("expected_9");
   expect(app.skillTestReviewEventContentSections(app.skillTestReviewExpandedEvent())[0]).toEqual(
-    expect.objectContaining({ title: "语义期望", content: "引导用户进行下一步操作" })
+    expect.objectContaining({ title: "阶段期望", content: "引导用户进行下一步操作" })
   );
   expect(app.skillTestReviewExpandedEvaluation(app.skillTestReviewExpandedEvent()).status).toBe("passed");
 });

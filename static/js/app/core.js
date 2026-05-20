@@ -487,14 +487,14 @@
 
           if (this.route.name === "skill-test-scenario") {
             this.activeDetailTab = "test";
-            await this.loadSkillDetail(this.route.params.skillId);
+            await this.loadSkillDetail(this.route.params.skillId, { loadTestCases: false });
             await this.loadSkillTestCaseDetail(this.route.params.skillId, this.route.params.scenarioId);
             return;
           }
 
           if (this.route.name === "skill-test-scenario-new") {
             this.activeDetailTab = "test";
-            await this.loadSkillDetail(this.route.params.skillId);
+            await this.loadSkillDetail(this.route.params.skillId, { loadTestCases: false });
             this.skillTestCase = null;
             this.skillTestDataObjects = [];
             this.resetSkillTestCaseForm();
@@ -503,7 +503,7 @@
 
           if (this.route.name === "skill-test-scenario-review") {
             this.activeDetailTab = "test";
-            await this.loadSkillDetail(this.route.params.skillId);
+            await this.loadSkillDetail(this.route.params.skillId, { loadTestCases: false });
             await this.loadSkillTestRunReview(
               this.route.params.skillId,
               this.route.params.scenarioId,

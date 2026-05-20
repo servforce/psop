@@ -63,11 +63,13 @@
           schema_version: "psop-skill-test-timeline/v1",
           duration_ms: 1800000,
           lanes: [
+            { id: "sensor.gps", kind: "input", label: "GPS", event_kind: "sensor.gps.reading.v1", mime_type: "application/json" },
+            { id: "sensor.pose3d", kind: "input", label: "三轴定位", event_kind: "sensor.pose3d.reading.v1", mime_type: "application/json" },
             { id: "input.text", kind: "input", label: "文本" },
             { id: "input.image", kind: "input", label: "图片" },
             { id: "input.audio", kind: "input", label: "音频" },
             { id: "input.video", kind: "input", label: "视频" },
-            { id: "expected.semantic", kind: "output", label: "语义" }
+            { id: "expected.semantic", kind: "output", label: "文本" }
           ],
           events: []
         };
@@ -112,7 +114,7 @@
           (event) => this.isSkillTestTimelineExpectationEvent(event) && !String(event.expectation || "").trim()
         );
         if (missingExpectation) {
-          throw new Error("请填写语义输出事件的期望内容。");
+          throw new Error("请填写文本输出事件的期望内容。");
         }
       },
 
@@ -130,6 +132,10 @@
         return laneId === "actual.output";
       },
 
+      isSkillTestSensorLane(laneId) {
+        return ["sensor.gps", "sensor.pose3d"].includes(laneId || "");
+      },
+
       isSkillTestTimelineExpectationEvent(event) {
         return this.isSkillTestExpectationLane(event?.lane_id) || Object.prototype.hasOwnProperty.call(event || {}, "expectation");
       },
@@ -138,6 +144,20 @@
       skillTestEventDefaultsForLane(laneId) {
         if (this.isSkillTestExpectationLane(laneId)) {
           return {};
+        }
+        if (laneId === "sensor.gps") {
+          return {
+            event_kind: "sensor.gps.reading.v1",
+            mime_type: "application/json",
+            payload_inline: this.defaultSkillTestSensorPayload(laneId)
+          };
+        }
+        if (laneId === "sensor.pose3d") {
+          return {
+            event_kind: "sensor.pose3d.reading.v1",
+            mime_type: "application/json",
+            payload_inline: this.defaultSkillTestSensorPayload(laneId)
+          };
         }
         if (laneId === "input.image") {
           return { event_kind: "terminal.image.input.v1", mime_type: "image/*" };
@@ -151,8 +171,91 @@
         return { event_kind: "terminal.text.input.v1", mime_type: "text/plain" };
       },
 
+      skillTestSensorFields(laneId) {
+        if (laneId === "sensor.gps") {
+          return [
+            { key: "latitude", label: "纬度", required: true, type: "number" },
+            { key: "longitude", label: "经度", required: true, type: "number" },
+            { key: "altitude", label: "海拔", required: false, type: "number" },
+            { key: "accuracy_m", label: "精度（米）", required: false, type: "number" },
+            { key: "timestamp", label: "时间戳", required: false, type: "text" }
+          ];
+        }
+        if (laneId === "sensor.pose3d") {
+          return [
+            { key: "x", label: "X 坐标", required: true, type: "number" },
+            { key: "y", label: "Y 坐标", required: true, type: "number" },
+            { key: "z", label: "Z 坐标", required: true, type: "number" },
+            { key: "roll", label: "横滚角", required: false, type: "number" },
+            { key: "pitch", label: "俯仰角", required: false, type: "number" },
+            { key: "yaw", label: "偏航角", required: false, type: "number" },
+            { key: "timestamp", label: "时间戳", required: false, type: "text" }
+          ];
+        }
+        return [];
+      },
+
+      defaultSkillTestSensorPayload(laneId) {
+        if (laneId === "sensor.gps") {
+          return { latitude: 0, longitude: 0 };
+        }
+        if (laneId === "sensor.pose3d") {
+          return { x: 0, y: 0, z: 0 };
+        }
+        return {};
+      },
+
+      normalizeSkillTestSensorPayload(laneId, payload) {
+        const fields = this.skillTestSensorFields(laneId);
+        const raw = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+        const normalized = { ...this.defaultSkillTestSensorPayload(laneId), ...raw };
+        fields.forEach((field) => {
+          const value = normalized[field.key];
+          if (field.type === "number") {
+            if (value === "" || value === null || value === undefined) {
+              if (field.required) {
+                normalized[field.key] = 0;
+              } else {
+                delete normalized[field.key];
+              }
+              return;
+            }
+            const numberValue = Number(value);
+            if (Number.isFinite(numberValue)) {
+              normalized[field.key] = numberValue;
+            } else if (field.required) {
+              normalized[field.key] = 0;
+            } else {
+              delete normalized[field.key];
+            }
+          } else if (value !== undefined && value !== null && String(value).trim() !== "") {
+            normalized[field.key] = String(value);
+          } else {
+            delete normalized[field.key];
+          }
+        });
+        return normalized;
+      },
+
+      skillTestSensorFieldValue(event, fieldName) {
+        const payload = event?.payload_inline;
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+          return "";
+        }
+        return payload[fieldName] ?? "";
+      },
+
       skillTestTimelineEventIdPrefix(laneId) {
-        return this.isSkillTestExpectationLane(laneId) ? "expected" : "input";
+        if (this.isSkillTestExpectationLane(laneId)) {
+          return "expected";
+        }
+        if (laneId === "sensor.gps") {
+          return "gps";
+        }
+        if (laneId === "sensor.pose3d") {
+          return "pose";
+        }
+        return "input";
       },
 
       skillTestTimelineEventIdCounts(events) {
@@ -189,6 +292,34 @@
       },
 
 
+      normalizeSkillTestTimelineLanes(lanes) {
+        const defaults = this.defaultSkillTestTimeline().lanes;
+        const defaultIds = defaults.map((lane) => lane.id);
+        const rawLanes = Array.isArray(lanes)
+          ? lanes.filter((lane) => lane && typeof lane === "object" && !Array.isArray(lane) && lane.id)
+          : [];
+        const rawById = new Map();
+        rawLanes.forEach((lane) => {
+          const id = String(lane.id);
+          if (!rawById.has(id)) {
+            rawById.set(id, { ...lane, id });
+          }
+        });
+        const mergedDefaults = defaults.map((lane) => ({ ...(rawById.get(lane.id) || {}), ...lane }));
+        const customLanes = [];
+        const seenCustomIds = new Set(defaultIds);
+        rawLanes.forEach((lane) => {
+          const id = String(lane.id);
+          if (seenCustomIds.has(id)) {
+            return;
+          }
+          seenCustomIds.add(id);
+          customLanes.push({ ...lane, id });
+        });
+        return [...mergedDefaults, ...customLanes];
+      },
+
+
       normalizeSkillTestTimelineDraft(timeline) {
         if (!timeline || typeof timeline !== "object" || Array.isArray(timeline)) {
           return this.defaultSkillTestTimeline();
@@ -196,7 +327,7 @@
         const defaults = this.defaultSkillTestTimeline();
         const draft = JSON.parse(JSON.stringify(timeline));
         const durationMs = Math.max(1, Number(draft.duration_ms || this.skillTestCaseForm.duration_ms || defaults.duration_ms));
-        const lanes = Array.isArray(draft.lanes) && draft.lanes.length ? draft.lanes : defaults.lanes;
+        const lanes = this.normalizeSkillTestTimelineLanes(draft.lanes);
         const events = Array.isArray(draft.events) ? draft.events : [];
         const originalIdCounts = this.skillTestTimelineEventIdCounts(events);
         const reservedIds = new Set(originalIdCounts.keys());
@@ -240,6 +371,9 @@
                 delete normalized.asset_id;
                 delete normalized.event_kind;
                 delete normalized.mime_type;
+              } else if (this.isSkillTestSensorLane(laneId)) {
+                normalized.payload_inline = this.normalizeSkillTestSensorPayload(laneId, event.payload_inline);
+                delete normalized.asset_id;
               }
               normalizedEvents.push(normalized);
               return normalized;
@@ -438,7 +572,13 @@
 
       skillTestTimelineLaneLabel(lane) {
         if (lane?.id === "expected.semantic") {
-          return "语义";
+          return "文本";
+        }
+        if (lane?.id === "sensor.gps") {
+          return "GPS";
+        }
+        if (lane?.id === "sensor.pose3d") {
+          return "三轴";
         }
         if (this.isSkillTestRuntimeOutputLane(lane?.id)) {
           return "真实";
@@ -456,6 +596,12 @@
         }
         if (laneId === "input.video") {
           return "movie";
+        }
+        if (laneId === "sensor.gps") {
+          return "location_on";
+        }
+        if (laneId === "sensor.pose3d") {
+          return "view_in_ar";
         }
         if (laneId === "expected.semantic") {
           return "fact_check";
@@ -534,6 +680,12 @@
         if (laneId === "input.video") {
           return "border-violet-500/25 bg-violet-500/10 text-violet-200";
         }
+        if (laneId === "sensor.gps") {
+          return "border-lime-500/25 bg-lime-500/10 text-lime-200";
+        }
+        if (laneId === "sensor.pose3d") {
+          return "border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-200";
+        }
         return "border-orange-500/30 bg-orange-500/10 text-orange-200";
       },
 
@@ -566,6 +718,12 @@
         }
         if (laneId === "input.video") {
           return "border-violet-500/60 bg-slate-950 text-slate-100 ring-1 ring-violet-500/25";
+        }
+        if (laneId === "sensor.gps") {
+          return "border-lime-500/60 bg-slate-950 text-slate-100 ring-1 ring-lime-500/25";
+        }
+        if (laneId === "sensor.pose3d") {
+          return "border-fuchsia-500/60 bg-slate-950 text-slate-100 ring-1 ring-fuchsia-500/25";
         }
         return "border-orange-500/60 bg-slate-950 text-slate-100 ring-1 ring-orange-500/25";
       },
@@ -605,6 +763,67 @@
         }
         const asset = this.skillTestAssetById(event.asset_id);
         return asset ? this.skillTestAssetLabel(asset) : "文件已绑定";
+      },
+
+
+      skillTestTimelineEventAsset(event) {
+        if (!event?.asset_id) {
+          return null;
+        }
+        return this.skillTestAssetById(event.asset_id);
+      },
+
+
+      skillTestTimelineAssetPreviewKind(event) {
+        const laneId = event?.lane_id || "";
+        const asset = this.skillTestTimelineEventAsset(event);
+        const mimeType = asset?.mime_type || event?.mime_type || "";
+        if (mimeType.startsWith("image/") || laneId === "input.image") {
+          return "image";
+        }
+        if (mimeType.startsWith("audio/") || laneId === "input.audio") {
+          return "audio";
+        }
+        if (mimeType.startsWith("video/") || laneId === "input.video") {
+          return "video";
+        }
+        return "";
+      },
+
+
+      skillTestTimelineAssetPreviewUrl(event) {
+        const asset = this.skillTestTimelineEventAsset(event);
+        if (!asset) {
+          return "";
+        }
+        if (asset.preview_url) {
+          return asset.preview_url;
+        }
+        if (asset.is_local) {
+          return "";
+        }
+        const skillId = this.currentSkill?.id || this.skillTestCase?.skill_definition_id || asset.skill_definition_id || "";
+        const scenarioId = this.skillTestCase?.id || asset.scenario_id || "";
+        if (!skillId || !scenarioId || !asset.id) {
+          return "";
+        }
+        return `${this.apiBaseUrl}/skills/${encodeURIComponent(skillId)}/test-scenarios/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(asset.id)}/content`;
+      },
+
+
+      skillTestTimelineAssetPreviewMeta(event) {
+        const asset = this.skillTestTimelineEventAsset(event);
+        if (!asset) {
+          return "";
+        }
+        const parts = [];
+        if (asset.mime_type) {
+          parts.push(asset.mime_type);
+        }
+        if (asset.size_bytes) {
+          parts.push(this.formatBytes(asset.size_bytes));
+        }
+        return parts.join(" · ");
       },
 
 
@@ -731,6 +950,71 @@
         this.selectedSkillTestTimelineEventIds = eventId ? [eventId] : [];
       },
 
+      skillTestTimelineSelectedEventIdSet() {
+        return new Set([
+          ...(this.selectedSkillTestTimelineEventIds || []),
+          this.selectedSkillTestTimelineEventId
+        ].filter(Boolean));
+      },
+
+      hasSelectedSkillTestTimelineEvents() {
+        const selectedIds = this.skillTestTimelineSelectedEventIdSet();
+        if (!selectedIds.size) {
+          return false;
+        }
+        return this.skillTestTimelineEvents().some((event) => selectedIds.has(event.id));
+      },
+
+      isSkillTestTimelineShortcutEditableTarget(target) {
+        const element = target?.nodeType === 1 ? target : target?.parentElement;
+        if (!element) {
+          return false;
+        }
+        const tagName = String(element.tagName || "").toLowerCase();
+        if (["input", "textarea", "select"].includes(tagName)) {
+          return true;
+        }
+        if (typeof element.closest === "function") {
+          return Boolean(element.closest("[contenteditable]"));
+        }
+        return false;
+      },
+
+      shouldHandleSkillTestTimelineBackspaceShortcut(keyboardEvent) {
+        if (!keyboardEvent || keyboardEvent.defaultPrevented || keyboardEvent.key !== "Backspace") {
+          return false;
+        }
+        if (keyboardEvent.altKey || keyboardEvent.ctrlKey || keyboardEvent.metaKey) {
+          return false;
+        }
+        if (!["skill-test-scenario", "skill-test-scenario-new"].includes(this.route?.name)) {
+          return false;
+        }
+        if (this.isSkillTestTimelineShortcutEditableTarget(keyboardEvent.target)) {
+          return false;
+        }
+        return this.hasSelectedSkillTestTimelineEvents();
+      },
+
+      confirmSkillTestTimelineEventDeletion() {
+        if (typeof this.confirmDangerAction !== "function") {
+          return true;
+        }
+        return this.confirmDangerAction("确认删除事件？此操作可能无法撤销。");
+      },
+
+      handleSkillTestTimelineKeyboardShortcut(keyboardEvent) {
+        if (!this.shouldHandleSkillTestTimelineBackspaceShortcut(keyboardEvent)) {
+          return false;
+        }
+        keyboardEvent.preventDefault?.();
+        keyboardEvent.stopPropagation?.();
+        if (!this.confirmSkillTestTimelineEventDeletion()) {
+          return false;
+        }
+        return this.removeSelectedSkillTestTimelineEvents();
+      },
+
       handleSkillTestTimelineEventClick(clickEvent, eventId) {
         if (!eventId || this.wasSkillTestTimelineDragGesture(eventId)) {
           return;
@@ -794,14 +1078,18 @@
               id: this.nextSkillTestTimelineEventId(timeline.events, "expected"),
               lane_id: "expected.semantic",
               at_ms: atMs,
-              expectation: "描述该时间点以前应满足的语义输出"
+              expectation: "描述该时间点以前应满足的文本输出"
             }
           : {
-              id: this.nextSkillTestTimelineEventId(timeline.events, "input"),
+              id: this.nextSkillTestTimelineEventId(timeline.events, this.skillTestTimelineEventIdPrefix(laneId || "input.text")),
               lane_id: laneId || "input.text",
               at_ms: atMs,
               ...this.skillTestEventDefaultsForLane(laneId || "input.text"),
-              payload_inline: laneId === "input.text" ? "填写文本输入" : ""
+              payload_inline: this.isSkillTestSensorLane(laneId)
+                ? this.defaultSkillTestSensorPayload(laneId)
+                : laneId === "input.text"
+                  ? "填写文本输入"
+                  : ""
             };
         timeline.events.push(event);
         this.writeSkillTestTimelineDraft(timeline);
@@ -814,11 +1102,13 @@
         const laneId = this.skillTestCaseForm.event_lane_id || "input.text";
         const defaultsForLane = this.skillTestEventDefaultsForLane(laneId);
         const event = {
-          id: this.nextSkillTestTimelineEventId(timeline.events, "input"),
+          id: this.nextSkillTestTimelineEventId(timeline.events, this.skillTestTimelineEventIdPrefix(laneId)),
           lane_id: laneId,
           at_ms: Math.max(0, Number(this.skillTestCaseForm.event_at_ms || 0)),
           ...defaultsForLane,
-          payload_inline: this.skillTestCaseForm.event_payload_inline || ""
+          payload_inline: this.isSkillTestSensorLane(laneId)
+            ? this.defaultSkillTestSensorPayload(laneId)
+            : this.skillTestCaseForm.event_payload_inline || ""
         };
         if (this.skillTestCaseForm.event_asset_id) {
           event.asset_id = this.skillTestCaseForm.event_asset_id;
@@ -899,6 +1189,31 @@
         this.skillTestTimelineEventDraft = nextDraft;
       },
 
+      updateSkillTestTimelineSensorField(fieldName, value) {
+        const draft = this.ensureSkillTestTimelineEventDraft();
+        if (!draft || !this.isSkillTestSensorLane(draft.lane_id)) {
+          return;
+        }
+        const payload = this.normalizeSkillTestSensorPayload(draft.lane_id, draft.payload_inline);
+        const field = this.skillTestSensorFields(draft.lane_id).find((item) => item.key === fieldName);
+        if (!field) {
+          return;
+        }
+        if (field.type === "number") {
+          if (value === "" && !field.required) {
+            delete payload[fieldName];
+          } else {
+            const numberValue = Number(value);
+            payload[fieldName] = Number.isFinite(numberValue) ? numberValue : 0;
+          }
+        } else if (value === "") {
+          delete payload[fieldName];
+        } else {
+          payload[fieldName] = String(value);
+        }
+        this.skillTestTimelineEventDraft = { ...draft, payload_inline: payload };
+      },
+
       flushSkillTestTimelineEventDraft() {
         const draft = this.skillTestTimelineEventDraft;
         if (!draft?.id) {
@@ -964,10 +1279,29 @@
 
 
       removeSelectedSkillTestTimelineEvent() {
-        const selected = this.skillTestTimelineSelectedEvent();
-        if (selected) {
-          this.removeSkillTestTimelineEvent(selected.index);
+        return this.removeSelectedSkillTestTimelineEvents();
+      },
+
+      removeSelectedSkillTestTimelineEvents() {
+        const selectedIds = this.skillTestTimelineSelectedEventIdSet();
+        if (!selectedIds.size) {
+          return false;
         }
+        const timeline = this.skillTestTimelineDraft();
+        const nextEvents = (timeline.events || []).filter((event) => !selectedIds.has(event.id));
+        if (nextEvents.length === (timeline.events || []).length) {
+          return false;
+        }
+        timeline.events = nextEvents;
+        this.selectedSkillTestTimelineEventId = "";
+        this.selectedSkillTestTimelineEventIds = [];
+        this.skillTestTimelineEventDraft = null;
+        this.skillTestTimelineDragState = null;
+        if (this.skillTestScenarioDetailPanel === "event") {
+          this.skillTestScenarioDetailPanel = "info";
+        }
+        this.writeSkillTestTimelineDraft(timeline);
+        return true;
       },
 
 
@@ -1086,6 +1420,9 @@
         if (this.isSkillTestRuntimeOutputLane(event?.lane_id)) {
           return this.skillTestReviewRuntimeOutputLabel(event);
         }
+        if (this.isSkillTestSensorLane(event?.lane_id)) {
+          return this.skillTestSensorEventLabel(event);
+        }
         if (event.asset_id) {
           const asset = this.skillTestAssetById(event.asset_id);
           if (asset) {
@@ -1106,6 +1443,9 @@
         if (this.isSkillTestTimelineExpectationEvent(event)) {
           return event.expectation || "";
         }
+        if (this.isSkillTestSensorLane(event?.lane_id)) {
+          return this.formatSkillTestReviewDebugJson(event?.payload_inline || {});
+        }
         const payload = event?.payload_inline;
         if (typeof payload === "string") {
           return payload;
@@ -1114,6 +1454,17 @@
           return payload.caption || payload.description || "";
         }
         return "";
+      },
+
+      skillTestSensorEventLabel(event) {
+        const payload = this.normalizeSkillTestSensorPayload(event?.lane_id, event?.payload_inline);
+        if (event?.lane_id === "sensor.gps") {
+          return `${payload.latitude}, ${payload.longitude}`;
+        }
+        if (event?.lane_id === "sensor.pose3d") {
+          return `x ${payload.x} / y ${payload.y} / z ${payload.z}`;
+        }
+        return "传感器读数";
       },
 
 
@@ -1273,6 +1624,9 @@
 
       createSkillTestAssetDraftFromFile(file, options = {}) {
         const laneId = options.lane_id || options.laneId || this.inferSkillTestLaneForMime(file.type || "");
+        const previewUrl = typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
+          ? URL.createObjectURL(file)
+          : "";
         return {
           id: `local_${Date.now()}_${Math.random().toString(16).slice(2)}`,
           skill_definition_id: this.currentSkill?.id || "",
@@ -1287,6 +1641,7 @@
           checksum: "local",
           created_at: new Date().toISOString(),
           file,
+          preview_url: previewUrl,
           is_local: true
         };
       },
@@ -1618,7 +1973,44 @@
       },
 
 
+      async cancelSkillTestRun() {
+        if (!this.skillTestRun || !this.isOpenSkillTestRun(this.skillTestRun)) {
+          return;
+        }
+        if (!this.confirmDangerAction("确认终止当前测试运行？终止后不会继续发送时间轴事件。")) {
+          return;
+        }
+        this.busy.skillTestCancel = true;
+        try {
+          this.stopSkillTestReviewPlayback();
+          const cancelled = await this.apiRequest(`/skill-test-scenario-runs/${this.skillTestRun.id}/cancel`, {
+            method: "POST",
+            body: JSON.stringify({ reason: "用户终止测试" })
+          });
+          this.skillTestRun = cancelled;
+          this.skillTestRuns = window.PSOPRuntimeEvents.mergeById(this.skillTestRuns || [], [cancelled]);
+          if (this.skillTestReview?.scenario_run?.id === cancelled.id) {
+            await this.refreshSkillTestRunReview(cancelled.id, { force: true });
+          }
+          this.stopSkillTestReviewPolling();
+          this.showNotice("success", "已终止测试运行。");
+        } catch (error) {
+          this.showNotice("error", error.message || "终止测试运行失败。");
+        } finally {
+          this.busy.skillTestCancel = false;
+        }
+      },
+
+
       currentSkillTestForkCursor() {
+        const stageOutput = this.selectedSkillTestStageOutput();
+        if (stageOutput?.cursor) {
+          return {
+            time_ms: Math.max(0, Number(stageOutput.cursor.time_ms || 0)),
+            terminal_seq: Math.max(0, Number(stageOutput.cursor.terminal_seq || 0)),
+            snapshot_seq: Math.max(0, Number(stageOutput.cursor.snapshot_seq || 0))
+          };
+        }
         const cutoffMs = this.skillTestReviewPlayheadMsValue();
         const anchors = this.skillTestReview?.cursor_anchors || [];
         const anchor =
@@ -1891,6 +2283,22 @@
         if (!this.isSkillTestTimelineExpectationEvent(expectationEvent)) {
           return [];
         }
+        const stageOutput = this.skillTestReviewStageOutputForEvent(expectationEvent);
+        if (stageOutput?.actual_outputs?.length) {
+          return stageOutput.actual_outputs.map((output, index) => ({
+            id: output.id || `stage_output_${expectationEvent.id}_${index}`,
+            lane_id: "actual.output",
+            at_ms: Number(output.at_ms || 0),
+            event_kind: output.event_kind || "terminal.output",
+            mime_type: output.mime_type || "",
+            payload_inline: output.payload_inline,
+            seq_no: output.seq_no,
+            occurred_at: output.occurred_at,
+            direction: "output",
+            required: false,
+            terminal_event: output
+          }));
+        }
         const expectations = this.skillTestReviewSemanticExpectationEvents();
         const targetIndex = expectations.findIndex((event) => event.id === expectationEvent.id);
         if (targetIndex < 0) {
@@ -2055,6 +2463,29 @@
         return this.skillTestReviewEvaluations().find((item) => item.expectation_id === expectationId) || null;
       },
 
+      skillTestReviewStageOutputs() {
+        return this.skillTestReview?.stage_outputs || [];
+      },
+
+      skillTestReviewStageOutputFor(stageId) {
+        return this.skillTestReviewStageOutputs().find((item) => item.stage_id === stageId || item.event_id === stageId) || null;
+      },
+
+      skillTestReviewStageOutputForEvent(event) {
+        if (!this.isSkillTestTimelineExpectationEvent(event)) {
+          return null;
+        }
+        return this.skillTestReviewStageOutputFor(event.id);
+      },
+
+      selectedSkillTestStageOutput() {
+        const expandedEvent = this.skillTestReviewExpandedEvent();
+        if (this.isSkillTestTimelineExpectationEvent(expandedEvent)) {
+          return this.skillTestReviewStageOutputForEvent(expandedEvent);
+        }
+        return this.skillTestReviewStageOutputForEvent(this.selectedSkillTestReviewExpectationEvent());
+      },
+
 
       selectSkillTestReviewEvent(event) {
         if (!this.isSkillTestTimelineExpectationEvent(event)) {
@@ -2092,6 +2523,8 @@
         this.selectedSkillTestReviewLaneId = "";
         if (this.isSkillTestTimelineExpectationEvent(event)) {
           this.selectSkillTestReviewEvent(event);
+        } else {
+          this.selectedSkillTestReviewExpectationId = "";
         }
         this.skillTestReviewExpandedEventKey = this.skillTestReviewEventKey(event);
         this.skillTestReviewDetailTab = "content";
@@ -2142,20 +2575,51 @@
           return [];
         }
         if (this.isSkillTestTimelineExpectationEvent(event)) {
-          return [
+          const stageOutput = this.skillTestReviewStageOutputForEvent(event);
+          const sections = [
             {
               id: `${event.id || "expectation"}:expectation`,
-              title: "语义期望",
+              title: "阶段期望",
               meta: this.formatSkillTestTimelineMs(event.at_ms || 0),
               content: event.expectation || "暂无语义期望。"
-            },
+            }
+          ];
+          if (stageOutput) {
+            const cursor = stageOutput.cursor || {};
+            sections.push({
+              id: `${event.id || "expectation"}:slice`,
+              title: "阶段切面",
+              meta: this.formatSkillTestTimelineMs(stageOutput.time_ms ?? event.at_ms ?? 0),
+              content: [
+                `切面时间: ${this.formatSkillTestTimelineMs(stageOutput.time_ms ?? event.at_ms ?? 0)}`,
+                `Terminal Seq: ${cursor.terminal_seq === undefined || cursor.terminal_seq === null ? 0 : cursor.terminal_seq}`,
+                `Snapshot Seq: ${cursor.snapshot_seq === undefined || cursor.snapshot_seq === null ? 0 : cursor.snapshot_seq}`
+              ].join("\n")
+            });
+          }
+          sections.push(
             ...this.skillTestReviewRuntimeOutputsForExpectation(event).map((outputEvent, index) => ({
               id: outputEvent.id || `${event.id || "expectation"}:runtime:${index}`,
               title: `真实输出 #${index + 1}`,
               meta: this.formatSkillTestTimelineMs(outputEvent.at_ms || 0),
               content: this.skillTestReviewRuntimeOutputLabel(outputEvent)
             }))
-          ];
+          );
+          if (stageOutput) {
+            sections.push({
+              id: `${event.id || "expectation"}:judge`,
+              title: "智能体判定",
+              meta: stageOutput.judge_result?.status || "pending",
+              content: stageOutput.judge_result?.reason || "暂无 Judge 结论。"
+            });
+            sections.push({
+              id: `${event.id || "expectation"}:human`,
+              title: "人工判定",
+              meta: stageOutput.human_review?.status || "pending",
+              content: stageOutput.human_review?.reason || "等待人工复核。"
+            });
+          }
+          return sections;
         }
         if (this.isSkillTestRuntimeOutputLane(event.lane_id)) {
           return [
@@ -2164,6 +2628,16 @@
               title: "真实输出",
               meta: this.formatSkillTestTimelineMs(event.at_ms || 0),
               content: this.skillTestReviewRuntimeOutputLabel(event)
+            }
+          ];
+        }
+        if (this.isSkillTestSensorLane(event.lane_id)) {
+          return [
+            {
+              id: `${event.id || "sensor"}:payload`,
+              title: "传感器读数",
+              meta: this.skillTestTimelineLaneLabel({ id: event.lane_id }),
+              content: this.formatSkillTestReviewDebugJson(event.payload_inline || {})
             }
           ];
         }
@@ -2211,28 +2685,31 @@
         const terminalEvent = event.terminal_event || null;
         const asset = event.asset_id ? this.skillTestAssetById(event.asset_id) : null;
         const assetLabel = asset ? this.skillTestAssetLabel(asset) : event.asset_id ? this.skillTestTimelineEventAssetLabel(event) : "";
+        const stageOutput = this.skillTestReviewStageOutputForEvent(event);
         const pairs = [
           ["状态", this.skillTestReviewEventStatusLabel(event)],
+          ["阶段 ID", stageOutput?.stage_id],
+          ["人工判定", stageOutput?.human_review?.status],
           [
             "真实输出",
             this.isSkillTestTimelineExpectationEvent(event)
               ? `${this.skillTestReviewRuntimeOutputsForExpectation(event).length} 个`
               : ""
           ],
-          ["Event ID", event.id],
-          ["Event Kind", event.event_kind],
-          ["MIME", event.mime_type],
-          ["Asset", event.asset_id ? `${assetLabel} · ${event.asset_id}` : ""],
-          ["Required", event.required === false ? "false" : "true"]
+          ["事件 ID", event.id],
+          ["事件类型", event.event_kind],
+          ["MIME 类型", event.mime_type],
+          ["资源", event.asset_id ? `${assetLabel} · ${event.asset_id}` : ""],
+          ["必填", event.required === false ? "否" : "是"]
         ];
         if (terminalEvent) {
           pairs.push(
-            ["Terminal Seq", terminalEvent.seq_no === undefined || terminalEvent.seq_no === null ? "" : `#${terminalEvent.seq_no}`],
-            ["Direction", this.terminalDirectionLabel(terminalEvent.direction)],
-            ["Occurred At", this.formatDateTime(terminalEvent.occurred_at)],
-            ["Terminal Event Kind", terminalEvent.event_kind],
-            ["Terminal MIME", terminalEvent.mime_type],
-            ["Artifact Object", terminalEvent.artifact_object_id]
+            ["终端序号", terminalEvent.seq_no === undefined || terminalEvent.seq_no === null ? "" : `#${terminalEvent.seq_no}`],
+            ["方向", this.terminalDirectionLabel(terminalEvent.direction)],
+            ["发生时间", this.formatDateTime(terminalEvent.occurred_at)],
+            ["终端事件类型", terminalEvent.event_kind],
+            ["终端 MIME 类型", terminalEvent.mime_type],
+            ["Artifact 对象", terminalEvent.artifact_object_id]
           );
         }
         return pairs

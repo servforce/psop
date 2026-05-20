@@ -25,7 +25,7 @@
     <script defer src="/node_modules/alpinejs/dist/cdn.min.js"></script>
   </head>
   <body class="psop-dark h-dvh overflow-hidden bg-slate-950 text-slate-200">
-    <div x-data="skillsConsole()" x-init="boot()" class="h-dvh overflow-hidden" x-cloak>
+    <div x-data="skillsConsole()" x-init="boot()" class="h-dvh overflow-hidden" @keydown.window="handleSkillTestTimelineKeyboardShortcut($event)" x-cloak>
       <div class="flex h-dvh overflow-hidden bg-[#09090b]">
         <aside
             class="hidden h-full shrink-0 flex-col overflow-hidden border-r border-slate-800 bg-slate-950/95 shadow-none transition-all duration-200 lg:flex"
