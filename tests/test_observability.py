@@ -6,7 +6,9 @@ import json
 import logging
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.app import create_app
 from app.core.config import Settings
 from app.core.logging import JsonLogFormatter, configure_logging, log_context
 from app.core.observability import configure_observability, start_span
@@ -128,3 +130,56 @@ def test_start_span_preserves_business_exception() -> None:
     with pytest.raises(RuntimeError, match="business failed"):
         with start_span("test.business_exception"):
             raise RuntimeError("business failed")
+
+
+def test_create_app_request_spans_share_one_trace(monkeypatch) -> None:
+    import app.core.observability as observability
+
+    monkeypatch.setattr(observability, "_build_otlp_span_exporter", lambda _settings: None)
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonLogFormatter())
+    logger = logging.getLogger("tests.observability.request")
+    original_handlers = list(logger.handlers)
+    original_propagate = logger.propagate
+    original_level = logger.level
+    logger.handlers = [handler]
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        database_check_on_startup=False,
+        database_auto_create_schema=False,
+        runtime_worker_enabled=False,
+        otel_enabled=True,
+        otel_traces_enabled=True,
+        otel_logs_enabled=False,
+    )
+    app = create_app(settings)
+
+    @app.get("/probe-trace")
+    def probe_trace() -> dict[str, bool]:
+        logger.info("request start")
+        with start_span("probe.child1"):
+            logger.info("child 1")
+        with start_span("probe.child2"):
+            logger.info("child 2")
+        return {"ok": True}
+
+    try:
+        with TestClient(app) as client:
+            response = client.get("/probe-trace")
+    finally:
+        logger.handlers = original_handlers
+        logger.propagate = original_propagate
+        logger.setLevel(original_level)
+
+    assert response.status_code == 200
+    payloads = [json.loads(line) for line in stream.getvalue().splitlines()]
+    by_message = {payload["message"]: payload for payload in payloads}
+
+    request_trace_id = by_message["request start"]["trace_id"]
+    assert by_message["child 1"]["trace_id"] == request_trace_id
+    assert by_message["child 2"]["trace_id"] == request_trace_id
+    assert by_message["child 1"]["span_id"] != by_message["child 2"]["span_id"]

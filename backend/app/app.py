@@ -32,8 +32,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     db_manager: DatabaseManager = app.state.db_manager
     configure_logging(settings.log_level, log_format=settings.log_format)
-    observability = configure_observability(app=app, settings=settings, engine=db_manager.engine)
-    app.state.observability = observability
+    observability = getattr(app.state, "observability", None)
+    if observability is None:
+        observability = configure_observability(app=app, settings=settings, engine=db_manager.engine)
+        app.state.observability = observability
     LOGGER.info(
         "starting %s in %s mode",
         settings.app_name,
@@ -74,6 +76,7 @@ def create_app(
     object_store: ObjectStoreService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
+    configure_logging(resolved_settings.log_level, log_format=resolved_settings.log_format)
 
     app = FastAPI(
         title=resolved_settings.app_name,
@@ -109,4 +112,10 @@ def create_app(
     app.include_router(root_router)
     app.include_router(ws_router)
     app.include_router(api_router, prefix=resolved_settings.api_prefix)
+    # FastAPI OTel instrumentation must run before the ASGI middleware stack is built.
+    app.state.observability = configure_observability(
+        app=app,
+        settings=resolved_settings,
+        engine=app.state.db_manager.engine,
+    )
     return app

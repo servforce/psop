@@ -77,7 +77,8 @@ def configure_observability(*, app: Any, settings: Settings, engine: Any | None 
 
     handle = ObservabilityHandle(enabled=True)
     global _PROVIDERS_INITIALIZED
-    if not _PROVIDERS_INITIALIZED:
+    providers_requested = settings.otel_traces_enabled or settings.otel_logs_enabled
+    if providers_requested and not _PROVIDERS_INITIALIZED:
         if settings.otel_traces_enabled:
             handle.tracer_provider = _configure_traces(settings=settings, resource=resource, trace_module=trace)
         if settings.otel_logs_enabled:
