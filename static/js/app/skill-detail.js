@@ -147,15 +147,18 @@
         this.rawMaterialsLoadedSkillId = null;
         this.rawMaterials = [];
         this.rawMaterialDetail = null;
+        this.rawMaterialAnalysis = null;
         this.selectedRawMaterialIds = [];
-        this.rawMaterialUploadMode = "file";
-        this.rawMaterialUploadFile = null;
+        this.rawMaterialUploadFiles = [];
+        this.rawMaterialUploadItems = [];
+        this.rawMaterialUploadSelectedIndex = 0;
+        this.rawMaterialUploadNameAutoFilled = false;
+        this.rawMaterialUploadProgress = null;
+        this.rawMaterialUploadError = "";
         this.rawMaterialUploadForm = {
           name: "",
           description: "",
-          material_kind: "",
-          source_note: "",
-          source_url: ""
+          source_note: ""
         };
         this.rawMaterialUploadModalOpen = false;
         this.rawMaterialGenerateModalOpen = false;
@@ -250,6 +253,7 @@
           );
           if (this.rawMaterialDetail && !this.rawMaterials.some((material) => material.id === this.rawMaterialDetail.id)) {
             this.rawMaterialDetail = null;
+            this.rawMaterialAnalysis = null;
           }
           if (!this.rawMaterialDetail && this.rawMaterials.length > 0) {
             await this.openRawMaterialDetail(this.rawMaterials[0]);
@@ -268,30 +272,91 @@
         this.busy.rawMaterialDetail = true;
         try {
           this.rawMaterialDetail = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`);
+          await this.loadRawMaterialAnalysis(this.rawMaterialDetail.id);
         } finally {
           this.busy.rawMaterialDetail = false;
         }
       },
 
 
-      handleRawMaterialFileChange(event) {
-        const file = event?.target?.files?.[0] || null;
-        this.rawMaterialUploadFile = file;
-        if (file && !this.rawMaterialUploadForm.name) {
-          this.rawMaterialUploadForm.name = file.name;
+      async loadRawMaterialAnalysis(materialId) {
+        if (!this.currentSkill || !materialId) {
+          return;
+        }
+        try {
+          this.rawMaterialAnalysis = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${materialId}/analysis`);
+        } catch (error) {
+          this.rawMaterialAnalysis = null;
         }
       },
 
 
-      openRawMaterialUploadModal(mode = "file") {
-        this.rawMaterialUploadMode = mode;
-        this.rawMaterialUploadFile = null;
+      async analyzeRawMaterial(material = this.rawMaterialDetail) {
+        if (!this.currentSkill || !material) {
+          return;
+        }
+        const analysisStatus = material.analysis_status || material.status;
+        if (material.status === "processing" || ["pending", "running"].includes(analysisStatus)) {
+          this.showNotice("error", "素材正在分析中，不能重复解析。");
+          return;
+        }
+        const materialId = material.id;
+        this.busy.rawMaterialAnalyze = true;
+        this.clearNotice();
+        try {
+          const analysis = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${materialId}/analyze`, {
+            method: "POST"
+          });
+          await this.loadRawMaterials(this.currentSkill.id, true);
+          if (this.rawMaterialDetail?.id === materialId) {
+            this.rawMaterialAnalysis = analysis;
+            this.rawMaterialDetail = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${materialId}`);
+          }
+          this.showNotice("success", "素材分析任务已提交。");
+        } catch (error) {
+          this.showNotice("error", error.message || "提交素材分析失败。");
+        } finally {
+          this.busy.rawMaterialAnalyze = false;
+        }
+      },
+
+
+      handleRawMaterialFileChange(event) {
+        const files = Array.from(event?.target?.files || []);
+        if (files.length === 0) {
+          return;
+        }
+        this.syncRawMaterialUploadSelectedItem();
+        const nextItems = files.map((file) => ({
+          file,
+          name: file.name,
+          description: "",
+          source_note: ""
+        }));
+        const startIndex = this.rawMaterialUploadItems.length;
+        this.rawMaterialUploadItems = [...this.rawMaterialUploadItems, ...nextItems];
+        this.rawMaterialUploadFiles = this.rawMaterialUploadItems.map((item) => item.file);
+        this.rawMaterialUploadSelectedIndex = startIndex;
+        this.rawMaterialUploadForm = this.rawMaterialUploadItemForm(this.rawMaterialUploadSelectedItem());
+        this.rawMaterialUploadError = "";
+        this.rawMaterialUploadNameAutoFilled = nextItems.length === 1;
+        if (this.$refs.rawMaterialFileInput) {
+          this.$refs.rawMaterialFileInput.value = "";
+        }
+      },
+
+
+      openRawMaterialUploadModal() {
+        this.rawMaterialUploadFiles = [];
+        this.rawMaterialUploadItems = [];
+        this.rawMaterialUploadSelectedIndex = 0;
+        this.rawMaterialUploadNameAutoFilled = false;
+        this.rawMaterialUploadProgress = null;
+        this.rawMaterialUploadError = "";
         this.rawMaterialUploadForm = {
           name: "",
           description: "",
-          material_kind: "",
-          source_note: "",
-          source_url: ""
+          source_note: ""
         };
         this.rawMaterialUploadModalOpen = true;
       },
@@ -305,59 +370,198 @@
       },
 
 
+      rawMaterialUploadSelectedItem() {
+        return this.rawMaterialUploadItems[this.rawMaterialUploadSelectedIndex] || null;
+      },
+
+
+      rawMaterialUploadItemForm(item) {
+        return {
+          name: item?.name || "",
+          description: item?.description || "",
+          source_note: item?.source_note || ""
+        };
+      },
+
+
+      selectRawMaterialUploadItem(index) {
+        if (this.busy.rawMaterialUpload || index < 0 || index >= this.rawMaterialUploadItems.length) {
+          return;
+        }
+        this.syncRawMaterialUploadSelectedItem();
+        this.rawMaterialUploadSelectedIndex = index;
+        this.rawMaterialUploadForm = this.rawMaterialUploadItemForm(this.rawMaterialUploadSelectedItem());
+        this.rawMaterialUploadNameAutoFilled = false;
+      },
+
+
+      syncRawMaterialUploadSelectedItem() {
+        const item = this.rawMaterialUploadSelectedItem();
+        if (!item) {
+          return;
+        }
+        ["name", "description", "source_note"].forEach((key) => {
+          item[key] = this.rawMaterialUploadForm[key] || "";
+        });
+      },
+
+
+      removeRawMaterialUploadItem(index) {
+        if (this.busy.rawMaterialUpload || index < 0 || index >= this.rawMaterialUploadItems.length) {
+          return;
+        }
+        this.syncRawMaterialUploadSelectedItem();
+        this.rawMaterialUploadItems.splice(index, 1);
+        this.rawMaterialUploadFiles = this.rawMaterialUploadItems.map((item) => item.file);
+        if (this.rawMaterialUploadSelectedIndex >= this.rawMaterialUploadItems.length) {
+          this.rawMaterialUploadSelectedIndex = Math.max(0, this.rawMaterialUploadItems.length - 1);
+        } else if (index < this.rawMaterialUploadSelectedIndex) {
+          this.rawMaterialUploadSelectedIndex -= 1;
+        }
+        this.rawMaterialUploadForm = this.rawMaterialUploadItemForm(this.rawMaterialUploadSelectedItem());
+        if (this.rawMaterialUploadItems.length === 0 && this.$refs.rawMaterialFileInput) {
+          this.$refs.rawMaterialFileInput.value = "";
+        }
+      },
+
+
       async submitRawMaterial() {
         if (!this.currentSkill) {
           return;
         }
-        if (this.rawMaterialUploadMode === "file" && !this.rawMaterialUploadFile) {
-          this.showCenterToast("error", "请选择要上传的素材文件。");
+        this.rawMaterialUploadError = "";
+        this.syncRawMaterialUploadSelectedItem();
+        const selectedItems = this.rawMaterialUploadItems.length > 0
+          ? this.rawMaterialUploadItems
+          : Array.from(this.$refs.rawMaterialFileInput?.files || []).map((file) => ({
+            file,
+            name: file.name,
+            description: "",
+            source_note: ""
+          }));
+        if (selectedItems.length === 0) {
+          this.rawMaterialUploadError = "请选择要上传的素材文件。";
           return;
         }
-        if (this.rawMaterialUploadMode === "url" && !this.rawMaterialUploadForm.source_url.trim()) {
-          this.showCenterToast("error", "请输入参考 URL。");
-          return;
-        }
-
-        const formData = new FormData();
-        if (this.rawMaterialUploadMode === "file") {
-          formData.append("file", this.rawMaterialUploadFile);
-        } else {
-          formData.append("source_url", this.rawMaterialUploadForm.source_url.trim());
-        }
-        ["name", "description", "material_kind", "source_note"].forEach((key) => {
-          const value = this.rawMaterialUploadForm[key];
-          if (value) {
-            formData.append(key, value);
-          }
-        });
 
         this.busy.rawMaterialUpload = true;
         this.clearNotice();
+        const createdMaterials = [];
+        const failedUploads = [];
         try {
-          const created = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials`, {
-            method: "POST",
-            body: formData
-          });
-          this.rawMaterialUploadFile = null;
+          for (const [index, item] of selectedItems.entries()) {
+            const selectedFile = item.file;
+            this.rawMaterialUploadProgress = {
+              current: index + 1,
+              total: selectedItems.length,
+              filename: selectedFile.name
+            };
+            const formData = new FormData();
+            formData.append("file", selectedFile);
+            ["name", "description", "source_note"].forEach((key) => {
+              const value = item[key];
+              if (value) {
+                formData.append(key, value);
+              }
+            });
+            try {
+              const created = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials`, {
+                method: "POST",
+                body: formData
+              });
+              createdMaterials.push(created);
+            } catch (error) {
+              failedUploads.push({
+                ...item,
+                message: error.message || "保存素材失败。"
+              });
+            }
+          }
+
+          if (createdMaterials.length > 0) {
+            await this.loadRawMaterials(this.currentSkill.id, true);
+          }
+          if (failedUploads.length > 0) {
+            this.rawMaterialUploadItems = failedUploads.map(({ message, ...item }) => item);
+            this.rawMaterialUploadFiles = this.rawMaterialUploadItems.map((item) => item.file);
+            this.rawMaterialUploadSelectedIndex = 0;
+            this.rawMaterialUploadForm = this.rawMaterialUploadItemForm(this.rawMaterialUploadSelectedItem());
+            this.rawMaterialUploadNameAutoFilled = false;
+            if (this.$refs.rawMaterialFileInput) {
+              this.$refs.rawMaterialFileInput.value = "";
+            }
+            const prefix = createdMaterials.length > 0 ? `已上传 ${createdMaterials.length} 个素材，` : "";
+            const firstFailure = failedUploads[0];
+            const suffix = failedUploads.length === 1
+              ? `${firstFailure.file.name} 上传失败：${firstFailure.message}`
+              : `${failedUploads.length} 个文件上传失败，首个失败：${firstFailure.file.name}：${firstFailure.message}`;
+            const message = `${prefix}${suffix}`;
+            this.rawMaterialUploadError = message;
+            this.showNotice("error", message);
+            return;
+          }
+
+          this.rawMaterialUploadFiles = [];
+          this.rawMaterialUploadItems = [];
+          this.rawMaterialUploadSelectedIndex = 0;
+          this.rawMaterialUploadNameAutoFilled = false;
+          this.rawMaterialUploadProgress = null;
           this.rawMaterialUploadForm = {
             name: "",
             description: "",
-            material_kind: "",
-            source_note: "",
-            source_url: ""
+            source_note: ""
           };
           if (this.$refs.rawMaterialFileInput) {
             this.$refs.rawMaterialFileInput.value = "";
           }
           this.rawMaterialUploadModalOpen = false;
-          await this.loadRawMaterials(this.currentSkill.id, true);
-          await this.openRawMaterialDetail(created);
-          this.showNotice(created.status === "ready" ? "success" : "error", created.status === "ready" ? "素材已保存并解析完成。" : "素材已保存，但解析失败。");
+          if (createdMaterials.length > 0) {
+            await this.loadRawMaterials(this.currentSkill.id, true);
+          }
+          const lastCreated = createdMaterials[createdMaterials.length - 1];
+          if (lastCreated) {
+            await this.openRawMaterialDetail(lastCreated);
+          }
+          const noticeType = createdMaterials.some((material) => material.status === "failed") ? "error" : "success";
+          this.showNotice(noticeType, this.rawMaterialUploadSuccessMessage(createdMaterials));
         } catch (error) {
-          this.showNotice("error", error.message || "保存素材失败。");
+          const message = error.message || "保存素材失败。";
+          this.rawMaterialUploadError = message;
+          this.showNotice("error", message);
         } finally {
+          this.rawMaterialUploadProgress = null;
           this.busy.rawMaterialUpload = false;
         }
+      },
+
+
+      rawMaterialUploadSuccessMessage(createdMaterials) {
+        if (!Array.isArray(createdMaterials) || createdMaterials.length === 0) {
+          return "素材已保存。";
+        }
+        if (createdMaterials.length === 1) {
+          const created = createdMaterials[0];
+          const statusMessages = {
+            ready: "素材已保存并解析完成。",
+            processing: "素材已保存，视频分析已开始。",
+            failed: created.error_message || "素材已保存，但解析失败。"
+          };
+          return statusMessages[created.status] || "素材已保存。";
+        }
+        const processingCount = createdMaterials.filter((material) => material.status === "processing").length;
+        const failedCount = createdMaterials.filter((material) => material.status === "failed").length;
+        const readyCount = createdMaterials.filter((material) => material.status === "ready").length;
+        const parts = [`已上传 ${createdMaterials.length} 个素材`];
+        if (readyCount) {
+          parts.push(`${readyCount} 个已解析`);
+        }
+        if (processingCount) {
+          parts.push(`${processingCount} 个视频已开始分析`);
+        }
+        if (failedCount) {
+          parts.push(`${failedCount} 个解析失败`);
+        }
+        return `${parts.join("，")}。`;
       },
 
 
@@ -408,9 +612,23 @@
       },
 
 
+      selectedReadyVideoRawMaterials() {
+        return this.selectedRawMaterials().filter((material) => this.isVideoRawMaterial(material) && material.status === "ready");
+      },
+
+
+      hasSelectedReadyVideoRawMaterial() {
+        return this.selectedReadyVideoRawMaterials().length > 0;
+      },
+
+
       openRawMaterialGenerateModal() {
         if (this.selectedRawMaterialIds.length === 0) {
           this.showCenterToast("error", "请选择至少一个已解析素材。");
+          return;
+        }
+        if (!this.hasSelectedReadyVideoRawMaterial()) {
+          this.showCenterToast("error", "请至少选择一个已分析完成的视频素材。");
           return;
         }
         this.rawMaterialGenerateForm = {
@@ -472,7 +690,6 @@
           image: "图片",
           audio: "音频",
           video: "视频",
-          url: "URL",
           file: "文件"
         };
         return labels[value] || value || "素材";
@@ -487,7 +704,6 @@
           image: "image",
           audio: "graphic_eq",
           video: "movie",
-          url: "link",
           file: "attach_file"
         };
         return icons[value] || "draft";
@@ -499,6 +715,19 @@
           return "";
         }
         return `${this.apiBaseUrl}/skills/${encodeURIComponent(this.currentSkill.id)}/raw-materials/${encodeURIComponent(material.id)}/content`;
+      },
+
+
+      rawMaterialDerivedAssetContentUrl(asset) {
+        if (!this.currentSkill || !this.rawMaterialDetail?.id || !asset?.id) {
+          return "";
+        }
+        return `${this.apiBaseUrl}/skills/${encodeURIComponent(this.currentSkill.id)}/raw-materials/${encodeURIComponent(this.rawMaterialDetail.id)}/derived-assets/${encodeURIComponent(asset.id)}/content`;
+      },
+
+
+      isVideoRawMaterial(material) {
+        return material?.material_kind === "video" || String(material?.mime_type || "").startsWith("video/");
       },
 
 

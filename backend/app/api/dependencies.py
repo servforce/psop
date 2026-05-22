@@ -11,6 +11,7 @@ from app.domain.compiler.service import CompilerService
 from app.domain.runtime.service import RuntimeService
 from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.service import SkillsService
+from app.gateway.asr import AsrGateway
 from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway
 from app.infra.database import DatabaseManager
@@ -31,6 +32,10 @@ def get_gitlab_gateway(request: Request) -> GitLabSkillSourceGateway:
 
 def get_inference_gateway(request: Request) -> LlmInferenceGateway:
     return request.app.state.inference_gateway  # type: ignore[return-value]
+
+
+def get_asr_gateway(request: Request) -> AsrGateway:
+    return request.app.state.asr_gateway  # type: ignore[return-value]
 
 
 def get_object_store(request: Request) -> ObjectStoreService:
@@ -54,6 +59,7 @@ def get_skills_service(request: Request) -> SkillsService:
         gitlab_gateway=get_gitlab_gateway(request),
         compiler_service=compiler_service,
         inference_gateway=get_inference_gateway(request),
+        asr_gateway=get_asr_gateway(request),
         object_store=get_object_store(request),
         agent_prompt_service=get_agent_prompt_service(request),
     )

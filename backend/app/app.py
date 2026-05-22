@@ -18,6 +18,7 @@ from app.core.logging import configure_logging
 from app.core.observability import configure_observability
 from app.domain.skills.exceptions import SkillsError
 from app.domain.jobs.worker import RuntimeJobWorker
+from app.gateway.asr import AsrGateway, HttpAsrGateway
 from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway, HttpGitLabSkillSourceGateway
 from app.infra.database import DatabaseManager
@@ -53,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             database_manager=db_manager,
             gitlab_gateway=app.state.gitlab_gateway,
             inference_gateway=app.state.inference_gateway,
+            asr_gateway=app.state.asr_gateway,
             object_store=app.state.object_store,
         )
         worker_task = asyncio.create_task(worker.run_forever())
@@ -73,6 +75,7 @@ def create_app(
     *,
     gitlab_gateway: GitLabSkillSourceGateway | None = None,
     inference_gateway: LlmInferenceGateway | None = None,
+    asr_gateway: AsrGateway | None = None,
     object_store: ObjectStoreService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
@@ -89,6 +92,7 @@ def create_app(
     app.state.db_manager = DatabaseManager(resolved_settings.sqlalchemy_database_url)
     app.state.gitlab_gateway = gitlab_gateway or HttpGitLabSkillSourceGateway.from_settings(resolved_settings)
     app.state.inference_gateway = inference_gateway or OpenAICompatibleInferenceGateway.from_settings(resolved_settings)
+    app.state.asr_gateway = asr_gateway or HttpAsrGateway.from_settings(resolved_settings)
     app.state.object_store = object_store or ObjectStoreService.from_settings(resolved_settings)
     app.add_middleware(
         CORSMiddleware,

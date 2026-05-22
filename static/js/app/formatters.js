@@ -96,6 +96,7 @@
           published: "已发布",
           requested: "已请求",
           compiling: "编译中",
+          processing: "处理中",
           pending: "待处理",
           running: "运行中",
           waiting_input: "等待输入",

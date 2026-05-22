@@ -116,6 +116,12 @@ cd ..
 scripts/dev/start.sh
 ```
 
+后台启动并把日志写入项目根目录 `logs/`：
+
+```bash
+scripts/dev/start-background.sh
+```
+
 默认情况下，后端运行在 `http://127.0.0.1:8001`，Web IDE 运行在 `http://127.0.0.1:4173`。
 
 ## 配置说明
@@ -125,7 +131,10 @@ scripts/dev/start.sh
 - `PSOP_DATABASE_*` 或 `PSOP_DATABASE_URL`
 - `PSOP_GITLAB_*`
 - `PSOP_OBJECT_STORE_*`
+- `PSOP_RAW_MATERIAL_*`
+- `PSOP_VIDEO_*`
 - `PSOP_LLM_*`
+- `PSOP_ASR_*`
 - `PSOP_OTEL_*`
 - `PSOP_SERVER_*`
 - `PSOP_WEB_*`

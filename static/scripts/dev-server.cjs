@@ -43,6 +43,7 @@ function resolveFilePath(requestPath) {
 
 const server = http.createServer((req, res) => {
   const requestPath = decodeURIComponent((req.url || "/").split("?")[0]);
+  res.setHeader("Cache-Control", "no-store");
 
   if (requestPath === "/js/runtime-config.js") {
     res.setHeader("Content-Type", "text/javascript; charset=utf-8");

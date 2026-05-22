@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -n "${PSOP_NODE_BIN_DIR:-}" ]]; then
+  export PATH="${PSOP_NODE_BIN_DIR}:${PATH}"
+elif [[ -x /opt/node20/bin/node && -x /opt/node20/bin/npm ]]; then
+  export PATH="/opt/node20/bin:${PATH}"
+fi
+
 node_path="$(command -v node || true)"
 npm_path="$(command -v npm || true)"
 

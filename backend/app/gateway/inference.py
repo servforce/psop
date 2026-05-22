@@ -55,12 +55,18 @@ class OpenAICompatibleInferenceGateway:
         api_base_url: str,
         api_key: str | None,
         default_model: str,
+        route_models: dict[str, str] | None = None,
         timeout_seconds: float = 60.0,
     ) -> None:
         self.provider = provider
         self.api_base_url = api_base_url.rstrip("/")
         self.api_key = api_key
         self.default_model = default_model
+        self.route_models = {
+            str(route_key): str(model)
+            for route_key, model in (route_models or {}).items()
+            if str(route_key).strip() and str(model).strip()
+        }
         self.timeout_seconds = timeout_seconds
 
     @classmethod
@@ -70,14 +76,20 @@ class OpenAICompatibleInferenceGateway:
             api_base_url=settings.llm_api_base_url,
             api_key=settings.llm_api_key,
             default_model=settings.llm_default_model,
+            route_models={"vision": settings.llm_vision_model or ""},
             timeout_seconds=settings.llm_timeout_seconds,
         )
+
+    def _resolve_model(self, route_key: str) -> str:
+        if not route_key or route_key == "default":
+            return self.default_model
+        return self.route_models.get(route_key, route_key)
 
     def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
         if not self.api_key:
             raise SkillsConfigurationError("未配置 LLM API Key，无法执行真实运行链路。")
 
-        model = route_key if route_key and route_key != "default" else self.default_model
+        model = self._resolve_model(route_key)
         payload = {
             "model": model,
             "messages": [
@@ -232,7 +244,7 @@ class OpenAICompatibleInferenceGateway:
         if not self.api_key:
             raise SkillsConfigurationError("未配置 LLM API Key，无法执行真实运行链路。")
 
-        model = route_key if route_key and route_key != "default" else self.default_model
+        model = self._resolve_model(route_key)
         content_parts: list[dict[str, object]] = [{"type": "text", "text": user_prompt}]
         for attachment in attachments:
             if attachment.media_type.startswith("image/"):

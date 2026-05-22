@@ -4,7 +4,6 @@ import base64
 import hashlib
 import io
 import json
-import mimetypes
 import re
 import subprocess
 import tempfile
@@ -13,9 +12,6 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
-
-import httpx
 
 from app.core.config import Settings
 from app.domain.skills.exceptions import SkillValidationError, SkillsGatewayError
@@ -35,27 +31,16 @@ REQUIRED_GENERATED_FILES = [
 
 
 @dataclass(frozen=True, slots=True)
-class MaterialContent:
-    filename: str
-    content: bytes
-    mime_type: str
-    source_note: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class MaterialExtraction:
+class MaterialAnalysisResult:
     status: str
-    parse_summary: str
-    extracted_text: str = ""
-    processing_metadata: dict[str, Any] = field(default_factory=dict)
+    analysis_result: dict[str, Any] = field(default_factory=dict)
+    error_details: dict[str, Any] = field(default_factory=dict)
     error_message: str = ""
-
 
 @dataclass(frozen=True, slots=True)
 class StoredRawMaterial:
     stored: StoredObject
     artifact_payload: dict[str, Any]
-    extraction: MaterialExtraction
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +49,7 @@ class GeneratedSkillDraft:
     generation_reason: str
     review_notes: list[str]
     material_usage: list[dict[str, Any]]
+    selected_reference_assets: list[dict[str, Any]]
     directory_tree: str
     raw_parsed: dict[str, Any]
 
@@ -80,39 +66,7 @@ class RawMaterialProcessor:
         self.inference_gateway = inference_gateway
         self.object_store = object_store
 
-    def fetch_url(self, source_url: str) -> MaterialContent:
-        parsed = urlparse(source_url.strip())
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise SkillValidationError("参考网址必须是 http 或 https URL。", details={"source_url": source_url})
-
-        max_bytes = self._max_upload_bytes()
-        timeout = httpx.Timeout(self._url_timeout_seconds(), connect=min(10.0, self._url_timeout_seconds()))
-        try:
-            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-                response = client.get(source_url)
-                response.raise_for_status()
-                content = response.content
-        except httpx.HTTPError as exc:
-            raise SkillsGatewayError(
-                "参考网址抓取失败。",
-                details={"source_url": source_url, "error": str(exc)},
-            ) from exc
-
-        if len(content) > max_bytes:
-            raise SkillValidationError(
-                "参考网址内容超过大小限制。",
-                details={"source_url": source_url, "max_bytes": max_bytes, "size_bytes": len(content)},
-            )
-        content_type = response.headers.get("content-type", "application/octet-stream").split(";", 1)[0].strip()
-        filename = _filename_from_url(source_url, content_type)
-        return MaterialContent(
-            filename=filename,
-            content=content,
-            mime_type=content_type or "application/octet-stream",
-            source_note=source_url,
-        )
-
-    def store_and_extract(
+    def store(
         self,
         *,
         skill_id: str,
@@ -138,15 +92,6 @@ class RawMaterialProcessor:
                 "source": "skill_raw_material",
             },
         )
-        extraction = self.extract(
-            filename=safe_filename,
-            content=content,
-            mime_type=mime_type,
-            name=name,
-            description=description,
-            material_kind=material_kind,
-            source_note=source_note,
-        )
         artifact_payload = {
             "kind": "skill_raw_material",
             "filename": safe_filename,
@@ -156,11 +101,12 @@ class RawMaterialProcessor:
             "source_note": source_note,
             "metadata": stored.metadata,
         }
-        return StoredRawMaterial(stored=stored, artifact_payload=artifact_payload, extraction=extraction)
+        return StoredRawMaterial(stored=stored, artifact_payload=artifact_payload)
 
-    def extract(
+    def analyze(
         self,
         *,
+        material_id: str,
         filename: str,
         content: bytes,
         mime_type: str,
@@ -168,17 +114,40 @@ class RawMaterialProcessor:
         description: str,
         material_kind: str,
         source_note: str,
-    ) -> MaterialExtraction:
+    ) -> MaterialAnalysisResult:
         try:
             if _is_textual(filename, mime_type):
                 extracted = _decode_text(content)
                 if _is_html(filename, mime_type):
                     extracted = _html_to_text(extracted)
-                return _text_extraction(extracted, source="local_text")
+                return _text_analysis(
+                    extracted,
+                    source="local_text",
+                    material_id=material_id,
+                    filename=filename,
+                    mime_type=mime_type,
+                    name=name,
+                    description=description,
+                    material_kind=material_kind,
+                    source_note=source_note,
+                    budget_chars=self._extract_text_budget_chars(),
+                )
             if _is_pdf(filename, mime_type):
-                return _text_extraction(_extract_pdf_text(content), source="local_pdf")
+                return _text_analysis(
+                    _extract_pdf_text(content),
+                    source="local_pdf",
+                    material_id=material_id,
+                    filename=filename,
+                    mime_type=mime_type,
+                    name=name,
+                    description=description,
+                    material_kind=material_kind,
+                    source_note=source_note,
+                    budget_chars=self._extract_text_budget_chars(),
+                )
             if mime_type.startswith("image/"):
                 return self._multimodal_extraction(
+                    material_id=material_id,
                     filename=filename,
                     content=content,
                     mime_type=mime_type,
@@ -191,6 +160,7 @@ class RawMaterialProcessor:
                 )
             if mime_type.startswith("audio/"):
                 return self._multimodal_extraction(
+                    material_id=material_id,
                     filename=filename,
                     content=content,
                     mime_type=mime_type,
@@ -201,51 +171,74 @@ class RawMaterialProcessor:
                         "source_note": source_note,
                     },
                 )
-            if mime_type.startswith("video/"):
-                frame = _extract_video_frame(content, filename)
-                return self._multimodal_extraction(
-                    filename=f"{Path(filename).stem or 'video'}-frame.jpg",
-                    content=frame,
-                    mime_type="image/jpeg",
-                    prompt_context={
-                        "name": name,
-                        "description": description,
-                        "material_kind": material_kind,
-                        "source_note": source_note,
-                        "original_filename": filename,
-                        "original_mime_type": mime_type,
-                    },
-                )
-            return MaterialExtraction(
+            return MaterialAnalysisResult(
                 status="ready",
-                parse_summary="素材已保存。当前类型没有可提取文本，生成时将使用文件元数据和用户描述。",
-                processing_metadata={"processor": "metadata_only"},
+                analysis_result=_metadata_analysis_result(
+                    material_id=material_id,
+                    filename=filename,
+                    mime_type=mime_type,
+                    name=name,
+                    description=description,
+                    material_kind=material_kind,
+                    source_note=source_note,
+                    summary="素材已保存。当前类型没有可提取文本或视觉内容。",
+                    limitations=["当前文件类型暂无专用解析器。"],
+                    debug={"processor": "metadata_only"},
+                ),
             )
         except Exception as exc:
-            return MaterialExtraction(
+            error_details = {
+                "error_type": exc.__class__.__name__,
+                "message": str(exc),
+                **(dict(getattr(exc, "details", {}) or {}) if isinstance(exc, (SkillValidationError, SkillsGatewayError)) else {}),
+            }
+            return MaterialAnalysisResult(
                 status="failed",
-                parse_summary="素材已保存，但解析失败。",
-                processing_metadata={"processor": "failed", "error_type": exc.__class__.__name__},
+                analysis_result=_metadata_analysis_result(
+                    material_id=material_id,
+                    filename=filename,
+                    mime_type=mime_type,
+                    name=name,
+                    description=description,
+                    material_kind=material_kind,
+                    source_note=source_note,
+                    summary="素材解析失败。",
+                    limitations=[str(exc)],
+                    debug={"processor": "failed", "error_type": exc.__class__.__name__},
+                ),
+                error_details=error_details,
                 error_message=str(exc),
             )
 
     def _multimodal_extraction(
         self,
         *,
+        material_id: str,
         filename: str,
         content: bytes,
         mime_type: str,
         prompt_context: dict[str, Any],
-    ) -> MaterialExtraction:
+    ) -> MaterialAnalysisResult:
         if not hasattr(self.inference_gateway, "complete_multimodal"):
             raise SkillsGatewayError("当前 LLM Inference Gateway 不支持多模态素材解析。")
         system_prompt = (
-            "你是 PSOP 原始素材解析器。请分析用户上传的素材，提取对创建现实任务 Skill 有用的信息。"
-            "必须输出 JSON：{\"summary\":\"...\",\"extracted_text\":\"...\",\"signals\":[\"...\"]}。"
+            "你是现实操作素材的信息抽取助手。你的任务是从用户上传的素材中提取可用于编写操作指南的信息。"
+            "只依据附件中可见、可读或可听的内容；无法确认的内容写“无法判断”，不要臆测品牌、步骤或场景。"
+            "关注素材中和实际任务相关的主体内容；忽略平台水印、频道标识、播放控件、装饰性 logo 等无关覆盖层。"
+            "但不要忽略字幕、箭头标注、接口名称、警示文字、参数标签等会影响操作理解的信息。"
+            "重点提取：画面主体、对象/设备、工具/材料、可见状态、注意事项、安全提示和可引用证据。"
+            "不要把素材拆解成最终 Skill 的完整任务步骤，也不要输出任务轨迹字段。"
+            "必须只输出合法 JSON，不要使用 Markdown 或解释文字。"
+            "格式：{\"summary\":\"一句话概括素材内容\","
+            "\"content\":{\"text\":\"附件中可读或可听文本，没有则为空字符串\",\"language\":\"\"},"
+            "\"evidence_items\":[{\"kind\":\"visual_observation\",\"content\":\"观察到的事实\","
+            "\"observations\":[\"细节\"]}],"
+            "\"signals\":[\"工具、设备、接口、警示等线索\"],"
+            "\"limitations\":[\"无法确认或质量限制\"]}。"
         )
         user_prompt = json.dumps(
             {
-                "task": "extract_raw_material_for_skill_creation",
+                "task": "extract_operational_material_information",
                 "filename": filename,
                 "mime_type": mime_type,
                 "context": prompt_context,
@@ -253,6 +246,7 @@ class RawMaterialProcessor:
             ensure_ascii=False,
             sort_keys=True,
         )
+        route_key = "vision" if mime_type.startswith("image/") else "default"
         completion: LlmCompletion = self.inference_gateway.complete_multimodal(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -263,39 +257,77 @@ class RawMaterialProcessor:
                     content_base64=base64.b64encode(content).decode("ascii"),
                 )
             ],
-            route_key="default",
+            route_key=route_key,
         )
         parsed = _parse_json_object(completion.content)
         summary = str(parsed.get("summary") or "多模态素材解析完成。").strip()
-        extracted = str(parsed.get("extracted_text") or "").strip()
-        return MaterialExtraction(
+        content_value = parsed.get("content") if isinstance(parsed.get("content"), dict) else {}
+        text = str(content_value.get("text") or "").strip()
+        evidence_items = _normalize_evidence_items(parsed.get("evidence_items"), default_kind="visual_observation")
+        if not evidence_items and text:
+            evidence_items = [{"id": "evidence-1", "kind": "text_excerpt", "content": text, "observations": []}]
+        if not evidence_items:
+            evidence_items = [
+                {
+                    "id": "evidence-1",
+                    "kind": "visual_observation" if mime_type.startswith("image/") else "audio_observation",
+                    "content": summary,
+                    "observations": [],
+                }
+            ]
+        return MaterialAnalysisResult(
             status="ready",
-            parse_summary=_truncate(summary, 2000),
-            extracted_text=_truncate(extracted, self._extract_text_budget_chars()),
-            processing_metadata={
-                "processor": "llm_multimodal",
-                "provider": completion.provider,
-                "model": completion.model,
-                "usage": completion.usage,
-                "raw": completion.raw_response,
-                "signals": parsed.get("signals") if isinstance(parsed.get("signals"), list) else [],
-            },
+            analysis_result=_analysis_result(
+                material_id=material_id,
+                filename=filename,
+                mime_type=mime_type,
+                name=str(prompt_context.get("name") or filename),
+                description=str(prompt_context.get("description") or ""),
+                material_kind=str(prompt_context.get("material_kind") or infer_material_kind(filename, mime_type)),
+                source_note=str(prompt_context.get("source_note") or ""),
+                summary=_truncate(summary, 2000),
+                content={
+                    "text": _truncate(text, self._extract_text_budget_chars()),
+                    "language": str(content_value.get("language") or ""),
+                    "source_type": "multimodal",
+                },
+                evidence_items=evidence_items,
+                assets=[],
+                signals=_string_list(parsed.get("signals")),
+                limitations=_string_list(parsed.get("limitations")),
+                debug={
+                    "processor": "llm_multimodal",
+                    "provider": completion.provider,
+                    "model": completion.model,
+                    "usage": completion.usage,
+                    "raw": completion.raw_response,
+                },
+            ),
         )
 
     def _validate_upload(self, *, filename: str, content: bytes, mime_type: str) -> None:
         if not content:
             raise SkillValidationError("上传素材不能为空。")
-        if len(content) > self._max_upload_bytes():
+        max_upload_bytes = self._max_upload_bytes(mime_type)
+        if len(content) > max_upload_bytes:
             raise SkillValidationError(
                 "上传素材超过大小限制。",
-                details={"max_bytes": self._max_upload_bytes(), "size_bytes": len(content)},
+                details={"max_bytes": max_upload_bytes, "size_bytes": len(content), "mime_type": mime_type},
             )
         if not filename:
             raise SkillValidationError("上传素材文件名不能为空。")
         if not mime_type:
             raise SkillValidationError("上传素材类型不能为空。")
 
-    def _max_upload_bytes(self) -> int:
+    def _max_upload_bytes(self, mime_type: str) -> int:
+        if mime_type.lower().startswith("video/"):
+            return int(
+                getattr(
+                    self.settings,
+                    "raw_material_video_max_upload_bytes",
+                    getattr(self.settings, "raw_material_max_upload_bytes", self.settings.test_data_max_upload_bytes),
+                )
+            )
         return int(getattr(self.settings, "raw_material_max_upload_bytes", self.settings.test_data_max_upload_bytes))
 
     def _extract_text_budget_chars(self) -> int:
@@ -321,11 +353,17 @@ def parse_generated_skill_draft(content: str) -> GeneratedSkillDraft:
         raise SkillValidationError("Skill 创建智能体响应缺少必需文件。", details={"missing_files": missing})
     review_notes = parsed.get("review_notes")
     material_usage = parsed.get("material_usage")
+    selected_reference_assets = parsed.get("selected_reference_assets")
     return GeneratedSkillDraft(
         files=files,
         generation_reason=str(parsed.get("generation_reason") or "").strip(),
         review_notes=[str(item) for item in review_notes] if isinstance(review_notes, list) else [],
         material_usage=[item for item in material_usage if isinstance(item, dict)] if isinstance(material_usage, list) else [],
+        selected_reference_assets=[
+            item for item in selected_reference_assets if isinstance(item, dict)
+        ]
+        if isinstance(selected_reference_assets, list)
+        else [],
         directory_tree=str(parsed.get("directory_tree") or "").strip(),
         raw_parsed=parsed,
     )
@@ -341,9 +379,7 @@ def normalize_generated_path(value: str) -> str:
     return "/".join(parts)
 
 
-def infer_material_kind(filename: str, mime_type: str, *, source_url: str | None = None) -> str:
-    if source_url:
-        return "url"
+def infer_material_kind(filename: str, mime_type: str) -> str:
     lower = mime_type.lower()
     if lower.startswith("text/") or _is_textual(filename, mime_type):
         return "text"
@@ -361,15 +397,6 @@ def infer_material_kind(filename: str, mime_type: str, *, source_url: str | None
 def _safe_filename(filename: str) -> str:
     cleaned = filename.replace("\\", "/").split("/")[-1].strip()
     return cleaned or "upload.bin"
-
-
-def _filename_from_url(source_url: str, mime_type: str) -> str:
-    path = urlparse(source_url).path.rstrip("/")
-    candidate = path.rsplit("/", 1)[-1] if path else ""
-    if candidate:
-        return candidate
-    extension = mimetypes.guess_extension(mime_type) or ".html"
-    return f"reference-url{extension}"
 
 
 def _is_textual(filename: str, mime_type: str) -> bool:
@@ -474,14 +501,176 @@ def _html_to_text(value: str) -> str:
     return parser.text()
 
 
-def _text_extraction(value: str, *, source: str) -> MaterialExtraction:
+def _text_analysis(
+    value: str,
+    *,
+    source: str,
+    material_id: str,
+    filename: str,
+    mime_type: str,
+    name: str,
+    description: str,
+    material_kind: str,
+    source_note: str,
+    budget_chars: int,
+) -> MaterialAnalysisResult:
     text = value.strip()
-    return MaterialExtraction(
+    summary = _truncate(text.replace("\n", " "), 1200) or "文本素材解析完成。"
+    return MaterialAnalysisResult(
         status="ready",
-        parse_summary=_truncate(text.replace("\n", " "), 1200) or "文本素材解析完成。",
-        extracted_text=_truncate(text, 80_000),
-        processing_metadata={"processor": source, "extracted_chars": len(text)},
+        analysis_result=_analysis_result(
+            material_id=material_id,
+            filename=filename,
+            mime_type=mime_type,
+            name=name,
+            description=description,
+            material_kind=material_kind,
+            source_note=source_note,
+            summary=summary,
+            content={
+                "text": _truncate(text, budget_chars),
+                "language": "",
+                "source_type": source,
+            },
+            evidence_items=[
+                {
+                    "id": "text-1",
+                    "kind": "text_excerpt",
+                    "content": _truncate(text, min(8000, budget_chars)),
+                    "observations": [],
+                }
+            ] if text else [],
+            assets=[],
+            signals=[],
+            limitations=[] if text else ["未提取到可用文本。"],
+            debug={"processor": source, "extracted_chars": len(text)},
+        ),
     )
+
+
+def _metadata_analysis_result(
+    *,
+    material_id: str,
+    filename: str,
+    mime_type: str,
+    name: str,
+    description: str,
+    material_kind: str,
+    source_note: str,
+    summary: str,
+    limitations: list[str],
+    debug: dict[str, Any],
+) -> dict[str, Any]:
+    return _analysis_result(
+        material_id=material_id,
+        filename=filename,
+        mime_type=mime_type,
+        name=name,
+        description=description,
+        material_kind=material_kind,
+        source_note=source_note,
+        summary=summary,
+        content={"text": "", "language": "", "source_type": "metadata"},
+        evidence_items=[
+            {
+                "id": "metadata-1",
+                "kind": "metadata",
+                "content": f"文件名：{filename}；MIME：{mime_type}",
+                "observations": [],
+            }
+        ],
+        assets=[],
+        signals=[],
+        limitations=limitations,
+        debug=debug,
+    )
+
+
+def _analysis_result(
+    *,
+    material_id: str,
+    filename: str,
+    mime_type: str,
+    name: str,
+    description: str,
+    material_kind: str,
+    source_note: str,
+    summary: str,
+    content: dict[str, Any],
+    evidence_items: list[dict[str, Any]],
+    assets: list[dict[str, Any]],
+    signals: list[str],
+    limitations: list[str],
+    debug: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "material_type": infer_material_kind(filename, mime_type),
+        "source": {
+            "material_id": material_id,
+            "name": name,
+            "description": description,
+            "material_kind": material_kind,
+            "filename": filename,
+            "mime_type": mime_type,
+            "source_note": source_note,
+        },
+        "summary": summary,
+        "content": content,
+        "evidence_items": _normalize_evidence_items(evidence_items, default_kind="metadata"),
+        "assets": assets,
+        "signals": signals,
+        "limitations": limitations,
+        "debug": debug,
+    }
+
+
+def _normalize_evidence_items(value: Any, *, default_kind: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(value, start=1):
+        if isinstance(item, dict):
+            content = str(item.get("content") or item.get("caption") or item.get("summary") or "").strip()
+            observations = item.get("observations")
+            timestamp = item.get("timestamp_ms")
+            timestamp_payload = {}
+            if isinstance(timestamp, (int, float)):
+                timestamp_payload["timestamp_ms"] = int(timestamp)
+            elif isinstance(timestamp, str) and timestamp.isdigit():
+                timestamp_payload["timestamp_ms"] = int(timestamp)
+            normalized.append(
+                {
+                    "id": str(item.get("id") or f"evidence-{index}"),
+                    "kind": str(item.get("kind") or default_kind),
+                    "content": content,
+                    "observations": observations if isinstance(observations, list) else [],
+                    **timestamp_payload,
+                    **({"asset_id": str(item["asset_id"])} if item.get("asset_id") else {}),
+                    **({"reference_path": str(item["reference_path"])} if item.get("reference_path") else {}),
+                    **(
+                        {"asset_metadata": item["asset_metadata"]}
+                        if isinstance(item.get("asset_metadata"), dict)
+                        else {}
+                    ),
+                }
+            )
+        elif item is not None:
+            normalized.append(
+                {
+                    "id": f"evidence-{index}",
+                    "kind": default_kind,
+                    "content": str(item),
+                    "observations": [],
+                }
+            )
+    return normalized
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:

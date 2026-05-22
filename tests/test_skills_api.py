@@ -5,13 +5,18 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.app import create_app
 from app.core.config import Settings
 from app.domain.skills import raw_materials
+from app.domain.skills import video_analysis
+from app.domain.skills import service as skills_service_module
+from app.domain.skills.models import SkillRawMaterial, SkillRawMaterialAnalysis
 from app.domain.skill_tests.service import SkillTestService
-from app.domain.skills.exceptions import SkillsGatewayError
+from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
+from app.gateway.asr import AsrTranscription
 from app.gateway.inference import LlmAttachment, LlmCompletion
 from app.infra.object_store import StoredObject
 from app.gateway.gitlab import GitLabProjectInfo, RepositoryFile, RepositoryTreeEntry, SkillSourceBundle
@@ -28,7 +33,7 @@ class _FakeProject:
     readme_content: str
     skill_md_content: str
     skill_yaml_content: str
-    files: dict[str, str] = field(default_factory=dict)
+    files: dict[str, str | bytes] = field(default_factory=dict)
     archived: bool = False
 
 
@@ -157,7 +162,7 @@ class FakeGitLabGateway:
         return RepositoryFile(
             file_path=file_path,
             file_name=file_path.rsplit("/", 1)[-1],
-            content=project.files[file_path],
+            content=str(project.files[file_path]),
             ref=project.default_branch,
             head_commit_sha=project.head_commit_sha,
         )
@@ -189,6 +194,7 @@ class FakeGitLabGateway:
         project_id: str,
         branch: str,
         files: dict[str, str],
+        binary_files: dict[str, bytes] | None = None,
         commit_message: str,
     ) -> str:
         project = self.projects[project_id]
@@ -202,6 +208,8 @@ class FakeGitLabGateway:
                 project.skill_md_content = content
             if file_path == "skill.yaml":
                 project.skill_yaml_content = content
+        for file_path, content in (binary_files or {}).items():
+            project.files[file_path] = content
         project.head_commit_sha = self._next_commit_sha()
         return project.head_commit_sha
 
@@ -228,9 +236,31 @@ class FakeInferenceGateway:
             content = json.dumps(build_test_formal_v5_artifact(), ensure_ascii=False)
         elif "generate_psop_skill_source_from_raw_materials" in user_prompt:
             try:
-                material_id = str(json.loads(user_prompt)["raw_materials"][0]["id"])
+                parsed_prompt = json.loads(user_prompt)
+                material_id = str(parsed_prompt["material_analysis_results"][0]["source"]["material_id"])
+                candidate_assets = [
+                    item
+                    for item in parsed_prompt.get("candidate_reference_assets", [])
+                    if isinstance(item, dict) and item.get("id") and item.get("reference_path")
+                ]
+                selected_reference_assets = [
+                    {
+                        "asset_id": str(item["id"]),
+                        "reference_path": str(item["reference_path"]),
+                        "reason": "测试选择前两个候选帧作为运行时参考。",
+                    }
+                    for item in candidate_assets[:2]
+                ]
+                keyframe_paths = [
+                    str(item["reference_path"])
+                    for item in selected_reference_assets
+                    if item.get("reference_path")
+                ]
             except (KeyError, IndexError, TypeError, json.JSONDecodeError):
                 material_id = "material-1"
+                keyframe_paths = []
+                selected_reference_assets = []
+            reference_lines = "\n".join(f"![关键帧]({path})" for path in keyframe_paths) or "- 原始素材摘要已用于生成。"
             content = json.dumps(
                 {
                     "directory_tree": (
@@ -244,9 +274,9 @@ class FakeInferenceGateway:
                     ),
                     "files": {
                         "README.md": "# Generated Skill\n\n基于原始素材生成的 Skill 草稿。\n",
-                        "SKILL.md": "# Generated Skill\n\n请根据素材帮助用户完成任务。\n",
+                        "SKILL.md": "# Generated Skill\n\n请根据素材帮助用户完成任务，并参考视频关键帧。\n",
                         "prompts/system.md": "你是一个基于素材工作的 PSOP Skill 智能体。\n",
-                        "references/README.md": "# References\n\n- 原始素材摘要已用于生成。\n",
+                        "references/README.md": f"# References\n\n{reference_lines}\n",
                         "examples/input.md": "# Input\n\n用户给出现场问题。\n",
                         "examples/expected-output.md": "# Expected Output\n\n给出结构化行动建议。\n",
                         "tests/checklist.md": "# Checklist\n\n- [ ] README 已说明用途\n- [ ] SKILL 已包含执行步骤\n",
@@ -255,6 +285,7 @@ class FakeInferenceGateway:
                     "review_notes": ["需要人工复核边界条件。"],
                     "generation_reason": "素材包含创建 Skill 所需的任务说明与示例。",
                     "material_usage": [{"material_id": material_id, "usage": "提炼流程与示例"}],
+                    "selected_reference_assets": selected_reference_assets,
                 },
                 ensure_ascii=False,
             )
@@ -324,7 +355,14 @@ class FakeInferenceGateway:
             content=json.dumps(
                 {
                     "summary": "视觉或音视频素材已由 LLM Gateway 解析。",
-                    "extracted_text": "素材包含可用于创建 Skill 的多模态线索。",
+                    "content": {"text": "素材包含可用于创建 Skill 的多模态线索。", "language": ""},
+                    "evidence_items": [
+                        {
+                            "kind": "visual_observation",
+                            "content": "素材包含可用于创建 Skill 的多模态线索。",
+                            "observations": ["fake multimodal signal"],
+                        }
+                    ],
                     "signals": [{"kind": "multimodal", "confidence": 0.9}],
                 },
                 ensure_ascii=False,
@@ -333,6 +371,35 @@ class FakeInferenceGateway:
             model="fake-model",
             raw_response={"id": "fake-multimodal-response"},
             usage={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
+        )
+
+
+class FakeAsrGateway:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def transcribe(
+        self,
+        *,
+        filename: str,
+        content: bytes,
+        media_type: str = "audio/wav",
+        language: str | None = None,
+        prompt: str | None = None,
+    ) -> AsrTranscription:
+        self.calls.append(
+            {
+                "filename": filename,
+                "content": content,
+                "media_type": media_type,
+                "language": language,
+                "prompt": prompt,
+            }
+        )
+        return AsrTranscription(
+            text="第一步关闭电源。第二步拆下面板。第三步清洁滤网并复位。",
+            language="Chinese",
+            raw_response={"text": "第一步关闭电源。第二步拆下面板。第三步清洁滤网并复位。"},
         )
 
 
@@ -556,12 +623,14 @@ def create_test_settings() -> Settings:
 def create_test_client() -> tuple[TestClient, FakeGitLabGateway, FakeInferenceGateway]:
     fake_gateway = FakeGitLabGateway()
     fake_inference = FakeInferenceGateway()
+    fake_asr = FakeAsrGateway()
     fake_object_store = FakeObjectStore()
     client = TestClient(
         create_app(
             create_test_settings(),
             gitlab_gateway=fake_gateway,
             inference_gateway=fake_inference,
+            asr_gateway=fake_asr,
             object_store=fake_object_store,
         )
     )
@@ -667,6 +736,10 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
         material_id = upload_response.json()["id"]
         detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
         content_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/content")
+        range_response = client.get(
+            f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/content",
+            headers={"Range": "bytes=0-6"},
+        )
         delete_response = client.delete(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
         after_delete_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
         deleted_detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
@@ -676,20 +749,27 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
     assert upload_payload["status"] == "ready"
     assert upload_payload["filename"] == "guide.md"
     assert upload_payload["source_note"] == "operator upload"
-    assert "Guide" in upload_payload["extracted_text"]
+    assert "Guide" in upload_payload["analysis_result"]["content"]["text"]
 
     assert image_response.status_code == 201
     assert image_response.json()["status"] == "ready"
-    assert image_response.json()["processing_metadata"]["processor"] == "llm_multimodal"
-    assert any(call.get("attachments") == "panel.png" for call in fake_inference.calls)
+    assert image_response.json()["analysis_result"]["debug"]["processor"] == "llm_multimodal"
+    assert any(
+        call.get("attachments") == "panel.png" and call.get("route_key") == "vision"
+        for call in fake_inference.calls
+    )
 
     assert list_response.status_code == 200
     assert {item["id"] for item in list_response.json()} == {material_id, image_response.json()["id"]}
 
     assert detail_response.status_code == 200
-    assert "lockout" in detail_response.json()["extracted_text"]
+    assert "lockout" in detail_response.json()["analysis_result"]["content"]["text"]
     assert content_response.status_code == 200
     assert content_response.content == b"# Guide\n\nUse lockout before repair.\n"
+    assert content_response.headers["accept-ranges"] == "bytes"
+    assert range_response.status_code == 206
+    assert range_response.headers["content-range"] == "bytes 0-6/36"
+    assert range_response.content == b"# Guide"
 
     assert delete_response.status_code == 200
     assert delete_response.json() == {"deleted": True, "material_id": material_id}
@@ -697,38 +777,16 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
     assert deleted_detail_response.status_code == 404
 
 
-def test_skill_raw_material_url_upload_fetches_reference(monkeypatch) -> None:
-    class FakeHttpResponse:
-        content = b"<html><body><h1>Reference</h1><p>Calibrate sensor before use.</p></body></html>"
-        headers = {"content-type": "text/html; charset=utf-8"}
-
-        def raise_for_status(self) -> None:
-            return None
-
-    class FakeHttpClient:
-        def __init__(self, *_, **__) -> None:
-            pass
-
-        def __enter__(self) -> "FakeHttpClient":
-            return self
-
-        def __exit__(self, *_: object) -> None:
-            return None
-
-        def get(self, url: str) -> FakeHttpResponse:
-            assert url == "https://example.test/reference"
-            return FakeHttpResponse()
-
-    monkeypatch.setattr(raw_materials.httpx, "Client", FakeHttpClient)
+def test_skill_raw_material_upload_rejects_url_only_payload() -> None:
     client, _, _ = create_test_client()
 
     with client:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "url-material-skill",
-                "name": "URL Material Skill",
-                "description": "Create skills from reference URLs.",
+                "key": "url-only-material-skill",
+                "name": "URL Only Material Skill",
+                "description": "Reject URL raw materials.",
             },
         ).json()
         response = client.post(
@@ -736,21 +794,68 @@ def test_skill_raw_material_url_upload_fetches_reference(monkeypatch) -> None:
             data={
                 "source_url": "https://example.test/reference",
                 "name": "参考页面",
-                "description": "在线参考资料",
             },
         )
 
-    assert response.status_code == 201
-    payload = response.json()
-    assert payload["material_kind"] == "url"
-    assert payload["source_note"] == "https://example.test/reference"
-    assert "Reference" in payload["extracted_text"]
-    assert "Calibrate sensor" in payload["extracted_text"]
+    assert response.status_code == 422
+    assert response.json()["message"] == "请上传素材文件。"
+
+
+def test_skill_raw_material_video_uses_dedicated_upload_limit() -> None:
+    settings = create_test_settings()
+    settings.raw_material_max_upload_bytes = 8
+    settings.raw_material_video_max_upload_bytes = 32
+    processor = raw_materials.RawMaterialProcessor(
+        settings=settings,
+        inference_gateway=FakeInferenceGateway(),
+        object_store=FakeObjectStore(),
+    )
+
+    processor._validate_upload(filename="guide.mp4", content=b"x" * 16, mime_type="video/mp4")
+
+    with pytest.raises(SkillValidationError) as exc_info:
+        processor._validate_upload(filename="guide.txt", content=b"x" * 16, mime_type="text/plain")
+
+    assert exc_info.value.message == "上传素材超过大小限制。"
+    assert exc_info.value.details["max_bytes"] == 8
+
+
+def _fake_video_analysis_result() -> video_analysis.VideoAnalysisResult:
+    keyframes = [
+        video_analysis.VideoKeyframeAnalysis(
+            timestamp_ms=0,
+            filename="000000000.jpg",
+            content=b"fake-keyframe-0",
+            caption="关闭设备电源并确认安全。",
+            observations=[{"kind": "safety"}],
+            frame_source="timeline_sample",
+            metadata={"frame_source": "timeline_sample", "operation_relevance": "high"},
+        ),
+        video_analysis.VideoKeyframeAnalysis(
+            timestamp_ms=30000,
+            filename="000030000.jpg",
+            content=b"fake-keyframe-1",
+            caption="拆下面板并清洁滤网。",
+            observations=[{"kind": "operation"}],
+            frame_source="scene_change",
+            metadata={"frame_source": "scene_change", "operation_relevance": "high"},
+        ),
+    ]
+    asr = AsrTranscription(text="先关闭电源，然后拆下面板并清洁滤网。", language="Chinese")
+    return video_analysis.VideoAnalysisResult(
+        asr=asr,
+        keyframes=keyframes,
+        duration_ms=60_000,
+    )
 
 
 def test_skill_raw_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
     monkeypatch.setattr(raw_materials, "_extract_pdf_text", lambda content: "PDF extracted procedure text.")
-    monkeypatch.setattr(raw_materials, "_extract_video_frame", lambda content, filename: b"fake-jpeg-frame")
+    monkeypatch.setattr(
+        skills_service_module,
+        "analyze_video_material",
+        lambda **_: _fake_video_analysis_result(),
+    )
     client, _, fake_inference = create_test_client()
 
     with client:
@@ -778,25 +883,137 @@ def test_skill_raw_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
             data={"name": "Video Walkthrough", "material_kind": "video"},
             files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
         )
+        video_analysis_response = client.get(
+            f"/api/v1/skills/{skill_id}/raw-materials/{video_response.json()['id']}/analysis"
+        )
         list_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
 
     assert pdf_response.status_code == 201
     assert pdf_response.json()["status"] == "ready"
-    assert "PDF extracted procedure text" in pdf_response.json()["extracted_text"]
+    assert "PDF extracted procedure text" in pdf_response.json()["analysis_result"]["content"]["text"]
 
     assert audio_response.status_code == 201
     assert audio_response.json()["status"] == "ready"
-    assert audio_response.json()["processing_metadata"]["processor"] == "llm_multimodal"
+    assert audio_response.json()["analysis_result"]["debug"]["processor"] == "llm_multimodal"
 
     assert video_response.status_code == 201
     assert video_response.json()["status"] == "ready"
-    assert video_response.json()["processing_metadata"]["processor"] == "llm_multimodal"
+    assert video_response.json()["analysis_status"] == "ready"
+    assert video_response.json()["derived_asset_count"] == 2
+    assert video_response.json()["analysis_result"]["debug"]["processor"] == "video_analysis"
+    assert video_analysis_response.status_code == 200
+    assert video_analysis_response.json()["analysis_result"]["content"]["text"].startswith("先关闭电源")
+    assert len(video_analysis_response.json()["derived_assets"]) == 2
     assert len(list_response.json()) == 3
-    assert any(call.get("attachments") == "notes.wav" for call in fake_inference.calls)
-    assert any(call.get("attachments") == "walkthrough-frame.jpg" for call in fake_inference.calls)
+    assert any(
+        call.get("attachments") == "notes.wav" and call.get("route_key") == "default"
+        for call in fake_inference.calls
+    )
 
 
-def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_publish_or_compile() -> None:
+def test_failed_video_raw_material_can_be_reanalyzed(monkeypatch) -> None:
+    attempts = {"count": 0}
+
+    def fake_analyze_video_material(**_: object) -> video_analysis.VideoAnalysisResult:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise SkillsGatewayError(
+                "ASR Gateway 返回错误响应。",
+                details={"status_code": 413, "body": "audio too large"},
+            )
+        return _fake_video_analysis_result()
+
+    monkeypatch.setattr(skills_service_module, "analyze_video_material", fake_analyze_video_material)
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "retry-material-analysis-skill",
+                "name": "Retry Video Analysis Skill",
+                "description": "Retry failed video parsing.",
+            },
+        ).json()
+        skill_id = created["id"]
+        upload_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "视频教程", "material_kind": "video"},
+            files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
+        )
+        material_id = upload_response.json()["id"]
+        failed_analysis_response = client.get(
+            f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/analysis"
+        )
+        retry_response = client.post(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/analyze")
+        detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
+
+    assert upload_response.status_code == 201
+    assert upload_response.json()["status"] == "failed"
+    assert failed_analysis_response.status_code == 200
+    assert failed_analysis_response.json()["status"] == "failed"
+    assert failed_analysis_response.json()["error_details"]["status_code"] == 413
+    assert failed_analysis_response.json()["error_details"]["body"] == "audio too large"
+    assert retry_response.status_code == 200
+    assert retry_response.json()["status"] == "ready"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["status"] == "ready"
+    assert detail_response.json()["analysis_status"] == "ready"
+    assert attempts["count"] == 2
+
+
+def test_processing_video_raw_material_cannot_be_reanalyzed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        skills_service_module,
+        "analyze_video_material",
+        lambda **_: _fake_video_analysis_result(),
+    )
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "processing-material-analysis-skill",
+                "name": "Processing Video Analysis Skill",
+                "description": "Reject duplicate processing video parsing.",
+            },
+        ).json()
+        skill_id = created["id"]
+        upload_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "视频教程", "material_kind": "video"},
+            files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
+        )
+        material_id = upload_response.json()["id"]
+        with client.app.state.db_manager.session() as session:
+            material = session.get(SkillRawMaterial, material_id)
+            analysis = (
+                session.query(SkillRawMaterialAnalysis)
+                .filter(SkillRawMaterialAnalysis.raw_material_id == material_id)
+                .one()
+            )
+            material.status = "processing"
+            analysis.status = "running"
+            session.commit()
+        retry_response = client.post(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/analyze")
+
+    assert upload_response.status_code == 201
+    assert retry_response.status_code == 422
+    assert retry_response.json()["message"] == "素材正在分析中，不能重复解析。"
+    assert retry_response.json()["details"] == {
+        "material_id": material_id,
+        "material_status": "processing",
+        "analysis_status": "running",
+    }
+
+
+def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_publish_or_compile(monkeypatch) -> None:
+    monkeypatch.setattr(
+        skills_service_module,
+        "analyze_video_material",
+        lambda **_: _fake_video_analysis_result(),
+    )
     client, fake_gateway, fake_inference = create_test_client()
 
     with client:
@@ -815,11 +1032,17 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
             files={"file": ("workflow.md", b"# Workflow\n\nAsk, inspect, then advise.\n", "text/markdown")},
         )
         material_id = material_response.json()["id"]
+        video_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "视频教程", "material_kind": "video"},
+            files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
+        )
+        video_material_id = video_response.json()["id"]
 
         generate_response = client.post(
             f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
             json={
-                "material_ids": [material_id],
+                "material_ids": [video_material_id, material_id],
                 "user_description": "请基于素材生成一个现场支持 Skill。",
                 "base_commit_sha": created["latest_draft_head_sha"],
             },
@@ -831,8 +1054,16 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert generate_response.status_code == 200
     payload = generate_response.json()
     assert payload["status"] == "succeeded"
-    assert payload["material_ids"] == [material_id]
+    assert payload["material_ids"] == [video_material_id, material_id]
     assert payload["committed_commit_sha"].startswith("commit-")
+    assert payload["prompt_metadata"]["reference_files"] == [
+        f"references/video-keyframes/{video_material_id}/000000000.jpg",
+        f"references/video-keyframes/{video_material_id}/000030000.jpg",
+    ]
+    assert [item["reference_path"] for item in payload["prompt_metadata"]["selected_reference_assets"]] == [
+        f"references/video-keyframes/{video_material_id}/000000000.jpg",
+        f"references/video-keyframes/{video_material_id}/000030000.jpg",
+    ]
     assert set(payload["generated_files"]) >= {
         "README.md",
         "SKILL.md",
@@ -843,8 +1074,11 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
         "tests/checklist.md",
     }
     assert "skill.yaml" not in payload["generated_files"]
-    assert payload["material_usage"][0]["material_id"] == material_id
+    assert payload["material_usage"][0]["material_id"] == video_material_id
     assert fake_gateway.projects[created["gitlab_project_id"]].files["README.md"].startswith("# Generated Skill")
+    assert fake_gateway.projects[created["gitlab_project_id"]].files[
+        f"references/video-keyframes/{video_material_id}/000000000.jpg"
+    ] == b"fake-keyframe-0"
     assert "should-be-ignored" not in fake_gateway.projects[created["gitlab_project_id"]].files["skill.yaml"]
     assert detail_response.json()["latest_draft_head_sha"] == payload["committed_commit_sha"]
     prompt_material = detail_response.json()["current_draft_version"]["manifest_snapshot"]["prompt_material"]
@@ -855,7 +1089,12 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert any("generate_psop_skill_source_from_raw_materials" in call["user_prompt"] for call in fake_inference.calls)
 
 
-def test_generate_skill_draft_from_raw_materials_rejects_stale_head() -> None:
+def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch) -> None:
+    monkeypatch.setattr(
+        skills_service_module,
+        "analyze_video_material",
+        lambda **_: _fake_video_analysis_result(),
+    )
     client, fake_gateway, _ = create_test_client()
 
     with client:
@@ -869,10 +1108,10 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head() -> None:
         ).json()
         skill_id = created["id"]
         source_payload = client.get(f"/api/v1/skills/{skill_id}/source").json()
-        material_response = client.post(
+        video_response = client.post(
             f"/api/v1/skills/{skill_id}/raw-materials",
             data={"name": "素材"},
-            files={"file": ("notes.txt", b"Build a safe checklist.\n", "text/plain")},
+            files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
         )
         fake_gateway.commit_skill_source(
             project_id=created["gitlab_project_id"],
@@ -885,7 +1124,7 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head() -> None:
         response = client.post(
             f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
             json={
-                "material_ids": [material_response.json()["id"]],
+                "material_ids": [video_response.json()["id"]],
                 "user_description": "生成草稿。",
                 "base_commit_sha": source_payload["head_commit_sha"],
             },
@@ -893,6 +1132,36 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head() -> None:
 
     assert response.status_code == 409
     assert response.json()["code"] == "skill_source_conflict"
+
+
+def test_generate_skill_draft_from_raw_materials_requires_ready_video() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "video-required",
+                "name": "Video Required",
+                "description": "Reject generation without analyzed video.",
+            },
+        ).json()
+        text_response = client.post(
+            f"/api/v1/skills/{created['id']}/raw-materials",
+            data={"name": "文本素材"},
+            files={"file": ("notes.txt", b"Build a safe checklist.\n", "text/plain")},
+        )
+        response = client.post(
+            f"/api/v1/skills/{created['id']}/raw-materials/generate-skill-draft",
+            json={
+                "material_ids": [text_response.json()["id"]],
+                "user_description": "生成草稿。",
+                "base_commit_sha": created["latest_draft_head_sha"],
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["message"] == "生成 Skill 至少需要选择一个已分析完成的视频素材。"
 
 
 def test_repository_tree_file_and_folder_operations() -> None:

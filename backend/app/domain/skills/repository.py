@@ -7,6 +7,8 @@ from app.domain.skills.models import (
     SkillDefinition,
     SkillPublishRecord,
     SkillRawMaterial,
+    SkillRawMaterialAnalysis,
+    SkillRawMaterialDerivedAsset,
     SkillRawMaterialGeneration,
     SkillVersion,
 )
@@ -117,3 +119,35 @@ class SkillsRepository:
         session.add(generation)
         session.flush()
         return generation
+
+    def get_latest_raw_material_analysis(
+        self,
+        session: Session,
+        raw_material_id: str,
+    ) -> SkillRawMaterialAnalysis | None:
+        query = (
+            select(SkillRawMaterialAnalysis)
+            .where(SkillRawMaterialAnalysis.raw_material_id == raw_material_id)
+            .order_by(SkillRawMaterialAnalysis.created_at.desc())
+            .limit(1)
+        )
+        return session.scalar(query)
+
+    def get_raw_material_analysis(self, session: Session, analysis_id: str) -> SkillRawMaterialAnalysis | None:
+        return session.get(SkillRawMaterialAnalysis, analysis_id)
+
+    def get_derived_asset(self, session: Session, asset_id: str) -> SkillRawMaterialDerivedAsset | None:
+        return session.get(SkillRawMaterialDerivedAsset, asset_id)
+
+    def list_derived_assets(
+        self,
+        session: Session,
+        *,
+        raw_material_id: str,
+        analysis_id: str | None = None,
+    ) -> list[SkillRawMaterialDerivedAsset]:
+        query = select(SkillRawMaterialDerivedAsset).where(SkillRawMaterialDerivedAsset.raw_material_id == raw_material_id)
+        if analysis_id:
+            query = query.where(SkillRawMaterialDerivedAsset.analysis_id == analysis_id)
+        query = query.order_by(SkillRawMaterialDerivedAsset.timestamp_ms.asc(), SkillRawMaterialDerivedAsset.created_at.asc())
+        return list(session.scalars(query).all())

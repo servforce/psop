@@ -134,6 +134,22 @@ class PublishSkillResponse(BaseModel):
     compile_request: CompileRequestResponse | None = None
 
 
+class SkillRawMaterialDerivedAssetResponse(BaseModel):
+    id: str
+    raw_material_id: str
+    analysis_id: str
+    artifact_object_id: str
+    asset_kind: str
+    timestamp_ms: int
+    filename: str
+    mime_type: str
+    label: str
+    observations: list[Any] = Field(default_factory=list)
+    asset_metadata: dict[str, Any] = Field(default_factory=dict)
+    reference_path: str
+    created_at: datetime
+
+
 class SkillRawMaterialResponse(BaseModel):
     id: str
     skill_definition_id: str
@@ -147,15 +163,18 @@ class SkillRawMaterialResponse(BaseModel):
     status: str
     size_bytes: int
     checksum: str
-    parse_summary: str
-    processing_metadata: dict[str, Any]
     error_message: str
+    analysis_status: str | None = None
+    analysis_id: str | None = None
+    analysis_result_summary: str = ""
+    derived_asset_count: int = 0
     created_at: datetime
     updated_at: datetime
 
 
 class SkillRawMaterialDetailResponse(SkillRawMaterialResponse):
-    extracted_text: str
+    analysis_result: dict[str, Any] = Field(default_factory=dict)
+    derived_assets: list[SkillRawMaterialDerivedAssetResponse] = Field(default_factory=list)
 
 
 class DeleteSkillRawMaterialResponse(BaseModel):
@@ -185,3 +204,17 @@ class SkillRawMaterialGenerationResponse(BaseModel):
     committed_commit_sha: str
     error_message: str
     created_at: datetime
+
+
+class SkillRawMaterialAnalysisResponse(BaseModel):
+    id: str
+    raw_material_id: str
+    status: str
+    analysis_result: dict[str, Any]
+    error_message: str
+    error_details: dict[str, Any] = Field(default_factory=dict)
+    derived_assets: list[SkillRawMaterialDerivedAssetResponse] = Field(default_factory=list)
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime

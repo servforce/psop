@@ -53,8 +53,10 @@ class Settings(BaseSettings):
     object_store_secure: bool = False
     test_data_max_upload_bytes: int = 25 * 1024 * 1024
     raw_material_max_upload_bytes: int = 50 * 1024 * 1024
+    raw_material_video_max_upload_bytes: int = 2 * 1024 * 1024 * 1024
     raw_material_extract_text_max_chars: int = 80_000
     raw_material_url_timeout_seconds: float = 20.0
+    video_max_analyzed_frames: int = 120
     otel_enabled: bool = True
     otel_traces_enabled: bool = True
     otel_logs_enabled: bool = True
@@ -66,7 +68,12 @@ class Settings(BaseSettings):
     llm_api_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str | None = None
     llm_default_model: str = "gpt-4.1-mini"
+    llm_vision_model: str | None = None
     llm_timeout_seconds: float = 600.0
+    asr_api_base_url: str = "http://10.0.0.20:12302"
+    asr_language: str | None = "zh"
+    asr_timeout_seconds: float = 600.0
+    asr_temperature: float | None = 0.0
     runtime_worker_enabled: bool = True
     runtime_job_lease_seconds: int = 60
     runtime_job_max_attempts: int = 3

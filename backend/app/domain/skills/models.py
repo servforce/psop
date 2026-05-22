@@ -131,9 +131,6 @@ class SkillRawMaterial(Base):
     status: Mapped[str] = mapped_column(String(32), default="ready", nullable=False)
     size_bytes: Mapped[int] = mapped_column(default=0, nullable=False)
     checksum: Mapped[str] = mapped_column(String(128), default="", nullable=False)
-    parse_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    extracted_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    processing_metadata: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -167,4 +164,76 @@ class SkillRawMaterialGeneration(Base):
     material_usage: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     committed_commit_sha: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=now_utc,
+        onupdate=now_utc,
+        nullable=False,
+    )
+
+
+class SkillRawMaterialAnalysis(Base):
+    __tablename__ = "skill_raw_material_analysis"
+    __table_args__ = (
+        Index("idx_skill_raw_material_analysis_material_created_at", "raw_material_id", "created_at"),
+        Index("idx_skill_raw_material_analysis_material_status", "raw_material_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    skill_definition_id: Mapped[str] = mapped_column(
+        ForeignKey("skill_definition.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    raw_material_id: Mapped[str] = mapped_column(
+        ForeignKey("skill_raw_material.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    analysis_result: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    error_details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=now_utc,
+        onupdate=now_utc,
+        nullable=False,
+    )
+
+
+class SkillRawMaterialDerivedAsset(Base):
+    __tablename__ = "skill_raw_material_derived_asset"
+    __table_args__ = (
+        Index("idx_skill_raw_material_derived_asset_material_created_at", "raw_material_id", "created_at"),
+        Index("idx_skill_raw_material_derived_asset_analysis_kind", "analysis_id", "asset_kind"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    skill_definition_id: Mapped[str] = mapped_column(
+        ForeignKey("skill_definition.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    raw_material_id: Mapped[str] = mapped_column(
+        ForeignKey("skill_raw_material.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    analysis_id: Mapped[str] = mapped_column(
+        ForeignKey("skill_raw_material_analysis.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    artifact_object_id: Mapped[str] = mapped_column(
+        ForeignKey("artifact_object.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    asset_kind: Mapped[str] = mapped_column(String(64), default="file", nullable=False)
+    timestamp_ms: Mapped[int] = mapped_column(default=0, nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), default="image/jpeg", nullable=False)
+    label: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    observations: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    asset_metadata: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    reference_path: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)

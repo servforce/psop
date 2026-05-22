@@ -97,6 +97,7 @@ class GitLabSkillSourceGateway(Protocol):
         project_id: str,
         branch: str,
         files: dict[str, str],
+        binary_files: dict[str, bytes] | None = None,
         commit_message: str,
     ) -> str:
         ...
@@ -415,12 +416,23 @@ class HttpGitLabSkillSourceGateway:
         project_id: str,
         branch: str,
         files: dict[str, str],
+        binary_files: dict[str, bytes] | None = None,
         commit_message: str,
     ) -> str:
         actions = []
         for file_path, content in files.items():
             action = "update" if self._repository_file_exists(project_id, branch, file_path) else "create"
             actions.append({"action": action, "file_path": file_path, "content": content})
+        for file_path, content in (binary_files or {}).items():
+            action = "update" if self._repository_file_exists(project_id, branch, file_path) else "create"
+            actions.append(
+                {
+                    "action": action,
+                    "file_path": file_path,
+                    "content": base64.b64encode(content).decode("ascii"),
+                    "encoding": "base64",
+                }
+            )
         self._request(
             "POST",
             f"/projects/{quote(project_id, safe='')}/repository/commits",
@@ -434,7 +446,11 @@ class HttpGitLabSkillSourceGateway:
 
     def _repository_file_exists(self, project_id: str, ref: str, file_path: str) -> bool:
         try:
-            self._get_file_content(project_id, ref, file_path)
+            self._request(
+                "GET",
+                f"/projects/{quote(project_id, safe='')}/repository/files/{quote(file_path, safe='')}",
+                params={"ref": ref},
+            )
             return True
         except SkillsGatewayError as exc:
             if exc.details.get("status_code") == 404:

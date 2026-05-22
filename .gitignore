@@ -15,6 +15,9 @@ backend/.pytest_cache/
 static/node_modules/
 static/*.log
 
+logs/
+.dev-server.pid
+
 tests/__pycache__/
 *.log
 pytest-cache-files-*/
