@@ -701,6 +701,7 @@ def test_get_and_save_skill_source() -> None:
     assert after_snapshot["prompt_material"]["skill_md"] != before_skill_md
     assert after_snapshot["prompt_material"]["skill_md"] == saved_payload["skill_md_content"]
     assert after_snapshot["prompt_material"]["readme"] == saved_payload["readme_content"]
+    assert after_detail["updated_at"] != before_detail["updated_at"]
 
 
 def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
@@ -1081,6 +1082,7 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     ] == b"fake-keyframe-0"
     assert "should-be-ignored" not in fake_gateway.projects[created["gitlab_project_id"]].files["skill.yaml"]
     assert detail_response.json()["latest_draft_head_sha"] == payload["committed_commit_sha"]
+    assert detail_response.json()["updated_at"] != created["updated_at"]
     prompt_material = detail_response.json()["current_draft_version"]["manifest_snapshot"]["prompt_material"]
     assert prompt_material["readme"].startswith("# Generated Skill")
     assert prompt_material["skill_md"].startswith("# Generated Skill")

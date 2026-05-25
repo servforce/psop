@@ -242,6 +242,7 @@ class SkillsService:
         draft_version.source_commit_sha = new_commit_sha
         draft_version.manifest_snapshot = manifest_snapshot(document)
         draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)
+        definition.updated_at = now_utc()
 
         session.commit()
         return self.get_skill_detail(session, skill_id)
@@ -331,6 +332,7 @@ class SkillsService:
         draft_version.source_commit_sha = new_commit_sha
         draft_version.manifest_snapshot = manifest_snapshot(document)
         draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)
+        definition.updated_at = now_utc()
         session.commit()
 
         return SkillSourceResponse(
@@ -457,6 +459,7 @@ class SkillsService:
             commit_message=f"Update {file_path} via PSOP WEB IDE",
         )
         self._sync_draft_after_repository_commit(
+            definition,
             draft_version,
             new_commit_sha,
             document=document,
@@ -494,6 +497,7 @@ class SkillsService:
             commit_message=f"Create {file_path} via PSOP WEB IDE",
         )
         self._sync_draft_after_repository_commit(
+            definition,
             draft_version,
             new_commit_sha,
             document=document,
@@ -530,7 +534,7 @@ class SkillsService:
             action="create",
             commit_message=f"Create folder {folder_path.rstrip('/')} via PSOP WEB IDE",
         )
-        self._sync_draft_after_repository_commit(draft_version, new_commit_sha)
+        self._sync_draft_after_repository_commit(definition, draft_version, new_commit_sha)
         session.commit()
 
         return SkillRepositoryFileResponse(
@@ -1069,6 +1073,7 @@ class SkillsService:
         draft_version.source_commit_sha = new_commit_sha
         draft_version.manifest_snapshot = manifest_snapshot(document)
         draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)
+        definition.updated_at = now_utc()
         return new_commit_sha
 
     def _build_skill_generation_prompt_payload(
@@ -1568,6 +1573,7 @@ class SkillsService:
 
     def _sync_draft_after_repository_commit(
         self,
+        definition: SkillDefinition,
         draft_version: SkillVersion,
         commit_sha: str,
         document=None,
@@ -1575,6 +1581,7 @@ class SkillsService:
         skill_md_content: str | None = None,
     ) -> None:
         draft_version.source_commit_sha = commit_sha
+        definition.updated_at = now_utc()
         if document is not None or readme_content is not None or skill_md_content is not None:
             resolved_document = document or self._document_from_version_snapshot(draft_version)
             resolved_document = document_with_prompt_material(

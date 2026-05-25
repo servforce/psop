@@ -148,6 +148,7 @@
         this.rawMaterials = [];
         this.rawMaterialDetail = null;
         this.rawMaterialAnalysis = null;
+        this.rawMaterialDetailTab = "analysis";
         this.selectedRawMaterialIds = [];
         this.rawMaterialUploadFiles = [];
         this.rawMaterialUploadItems = [];
@@ -166,6 +167,7 @@
           user_description: ""
         };
         this.rawMaterialGenerationResult = null;
+        this.closeRawMaterialImagePreview();
         this.publishRecordsLoadedSkillId = null;
         this.publishRecords = [];
         this.sourceForm = {
@@ -271,6 +273,7 @@
 
         this.busy.rawMaterialDetail = true;
         try {
+          this.rawMaterialDetailTab = "analysis";
           this.rawMaterialDetail = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`);
           await this.loadRawMaterialAnalysis(this.rawMaterialDetail.id);
         } finally {
@@ -723,6 +726,76 @@
           return "";
         }
         return `${this.apiBaseUrl}/skills/${encodeURIComponent(this.currentSkill.id)}/raw-materials/${encodeURIComponent(this.rawMaterialDetail.id)}/derived-assets/${encodeURIComponent(asset.id)}/content`;
+      },
+
+
+      rawMaterialVisibleEvidenceItems() {
+        const result = this.rawMaterialDetail?.analysis_result || {};
+        const items = Array.isArray(result.evidence_items) ? result.evidence_items : [];
+        const hasTextContent = Boolean(String(result.content?.text || "").trim());
+        const derivedAssets = Array.isArray(this.rawMaterialDetail?.derived_assets)
+          ? this.rawMaterialDetail.derived_assets
+          : [];
+        const derivedAssetIds = new Set(derivedAssets.map((asset) => asset.id).filter(Boolean));
+
+        return items.filter((item) => {
+          if (hasTextContent && item?.kind === "audio_transcript") {
+            return false;
+          }
+          if (derivedAssetIds.has(item?.asset_id)) {
+            return false;
+          }
+          if (derivedAssets.length > 0 && item?.kind === "video_keyframe") {
+            return false;
+          }
+          return true;
+        });
+      },
+
+
+      openRawMaterialImagePreview(asset) {
+        const src = this.rawMaterialDerivedAssetContentUrl(asset);
+        if (!src) {
+          return;
+        }
+        this.rawMaterialImagePreview = {
+          open: true,
+          src,
+          title: asset.label || asset.filename || "派生资产",
+          description: asset.label || "",
+          timestamp_ms: asset.timestamp_ms ?? null,
+          frame_source: asset.asset_metadata?.frame_source || ""
+        };
+      },
+
+
+      closeRawMaterialImagePreview() {
+        this.rawMaterialImagePreview = {
+          open: false,
+          src: "",
+          title: "",
+          description: "",
+          timestamp_ms: null,
+          frame_source: ""
+        };
+      },
+
+
+      rawMaterialFrameSourceLabel(value) {
+        if (value === "scene_change") {
+          return "场景变化";
+        }
+        if (value === "timeline_sample") {
+          return "时间采样";
+        }
+        return value ? "候选帧" : "";
+      },
+
+
+      selectRawMaterialDetailTab(tabName) {
+        if (["analysis", "preview"].includes(tabName)) {
+          this.rawMaterialDetailTab = tabName;
+        }
       },
 
 

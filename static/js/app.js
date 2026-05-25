@@ -403,6 +403,7 @@
       rawMaterials: [],
       rawMaterialDetail: null,
       rawMaterialAnalysis: null,
+      rawMaterialDetailTab: "analysis",
       selectedRawMaterialIds: [],
       rawMaterialUploadFiles: [],
       rawMaterialUploadItems: [],
@@ -421,6 +422,14 @@
         user_description: ""
       },
       rawMaterialGenerationResult: null,
+      rawMaterialImagePreview: {
+        open: false,
+        src: "",
+        title: "",
+        description: "",
+        timestamp_ms: null,
+        frame_source: ""
+      },
       publishRecordsLoadedSkillId: null,
       publishRecords: [],
       publishEventSource: null,
