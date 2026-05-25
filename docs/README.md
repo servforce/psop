@@ -16,7 +16,9 @@
    - `WEB IDE` 的实现级设计基线。
 6. [PSOP服务端详细设计v1.md](./PSOP服务端详细设计v1.md)
    - 服务端、编译、运行时、数据库、接口与可观测的实现级设计基线。
-7. [agent-rules/general.md](./agent-rules/general.md)
+7. [PSOP终端接入说明v1.md](./PSOP终端接入说明v1.md)
+   - 终端接入开发者手册，覆盖 Invocation、Run、Terminal Session、事件追加、文件上传、WebSocket 与断线恢复。
+8. [agent-rules/general.md](./agent-rules/general.md)
    - 项目协作、文档、开发与提交流程规则。
 
 ## 目录约定
