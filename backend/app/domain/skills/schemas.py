@@ -190,6 +190,7 @@ class GenerateSkillDraftRequest(BaseModel):
 
 class SkillRawMaterialGenerationResponse(BaseModel):
     id: str
+    job_id: str | None = None
     skill_definition_id: str
     material_ids: list[str]
     user_description: str

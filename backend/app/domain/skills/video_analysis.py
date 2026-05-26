@@ -109,6 +109,7 @@ def analyze_video_material(
     limitations = []
     if duration_ms > DESIGNED_VIDEO_DURATION_MS and len(keyframes) >= max_keyframes:
         limitations.append("视频超过 30 分钟，候选帧已按全片时长降采样，局部操作细节可能覆盖不足。")
+    usage = _aggregate_keyframe_usage(keyframes)
     return VideoAnalysisResult(
         asr=asr,
         keyframes=keyframes,
@@ -118,6 +119,7 @@ def analyze_video_material(
             "max_keyframes": max_keyframes,
             "timeline_target_keyframes": TIMELINE_TARGET_KEYFRAMES,
             "timeline_interval_ms": _timeline_interval_ms(duration_ms, max_keyframes) if duration_ms else 0,
+            **({"usage": usage} if usage else {}),
         },
     )
 
@@ -402,8 +404,26 @@ def _recognize_keyframe(
         "frame_type": str(parsed.get("frame_type") or "unknown"),
         "operation_relevance": str(parsed.get("operation_relevance") or "unknown"),
         "noise_flags": [str(item) for item in noise_flags] if isinstance(noise_flags, list) else [],
+        "usage": completion.usage,
     }
     return caption or "关键帧包含可用于重建任务步骤的视觉线索。", observations, metadata
+
+
+def _aggregate_keyframe_usage(keyframes: list[VideoKeyframeAnalysis]) -> dict[str, int] | None:
+    totals = {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    for keyframe in keyframes:
+        usage = keyframe.metadata.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        token_seen = False
+        for key in ("input_tokens", "output_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                totals[key] += value
+                token_seen = True
+        if token_seen:
+            totals["llm_calls"] += 1
+    return totals if totals["llm_calls"] > 0 else None
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:

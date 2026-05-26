@@ -14,7 +14,7 @@ from app.domain.jobs.progress import ensure_publish_progress_payload, mark_publi
 from app.domain.jobs.repository import JobRepository
 from app.domain.runtime.service import RuntimeService
 from app.domain.skill_tests.service import SkillTestService
-from app.domain.skills.service import SkillsService
+from app.domain.skills.service import SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE, SkillsService
 from app.domain.skills.models import now_utc
 from app.gateway.asr import AsrGateway
 from app.gateway.inference import LlmInferenceGateway
@@ -63,12 +63,19 @@ class RuntimeJobWorker:
         try:
             with self.database_manager.session() as session:
                 job = None
-                for job_type in ("compile", "runtime", "skill_test_timeline_driver", "raw_material_analysis"):
+                for job_type in (
+                    "compile",
+                    "runtime",
+                    "skill_test_timeline_driver",
+                    "raw_material_analysis",
+                    SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE,
+                ):
                     with start_span("job.claim", job_type=job_type):
                         job = self.job_repository.claim_next_job(
                             session,
                             job_type=job_type,
                             lease_seconds=self.settings.runtime_job_lease_seconds,
+                            worker_name=self.__class__.__name__,
                         )
                     if job:
                         break
@@ -125,6 +132,15 @@ class RuntimeJobWorker:
                                 object_store=self.object_store,
                             )
                             skills_service.process_raw_material_analysis_job(session, job_id)
+                        elif job_type == SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE:
+                            skills_service = SkillsService(
+                                settings=self.settings,
+                                gitlab_gateway=self.gitlab_gateway,
+                                inference_gateway=self.inference_gateway,
+                                asr_gateway=self.asr_gateway,
+                                object_store=self.object_store,
+                            )
+                            skills_service.process_skill_raw_material_generation_job(session, job_id)
                         else:
                             raise RuntimeError(f"Unsupported job_type={job_type}.")
                     except Exception as exc:

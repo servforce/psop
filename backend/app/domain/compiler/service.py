@@ -514,6 +514,7 @@ class CompilerService:
             if job.status != "running":
                 job.status = "running"
                 job.attempt_no += 1
+                job.started_at = job.started_at or now_utc()
                 job.lease_until = now_utc()
                 session.commit()
             return self.process_compile_job(session, job.id)
@@ -711,6 +712,12 @@ class CompilerService:
                         repair_diagnostics=repair_diagnostics,
                         session=session,
                     )
+                    if progress:
+                        self.job_repository.accumulate_llm_usage(
+                            self.job_repository.get_runtime_job(session, progress.job_id),
+                            candidate.usage,
+                        )
+                        session.flush()
                 except Exception as exc:
                     record_span_exception(span, exc)
                     raise

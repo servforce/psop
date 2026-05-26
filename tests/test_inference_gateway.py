@@ -59,8 +59,45 @@ def test_named_route_without_mapping_still_uses_route_key_as_model() -> None:
         api_base_url="https://example.test/v1",
         api_key="test-key",
         default_model="glm-5.1",
-        route_models={"vision": "qwen-vl-test"},
+        route_models={"skill-creation": "qwen3.6-plus", "vision": "qwen-vl-test"},
     )
 
     assert gateway._resolve_model("skill-test-judge") == "skill-test-judge"
+    assert gateway._resolve_model("skill-creation") == "qwen3.6-plus"
     assert gateway._resolve_model("default") == "glm-5.1"
+
+
+def test_skill_creation_route_can_attach_qwen_thinking_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_post_chat_completion(
+        self: OpenAICompatibleInferenceGateway,
+        *,
+        payload: dict[str, object],
+        model: str,
+        route_key: str,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> LlmCompletion:
+        captured.update(payload)
+        return LlmCompletion(content="{}", provider="test", model=model, raw_response={"id": "response-1"})
+
+    monkeypatch.setattr(OpenAICompatibleInferenceGateway, "_post_chat_completion", fake_post_chat_completion)
+    gateway = OpenAICompatibleInferenceGateway(
+        provider="test",
+        api_base_url="https://example.test/v1",
+        api_key="test-key",
+        default_model="glm-5.1",
+        route_models={"skill-creation": "qwen3.6-plus"},
+        route_payload_options={"skill-creation": {"enable_thinking": True, "thinking_budget": 8192}},
+    )
+
+    gateway.complete_multimodal(
+        system_prompt="system",
+        user_prompt="user",
+        attachments=[],
+        route_key="skill-creation",
+    )
+
+    assert captured["enable_thinking"] is True
+    assert captured["thinking_budget"] == 8192

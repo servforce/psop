@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import posixpath
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, Query, WebSocket, WebSocketDisconnect
 from fastapi import File, Form, UploadFile
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_app_settings, get_db_session, get_object_store, get_runtime_service
+from app.api.dependencies import (
+    get_app_settings,
+    get_db_session,
+    get_job_query_service,
+    get_object_store,
+    get_runtime_service,
+)
 from app.core.config import Settings
 from app.domain.compiler.models import ArtifactObject
-from app.domain.jobs.schemas import RuntimeJobResponse
+from app.domain.jobs.schemas import RuntimeJobResponse, RuntimeJobStatsResponse
+from app.domain.jobs.service import JobQueryService
 from app.domain.runtime.schemas import (
     AppendTerminalEventRequest,
     BindingRequirementResponse,
@@ -353,14 +361,37 @@ def get_replay(
     return service.build_replay(session, run_id)
 
 
+@runtime_router.get("/jobs/stats", response_model=RuntimeJobStatsResponse)
+def get_runtime_job_stats(
+    window_hours: int = Query(default=24, ge=1, le=720),
+    session: Session = Depends(get_db_session),
+    service: JobQueryService = Depends(get_job_query_service),
+) -> RuntimeJobStatsResponse:
+    return service.get_runtime_job_stats(session, window_hours=window_hours)
+
+
 @runtime_router.get("/jobs", response_model=list[RuntimeJobResponse])
 def list_runtime_jobs(
     status: str | None = Query(default=None),
     job_type: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
-    service: RuntimeService = Depends(get_runtime_service),
+    service: JobQueryService = Depends(get_job_query_service),
 ) -> list[RuntimeJobResponse]:
-    return service.list_runtime_jobs(session, status=status, job_type=job_type)
+    return service.list_runtime_jobs(
+        session,
+        status=status,
+        job_type=job_type,
+        q=q,
+        created_from=created_from,
+        created_to=created_to,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @ws_router.websocket("/runs/{run_id}")

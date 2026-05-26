@@ -45,7 +45,8 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(html).toContain("关键帧图片分析");
   expect(html).not.toContain("派生资产</p>");
   expect(html).toContain("候选资产");
-  expect(html).toContain("由构建智能体选择关键帧");
+  expect(html).not.toContain("自动选择必要的参考图片");
+  expect(html).toContain("已提交后台任务");
   expect(html).not.toContain("selected_for_reference");
   expect(html).not.toContain("Skill 参考");
   expect(html).toContain('class="panel-body h-full min-h-0 overflow-hidden !p-0"');
@@ -77,7 +78,7 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(html).toContain('class="flex h-10 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950"');
   expect(html).toContain('x-show="rawMaterialDetailTab === \'analysis\'"');
   expect(html).toContain('x-show="rawMaterialDetailTab === \'preview\'"');
-  expect(html).toContain("min-h-0 overflow-y-auto overflow-x-hidden px-3 py-3");
+  expect(html).toContain('x-show="rawMaterialDetailTab === \'analysis\'" class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3"');
   expect(html).toContain('class="flex h-full min-h-0 items-center justify-center overflow-auto bg-black"');
   expect(html).not.toContain('x-text="rawMaterialDetail.filename"');
   expect(html).toContain('dt class="font-semibold uppercase tracking-[0.16em] text-slate-500">类型');
@@ -123,7 +124,7 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(skillDetailJs).toContain("/analyze");
   expect(skillDetailJs).toContain("/derived-assets/");
   expect(skillDetailJs).toContain("rawMaterialVisibleEvidenceItems()");
-  expect(skillDetailJs).toContain('item?.kind !== "audio_transcript"');
+  expect(skillDetailJs).toContain('if (hasTextContent && item?.kind === "audio_transcript")');
   expect(skillDetailJs).toContain("derivedAssetIds.has(item?.asset_id)");
   expect(skillDetailJs).toContain('item?.kind === "video_keyframe"');
   expect(skillDetailJs).toContain("openRawMaterialImagePreview(asset)");
@@ -135,6 +136,10 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(skillDetailJs).toContain("user_description: this.rawMaterialGenerateForm.user_description.trim()");
   expect(skillDetailJs).toContain("base_commit_sha: this.currentSkill.latest_draft_head_sha");
   expect(skillDetailJs).toContain("hasSelectedReadyVideoRawMaterial");
+  expect(skillDetailJs).toContain('job_type: "skill_raw_material_generation"');
+  expect(skillDetailJs).toContain('await this.navigate("/admin/tasks")');
+  expect(skillDetailJs).toContain('this.showCenterToast("success", "Skill 生成任务已提交。")');
+  expect(skillDetailJs).toContain('jobId ? `Skill 生成任务已提交：${this.formatShortId(jobId)}`');
   expect(skillDetailJs).toContain('kind === "document"');
   expect(skillDetailJs).toContain("this.sourceLoadedSkillId = null");
   expect(skillDetailJs).toContain("this.repositoryLoadedSkillId = null");

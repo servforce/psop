@@ -672,13 +672,35 @@
             })
           });
           this.rawMaterialGenerationResult = result;
-          this.sourceLoadedSkillId = null;
-          this.repositoryLoadedSkillId = null;
-          this.currentSkill = await this.apiRequest(`/skills/${skillId}`);
-          await this.loadRawMaterials(skillId, true);
-          this.showNotice("success", "Skill 草稿已生成并提交到 GitLab draft。");
+          if (result.status === "succeeded") {
+            this.sourceLoadedSkillId = null;
+            this.repositoryLoadedSkillId = null;
+            this.currentSkill = await this.apiRequest(`/skills/${skillId}`);
+            await this.loadRawMaterials(skillId, true);
+            this.rawMaterialGenerateModalOpen = false;
+            this.showCenterToast("success", "Skill 草稿已生成。");
+            this.showNotice("success", "Skill 草稿已生成并提交到 GitLab draft。");
+          } else if (result.status === "failed") {
+            this.showCenterToast("error", result.error_message || "生成 Skill 草稿失败。");
+          } else {
+            const jobId = result.job_id || result.prompt_metadata?.job_id || result.id;
+            this.rawMaterialGenerateModalOpen = false;
+            this.taskFilters = {
+              job_type: "skill_raw_material_generation",
+              status: "",
+              q: jobId || "",
+              created_from: "",
+              created_to: ""
+            };
+            await this.navigate("/admin/tasks");
+            this.showCenterToast("success", "Skill 生成任务已提交。");
+            this.showNotice(
+              "success",
+              jobId ? `Skill 生成任务已提交：${this.formatShortId(jobId)}` : "Skill 生成任务已提交。"
+            );
+          }
         } catch (error) {
-          this.showNotice("error", error.message || "生成 Skill 草稿失败。");
+          this.showCenterToast("error", error.message || "生成 Skill 草稿失败。");
         } finally {
           this.busy.rawMaterialGenerate = false;
         }

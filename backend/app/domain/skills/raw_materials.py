@@ -359,11 +359,7 @@ def parse_generated_skill_draft(content: str) -> GeneratedSkillDraft:
         generation_reason=str(parsed.get("generation_reason") or "").strip(),
         review_notes=[str(item) for item in review_notes] if isinstance(review_notes, list) else [],
         material_usage=[item for item in material_usage if isinstance(item, dict)] if isinstance(material_usage, list) else [],
-        selected_reference_assets=[
-            item for item in selected_reference_assets if isinstance(item, dict)
-        ]
-        if isinstance(selected_reference_assets, list)
-        else [],
+        selected_reference_assets=_normalize_selected_reference_assets(selected_reference_assets),
         directory_tree=str(parsed.get("directory_tree") or "").strip(),
         raw_parsed=parsed,
     )
@@ -686,14 +682,40 @@ def _parse_json_object(content: str) -> dict[str, Any]:
 
 def _extract_json(content: str) -> str:
     stripped = content.strip()
-    fenced = re.search(r"```(?:json)?\s*(.*?)```", stripped, flags=re.DOTALL | re.IGNORECASE)
-    if fenced:
-        return fenced.group(1).strip()
+    fenced = _extract_outer_fenced_json(stripped)
+    if fenced is not None:
+        return fenced
     first = stripped.find("{")
     last = stripped.rfind("}")
     if first != -1 and last != -1 and last > first:
         return stripped[first : last + 1]
     return stripped
+
+
+def _extract_outer_fenced_json(content: str) -> str | None:
+    lines = content.splitlines()
+    if len(lines) < 2:
+        return None
+    first = lines[0].strip().lower()
+    last = lines[-1].strip()
+    if not re.fullmatch(r"```(?:json)?", first):
+        return None
+    if last != "```":
+        return None
+    return "\n".join(lines[1:-1]).strip()
+
+
+def _normalize_selected_reference_assets(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            normalized.append(item)
+            continue
+        if isinstance(item, str) and item.strip():
+            normalized.append({"reference_path": item.strip(), "reason": ""})
+    return normalized
 
 
 def _truncate(value: str, limit: int) -> str:

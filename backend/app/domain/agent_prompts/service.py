@@ -103,7 +103,7 @@ class AgentPromptService:
                 version = AgentPromptVersion(
                     definition_id=definition.id,
                     version_no=version_no,
-                    version_label=pack.version or f"v{version_no}",
+                    version_label=self._seed_version_label(pack.version, version_no),
                     status="published",
                     route_key=pack.route_key,
                     files=pack.files,
@@ -112,6 +112,10 @@ class AgentPromptService:
                 )
                 session.add(version)
                 session.flush()
+                changed = True
+            expected_version_label = self._seed_version_label(pack.version, version.version_no)
+            if version.version_label != expected_version_label:
+                version.version_label = expected_version_label
                 changed = True
             if not definition.active_version_id:
                 definition.active_version_id = version.id
@@ -367,6 +371,12 @@ class AgentPromptService:
         if not version or version.definition_id != definition.id:
             raise SkillNotFoundError("未找到 Agent Prompt Pack 版本。", details={"version_id": version_id})
         return version
+
+    @staticmethod
+    def _seed_version_label(asset_version: str, version_no: int) -> str:
+        if version_no <= 1 and asset_version:
+            return asset_version
+        return f"v{version_no}"
 
     @staticmethod
     def _normalize_files(files: dict[str, str]) -> dict[str, str]:

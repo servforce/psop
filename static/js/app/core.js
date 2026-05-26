@@ -320,6 +320,7 @@
       async loadPageFragments() {
         const fragments = [
           ["skills-list-page", "/pages/skills-list.html"],
+          ["tasks-page", "/pages/tasks.html"],
           ["skill-detail-page", "/pages/skill-detail.html"],
           ["compiler-list-page", "/pages/compiler-list.html"],
           ["compiler-artifact-page", "/pages/compiler-artifact-detail.html"],
@@ -442,6 +443,9 @@
           this.stopSkillTestReviewPlayback?.();
           this.stopSkillTestReviewPolling?.();
         }
+        if (this.route.name !== "tasks-list") {
+          this.stopTaskPolling?.();
+        }
         if (this.route.name !== "compiler-artifact") {
           this.destroyCompilerArtifactViewer();
           this.compilerArtifact = null;
@@ -456,6 +460,12 @@
             this.activeDetailTab = "overview";
             this.resetLazyDetailState();
             await this.loadSkills();
+            return;
+          }
+
+          if (this.route.name === "tasks-list") {
+            this.currentSkill = null;
+            await this.loadTasksPage();
             return;
           }
 
@@ -749,6 +759,9 @@
         }
         if (this.route.name === "compiler-list") {
           return "编译";
+        }
+        if (this.route.name === "tasks-list") {
+          return "任务";
         }
         if (this.route.name === "compiler-artifact") {
           return "EG Artifact";

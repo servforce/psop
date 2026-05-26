@@ -20,6 +20,7 @@
     <script defer src="/js/app/compiler.js"></script>
     <script defer src="/js/app/agent-prompts.js"></script>
     <script defer src="/js/app/skill-test.js"></script>
+    <script defer src="/js/app/tasks.js"></script>
     <script defer src="/js/app/runtime.js"></script>
     <script defer src="/js/app/formatters.js"></script>
     <script defer src="/node_modules/alpinejs/dist/cdn.min.js"></script>
@@ -69,6 +70,16 @@
                 <span class="material-symbols-outlined text-[20px]">smart_toy</span>
                 <span x-show="!sidebarCollapsed" x-transition.opacity>基本原则</span>
               </button>
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="[route.name === 'tasks-list' ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="任务"
+                @click="navigate('/admin/tasks')"
+              >
+                <span class="material-symbols-outlined text-[20px]">task_alt</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>任务</span>
+              </button>
             </nav>
         </aside>
 
@@ -116,6 +127,7 @@
               </template>
 
               <div id="skills-list-page" class="h-full" x-show="!loadingPage && route.name === 'skills-list'"></div>
+              <div id="tasks-page" class="h-full" x-show="!loadingPage && route.name === 'tasks-list'"></div>
               <div id="skill-detail-page" class="h-full" x-show="!loadingPage && ['skill-detail', 'skill-test-scenario-new'].includes(route.name) && currentSkill"></div>
               <div id="compiler-list-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-list'"></div>
               <div id="compiler-artifact-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-artifact' && compilerArtifact"></div>

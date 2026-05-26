@@ -13,6 +13,10 @@
       return { name: "skills-list", params: {} };
     }
 
+    if (normalized === "/admin/tasks") {
+      return { name: "tasks-list", params: {} };
+    }
+
     const detailMatch = normalized.match(/^\/admin\/skills\/([^/]+)$/);
     if (detailMatch) {
       return {
@@ -116,6 +120,10 @@
 
   function buildSkillDetailPath(skillId) {
     return `/admin/skills/${skillId}`;
+  }
+
+  function buildTasksPath() {
+    return "/admin/tasks";
   }
 
   function buildRunLivePath(runId) {
@@ -483,6 +491,17 @@
         requested_from: "",
         requested_to: ""
       },
+      tasks: [],
+      taskStats: null,
+      taskLastLoadedAt: "",
+      taskPollTimer: null,
+      taskFilters: {
+        job_type: "",
+        status: "",
+        q: "",
+        created_from: "",
+        created_to: ""
+      },
       publishFilters: {
         status: "",
         published_from: "",
@@ -656,6 +675,7 @@
         skillTestEvaluate: false,
         skillTestSendData: false,
         skillTestCancel: false,
+        tasks: false,
         replayRuns: false,
         replayDetail: false
       }
@@ -666,6 +686,7 @@
     normalizePath,
     resolveAdminRoute,
     buildSkillDetailPath,
+    buildTasksPath,
     buildRunLivePath,
     buildSkillRunLivePath,
     buildSkillDebugRunLivePath,
@@ -695,6 +716,7 @@
       ...window.PSOPConsoleCompilerMethods,
       ...window.PSOPConsoleAgentPromptMethods,
       ...window.PSOPConsoleSkillTestMethods,
+      ...window.PSOPConsoleTasksMethods,
       ...window.PSOPConsoleRuntimeMethods,
       ...window.PSOPConsoleFormatMethods
     };

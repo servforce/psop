@@ -637,6 +637,35 @@ def create_test_client() -> tuple[TestClient, FakeGitLabGateway, FakeInferenceGa
     return client, fake_gateway, fake_inference
 
 
+def test_parse_generated_skill_draft_handles_outer_fence_and_inner_markdown_fences() -> None:
+    content = json.dumps(
+        {
+            "directory_tree": "README.md\nSKILL.md",
+            "files": {
+                "README.md": "# README\n",
+                "SKILL.md": "# Skill\n",
+                "prompts/system.md": "system",
+                "references/README.md": "reference",
+                "examples/input.md": "```text\n用户输入\n```",
+                "examples/expected-output.md": "```text\n助手输出\n```",
+                "tests/checklist.md": "- [ ] ok",
+            },
+            "review_notes": [],
+            "generation_reason": "ok",
+            "material_usage": [],
+            "selected_reference_assets": ["references/video-keyframes/material/000000000.jpg"],
+        },
+        ensure_ascii=False,
+    )
+
+    parsed = raw_materials.parse_generated_skill_draft(f"```json\n{content}\n```")
+
+    assert parsed.files["examples/input.md"].startswith("```text")
+    assert parsed.selected_reference_assets == [
+        {"reference_path": "references/video-keyframes/material/000000000.jpg", "reason": ""}
+    ]
+
+
 def test_create_skill_initializes_gitlab_and_persists_metadata() -> None:
     client, fake_gateway, _ = create_test_client()
 
@@ -733,6 +762,7 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
             data={"name": "设备照片", "material_kind": "image"},
             files={"file": ("panel.png", b"not-really-a-png", "image/png")},
         )
+        jobs_response = client.get("/api/v1/runtime/jobs", params={"job_type": "raw_material_analysis"})
         list_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
         material_id = upload_response.json()["id"]
         detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
@@ -759,6 +789,7 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
         call.get("attachments") == "panel.png" and call.get("route_key") == "vision"
         for call in fake_inference.calls
     )
+    assert any(job["token_usage"] and job["token_usage"]["total_tokens"] == 30 for job in jobs_response.json())
 
     assert list_response.status_code == 200
     assert {item["id"] for item in list_response.json()} == {material_id, image_response.json()["id"]}
@@ -1088,7 +1119,15 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert prompt_material["skill_md"].startswith("# Generated Skill")
     assert source_response.json()["head_commit_sha"] == payload["committed_commit_sha"]
     assert publishes_response.json() == []
-    assert any("generate_psop_skill_source_from_raw_materials" in call["user_prompt"] for call in fake_inference.calls)
+    generation_call = next(
+        call for call in fake_inference.calls if "generate_psop_skill_source_from_raw_materials" in call["user_prompt"]
+    )
+    generation_prompt = json.loads(generation_call["user_prompt"])
+    assert generation_call["route_key"] == "skill-creation"
+    assert "psop_skill_form_definition" in generation_prompt
+    assert "physical_world_skill_guidance" in generation_prompt
+    assert "publishable_document_skill_standard" in generation_prompt
+    assert len(generation_prompt["material_analysis_results"]) == 2
 
 
 def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch) -> None:
@@ -1483,6 +1522,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         terminal_events_after_append_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
         jobs_response = client.get("/api/v1/runtime/jobs")
+        job_stats_response = client.get("/api/v1/runtime/jobs/stats")
 
     assert publish_response.status_code == 202
     assert publish_payload["compile_request"]["status"] == "pending"
@@ -1568,6 +1608,19 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     jobs = jobs_response.json()
     assert {job["job_type"] for job in jobs} >= {"compile", "runtime"}
     assert all(job["status"] == "succeeded" for job in jobs)
+    compile_job = next(job for job in jobs if job["job_type"] == "compile")
+    runtime_job = next(job for job in jobs if job["job_type"] == "runtime")
+    assert compile_job["started_at"]
+    assert compile_job["finished_at"]
+    assert compile_job["duration_ms"] is not None
+    assert compile_job["token_usage"]["total_tokens"] >= 15
+    assert runtime_job["started_at"]
+    assert runtime_job["finished_at"]
+    assert runtime_job["progress"]["percent"] == 100
+    assert runtime_job["token_usage"]["total_tokens"] >= 45
+    job_stats = job_stats_response.json()
+    assert job_stats["succeeded"] >= 2
+    assert job_stats["token_usage"]["total_tokens"] >= 60
 
 
 def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
@@ -1897,6 +1950,12 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert image_inputs[0]["payload_inline"]["caption"] == "伞骨近照"
     assert any(event["direction"] == "output" and "测试任务已完成" in str(event["payload_inline"]) for event in terminal_events)
     assert any(job["job_type"] == "skill_test_timeline_driver" and job["status"] == "succeeded" for job in jobs_response.json())
+    assert any(
+        job["job_type"] == "skill_test_timeline_driver"
+        and job["token_usage"]
+        and job["token_usage"]["total_tokens"] >= 15
+        for job in jobs_response.json()
+    )
     assert any(call["route_key"] == "skill-test-judge" for call in fake_inference.calls)
 
     assert evaluate_response.status_code == 200

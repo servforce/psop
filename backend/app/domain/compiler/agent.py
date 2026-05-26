@@ -28,6 +28,7 @@ class CompileAgentCandidate:
     context_diagnostics: list[FormalDiagnostic]
     compiler_metadata: dict[str, Any]
     raw_content: str
+    usage: dict[str, Any]
 
 
 class SkillCompileAgent:
@@ -81,6 +82,7 @@ class SkillCompileAgent:
         candidate = self._parse_candidate(completion.content)
         candidate.context_diagnostics = context_diagnostics
         candidate.compiler_metadata = compiler_metadata
+        candidate.usage = dict(completion.usage or {})
         return candidate
 
     @staticmethod
@@ -102,6 +104,7 @@ class SkillCompileAgent:
                 context_diagnostics=[],
                 compiler_metadata={},
                 raw_content=content,
+                usage={},
             )
 
         if not isinstance(artifact, dict):
@@ -118,6 +121,7 @@ class SkillCompileAgent:
                 context_diagnostics=[],
                 compiler_metadata={},
                 raw_content=content,
+                usage={},
             )
         return CompileAgentCandidate(
             artifact=artifact,
@@ -125,6 +129,7 @@ class SkillCompileAgent:
             context_diagnostics=[],
             compiler_metadata={},
             raw_content=content,
+            usage={},
         )
 
     @staticmethod

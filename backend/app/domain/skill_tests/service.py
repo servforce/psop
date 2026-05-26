@@ -406,6 +406,7 @@ class SkillTestService:
         elif job.status == "running":
             job.status = "pending"
         job.last_error = ""
+        self._sync_driver_job_metrics(session, job, str(scenario_run_id))
         session.commit()
         return response
 
@@ -1630,3 +1631,21 @@ class SkillTestService:
             raw_response=evaluation.raw_response,
             created_at=evaluation.created_at,
         )
+
+    def _sync_driver_job_metrics(self, session: Session, job: RuntimeJob, scenario_run_id: str) -> None:
+        evaluations = self.repository.list_expectation_evaluations(session, scenario_run_id)
+        totals = {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        for evaluation in evaluations:
+            usage = (evaluation.raw_response or {}).get("usage")
+            if not isinstance(usage, dict):
+                continue
+            token_seen = False
+            for key in ("input_tokens", "output_tokens", "total_tokens"):
+                value = usage.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    totals[key] += value
+                    token_seen = True
+            if token_seen:
+                totals["llm_calls"] += 1
+        if totals["llm_calls"] > 0:
+            job.metrics = {**(job.metrics or {}), **totals}

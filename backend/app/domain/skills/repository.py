@@ -120,6 +120,9 @@ class SkillsRepository:
         session.flush()
         return generation
 
+    def get_raw_material_generation(self, session: Session, generation_id: str) -> SkillRawMaterialGeneration | None:
+        return session.get(SkillRawMaterialGeneration, generation_id)
+
     def get_latest_raw_material_analysis(
         self,
         session: Session,

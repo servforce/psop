@@ -56,6 +56,7 @@ class OpenAICompatibleInferenceGateway:
         api_key: str | None,
         default_model: str,
         route_models: dict[str, str] | None = None,
+        route_payload_options: dict[str, dict[str, object]] | None = None,
         timeout_seconds: float = 60.0,
     ) -> None:
         self.provider = provider
@@ -67,16 +68,30 @@ class OpenAICompatibleInferenceGateway:
             for route_key, model in (route_models or {}).items()
             if str(route_key).strip() and str(model).strip()
         }
+        self.route_payload_options = {
+            str(route_key): dict(options)
+            for route_key, options in (route_payload_options or {}).items()
+            if str(route_key).strip() and isinstance(options, dict)
+        }
         self.timeout_seconds = timeout_seconds
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "OpenAICompatibleInferenceGateway":
+        skill_creation_options: dict[str, object] = {}
+        if settings.llm_skill_creation_enable_thinking:
+            skill_creation_options["enable_thinking"] = True
+            if settings.llm_skill_creation_thinking_budget:
+                skill_creation_options["thinking_budget"] = settings.llm_skill_creation_thinking_budget
         return cls(
             provider=settings.llm_provider,
             api_base_url=settings.llm_api_base_url,
             api_key=settings.llm_api_key,
             default_model=settings.llm_default_model,
-            route_models={"vision": settings.llm_vision_model or ""},
+            route_models={
+                "skill-creation": settings.llm_skill_creation_model or "",
+                "vision": settings.llm_vision_model or "",
+            },
+            route_payload_options={"skill-creation": skill_creation_options},
             timeout_seconds=settings.llm_timeout_seconds,
         )
 
@@ -98,6 +113,7 @@ class OpenAICompatibleInferenceGateway:
             ],
             "temperature": 0.2,
         }
+        self._apply_route_payload_options(payload, route_key)
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         timeout = httpx.Timeout(self.timeout_seconds, connect=min(15.0, self.timeout_seconds))
@@ -285,6 +301,7 @@ class OpenAICompatibleInferenceGateway:
             ],
             "temperature": 0.2,
         }
+        self._apply_route_payload_options(payload, route_key)
         return self._post_chat_completion(
             payload=payload,
             model=model,
@@ -292,6 +309,11 @@ class OpenAICompatibleInferenceGateway:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
+
+    def _apply_route_payload_options(self, payload: dict[str, object], route_key: str) -> None:
+        for key, value in self.route_payload_options.get(route_key, {}).items():
+            if value is not None:
+                payload[key] = value
 
     def _post_chat_completion(
         self,

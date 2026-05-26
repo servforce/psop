@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.compiler.service import CompilerService
+from app.domain.jobs.service import JobQueryService
 from app.domain.runtime.service import RuntimeService
 from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.service import SkillsService
@@ -78,6 +79,10 @@ def get_runtime_service(request: Request) -> RuntimeService:
         settings=get_app_settings(request),
         inference_gateway=get_inference_gateway(request),
     )
+
+
+def get_job_query_service(_: Request) -> JobQueryService:
+    return JobQueryService()
 
 
 def get_skill_test_service(request: Request) -> SkillTestService:

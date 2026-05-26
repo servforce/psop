@@ -84,6 +84,7 @@ from app.gateway.gitlab import GitLabSkillSourceGateway
 from app.infra.object_store import ObjectStoreService
 
 LOGGER = logging.getLogger(__name__)
+SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE = "skill_raw_material_generation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -901,6 +902,7 @@ class SkillsService:
             analysis.ended_at = now_utc()
             job.status = "succeeded" if analysis.status == "ready" else "failed"
             job.last_error = analysis.error_message
+            self._sync_raw_material_analysis_job_metrics(job, analysis.analysis_result)
             session.commit()
             return analysis
         except Exception as exc:
@@ -912,6 +914,7 @@ class SkillsService:
             analysis.ended_at = now_utc()
             job.status = "failed"
             job.last_error = str(exc)
+            self._sync_raw_material_analysis_job_metrics(job, analysis.analysis_result)
             material.status = "failed"
             material.error_message = str(exc)
             session.commit()
@@ -926,7 +929,6 @@ class SkillsService:
         payload: GenerateSkillDraftRequest,
     ) -> SkillRawMaterialGenerationResponse:
         definition = self._require_definition(session, skill_id)
-        draft_version = self._require_draft_version(session, definition)
         material_ids = list(dict.fromkeys(payload.material_ids))
         materials = self.repository.list_raw_materials_by_ids(
             session,
@@ -944,13 +946,161 @@ class SkillsService:
         failed_materials = [material.id for material in materials if material.status != "ready"]
         if failed_materials:
             raise SkillValidationError("存在未就绪素材，不能用于生成 Skill。", details={"material_ids": failed_materials})
-        material_generation_context = self._collect_generation_material_context(session, materials)
+        if not any(self._is_video_material(material) for material in materials):
+            raise SkillValidationError("生成 Skill 至少需要选择一个已分析完成的视频素材。")
+        if payload.base_commit_sha:
+            draft_version = self._require_draft_version(session, definition)
+            current_head = self.gitlab_gateway.get_branch_head(definition.gitlab_project_id, draft_version.source_ref)
+            if current_head != payload.base_commit_sha:
+                raise SkillSourceConflictError(
+                    "source 已变更，请刷新后重试。",
+                    details={"expected": payload.base_commit_sha, "actual": current_head},
+                )
 
+        generation = SkillRawMaterialGeneration(
+            skill_definition_id=definition.id,
+            material_ids=material_ids,
+            user_description=payload.user_description,
+            status="pending",
+            prompt_metadata={"reference_files": []},
+            raw_response={
+                "request": {
+                    "material_ids": material_ids,
+                    "user_description": payload.user_description,
+                    "base_commit_sha": payload.base_commit_sha,
+                }
+            },
+        )
+        session.add(generation)
+        session.flush()
+
+        job = RuntimeJob(
+            job_type=SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE,
+            status="pending",
+            payload=self._skill_generation_job_payload(
+                skill_definition_id=definition.id,
+                generation_id=generation.id,
+                material_ids=material_ids,
+                base_commit_sha=payload.base_commit_sha,
+                current_stage="queued",
+            ),
+            dedupe_key=f"skill-raw-material-generation:{generation.id}",
+            max_attempts=self.settings.runtime_job_max_attempts,
+        )
+        session.add(job)
+        session.flush()
+        generation.prompt_metadata = {
+            **(generation.prompt_metadata or {}),
+            "job_id": job.id,
+            "job_type": SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE,
+        }
+        session.commit()
+
+        if not self.settings.runtime_worker_enabled:
+            self.process_skill_raw_material_generation_job(session, job.id)
+            refreshed = self.repository.get_raw_material_generation(session, generation.id)
+            return self._build_raw_material_generation_response(refreshed or generation)
+
+        return self._build_raw_material_generation_response(generation)
+
+    def process_skill_raw_material_generation_job(
+        self,
+        session: Session,
+        job_id: str,
+    ) -> SkillRawMaterialGeneration:
+        job = self.job_repository.get_runtime_job(session, job_id)
+        if not job:
+            raise SkillNotFoundError("未找到 Skill 生成任务。", details={"job_id": job_id})
+        if job.job_type != SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE:
+            raise SkillValidationError("当前 worker 仅支持 Skill 生成任务。", details={"job_type": job.job_type})
+        generation_id = str((job.payload or {}).get("generation_id") or "")
+        generation = self.repository.get_raw_material_generation(session, generation_id)
+        if not generation:
+            raise SkillNotFoundError("未找到 Skill 生成记录。", details={"job_id": job_id, "generation_id": generation_id})
+        if generation.status == "succeeded":
+            job.status = "succeeded"
+            job.lease_until = None
+            session.commit()
+            return generation
+
+        job.status = "running"
+        job.payload = self._skill_generation_job_payload(
+            skill_definition_id=generation.skill_definition_id,
+            generation_id=generation.id,
+            material_ids=[str(item) for item in generation.material_ids],
+            base_commit_sha=str((job.payload or {}).get("base_commit_sha") or "") or None,
+            current_stage="loading_source",
+        )
+        generation.status = "running"
+        generation.error_message = ""
+        generation.prompt_metadata = {
+            **(generation.prompt_metadata or {}),
+            "job_id": job.id,
+            "job_type": SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE,
+        }
+        session.commit()
+
+        try:
+            self._run_skill_raw_material_generation(
+                session,
+                generation=generation,
+                job=job,
+                base_commit_sha=str((job.payload or {}).get("base_commit_sha") or "") or None,
+            )
+            return generation
+        except Exception as exc:
+            generation.status = "failed"
+            generation.error_message = str(exc)
+            generation.raw_response = {
+                **(generation.raw_response or {}),
+                "error": str(exc),
+                "error_type": exc.__class__.__name__,
+            }
+            job.status = "failed"
+            job.last_error = str(exc)
+            job.lease_until = None
+            job.payload = self._set_skill_generation_job_stage(job.payload, "failed", "failed", str(exc))
+            session.commit()
+            LOGGER.exception(
+                "skill raw material generation failed",
+                extra={"generation_id": generation.id, "job_id": job_id},
+            )
+            return generation
+
+    def _run_skill_raw_material_generation(
+        self,
+        session: Session,
+        *,
+        generation: SkillRawMaterialGeneration,
+        job: RuntimeJob,
+        base_commit_sha: str | None,
+    ) -> None:
+        definition = self._require_definition(session, generation.skill_definition_id)
+        draft_version = self._require_draft_version(session, definition)
+        material_ids = [str(item) for item in generation.material_ids]
+        materials = self.repository.list_raw_materials_by_ids(
+            session,
+            skill_definition_id=definition.id,
+            material_ids=material_ids,
+        )
+        if len(materials) != len(material_ids):
+            found_ids = {material.id for material in materials}
+            raise SkillNotFoundError(
+                "部分原始素材不存在。",
+                details={"missing_material_ids": [item for item in material_ids if item not in found_ids]},
+            )
+        material_by_id = {material.id: material for material in materials}
+        materials = [material_by_id[material_id] for material_id in material_ids]
+        failed_materials = [material.id for material in materials if material.status != "ready"]
+        if failed_materials:
+            raise SkillValidationError("存在未就绪素材，不能用于生成 Skill。", details={"material_ids": failed_materials})
+
+        material_generation_context = self._collect_generation_material_context(session, materials)
         source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, draft_version.source_ref)
-        if payload.base_commit_sha and source_bundle.head_commit_sha != payload.base_commit_sha:
+        if base_commit_sha and source_bundle.head_commit_sha != base_commit_sha:
             raise SkillSourceConflictError(
                 "source 已变更，请刷新后重试。",
-                details={"expected": payload.base_commit_sha, "actual": source_bundle.head_commit_sha},
+                details={"expected": base_commit_sha, "actual": source_bundle.head_commit_sha},
             )
 
         prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
@@ -963,7 +1113,7 @@ class SkillsService:
             draft_version=draft_version,
             source_bundle=source_bundle,
             materials=materials,
-            user_description=payload.user_description,
+            user_description=generation.user_description,
             material_generation_context=material_generation_context,
         )
         system_prompt = prompt_pack.system_prompt
@@ -971,79 +1121,74 @@ class SkillsService:
         prompt_hash = hashlib.sha256(f"{system_prompt}\n{user_prompt}".encode("utf-8")).hexdigest()
         prompt_metadata = {
             **prompt_pack.metadata(),
+            "job_id": job.id,
+            "job_type": SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE,
             "candidate_reference_asset_count": len(material_generation_context["candidate_reference_assets"]),
             "reference_files": [],
         }
+        generation.prompt_hash = prompt_hash
+        generation.prompt_metadata = prompt_metadata
+        generation.raw_response = {"request": {"prompt_payload": prompt_payload, "agent_prompt": prompt_metadata}}
+        job.payload = self._set_skill_generation_job_stage(job.payload, "calling_model", "running")
+        session.commit()
 
-        generation = SkillRawMaterialGeneration(
-            skill_definition_id=definition.id,
-            material_ids=material_ids,
-            user_description=payload.user_description,
-            status="running",
-            prompt_hash=prompt_hash,
-            prompt_metadata=prompt_metadata,
-            raw_response={"request": {"prompt_payload": prompt_payload, "agent_prompt": prompt_metadata}},
+        completion = self.inference_gateway.complete(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            route_key=prompt_pack.route_key,
         )
-        session.add(generation)
-        session.flush()
+        self.job_repository.accumulate_llm_usage(job, completion.usage)
+        job.payload = self._set_skill_generation_job_stage(job.payload, "resolving_references", "running")
+        session.commit()
 
-        try:
-            completion = self.inference_gateway.complete(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                route_key=prompt_pack.route_key,
+        generated = parse_generated_skill_draft(completion.content)
+        reference_binary_files, selected_reference_assets, reference_files = self._resolve_selected_reference_assets(
+            session,
+            selected_reference_assets=generated.selected_reference_assets,
+            material_generation_context=material_generation_context,
+        )
+        prompt_metadata = {
+            **prompt_metadata,
+            "selected_reference_assets": selected_reference_assets,
+            "reference_files": reference_files,
+        }
+        generation.prompt_metadata = prompt_metadata
+        job.payload = self._set_skill_generation_job_stage(job.payload, "committing_source", "running")
+        session.commit()
+
+        current_head = self.gitlab_gateway.get_branch_head(definition.gitlab_project_id, draft_version.source_ref)
+        if current_head != source_bundle.head_commit_sha:
+            raise SkillSourceConflictError(
+                "source 已变更，请刷新后重试。",
+                details={"expected": source_bundle.head_commit_sha, "actual": current_head},
             )
-            generated = parse_generated_skill_draft(completion.content)
-            reference_binary_files, selected_reference_assets, reference_files = self._resolve_selected_reference_assets(
-                session,
-                selected_reference_assets=generated.selected_reference_assets,
-                material_generation_context=material_generation_context,
-            )
-            prompt_metadata = {
-                **prompt_metadata,
-                "selected_reference_assets": selected_reference_assets,
-                "reference_files": reference_files,
-            }
-            current_head = self.gitlab_gateway.get_branch_head(definition.gitlab_project_id, draft_version.source_ref)
-            if current_head != source_bundle.head_commit_sha:
-                raise SkillSourceConflictError(
-                    "source 已变更，请刷新后重试。",
-                    details={"expected": source_bundle.head_commit_sha, "actual": current_head},
-                )
-            committed_commit_sha = self._commit_generated_skill_files(
-                definition=definition,
-                draft_version=draft_version,
-                source_bundle=source_bundle,
-                generated=generated,
-                reference_binary_files=reference_binary_files,
-            )
-            generation.status = "succeeded"
-            generation.raw_response = {
-                "request": {"prompt_payload": prompt_payload, "agent_prompt": prompt_metadata},
-                "content": completion.content,
-                "parsed": generated.raw_parsed,
-                "usage": completion.usage,
-                "raw": completion.raw_response,
-            }
-            generation.generated_files = generated.files
-            generation.prompt_metadata = prompt_metadata
-            generation.generation_reason = generated.generation_reason
-            generation.review_notes = generated.review_notes
-            generation.material_usage = generated.material_usage
-            generation.committed_commit_sha = committed_commit_sha
-            generation.error_message = ""
-            session.commit()
-            return self._build_raw_material_generation_response(generation)
-        except Exception as exc:
-            generation.status = "failed"
-            generation.error_message = str(exc)
-            generation.raw_response = {
-                **(generation.raw_response or {}),
-                "error": str(exc),
-                "error_type": exc.__class__.__name__,
-            }
-            session.commit()
-            raise
+        committed_commit_sha = self._commit_generated_skill_files(
+            definition=definition,
+            draft_version=draft_version,
+            source_bundle=source_bundle,
+            generated=generated,
+            reference_binary_files=reference_binary_files,
+        )
+        generation.status = "succeeded"
+        generation.raw_response = {
+            "request": {"prompt_payload": prompt_payload, "agent_prompt": prompt_metadata},
+            "content": completion.content,
+            "parsed": generated.raw_parsed,
+            "usage": completion.usage,
+            "raw": completion.raw_response,
+        }
+        generation.generated_files = generated.files
+        generation.prompt_metadata = prompt_metadata
+        generation.generation_reason = generated.generation_reason
+        generation.review_notes = generated.review_notes
+        generation.material_usage = generated.material_usage
+        generation.committed_commit_sha = committed_commit_sha
+        generation.error_message = ""
+        job.status = "succeeded"
+        job.last_error = ""
+        job.lease_until = None
+        job.payload = self._set_skill_generation_job_stage(job.payload, "succeeded", "succeeded")
+        session.commit()
 
     def _commit_generated_skill_files(
         self,
@@ -1102,6 +1247,9 @@ class SkillsService:
                 "SKILL.md": source_bundle.skill_md_content,
             },
             "user_description": user_description,
+            "psop_skill_form_definition": self._skill_creation_form_definition_context(),
+            "physical_world_skill_guidance": self._physical_world_skill_guidance_context(),
+            "publishable_document_skill_standard": self._publishable_document_skill_standard_context(),
             "material_analysis_results": material_generation_context["material_analysis_results"],
             "candidate_reference_assets": material_generation_context["candidate_reference_assets"],
             "output_contract": {
@@ -1138,6 +1286,73 @@ class SkillsService:
                     "避开 Logo、片头、转场、纯水印、重复画面和低信息帧。"
                 ),
             },
+        }
+
+    @staticmethod
+    def _skill_creation_form_definition_context() -> dict:
+        return {
+            "definition": "PSOP Skill is a source-level contract for a real task. The platform compiles Skills into EG Compile Artifacts.",
+            "formal_revision": "psop-eg-formal/v5",
+            "core_constraints": [
+                "WEB IDE users author Skills; the system compiles and executes EG.",
+                "SKILL.md is the source contract for task workflow, evidence, safety, recovery, and completion criteria.",
+                "A publishable document Skill must be self-contained enough for compilation from README.md and SKILL.md.",
+                "Runtime execution must preserve explicit wait checkpoints and evidence requirements instead of silently advancing.",
+            ],
+            "minimum_contract_sections": [
+                "goal",
+                "applicability",
+                "inputs",
+                "outputs",
+                "workflow_steps",
+                "wait_checkpoints",
+                "expected_evidence",
+                "safety_constraints",
+                "recovery_paths",
+                "completion_criteria",
+            ],
+            "file_role_constraints": {
+                "README.md": "review-facing overview",
+                "SKILL.md": "canonical source contract",
+                "prompts/system.md": "runtime behavior guidance only; must not contain core contract absent from SKILL.md",
+                "references/README.md": "runtime reference knowledge and exact reference paths",
+                "examples": "contract-aligned sample interactions",
+                "tests/checklist.md": "release review and regression checklist",
+            },
+        }
+
+    @staticmethod
+    def _physical_world_skill_guidance_context() -> dict:
+        return {
+            "modeling_frame": "Physical-world skills should be modeled as state progression with evidence gates and safety stops.",
+            "required_reasoning": [
+                "Identify the real-world object state before and after each phase.",
+                "Separate instructions, user evidence, completion judgment, and failure recovery.",
+                "Make irreversible or hazardous actions explicit before the action is taken.",
+                "Ask for photos or explicit confirmation at high-risk checkpoints.",
+                "Stop or request evidence when the user skips prerequisites or reports an unsafe state.",
+            ],
+            "anti_patterns": [
+                "turning a long video transcript into a generic article",
+                "placing core runtime behavior only in prompts/system.md",
+                "using placeholder image paths such as references/.../file.jpg",
+                "mixing sponsor chatter, branding, or future predictions into the task contract",
+                "advancing through multiple physical phases without evidence gates",
+            ],
+        }
+
+    @staticmethod
+    def _publishable_document_skill_standard_context() -> dict:
+        return {
+            "status_target": "draft suitable for human publish review",
+            "must_pass": [
+                "README.md describes purpose, scope, inputs, outputs, and maintenance notes without implementation leakage.",
+                "SKILL.md includes a complete staged workflow with prerequisites, actions, evidence, wait points, safety constraints, recovery paths, and completion criteria.",
+                "examples/expected-output.md uses the same stage numbering and behavior as SKILL.md.",
+                "references/README.md and SKILL.md use exact reference_path values from selected_reference_assets.",
+                "No generated text contains TODO, placeholder paths, ellipsis reference paths, or unsupported future-hardware claims.",
+                "review_notes explicitly lists material gaps, uncertain assumptions, or items requiring human confirmation.",
+            ],
         }
 
     def _collect_generation_material_context(
@@ -1205,6 +1420,11 @@ class SkillsService:
             for item in candidate_assets
             if isinstance(item, dict) and item.get("id")
         }
+        candidate_by_reference_path = {
+            str(item.get("reference_path")): item
+            for item in candidate_assets
+            if isinstance(item, dict) and item.get("reference_path")
+        }
         if candidate_by_id and not selected_reference_assets:
             raise SkillValidationError("Skill 创建智能体未选择任何参考帧。")
         if len(selected_reference_assets) > MAX_SKILL_REFERENCE_ASSETS:
@@ -1219,6 +1439,10 @@ class SkillsService:
         seen_asset_ids: set[str] = set()
         for item in selected_reference_assets:
             asset_id = str(item.get("asset_id") or "").strip()
+            reference_path_hint = str(item.get("reference_path") or "").strip()
+            if not asset_id and reference_path_hint:
+                candidate = candidate_by_reference_path.get(reference_path_hint)
+                asset_id = str(candidate.get("id") or "").strip() if candidate else ""
             if not asset_id:
                 raise SkillValidationError("Skill 创建智能体选择的参考帧缺少 asset_id。", details={"item": item})
             if asset_id in seen_asset_ids:
@@ -1261,6 +1485,67 @@ class SkillsService:
         if len(value) <= limit:
             return value
         return value[: limit - 20].rstrip() + "\n...[truncated]"
+
+    @staticmethod
+    def _skill_generation_job_payload(
+        *,
+        skill_definition_id: str,
+        generation_id: str,
+        material_ids: list[str],
+        base_commit_sha: str | None,
+        current_stage: str,
+    ) -> dict:
+        stages = [
+            {"key": "queued", "label": "等待生成", "status": "pending"},
+            {"key": "loading_source", "label": "读取素材与源码", "status": "pending"},
+            {"key": "calling_model", "label": "构建智能体生成中", "status": "pending"},
+            {"key": "resolving_references", "label": "整理参考图片", "status": "pending"},
+            {"key": "committing_source", "label": "提交源码草稿", "status": "pending"},
+            {"key": "succeeded", "label": "生成完成", "status": "pending"},
+        ]
+        payload = {
+            "operation": "generate_skill_draft_from_raw_materials",
+            "skill_definition_id": skill_definition_id,
+            "generation_id": generation_id,
+            "material_ids": material_ids,
+            "base_commit_sha": base_commit_sha or "",
+            "current_stage": current_stage,
+            "progress_stages": stages,
+        }
+        return SkillsService._set_skill_generation_job_stage(payload, current_stage, "running" if current_stage != "queued" else "pending")
+
+    @staticmethod
+    def _set_skill_generation_job_stage(payload: dict | None, stage_key: str, status: str, message: str = "") -> dict:
+        updated = dict(payload or {})
+        updated["current_stage"] = stage_key
+        if message:
+            updated["error_message"] = message
+        stages = []
+        found = False
+        stage_order = [stage_key]
+        raw_stages = updated.get("progress_stages")
+        if isinstance(raw_stages, list):
+            stage_order = [str(stage.get("key") or "") for stage in raw_stages if isinstance(stage, dict)]
+        completed_keys = set(stage_order[: stage_order.index(stage_key)]) if stage_key in stage_order else set()
+        for stage in raw_stages if isinstance(raw_stages, list) else []:
+            if not isinstance(stage, dict):
+                continue
+            item = dict(stage)
+            key = str(item.get("key") or "")
+            if key == stage_key:
+                item["status"] = status
+                item["message"] = message
+                found = True
+            elif status == "succeeded" or key in completed_keys:
+                item["status"] = "succeeded"
+            elif item.get("status") != "failed":
+                item["status"] = "pending"
+            stages.append(item)
+        if not found and stage_key:
+            stages.append({"key": stage_key, "label": stage_key, "status": status, "message": message})
+        if stages:
+            updated["progress_stages"] = stages
+        return updated
 
     def _queue_raw_material_analysis(
         self,
@@ -1483,6 +1768,28 @@ class SkillsService:
 
     def _inference_gateway(self) -> LlmInferenceGateway:
         return self.inference_gateway or OpenAICompatibleInferenceGateway.from_settings(self.settings)
+
+    @staticmethod
+    def _sync_raw_material_analysis_job_metrics(job: RuntimeJob, analysis_result: dict) -> None:
+        debug = analysis_result.get("debug") if isinstance(analysis_result, dict) else None
+        usage = debug.get("usage") if isinstance(debug, dict) else None
+        if not isinstance(usage, dict):
+            return
+        metrics = dict(job.metrics or {})
+        changed = False
+        for key in ("input_tokens", "output_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                metrics[key] = value
+                changed = True
+        calls = usage.get("llm_calls")
+        if isinstance(calls, int) and not isinstance(calls, bool):
+            metrics["llm_calls"] = calls
+            changed = True
+        elif changed:
+            metrics["llm_calls"] = 1
+        if changed:
+            job.metrics = metrics
 
     def _raw_material_processor(self) -> RawMaterialProcessor:
         return RawMaterialProcessor(
@@ -1708,6 +2015,7 @@ class SkillsService:
     ) -> SkillRawMaterialGenerationResponse:
         return SkillRawMaterialGenerationResponse(
             id=generation.id,
+            job_id=str((generation.prompt_metadata or {}).get("job_id") or "") or None,
             skill_definition_id=generation.skill_definition_id,
             material_ids=[str(item) for item in generation.material_ids],
             user_description=generation.user_description,

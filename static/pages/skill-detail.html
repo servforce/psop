@@ -748,8 +748,17 @@
                       <span class="field-label">生成描述</span>
                       <textarea x-model.trim="rawMaterialGenerateForm.user_description" class="textarea-field h-36" placeholder="请描述希望生成的 Skill 目标、使用场景、边界和输出风格。" required></textarea>
                     </label>
-                    <p class="text-sm text-slate-500" x-text="hasSelectedReadyVideoRawMaterial() ? '将基于已分析视频生成 Skill，由构建智能体选择关键帧并写入 references/。' : '请至少选择一个已分析完成的视频素材。'"></p>
-                    <template x-if="rawMaterialGenerationResult">
+                    <template x-if="rawMaterialGenerationResult && rawMaterialGenerationResult.status !== 'succeeded'">
+                      <div class="rounded-md border border-sky-500/25 bg-sky-500/10 px-3 py-3 text-sm leading-6 text-sky-100">
+                        <p class="font-semibold">已提交后台任务</p>
+                        <p class="mt-1 text-sky-100">可在任务页面查看生成进度。</p>
+                        <p class="mt-2 mono-field break-all" x-text="rawMaterialGenerationResult.job_id || rawMaterialGenerationResult.prompt_metadata?.job_id || rawMaterialGenerationResult.id"></p>
+                        <template x-if="rawMaterialGenerationResult.error_message">
+                          <p class="mt-2 text-rose-200" x-text="rawMaterialGenerationResult.error_message"></p>
+                        </template>
+                      </div>
+                    </template>
+                    <template x-if="rawMaterialGenerationResult && rawMaterialGenerationResult.status === 'succeeded'">
                       <div class="rounded-md border border-emerald-500/25 bg-emerald-500/10 px-3 py-3 text-sm leading-6 text-emerald-100">
                         <p class="font-semibold">已提交 GitLab draft</p>
                         <p class="mt-1 mono-field break-all" x-text="rawMaterialGenerationResult.committed_commit_sha"></p>

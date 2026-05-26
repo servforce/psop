@@ -16,6 +16,10 @@ export function resolveAdminRoute(pathname) {
     return { name: "skills-list", params: {} };
   }
 
+  if (normalized === "/admin/tasks") {
+    return { name: "tasks-list", params: {} };
+  }
+
   const detailMatch = normalized.match(/^\/admin\/skills\/([^/]+)$/);
   if (detailMatch) {
     return {
@@ -107,6 +111,10 @@ export function resolveAdminRoute(pathname) {
 
 export function buildSkillDetailPath(skillId) {
   return `/admin/skills/${skillId}`;
+}
+
+export function buildTasksPath() {
+  return "/admin/tasks";
 }
 
 export function buildRunLivePath(runId) {

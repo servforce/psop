@@ -402,6 +402,7 @@ class RuntimeService:
                 invocation.status = "running"
                 if job:
                     job.status = "succeeded"
+                self._sync_runtime_job_metrics(job, token)
                 session.commit()
                 LOGGER.info("runtime loop waiting for terminal evidence")
                 return run
@@ -426,6 +427,7 @@ class RuntimeService:
                             invocation.status = "running"
                             if job:
                                 job.status = "succeeded"
+                            self._sync_runtime_job_metrics(job, token)
                             session.commit()
                             LOGGER.info("runtime loop waiting for input")
                             return run
@@ -478,6 +480,7 @@ class RuntimeService:
                         invocation.status = "running"
                         if job:
                             job.status = "succeeded"
+                        self._sync_runtime_job_metrics(job, token)
                         session.commit()
                         LOGGER.info("runtime loop entered wait checkpoint")
                         return run
@@ -500,6 +503,7 @@ class RuntimeService:
             if job:
                 job.status = "succeeded"
                 job.last_error = ""
+            self._sync_runtime_job_metrics(job, token)
             session.commit()
             LOGGER.info("runtime loop succeeded", extra={"final_output_length": len(run.final_output or "")})
             return run
@@ -513,6 +517,7 @@ class RuntimeService:
                     error=exc,
                     job=job,
                 )
+                self._sync_runtime_job_metrics(job, token)
                 session.commit()
                 LOGGER.exception("runtime turn processing failed; returned to waiting input", extra={"error": str(exc)})
                 return run
@@ -525,6 +530,7 @@ class RuntimeService:
             if job:
                 job.status = "failed"
                 job.last_error = str(exc)
+            self._sync_runtime_job_metrics(job, token)
             failure_trace = self._append_trace_event(
                 session,
                 run=run,
@@ -1148,6 +1154,10 @@ class RuntimeService:
     @staticmethod
     def _runtime_recoverable_failure_terminal_message() -> str:
         return "刚才服务器开小差了，请您重试！"
+
+    def _sync_runtime_job_metrics(self, job: RuntimeJob | None, token: dict[str, Any]) -> None:
+        budgets = token.get("budgets") if isinstance(token, dict) else None
+        self.job_repository.set_llm_usage_from_budgets(job, budgets if isinstance(budgets, dict) else None)
 
     def _compact_runtime_token(self, token: dict[str, Any]) -> dict[str, Any]:
         compacted = json.loads(json.dumps(token, ensure_ascii=False, default=str))
@@ -2144,11 +2154,18 @@ class RuntimeService:
             job_type=job.job_type,
             status=job.status,
             payload=job.payload,
+            dedupe_key=job.dedupe_key,
             run_id=job.run_id,
             compile_request_id=job.compile_request_id,
+            worker_name=job.worker_name or "",
+            metrics=dict(job.metrics or {}),
+            lease_until=job.lease_until,
+            available_at=job.available_at,
             attempt_no=job.attempt_no,
             max_attempts=job.max_attempts,
             last_error=job.last_error,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
             created_at=job.created_at,
             updated_at=job.updated_at,
         )
