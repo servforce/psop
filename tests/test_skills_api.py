@@ -1792,14 +1792,24 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
                     "external_event_id": "ws-terminal-demo-input",
                 },
             )
-            message = websocket.receive_json()
+            terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+            appended_events = [
+                event
+                for event in terminal_events_response.json()
+                if event["seq_no"] >= append_response.json()["seq_no"]
+            ]
+            messages = [websocket.receive_json() for _ in appended_events]
 
     assert invocation_response.status_code == 201
     assert connected["event_type"] == "ws.connected"
     assert append_response.status_code == 202
-    assert message["event_type"] == "terminal.event.appended"
-    assert message["payload"]["payload_inline"] == "WS 输入"
-    assert message["seq_no"] == append_response.json()["seq_no"]
+    assert terminal_events_response.status_code == 200
+    assert [message["event_type"] for message in messages] == ["terminal.event.appended"] * len(appended_events)
+    assert [message["seq_no"] for message in messages] == [event["seq_no"] for event in appended_events]
+    assert messages[0]["payload"]["payload_inline"] == "WS 输入"
+    assert messages[0]["seq_no"] == append_response.json()["seq_no"]
+    assert [message["payload"]["direction"] for message in messages] == ["input", "output", "output", "output"]
+    assert any("测试任务已完成" in str(message["payload"]["payload_inline"]) for message in messages)
 
 
 def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:

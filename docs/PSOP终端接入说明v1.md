@@ -741,7 +741,10 @@ WebSocket 服务端消息统一外层结构：
 | --- | --- |
 | `payload.message` | 固定为连接确认信息。 |
 
-通过 REST 成功追加终端事件后，服务端会广播：
+通过 REST 成功追加终端事件后，服务端会按 `seq_no` 顺序广播本次请求中新落库的所有终端事件：
+
+- 已接受的输入事件。
+- `Runtime Kernel` 在同一轮推进中产生的终端输出事件。
 
 ```json
 {
@@ -815,6 +818,7 @@ WebSocket 服务端消息统一外层结构：
 客户端处理规则：
 
 - WebSocket 只作为增量提示通道，REST 是状态恢复和完整数据读取的权威来源。
+- 一次输入可能触发多个 `terminal.event.appended` 消息；客户端应逐条合并，而不是假定一次 REST 请求只对应一个 WebSocket 消息。
 - 收到 WebSocket 事件后，按 `payload.id` 去重，按 `payload.seq_no` 排序。
 - 如果需要完整事件字段，收到推送后再调用 `/terminal/sessions/{run_id}/events?from_seq=...` 拉取。
 - 断线重连后，用本地最大 `seq_no + 1` 调用 `/terminal/sessions/{run_id}/events?from_seq=...` 补齐缺失事件。
