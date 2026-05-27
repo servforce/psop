@@ -353,6 +353,30 @@ def process_publish_job(session, compiler_service: CompilerService, compile_requ
     return compiler_service.get_compile_request(session, compile_request_id)
 
 
+def build_test_abort_formal_v5_artifact() -> dict:
+    artifact = build_test_formal_v5_artifact()
+    artifact["nodes"].append(
+        {
+            "id": "terminal_abort",
+            "kind": "terminal",
+            "guard": {"phase_is": "terminal_abort"},
+            "actor": {"name": "runtime.terminal"},
+            "merge": [
+                {"op": "set", "path": "outputs.final_response", "from": "observation.final_response"},
+                {"op": "set", "path": "status", "value": "aborted"},
+                {"op": "set", "path": "phase", "value": "aborted"},
+            ],
+            "policy": {"priority": 50},
+        }
+    )
+    artifact["halt"] = {
+        "success": {"field_equals": {"path": "status", "value": "success"}},
+        "aborted": {"field_equals": {"path": "status", "value": "aborted"}},
+    }
+    artifact["dependency_graph_for_view"].append({"from": "evaluate_collect_context", "to": "terminal_abort"})
+    return artifact
+
+
 def test_compiler_fails_when_agent_repair_still_invalid() -> None:
     settings = create_test_settings()
     database_manager = DatabaseManager(settings.sqlalchemy_database_url)
@@ -553,6 +577,113 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         "gateway.inference.completed",
     ]
     assert "runtime.final.completed" in [item.event_type for item in replay.timeline]
+
+
+def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
+    settings = create_test_settings()
+    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
+    database_manager.create_schema()
+    gitlab_gateway = FakeGitLabGateway()
+    inference_gateway = QueuedInferenceGateway(
+        [
+            json.dumps(build_test_abort_formal_v5_artifact(), ensure_ascii=False),
+            "请先核对电源额定功率，并上传现场证据。",
+            json.dumps(
+                {
+                    "decision": "abort",
+                    "reason": "电源额定功率低于当前硬件估算功耗，继续装机会带来安全风险。",
+                    "next_phase": "terminal_abort",
+                    "terminal_message": "已中止：电源功率不足，请先更换合适电源后再继续。",
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    compiler_service = CompilerService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        inference_gateway=inference_gateway,
+    )
+    skills_service = SkillsService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        compiler_service=compiler_service,
+    )
+    runtime_service = RuntimeService(settings=settings, inference_gateway=inference_gateway)
+
+    try:
+        with database_manager.session() as session:
+            skill = skills_service.create_skill(
+                session,
+                CreateSkillRequest(
+                    key="runtime-abort",
+                    name="Runtime Abort",
+                    description="Validate semantic abort path.",
+                ),
+            )
+            published = skills_service.publish_skill(
+                session,
+                skill_id=skill.id,
+                payload=PublishSkillRequest(publish_reason="Runtime abort publish"),
+            )
+            process_publish_job(session, compiler_service, published.compile_request.id)
+
+            invocation = runtime_service.create_invocation(
+                session,
+                CreateInvocationRequest(
+                    skill_key="runtime-abort",
+                    terminal_context={"terminal_kind": "web"},
+                ),
+            )
+            initial_run = runtime_service.get_run(session, invocation.run_id or "")
+
+            runtime_service.append_terminal_event(
+                session,
+                invocation.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="现场电源只有 300W，低于整机估算功耗。",
+                    external_event_id="runtime-abort-evidence-001",
+                ),
+            )
+            run = runtime_service.get_run(session, invocation.run_id or "")
+            refreshed_invocation = runtime_service.get_invocation(session, invocation.id)
+            terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
+            terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+            trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+            snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
+            replay = runtime_service.build_replay(session, invocation.run_id or "")
+
+            with pytest.raises(SkillValidationError):
+                runtime_service.append_terminal_event(
+                    session,
+                    invocation.run_id or "",
+                    AppendTerminalEventRequest(
+                        direction="input",
+                        event_kind="terminal.text.input.v1",
+                        payload_inline="不应接受新输入",
+                    ),
+                )
+    finally:
+        database_manager.dispose()
+
+    assert initial_run.status == "waiting_input"
+    assert refreshed_invocation.status == "aborted"
+    assert run.status == "aborted"
+    assert run.runtime_phase == "aborted"
+    assert "电源功率不足" in run.final_output
+    assert "电源功率不足" in run.exit_reason
+    assert run.ended_at is not None
+    assert terminal_session.terminal_session.status == "closed"
+    assert [event.direction for event in terminal_events] == ["output", "input", "output", "output"]
+    assert terminal_events[-1].source_ref["node_id"] == "terminal_abort"
+    assert snapshots[-1].token_payload["status"] == "aborted"
+    assert snapshots[-1].token_payload["control"]["abort"]["next_phase"] == "terminal_abort"
+    assert "runtime.aborted" in [item.event_type for item in trace_events]
+    assert "runtime.failed" not in [item.event_type for item in trace_events]
+    assert "已中止" in [item.title for item in replay.timeline]
 
 
 def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:

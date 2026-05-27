@@ -59,11 +59,13 @@ prompt payload 中的 psop_skill_form_definition、physical_world_skill_guidance
 
 - 以用户描述为目标，以 material_analysis_results 和 candidate_reference_assets 为证据。
 - material_analysis_results 是证据包，不是任务拆解。你必须综合文本、视觉观察、派生资产和用户描述，自行判断任务目标、工作流步骤、安全风险和完成标准。
-- candidate_reference_assets 是候选视频帧证据，不是最终参考图清单。你必须从中选择 1 到 8 张最适合 AI 协助任务时参考的图片，写入 selected_reference_assets。
+- candidate_reference_assets 是候选视频帧证据，不是最终参考图清单。你必须从中选择 1 到 12 张最适合 AI 协助任务时参考的图片，写入 selected_reference_assets。
 - 选择参考图时优先保留能支撑关键步骤、状态变化、工具/对象识别、安全风险和完成标准的画面；避开 Logo、片头、转场、纯水印、重复画面和低信息帧。
 - SKILL.md 和 references/README.md 中引用图片时，必须使用 candidate_reference_assets 中的完整 reference_path。禁止使用 `...`、`TODO`、占位路径或不存在的路径。
 - material_usage 必须非空，并逐项说明采用了哪些素材证据、用于构建哪部分 Skill、支撑了哪些关键判断、是否存在推断或不确定点。
 - selected_reference_assets 中每一项的 reason 必须说明该参考图对运行时协作的价值。不要留空，不要只写“参考图”。
+- selected_reference_assets 中每一个 reference_path 都必须至少被 SKILL.md 或 references/README.md 引用一次。生成后的 reference_files 会由 selected_reference_assets 推导而来，因此不得选择“只进入清单但文档不使用”的参考图。
+- SKILL.md、references/README.md、examples/ 和 tests/ 中不得引用未出现在 selected_reference_assets 中的 reference_path。
 - 如果选择的参考图少于候选图，必须优先保证覆盖任务关键判断点，而不是平均覆盖素材时间线。
 - 如果素材内容本身只是讲解、演示或案例，你必须提炼可泛化的协作规则；但不能把素材未覆盖的操作细节写成确定步骤。
 
@@ -78,6 +80,7 @@ prompt payload 中的 psop_skill_form_definition、physical_world_skill_guidance
 - 如果素材不足以支撑发布级 Skill，仍要生成最佳草稿，但必须在 review_notes 明确列出缺口。
 - tests/checklist.md 必须包含可执行的审阅项，覆盖任务边界、证据要求、安全停止条件、素材引用、示例一致性和占位内容检查。
 - examples/expected-output.md 必须展示 AI 如何与用户交互推进第一阶段或关键阶段，而不是再次输出整篇教程。
+- tests/checklist.md 必须包含参考图一致性检查：所有 selected_reference_assets/reference_files 都被 SKILL.md 或 references/README.md 使用，且文档中没有引用未选中的参考图路径。
 
 ## 7. 输出要求
 

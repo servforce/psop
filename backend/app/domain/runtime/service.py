@@ -359,7 +359,7 @@ class RuntimeService:
         run = self.repository.get_run(session, run_id)
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
-        if run.status in {"succeeded", "failed", "cancelled"}:
+        if run.status in {"succeeded", "failed", "cancelled", "aborted"}:
             return run
 
         artifact = self.repository.get_artifact(session, run.compile_artifact_id)
@@ -417,6 +417,10 @@ class RuntimeService:
             ) as loop_span:
                 for _ in range(max_steps):
                     if self._halt_success(artifact_payload, token):
+                        loop_span.set_attribute("runtime.exit_reason", "halt_success")
+                        break
+                    if self._halt_aborted(artifact_payload, token):
+                        loop_span.set_attribute("runtime.exit_reason", "halt_aborted")
                         break
 
                     enabled_nodes = self._enabled_nodes(artifact_payload, token)
@@ -487,8 +491,22 @@ class RuntimeService:
                 else:
                     raise RuntimeError(f"Runtime exceeded max_steps={max_steps}.")
 
-                if self._halt_success(artifact_payload, token):
-                    loop_span.set_attribute("runtime.exit_reason", "halt_success")
+            if self._halt_aborted(artifact_payload, token):
+                final_output = str(_get_path(token, "outputs.final_response") or "")
+                run.status = "aborted"
+                run.runtime_phase = "aborted"
+                run.exit_reason = self._truncate_exit_reason(final_output or "aborted")
+                run.final_output = final_output
+                run.ended_at = now_utc()
+                invocation.status = "aborted"
+                self._close_terminal_session(session, run)
+                if job:
+                    job.status = "succeeded"
+                    job.last_error = ""
+                self._sync_runtime_job_metrics(job, token)
+                session.commit()
+                LOGGER.info("runtime loop aborted", extra={"final_output_length": len(run.final_output or "")})
+                return run
 
             if not self._halt_success(artifact_payload, token):
                 raise RuntimeError("Runtime stopped without success halt condition.")
@@ -586,7 +604,7 @@ class RuntimeService:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
         if run.status == "cancelled":
             return self._build_run_response(session, run)
-        if run.status in {"succeeded", "failed"}:
+        if run.status in {"succeeded", "failed", "aborted"}:
             raise SkillValidationError("Run 已结束，不能取消。", details={"run_id": run_id, "status": run.status})
 
         invocation = self.repository.get_invocation(session, run.invocation_id)
@@ -684,7 +702,7 @@ class RuntimeService:
                     event=event_response,
                 )
 
-        if run.status in {"succeeded", "failed", "cancelled"}:
+        if run.status in {"succeeded", "failed", "cancelled", "aborted"}:
             raise SkillValidationError("Run 已结束，不能继续追加终端输入。", details={"run_id": run_id, "status": run.status})
         terminal_session = self.repository.get_terminal_session_for_run(session, run_id)
         if not terminal_session or terminal_session.status != "open":
@@ -963,11 +981,20 @@ class RuntimeService:
                     next_token["phase"] = "waiting"
                     entered_wait = True
             elif decision == "abort":
-                next_token["status"] = "failure"
-                next_token["phase"] = "failed"
-                next_token.setdefault("outputs", {})["final_response"] = terminal_message or str(
-                    observation.get("reason") or "任务已终止。"
-                )
+                final_message = terminal_message or str(observation.get("reason") or "任务已终止。")
+                requested_next_phase = str(observation.get("next_phase") or "").strip()
+                next_token.setdefault("outputs", {})["final_response"] = final_message
+                next_token.setdefault("control", {})["abort"] = {
+                    "requested_by_node": str(node.get("id") or ""),
+                    "reason": str(observation.get("reason") or ""),
+                    "next_phase": requested_next_phase,
+                    "occurred_at": now_utc().isoformat(),
+                }
+                if requested_next_phase:
+                    next_token["phase"] = requested_next_phase
+                else:
+                    next_token["status"] = "aborted"
+                    next_token["phase"] = "aborted"
 
         if interaction.get("wait_after_output"):
             next_token = self._enter_wait_checkpoint(run=run, token=next_token, node=node, observation=observation)
@@ -1041,6 +1068,12 @@ class RuntimeService:
         token["status"] = "waiting"
         token["phase"] = "waiting"
         return token
+
+    @staticmethod
+    def _truncate_exit_reason(value: str, *, max_length: int = 255) -> str:
+        if len(value) <= max_length:
+            return value
+        return value[: max_length - 3] + "..."
 
     @staticmethod
     def _runtime_phase_from_token(token: dict[str, Any]) -> str:
@@ -1943,6 +1976,8 @@ class RuntimeService:
             "tool": "gateway.tool.completed",
             "terminal": "runtime.final.completed",
         }
+        if str(node.get("kind")) == "terminal" and "abort" in str(node.get("id") or ""):
+            return "runtime.aborted"
         return mapping.get(str(kind), f"runtime.node.{node.get('id')}.completed")
 
     @staticmethod
@@ -1954,6 +1989,16 @@ class RuntimeService:
             if isinstance(condition, dict):
                 return _get_path(token, str(condition.get("path"))) == condition.get("value")
         return token.get("status") == "success"
+
+    @staticmethod
+    def _halt_aborted(artifact_payload: dict[str, Any], token: dict[str, Any]) -> bool:
+        halt = artifact_payload.get("halt", {})
+        aborted = halt.get("aborted") if isinstance(halt, dict) else None
+        if isinstance(aborted, dict) and "field_equals" in aborted:
+            condition = aborted["field_equals"]
+            if isinstance(condition, dict):
+                return _get_path(token, str(condition.get("path"))) == condition.get("value")
+        return token.get("status") == "aborted"
 
     @staticmethod
     def _halt_wait(artifact_payload: dict[str, Any], token: dict[str, Any]) -> bool:
@@ -2180,6 +2225,7 @@ class RuntimeService:
             "gateway.inference.completed": "LLM 输出",
             "gateway.tool.completed": "工具调用",
             "runtime.final.completed": "最终结果",
+            "runtime.aborted": "已中止",
             "runtime.message_processing.failed": "消息处理失败",
             "runtime.failed": "运行失败",
         }

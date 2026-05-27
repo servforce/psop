@@ -1275,7 +1275,9 @@ class SkillsService:
                 "draft_policy": "生成结果会提交到 GitLab draft 标准路径，但不会发布、不会编译。",
                 "video_reference_policy": (
                     f"必须从 candidate_reference_assets 中选择 1 到 {MAX_SKILL_REFERENCE_ASSETS} 张最适合 Skill 运行时参考的关键帧，"
-                    "输出到 selected_reference_assets，并在 references/README.md 与 SKILL.md 中引用对应 reference_path。"
+                    "输出到 selected_reference_assets。每一个 selected_reference_assets.reference_path 都必须至少被 "
+                    "SKILL.md 或 references/README.md 引用一次；SKILL.md、references/README.md、examples/ 和 tests/ "
+                    "不得引用未出现在 selected_reference_assets 中的 reference_path。"
                 ),
                 "material_analysis_policy": (
                     "material_analysis_results 是素材证据包，不是任务拆解；"
@@ -1352,6 +1354,7 @@ class SkillsService:
                 "references/README.md and SKILL.md use exact reference_path values from selected_reference_assets.",
                 "No generated text contains TODO, placeholder paths, ellipsis reference paths, or unsupported future-hardware claims.",
                 "review_notes explicitly lists material gaps, uncertain assumptions, or items requiring human confirmation.",
+                "Every selected_reference_assets/reference_files path is used by SKILL.md or references/README.md, and no document references an unselected reference_path.",
             ],
         }
 

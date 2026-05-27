@@ -261,6 +261,8 @@ def _normalize_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
             halt["success"] = _normalize_guard_shape(halt["success"])
         if "failure" in halt:
             halt["failure"] = _normalize_guard_shape(halt["failure"])
+        if "aborted" in halt:
+            halt["aborted"] = _normalize_guard_shape(halt["aborted"])
     return artifact
 
 
