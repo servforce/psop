@@ -1,12 +1,22 @@
-# 终端接入说明
+# PSOP 终端接入说明
 
-本文档面向负责终端接入的开发者，说明外部终端或 Web 终端如何接入 PSOP Runtime，完成 Skill 发起、终端输入输出、文件上传、运行状态同步、断线恢复和幂等重试。
+本文档面向终端开发者，说明外部终端或 Web 终端如何接入 PSOP，完成 Skill 发起、状态展示、文本输入、文件上传、事件同步、断线恢复和幂等重试。
 
-## 适用范围
+本文只描述终端接入边界，不包含平台内部实现细节。
 
-当前接入目标是 PSOP 的 Terminal Gateway。终端侧负责提供用户输入、展示运行输出、上传多模态文件，并通过 REST 与 WebSocket 跟踪运行进度。
+## 接入目标
 
-当前版本的终端能力以文本输入输出为核心，同时支持图片、音频、视频、PDF、JSON、普通文件作为运行时输入附件。复杂设备绑定、多终端协作、端侧权限认证属于后续扩展范围。
+终端侧需要实现以下能力：
+
+- 通过 `skill_key` 发起一次运行。
+- 展示当前运行状态、当前等待原因、期望输入和最终输出。
+- 展示终端输入/输出事件流。
+- 发送文本输入。
+- 上传图片、音频、视频、PDF、JSON 或普通文件作为输入附件。
+- 通过 WebSocket 接收增量提示，并通过 REST 补齐权威状态。
+- 在断线、刷新或网络超时时恢复会话，并避免重复提交输入。
+
+当前版本以文本输入输出为核心，同时支持文件附件输入。复杂设备绑定、多终端协作和端侧权限体系不属于本文范围。
 
 ## 基础地址
 
@@ -16,7 +26,7 @@ REST API 默认前缀：
 http(s)://<psop-host>/api/v1
 ```
 
-WebSocket 推荐地址：
+WebSocket 地址：
 
 ```text
 ws(s)://<psop-host>/ws/runs/{run_id}
@@ -24,47 +34,81 @@ ws(s)://<psop-host>/ws/runs/{run_id}
 
 说明：
 
-- 当前服务也注册了 `/api/v1/ws/runs/{run_id}`，但前端实现使用根路径 `/ws/runs/{run_id}`。
-- 本地开发环境常见地址为 `http://127.0.0.1:8001/api/v1`。
-- 目前项目内未在这些接口上实现独立鉴权；生产接入时应放在统一网关、反向代理或上层认证体系之后。
+- 本地开发环境常见 REST 地址为 `http://127.0.0.1:8001/api/v1`。
+- 当前服务也注册了 `/api/v1/ws/runs/{run_id}`，但推荐使用根路径 `/ws/runs/{run_id}`。
+- 鉴权由部署方统一处理。终端客户端按实际部署要求携带网关 token、cookie 或其他认证信息。
 
-## 核心对象
+## 终端需要关心的对象
 
-`Invocation` 表示一次 Skill 调用请求。创建 Invocation 后，系统会创建对应的 `Run` 和 `TerminalSession`。
+### Invocation
 
-`Run` 表示一次可执行的运行实例，包含运行状态、当前阶段、最新终端事件序号、最新 Trace 序号、等待原因、最终输出等信息。
+一次 Skill 调用请求。终端创建 Invocation 后，会得到对应的 `run_id` 和 `terminal_session_id`。
 
-`TerminalSession` 表示某个 Run 的终端会话。终端会话打开时可以继续追加输入；Run 成功、失败或取消后，终端会话会关闭。
+### Run
 
-`TerminalEvent` 表示终端输入或输出事件。客户端必须用服务端返回的 `seq_no` 作为事件顺序依据，不要使用客户端时间戳排序。
+一次运行实例。终端主要读取以下信息：
 
-`TraceEvent` 表示 Runtime 内部执行轨迹，适合用于展示步骤、调试、回放和排障。
+| 字段 | 说明 |
+| --- | --- |
+| `id` | Run ID。 |
+| `status` | 当前运行状态。 |
+| `runtime_phase` | 当前运行阶段标识，仅用于展示或调试提示，不应写业务逻辑强依赖。 |
+| `latest_terminal_seq` | 最新终端事件序号。 |
+| `terminal_session_id` | 当前终端会话 ID。 |
+| `current_step` | 当前等待的业务步骤。 |
+| `wait_reason` | 等待用户输入的原因。 |
+| `expected_inputs` | 当前期望输入类型。 |
+| `checkpoint_id` | 当前等待点 ID，可用于 UI 标识。 |
+| `final_output` | 运行结束后的最终输出。 |
+| `exit_reason` | 失败、取消或中止原因。 |
 
-`RunCapabilityBinding` 表示运行时能力绑定。当前 MVP 会自动创建 `terminal.input` 与 `terminal.output` 两个默认绑定。
+常见状态：
+
+| status | 说明 | 终端侧行为 |
+| --- | --- | --- |
+| `queued` | 已创建，等待处理。 | 展示等待状态。 |
+| `running` | 系统正在执行。 | 展示输出和进度，不要强制用户输入。 |
+| `waiting_input` | 系统等待用户输入。 | 突出输入框，并按 `expected_inputs` 引导用户提交内容。 |
+| `succeeded` | 运行成功。 | 停止输入，展示 `final_output`。 |
+| `failed` | 运行失败。 | 停止输入，展示 `exit_reason`。 |
+| `cancelled` | 运行被取消。 | 停止输入。 |
+| `aborted` | 运行因业务安全、边界或不适用条件被中止。 | 停止输入，展示 `final_output` 或 `exit_reason`。 |
+
+### TerminalSession
+
+某个 Run 的终端会话。会话为 `open` 时终端可以继续提交输入；Run 结束后会话会变为 `closed`。
+
+### TerminalEvent
+
+终端输入或输出事件。客户端必须使用服务端返回的 `seq_no` 排序，不要使用客户端时间戳排序。
+
+终端事件常见类型：
+
+| event_kind | 方向 | 展示建议 |
+| --- | --- | --- |
+| `terminal.text.input.v1` | input | 用户输入气泡或命令行输入。 |
+| `terminal.text.output.v1` | output | 系统输出文本。 |
+| `terminal.image.input.v1` | input | 图片缩略图或附件卡片。 |
+| `terminal.audio.input.v1` | input | 音频附件卡片。 |
+| `terminal.video.input.v1` | input | 视频附件卡片。 |
+| `terminal.file.input.v1` | input | 通用附件卡片。 |
 
 ## 接入流程
-
-整体时序：
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant T as 终端客户端
-    participant API as PSOP REST API
-    participant RT as RuntimeService
+    participant API as PSOP API
     participant WS as WebSocket
-    participant OBJ as 对象存储
 
     T->>API: POST /gateway/invocations
-    API->>RT: 创建 Invocation、Run、TerminalSession、默认 Binding
-    RT-->>API: run_id、terminal_session_id
-    API-->>T: InvocationResponse
+    API-->>T: invocation_id, run_id, terminal_session_id
 
     T->>API: GET /runs/{run_id}
     T->>API: GET /terminal/sessions/{run_id}
     T->>API: GET /terminal/sessions/{run_id}/events
-    T->>API: GET /runs/{run_id}/trace-events
-    API-->>T: 初始运行状态、会话、历史事件和 Trace
+    API-->>T: Run 状态、会话状态、历史事件
 
     T->>WS: connect /ws/runs/{run_id}
     WS-->>T: ws.connected
@@ -72,44 +116,41 @@ sequenceDiagram
     loop Run 未结束且 TerminalSession 为 open
         alt 发送文本输入
             T->>API: POST /terminal/sessions/{run_id}/events
-            API->>RT: 追加 TerminalEvent，使用 external_event_id 幂等去重
-            RT-->>API: accepted、seq_no
-            API-->>T: TerminalEventAppendResponse
-            API-->>WS: broadcast terminal.event.appended
+            API-->>T: accepted, seq_no, event
             WS-->>T: terminal.event.appended
         else 上传文件输入
             T->>API: POST /terminal/sessions/{run_id}/files
-            API->>OBJ: 保存文件对象
-            OBJ-->>API: object_key、checksum
-            API->>RT: 创建附件 TerminalEvent
-            RT-->>API: accepted、seq_no
-            API-->>T: TerminalEventAppendResponse
-            API-->>WS: broadcast terminal.event.appended
+            API-->>T: accepted, seq_no, event
             WS-->>T: terminal.event.appended
         end
-        T->>API: GET /runs/{run_id} + 增量 events/trace-events
-        API-->>T: 最新状态、输出、缺失事件和 Trace
+        T->>API: GET /runs/{run_id}
+        T->>API: GET /terminal/sessions/{run_id}/events?from_seq=last_seq+1
+        API-->>T: 最新状态和缺失事件
     end
 
     opt 断线或页面刷新
         T->>API: GET /runs/{run_id}
+        T->>API: GET /terminal/sessions/{run_id}
         T->>API: GET /terminal/sessions/{run_id}/events?from_seq=last_seq+1
-        T->>API: GET /runs/{run_id}/trace-events
-        API-->>T: 恢复状态并补齐缺失事件
+        API-->>T: 恢复状态并补齐事件
         T->>WS: reconnect /ws/runs/{run_id}
     end
 ```
 
-1. 创建 Invocation，得到 `run_id` 与 `terminal_session_id`。
-2. 读取 Run、TerminalSession、历史 TerminalEvent 和 TraceEvent。
-3. 连接 WebSocket，订阅增量事件。
+推荐流程：
+
+1. 创建 Invocation，保存 `run_id` 与 `terminal_session_id`。
+2. 读取 Run、TerminalSession 和历史 TerminalEvent。
+3. 连接 WebSocket。
 4. 用户发送文本时，调用终端事件追加接口。
-5. 用户上传文件时，调用终端文件上传接口。
-6. 通过 REST 定期或按需刷新 Run、TerminalEvent 和 TraceEvent。
-7. 断线或刷新后，通过 REST 读取缺失事件，并用 `seq_no` 合并。
-8. Run 进入 `succeeded`、`failed` 或 `cancelled` 后停止发送输入。
+5. 用户上传文件时，调用文件上传接口。
+6. 每次提交输入后，通过 REST 刷新 Run，并拉取缺失事件。
+7. 断线或刷新后，通过 REST 读取状态和缺失事件，再重连 WebSocket。
+8. Run 进入 `succeeded`、`failed`、`cancelled` 或 `aborted` 后停止发送输入。
 
 ## 创建运行
+
+说明：本文接口示例只列出终端客户端需要读取或提交的字段。服务端响应可能包含额外平台内部字段，终端侧应忽略未在字段说明中列出的字段。
 
 接口：
 
@@ -132,8 +173,7 @@ Content-Type: application/json
   },
   "input_envelope": {
     "user_input": "开始执行这次安装任务"
-  },
-  "binding_preferences": []
+  }
 }
 ```
 
@@ -143,20 +183,30 @@ Content-Type: application/json
 | --- | --- | --- |
 | `skill_key` | 是 | 要运行的 Skill key。 |
 | `version_selector` | 否 | 当前默认使用 `latest`。 |
-| `compile_artifact_id` | 否 | 指定已编译产物；不传时使用最新已发布版本的最新 ready 产物。 |
-| `gateway_type` | 否 | Web 和终端接入均传 `terminal`。 |
+| `gateway_type` | 否 | 终端接入传 `terminal`。 |
 | `terminal_context` | 否 | 终端类型、设备、连接来源等上下文。 |
 | `input_envelope` | 否 | 初始输入。`user_input` 或 `text` 会被记录为初始终端输入。 |
-| `binding_preferences` | 否 | 预留给自定义绑定策略。当前可传空数组。 |
 
-成功响应示例：
+`terminal_context` 建议字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `terminal_kind` | 否 | 终端类型，例如 `web`、`external`、`mobile`、`cli`。 |
+| `device_id` | 否 | 终端设备或客户端实例 ID。 |
+| `operator` | 否 | 当前操作员、坐席或外部系统标识。 |
+
+`input_envelope` 建议字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `user_input` | 否 | 初始用户文本。 |
+| `text` | 否 | 初始用户文本的兼容字段；如果同时传 `user_input`，优先使用 `user_input`。 |
+
+终端侧可用响应示例：
 
 ```json
 {
   "id": "invocation-id",
-  "skill_definition_id": "skill-id",
-  "skill_version_id": "version-id",
-  "compile_artifact_id": "artifact-id",
   "gateway_type": "terminal",
   "input_envelope": {
     "user_input": "开始执行这次安装任务"
@@ -165,7 +215,6 @@ Content-Type: application/json
     "terminal_kind": "external",
     "device_id": "terminal-001"
   },
-  "binding_preferences": [],
   "status": "running",
   "run_id": "run-id",
   "terminal_session_id": "terminal-session-id",
@@ -173,6 +222,21 @@ Content-Type: application/json
   "updated_at": "2026-05-25T00:00:00Z"
 }
 ```
+
+终端侧重点响应字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | Invocation ID。 |
+| `status` | Invocation 状态，创建后通常为 `running`。 |
+| `run_id` | 后续读取状态、发送事件、连接 WebSocket 使用的 Run ID。 |
+| `terminal_session_id` | 终端会话 ID。 |
+| `gateway_type` | 网关类型，终端接入通常为 `terminal`。 |
+| `input_envelope` | 服务端记录的初始输入。 |
+| `terminal_context` | 服务端记录的终端上下文。 |
+| `created_at` / `updated_at` | 创建和更新时间。 |
+
+接口响应可能包含平台内部字段。终端侧不应依赖未在上表列出的字段。
 
 命令示例：
 
@@ -192,7 +256,7 @@ curl -sS -X POST "$PSOP_API_BASE/gateway/invocations" \
   }'
 ```
 
-## 读取运行状态
+## 读取状态和事件
 
 读取 Run：
 
@@ -200,20 +264,64 @@ curl -sS -X POST "$PSOP_API_BASE/gateway/invocations" \
 GET /api/v1/runs/{run_id}
 ```
 
-关键字段：
+路径参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `run_id` | 是 | 创建 Invocation 后返回的 Run ID。 |
+
+终端侧可用响应示例：
+
+```json
+{
+  "id": "run-id",
+  "invocation_id": "invocation-id",
+  "status": "waiting_input",
+  "runtime_phase": "collect_context_evidence",
+  "latest_terminal_seq": 3,
+  "terminal_session_id": "terminal-session-id",
+  "current_step": "collect_context",
+  "wait_reason": "等待用户提交当前真实场景的说明或多模态证据。",
+  "expected_inputs": [
+    {
+      "kind": "text",
+      "event_kind": "terminal.text.input.v1"
+    },
+    {
+      "kind": "image",
+      "event_kind": "terminal.image.input.v1"
+    }
+  ],
+  "checkpoint_id": "collect_context_evidence",
+  "resume_phase": "evaluate_collect_context",
+  "latest_evaluation": {},
+  "final_output": "",
+  "exit_reason": "",
+  "created_at": "2026-05-25T00:00:00Z",
+  "started_at": "2026-05-25T00:00:02Z",
+  "ended_at": null,
+  "updated_at": "2026-05-25T00:00:04Z"
+}
+```
+
+终端侧重点响应字段：
 
 | 字段 | 说明 |
 | --- | --- |
-| `status` | 运行状态，常见值为 `queued`、`running`、`waiting_input`、`succeeded`、`failed`、`cancelled`。 |
-| `runtime_phase` | Runtime 当前阶段。 |
-| `latest_terminal_seq` | 最新终端事件序号。 |
-| `latest_trace_seq` | 最新 Trace 事件序号。 |
-| `terminal_session_id` | 当前终端会话 id。 |
-| `current_step` | 当前步骤摘要。 |
-| `wait_reason` | 等待用户输入时的原因。 |
-| `expected_inputs` | 当前期望输入。 |
-| `final_output` | 运行完成后的最终输出。 |
-| `exit_reason` | 失败、取消或退出原因。 |
+| `id` | Run ID。 |
+| `status` | 当前状态，决定是否允许继续输入。 |
+| `runtime_phase` | 当前阶段标识，仅用于展示。 |
+| `latest_terminal_seq` | 最新终端事件序号，用于增量拉取。 |
+| `terminal_session_id` | 终端会话 ID。 |
+| `current_step` | 当前等待的业务步骤。 |
+| `wait_reason` | 等待用户输入的提示文案。 |
+| `expected_inputs` | 当前期望输入类型列表。 |
+| `checkpoint_id` | 当前等待点 ID。 |
+| `resume_phase` | 收到输入后系统将恢复到的阶段标识，仅用于展示。 |
+| `latest_evaluation` | 最近一次步骤判断摘要；可用于展示“已确认/需补充/已中止”等状态。 |
+| `final_output` | 成功或中止后的最终输出。 |
+| `exit_reason` | 失败、取消或中止原因。 |
+| `created_at` / `started_at` / `ended_at` / `updated_at` | 生命周期时间。 |
 
 读取终端会话：
 
@@ -221,7 +329,13 @@ GET /api/v1/runs/{run_id}
 GET /api/v1/terminal/sessions/{run_id}
 ```
 
-响应包含：
+路径参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `run_id` | 是 | Run ID。 |
+
+终端侧可用响应示例：
 
 ```json
 {
@@ -241,6 +355,19 @@ GET /api/v1/terminal/sessions/{run_id}
 }
 ```
 
+响应字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `terminal_session.id` | TerminalSession ID。 |
+| `terminal_session.run_id` | 所属 Run ID。 |
+| `terminal_session.mode` | 终端模式，来自创建运行时的终端上下文。 |
+| `terminal_session.status` | 会话状态，`open` 时可继续输入，`closed` 时禁止输入。 |
+| `terminal_session.opened_at` | 会话打开时间。 |
+| `terminal_session.closed_at` | 会话关闭时间，未关闭时为 `null`。 |
+| `transcript_summary.latest_seq` | 当前已保存的最新终端事件序号。 |
+| `transcript_summary.event_count` | 当前已保存的终端事件数量。 |
+
 读取终端事件：
 
 ```http
@@ -249,12 +376,78 @@ GET /api/v1/terminal/sessions/{run_id}/events?from_seq=4
 GET /api/v1/terminal/sessions/{run_id}/events?from_seq=4&to_seq=12
 ```
 
-读取 Trace：
+路径和查询参数：
 
-```http
-GET /api/v1/runs/{run_id}/trace-events
-GET /api/v1/runs/{run_id}/trace-events?event_type=runtime.failed
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `run_id` | 是 | Run ID。 |
+| `from_seq` | 否 | 起始事件序号，包含该序号。用于断线恢复或增量拉取。 |
+| `to_seq` | 否 | 结束事件序号，包含该序号。用于拉取一个闭区间。 |
+
+终端侧可用响应示例：
+
+```json
+[
+  {
+    "id": "terminal-event-output-1",
+    "terminal_session_id": "terminal-session-id",
+    "run_id": "run-id",
+    "direction": "output",
+    "event_kind": "terminal.text.output.v1",
+    "mime_type": "text/markdown",
+    "payload_inline": "请先确认电源线已断开，并上传当前机箱内部照片。",
+    "seq_no": 1,
+    "external_event_id": null,
+    "source_ref": {
+      "kind": "runtime",
+      "node_id": "instruct_collect_context"
+    },
+    "occurred_at": "2026-05-25T00:00:03Z",
+    "created_at": "2026-05-25T00:00:03Z"
+  },
+  {
+    "id": "terminal-event-input-2",
+    "terminal_session_id": "terminal-session-id",
+    "run_id": "run-id",
+    "direction": "input",
+    "event_kind": "terminal.text.input.v1",
+    "mime_type": "text/plain",
+    "payload_inline": "我已断开电源，准备上传照片。",
+    "seq_no": 2,
+    "external_event_id": "terminal-001-20260525-000001",
+    "source_ref": {
+      "kind": "external_terminal",
+      "device_id": "terminal-001"
+    },
+    "occurred_at": "2026-05-25T00:01:00Z",
+    "created_at": "2026-05-25T00:01:00Z"
+  }
+]
 ```
+
+终端事件响应中的关键字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | 服务端事件 ID。 |
+| `run_id` | 所属 Run。 |
+| `terminal_session_id` | 所属终端会话。 |
+| `direction` | `input` 或 `output`。 |
+| `event_kind` | 事件类型。 |
+| `mime_type` | 内容 MIME。 |
+| `payload_inline` | 文本内容或附件元数据。 |
+| `seq_no` | 服务端事件顺序号。 |
+| `external_event_id` | 终端侧提交的幂等 ID。 |
+| `source_ref` | 终端侧提交的来源信息。 |
+| `occurred_at` | 事件发生时间。 |
+| `created_at` | 服务端创建时间。 |
+
+客户端合并规则：
+
+- 按 `seq_no` 升序展示。
+- 同一个 `id` 只展示一次。
+- 如果本地存在乐观消息，收到相同 `external_event_id` 的服务端事件后，用服务端事件替换。
+- 发现 `seq_no` 不连续时，通过 `from_seq` 拉取缺失事件。
 
 ## 发送文本输入
 
@@ -282,6 +475,20 @@ Idempotency-Key: <client-event-id>
   "external_event_id": "terminal-001-20260525-000001"
 }
 ```
+
+请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `direction` | 是 | 终端主动提交时固定为 `input`。 |
+| `event_kind` | 是 | 文本输入使用 `terminal.text.input.v1`。 |
+| `mime_type` | 是 | 文本输入使用 `text/plain`。 |
+| `payload_inline` | 是 | 文本内容；可以是字符串，也可以是包含 `user_input`、`text`、`value` 或 `content` 的对象。 |
+| `source.kind` | 否 | 来源类型，例如 `external_terminal`、`web`、`cli`。 |
+| `source.device_id` | 否 | 设备或客户端实例 ID。 |
+| `source.connection_id` | 否 | 当前连接 ID。 |
+| `external_event_id` | 强烈建议 | 终端侧事件 ID，用于幂等重试。 |
+| `occurred_at` | 否 | 终端侧事件发生时间；不传时服务端使用当前时间。 |
 
 成功响应：
 
@@ -311,11 +518,20 @@ Idempotency-Key: <client-event-id>
 }
 ```
 
+响应字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `accepted` | 是否接受事件。幂等命中时也返回 `true`。 |
+| `event_id` | 服务端事件 ID。 |
+| `seq_no` | 服务端事件序号。 |
+| `event` | 完整终端事件对象。 |
+
 规则：
 
-- `direction` 当前只允许 `input` 或 `output`。终端客户端通常只主动发送 `input`。
+- 终端客户端只应主动发送 `direction=input`。
 - 文本输入推荐直接把字符串放入 `payload_inline`。
-- 如果 `payload_inline` 是对象，Runtime 会依次读取 `user_input`、`text`、`value`、`content` 作为文本内容。
+- 如果 `payload_inline` 是对象，服务端会依次读取 `user_input`、`text`、`value`、`content` 作为文本内容。
 - 必须传 `external_event_id` 或 `Idempotency-Key`，用于重试去重。
 - Run 已结束或 TerminalSession 已关闭时，服务端会拒绝继续追加输入。
 
@@ -366,9 +582,9 @@ Idempotency-Key: <client-event-id>
 - `application/pdf`
 - `application/octet-stream`
 
-文件大小限制由服务端配置 `test_data_max_upload_bytes` 控制，默认值为 25 MiB。
+文件大小限制由服务端配置控制，默认值为 25 MiB。
 
-文件上传后，服务端会保存对象存储记录，并自动追加一个终端输入事件。事件类型按 MIME 自动判断：
+文件上传成功后，服务端会自动追加一个终端输入事件。事件类型按 MIME 自动判断：
 
 | MIME | event_kind |
 | --- | --- |
@@ -386,6 +602,40 @@ curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/files" \
   -F "caption=现场安装照片"
 ```
 
+终端侧可用响应示例：
+
+```json
+{
+  "accepted": true,
+  "event_id": "terminal-event-file-1",
+  "seq_no": 5,
+  "event": {
+    "id": "terminal-event-file-1",
+    "terminal_session_id": "terminal-session-id",
+    "run_id": "run-id",
+    "direction": "input",
+    "event_kind": "terminal.image.input.v1",
+    "mime_type": "image/jpeg",
+    "payload_inline": {
+      "filename": "photo.jpg",
+      "name": "photo.jpg",
+      "description": "现场安装照片",
+      "caption": "现场安装照片",
+      "size_bytes": 123456,
+      "checksum": "sha256:...",
+      "object_key": "terminal-uploads/run-id/uuid-photo.jpg"
+    },
+    "seq_no": 5,
+    "external_event_id": "terminal-001-file-000001",
+    "source_ref": {
+      "kind": "web"
+    },
+    "occurred_at": "2026-05-25T00:02:00Z",
+    "created_at": "2026-05-25T00:02:00Z"
+  }
+}
+```
+
 上传事件的 `payload_inline` 示例：
 
 ```json
@@ -400,12 +650,26 @@ curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/files" \
 }
 ```
 
+上传响应字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `accepted` | 是否接受上传事件。 |
+| `event_id` | 服务端终端事件 ID。 |
+| `seq_no` | 服务端终端事件序号。 |
+| `event.event_kind` | 根据 MIME 自动推导出的事件类型。 |
+| `event.payload_inline.filename` | 原始文件名。 |
+| `event.payload_inline.caption` | 上传时提交的说明。 |
+| `event.payload_inline.size_bytes` | 文件大小。 |
+| `event.payload_inline.checksum` | 服务端保存后的校验和。 |
+| `event.payload_inline.object_key` | 服务端文件引用。终端侧只用于展示或后续下载入口，不要自行拼接对象存储地址。 |
+
 接入建议：
 
 - 原始文件不要通过 `/events` 的 `payload_inline` 传输。
-- 文件类输入统一走 `/files`，让服务端负责对象存储、校验和事件创建。
+- 文件类输入统一走 `/files`。
 - 上传失败后可以使用同一个 `Idempotency-Key` 重试，服务端会避免重复创建终端事件。
-- 当前上传接口会先写对象存储再追加终端事件；如果首次请求已经成功但响应丢失，重复请求可能产生未引用的重复对象，但不会产生重复终端消息。
+- 当前上传接口会先保存文件再追加终端事件；如果首次请求已经成功但响应丢失，重复请求可能产生未引用的重复文件，但不会产生重复终端消息。
 
 ## 订阅 WebSocket
 
@@ -414,6 +678,47 @@ curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/files" \
 ```text
 ws(s)://<psop-host>/ws/runs/{run_id}
 ```
+
+连接输入字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `run_id` | 是 | 路径参数，创建 Invocation 后返回的 Run ID。 |
+| 认证信息 | 按部署要求 | 如果生产环境网关要求鉴权，通过 cookie、header 转换、query token 或网关注入方式携带。 |
+
+JavaScript 连接示例：
+
+```js
+const ws = new WebSocket(`${PSOP_WS_BASE}/runs/${runId}`);
+
+ws.onmessage = (message) => {
+  const event = JSON.parse(message.data);
+  if (event.event_type === "terminal.event.appended") {
+    mergeTerminalEvent(event.payload);
+  }
+};
+
+ws.onclose = () => {
+  scheduleReconnect();
+};
+```
+
+客户端输入规则：
+
+- 当前 WebSocket 不接收业务输入。文本和文件输入必须走 REST。
+- 连接建立后客户端无需发送消息。
+- 如果客户端框架需要心跳，优先使用 WebSocket 协议层 ping/pong；不要通过业务消息承载用户输入。
+
+WebSocket 服务端消息统一外层结构：
+
+| 字段 | 说明 |
+| --- | --- |
+| `event_type` | 事件类型，例如 `ws.connected`、`terminal.event.appended`。 |
+| `run_id` | 当前 Run ID。 |
+| `invocation_id` | 当前版本通常为 `null`，终端侧无需依赖。 |
+| `seq_no` | 事件序号。对 `terminal.event.appended`，与 `payload.seq_no` 一致；连接确认事件为 `0`。 |
+| `occurred_at` | 事件发生时间。连接确认事件可能为 `null`。 |
+| `payload` | 事件载荷。不同 `event_type` 的结构不同。 |
 
 连接成功后服务端会发送：
 
@@ -430,7 +735,13 @@ ws(s)://<psop-host>/ws/runs/{run_id}
 }
 ```
 
-通过 `/events` 或 `/files` 成功追加终端事件后，服务端会广播：
+`ws.connected` 载荷字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `payload.message` | 固定为连接确认信息。 |
+
+通过 REST 成功追加终端事件后，服务端会广播：
 
 ```json
 {
@@ -450,78 +761,68 @@ ws(s)://<psop-host>/ws/runs/{run_id}
 }
 ```
 
-客户端处理规则：
+`terminal.event.appended` 载荷字段：
 
-- WebSocket 只作为增量提示通道，REST 仍然是状态恢复和完整数据读取的权威来源。
-- 当前 WebSocket 主要覆盖终端 REST 接口追加的事件；Runtime 内部生成的输出、Trace 和状态变化需要通过 REST 刷新补齐。
-- 收到事件后按 `payload.id` 去重，按 `payload.seq_no` 排序。
-- 断线重连后，用本地最大 `seq_no + 1` 调用 `/terminal/sessions/{run_id}/events?from_seq=...` 补齐缺失事件。
-- 客户端不需要向 WebSocket 发送业务消息；当前服务端只保持连接并推送服务端事件。
+| 字段 | 说明 |
+| --- | --- |
+| `payload.id` | 服务端终端事件 ID。 |
+| `payload.terminal_session_id` | 所属终端会话 ID。 |
+| `payload.run_id` | 所属 Run ID。 |
+| `payload.direction` | `input` 或 `output`。 |
+| `payload.event_kind` | 终端事件类型。 |
+| `payload.mime_type` | 内容 MIME。 |
+| `payload.payload_inline` | 文本内容或附件元数据。 |
+| `payload.seq_no` | 服务端终端事件序号。 |
+| `payload.external_event_id` | 终端侧提交的幂等 ID。 |
+| `payload.source_ref` | 终端侧提交的来源信息。 |
+| `payload.occurred_at` | 事件发生时间。 |
+| `payload.created_at` | 服务端创建时间。 |
 
-## 绑定能力
-
-创建 Run 时服务端会自动创建默认绑定：
-
-| requirement_key | capability | channel | 说明 |
-| --- | --- | --- | --- |
-| `terminal.input` | `terminal.text.input.v1` | `input` | 接收终端输入。 |
-| `terminal.output` | `terminal.text.output.v1` | `output` | 输出终端内容。 |
-
-读取绑定：
-
-```http
-GET /api/v1/runs/{run_id}/bindings
-GET /api/v1/runs/{run_id}/binding-requirements
-```
-
-更新绑定：
-
-```http
-POST /api/v1/runs/{run_id}/bindings/resolve
-Content-Type: application/json
-```
-
-请求体：
+文件事件推送示例：
 
 ```json
 {
-  "bindings": [
-    {
-      "requirement_key": "terminal.input",
-      "target_kind": "external_terminal",
-      "target_ref": "terminal-001",
-      "channel": "stdin"
+  "event_type": "terminal.event.appended",
+  "run_id": "run-id",
+  "invocation_id": null,
+  "seq_no": 5,
+  "occurred_at": "2026-05-25T00:02:00Z",
+  "payload": {
+    "id": "terminal-event-file-1",
+    "terminal_session_id": "terminal-session-id",
+    "run_id": "run-id",
+    "direction": "input",
+    "event_kind": "terminal.image.input.v1",
+    "mime_type": "image/jpeg",
+    "payload_inline": {
+      "filename": "photo.jpg",
+      "caption": "现场安装照片",
+      "size_bytes": 123456,
+      "checksum": "sha256:...",
+      "object_key": "terminal-uploads/run-id/uuid-photo.jpg"
     },
-    {
-      "requirement_key": "terminal.output",
-      "target_kind": "external_terminal",
-      "target_ref": "terminal-001",
-      "channel": "stdout"
-    }
-  ]
+    "seq_no": 5,
+    "external_event_id": "terminal-001-file-000001",
+    "source_ref": {
+      "kind": "web"
+    },
+    "occurred_at": "2026-05-25T00:02:00Z",
+    "created_at": "2026-05-25T00:02:00Z"
+  }
 }
 ```
 
-当前普通终端接入可以不调用绑定更新接口。需要区分多设备、多通道或外部执行器时，再通过该接口声明目标终端。
+客户端处理规则：
 
-## 运行状态与输入时机
-
-常见 Run 状态：
-
-| status | 说明 | 终端侧行为 |
-| --- | --- | --- |
-| `queued` | 已创建，等待处理。 | 展示等待状态，可以保持连接。 |
-| `running` | Runtime 正在执行。 | 展示输出，不要假设必须等待输入。 |
-| `waiting_input` | Runtime 等待用户输入。 | 可以提示用户按 `expected_inputs` 输入。 |
-| `succeeded` | 运行成功。 | 停止输入，展示 `final_output`。 |
-| `failed` | 运行失败。 | 停止输入，展示 `exit_reason` 和 Trace。 |
-| `cancelled` | 运行取消。 | 停止输入。 |
-
-终端侧可以在 Run 未结束且 TerminalSession 为 `open` 时发送输入。最佳体验是在 `waiting_input` 时突出输入框，在 `running` 时允许用户提前补充信息但降低视觉强调。
+- WebSocket 只作为增量提示通道，REST 是状态恢复和完整数据读取的权威来源。
+- 收到 WebSocket 事件后，按 `payload.id` 去重，按 `payload.seq_no` 排序。
+- 如果需要完整事件字段，收到推送后再调用 `/terminal/sessions/{run_id}/events?from_seq=...` 拉取。
+- 断线重连后，用本地最大 `seq_no + 1` 调用 `/terminal/sessions/{run_id}/events?from_seq=...` 补齐缺失事件。
+- 客户端不需要向 WebSocket 发送业务消息。
 
 ## 幂等与重试
 
-终端侧必须为每个输入生成稳定的客户端事件 id，并同时放入：
+终端侧必须为每个输入生成稳定的客户端事件 ID，并同时放入：
 
 - HTTP Header `Idempotency-Key`
 - JSON 字段 `external_event_id`
@@ -538,7 +839,7 @@ Content-Type: application/json
 terminal-001-20260525-000001
 ```
 
-服务端会按 `run_id + external_event_id` 去重。网络超时后，客户端可使用同一个 id 重试；如果事件已经被服务端接受，会返回同一个已存在事件。
+服务端会按 `run_id + external_event_id` 去重。网络超时后，客户端可使用同一个 ID 重试；如果事件已经被服务端接受，会返回同一个已存在事件。
 
 ## 断线恢复
 
@@ -549,7 +850,6 @@ terminal-001-20260525-000001
 | `run_id` | 恢复当前运行。 |
 | `terminal_session_id` | 展示会话状态。 |
 | `latest_terminal_seq` | 拉取缺失终端事件。 |
-| `latest_trace_seq` | 拉取或合并运行轨迹。 |
 | 已发送但未确认的 `external_event_id` | 恢复乐观输入状态。 |
 
 恢复流程：
@@ -557,9 +857,8 @@ terminal-001-20260525-000001
 1. 调用 `GET /api/v1/runs/{run_id}` 获取最新 Run。
 2. 调用 `GET /api/v1/terminal/sessions/{run_id}` 获取会话状态。
 3. 调用 `GET /api/v1/terminal/sessions/{run_id}/events?from_seq=<last_seq+1>` 补齐终端事件。
-4. 调用 `GET /api/v1/runs/{run_id}/trace-events` 补齐 Trace。
-5. 对本地未确认输入，用 `external_event_id` 在事件列表中查找；找到则标记为已确认，找不到则允许用户重试。
-6. 重新连接 WebSocket。
+4. 对本地未确认输入，用 `external_event_id` 在事件列表中查找；找到则标记为已确认，找不到则允许用户重试。
+5. 重新连接 WebSocket。
 
 ## 错误处理
 
@@ -580,35 +879,34 @@ PSOP 业务错误通常返回：
 
 | 场景 | 处理建议 |
 | --- | --- |
-| Skill 不存在、无发布版本、无 ready 编译产物 | 不创建终端会话，提示调用方检查 Skill 发布与编译状态。 |
-| Run 已结束 | 停止输入，引导用户新建 Invocation。 |
+| Skill 不存在、无发布版本、无可运行版本 | 不创建终端会话，提示调用方检查 Skill 发布状态。 |
+| Run 已结束 | 停止输入，引导用户新建运行。 |
 | TerminalSession 已关闭 | 停止输入，刷新 Run 状态。 |
 | `direction` 非法 | 客户端修正为 `input`。 |
 | 缺少 `event_kind` 或 `mime_type` | 客户端按事件类型补齐。 |
-| 文件过大 | 提示压缩或拆分文件，必要时调整服务端上传限制。 |
+| 文件过大 | 提示压缩或拆分文件，必要时联系服务端调整上传限制。 |
 | MIME 不支持 | 转换文件格式或使用支持类型。 |
 | WebSocket 断开 | 自动重连，并通过 REST 补齐事件。 |
 
-## 事件展示建议
+## 展示建议
 
 终端侧应至少支持以下展示：
 
-| event_kind | 展示方式 |
-| --- | --- |
-| `terminal.text.input.v1` | 用户输入气泡或命令行输入。 |
-| `terminal.text.output.v1` | Runtime 输出文本。 |
-| `terminal.image.input.v1` | 文件名、缩略图或附件卡片。 |
-| `terminal.audio.input.v1` | 文件名、大小、音频附件卡片。 |
-| `terminal.video.input.v1` | 文件名、大小、视频附件卡片。 |
-| `terminal.file.input.v1` | 通用附件卡片。 |
+- 当前运行状态。
+- 当前等待原因和期望输入。
+- 用户文本输入。
+- 系统文本输出。
+- 图片、音频、视频、PDF 和普通文件附件。
+- 运行成功、失败、取消或中止后的最终状态。
 
 展示原则：
 
 - 以服务端返回事件为准，乐观消息需要在确认后替换为真实事件。
 - 按 `seq_no` 排序。
-- 同一个事件 id 只展示一次。
+- 同一个事件 `id` 只展示一次。
 - 输出、输入、附件、错误信息应有清晰区分。
-- Run 失败时，同时展示 `exit_reason` 和 `runtime.failed` TraceEvent 的错误摘要。
+- Run 失败时展示 `exit_reason`。
+- Run 被中止时优先展示 `final_output`，没有最终输出时展示 `exit_reason`。
 
 ## 最小接入清单
 
@@ -616,22 +914,21 @@ PSOP 业务错误通常返回：
 
 | 项目 | 验收标准 |
 | --- | --- |
-| 创建运行 | 能通过 `skill_key` 创建 Invocation，并进入对应 Run。 |
-| 状态加载 | 能读取 Run、TerminalSession、TerminalEvent、TraceEvent。 |
+| 创建运行 | 能通过 `skill_key` 创建 Invocation，并得到 `run_id`。 |
+| 状态加载 | 能读取 Run、TerminalSession 和 TerminalEvent。 |
 | 文本输入 | 能发送 `terminal.text.input.v1`，并通过 `external_event_id` 确认服务端接收。 |
 | 文件输入 | 能通过 `/files` 上传至少一种附件，并在事件流中展示。 |
-| 实时推送 | 能连接 `/ws/runs/{run_id}` 并处理 `terminal.event.appended`。 |
+| 实时提示 | 能连接 `/ws/runs/{run_id}` 并处理 `terminal.event.appended`。 |
 | 断线恢复 | WebSocket 断开后能通过 REST 补齐缺失事件。 |
-| 结束保护 | Run 结束或 Session 关闭后禁止继续输入。 |
-| 幂等重试 | 网络超时后用相同事件 id 重试，不产生重复消息。 |
+| 结束保护 | Run 结束或 TerminalSession 关闭后禁止继续输入。 |
+| 幂等重试 | 网络超时后用相同事件 ID 重试，不产生重复消息。 |
 | 错误展示 | 能展示服务端 `message` 与关键 `details`。 |
 
-## 相关代码位置
+## 客户端参考
 
-| 模块 | 说明 |
+当前 Web 终端实现可作为客户端参考：
+
+| 文件 | 说明 |
 | --- | --- |
-| `backend/app/api/routes/runtime.py` | Runtime、Gateway、Terminal、WebSocket API 路由。 |
-| `backend/app/domain/runtime/schemas.py` | 请求与响应 schema。 |
-| `backend/app/domain/runtime/service.py` | Invocation、Run、TerminalEvent、Binding 的核心业务逻辑。 |
-| `static/js/app/runtime.js` | 当前 Web 终端接入实现，可作为客户端参考。 |
+| `static/js/app/runtime.js` | Web 终端运行、输入、事件展示和刷新逻辑。 |
 | `static/js/app.js` | API Base URL 与 WebSocket URL 解析逻辑。 |
