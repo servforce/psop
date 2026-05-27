@@ -24,3 +24,5 @@ pytest-cache-files-*/
 
 .env
 .codex
+.generated/
+*.mp4
