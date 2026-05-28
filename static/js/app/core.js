@@ -446,7 +446,7 @@
         if (this.route.name !== "tasks-list") {
           this.stopTaskPolling?.();
         }
-        if (this.route.name !== "compiler-artifact") {
+        if (!["compiler-artifact", "skill-compiler-artifact"].includes(this.route.name)) {
           this.destroyCompilerArtifactViewer();
           this.compilerArtifact = null;
           this.compilerArtifactGraphModel = null;
@@ -519,6 +519,13 @@
               this.route.params.scenarioId,
               this.route.params.scenarioRunId
             );
+            return;
+          }
+
+          if (this.route.name === "skill-compiler-artifact") {
+            this.activeDetailTab = "compiler";
+            await this.loadSkillDetail(this.route.params.skillId);
+            await this.loadCompilerArtifact(this.route.params.artifactId);
             return;
           }
 
@@ -740,6 +747,7 @@
         if (
           [
             "skill-detail",
+            "skill-compiler-artifact",
             "skill-run-live",
             "skill-debug-live",
             "skill-replay-detail",

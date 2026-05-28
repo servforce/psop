@@ -1668,6 +1668,14 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
             data={"caption": "现场证据已确认"},
             files={"file": ("debug-photo.png", b"debug-image", "image/png")},
         )
+        uploaded_event = upload_response.json()["event"]
+        uploaded_content_response = client.get(
+            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/content"
+        )
+        uploaded_content_range_response = client.get(
+            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/content",
+            headers={"Range": "bytes=0-4"},
+        )
         final_run_response = client.get(f"/api/v1/runs/{run_id}")
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
@@ -1691,6 +1699,11 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert len(upload_response.json()["event"]["artifact_object_id"]) == 36
     assert upload_response.json()["event"]["payload_inline"]["object_key"].startswith(f"terminal-uploads/{run_id}/")
     assert upload_response.json()["event"]["payload_inline"]["caption"] == "现场证据已确认"
+    assert uploaded_content_response.status_code == 200
+    assert uploaded_content_response.headers["content-type"] == "image/png"
+    assert uploaded_content_response.content == b"debug-image"
+    assert uploaded_content_range_response.status_code == 206
+    assert uploaded_content_range_response.content == b"debug"
     assert final_run_response.json()["status"] == "succeeded"
     assert any(event["event_kind"] == "terminal.image.input.v1" for event in terminal_events_response.json())
     assert replay_response.status_code == 200

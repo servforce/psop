@@ -198,7 +198,7 @@
         this.skillTestReviewAutoFollow = true;
         this.skillTestCaseSearch = "";
         this.resetSkillTestCaseForm();
-        this.closeCompilerArtifactWorkspace();
+        this.resetCompilerArtifactState();
         if (skillId) {
           this.activeSourceTab = "skill.yaml";
         }
@@ -1348,6 +1348,16 @@
         }
 
         this.activeDetailTab = "debug";
+        await this.navigate(buildSkillDetailPath(this.currentSkill.id));
+      },
+
+
+      async openCurrentSkillCompiler() {
+        if (!this.currentSkill?.id) {
+          return;
+        }
+
+        this.activeDetailTab = "compiler";
         await this.navigate(buildSkillDetailPath(this.currentSkill.id));
       },
 

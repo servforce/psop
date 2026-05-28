@@ -73,6 +73,14 @@
       };
     }
 
+    const skillCompilerArtifactMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/compiler\/artifacts\/([^/]+)$/);
+    if (skillCompilerArtifactMatch) {
+      return {
+        name: "skill-compiler-artifact",
+        params: { skillId: skillCompilerArtifactMatch[1], artifactId: skillCompilerArtifactMatch[2] }
+      };
+    }
+
     if (normalized === "/admin/compiler") {
       return { name: "compiler-list", params: {} };
     }
@@ -160,6 +168,10 @@
 
   function buildCompilerArtifactPath(artifactId) {
     return `/admin/compiler/artifacts/${artifactId}`;
+  }
+
+  function buildSkillCompilerArtifactPath(skillId, artifactId) {
+    return `/admin/skills/${skillId}/compiler/artifacts/${artifactId}`;
   }
 
   function buildAgentPromptPath(definitionId) {
@@ -477,7 +489,6 @@
       compilerArtifactNodeJsonDraft: "",
       compilerArtifactNodeJsonError: "",
       bpmnViewer: null,
-      compilerArtifactWorkspaceOpen: false,
       agentPrompts: [],
       agentPromptDetail: null,
       agentPromptBindings: [],
@@ -574,6 +585,14 @@
       liveRunTerminalSession: null,
       liveRunTerminalEvents: [],
       liveRunTraceEvents: [],
+      liveRunInteractionTab: "transcript",
+      terminalMediaPreview: {
+        open: false,
+        kind: "",
+        src: "",
+        title: "",
+        caption: ""
+      },
       liveRunWs: null,
       liveRunWsRunId: "",
       liveRunWsStatus: "idle",
@@ -696,6 +715,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildSkillCompilerArtifactPath,
     buildAgentPromptPath,
     generateSkillKey,
     resolveApiBaseUrl,

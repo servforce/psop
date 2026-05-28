@@ -5,7 +5,7 @@ const guardedFragments = [
   ["skill-detail.html", '<template x-if="currentSkill">'],
   ["run-live.html", '<template x-if="liveRun">'],
   ["replay-detail.html", '<template x-if="replayDetail">'],
-  ["skill-test-scenario-detail.html", '<template x-if="currentSkill && skillTestCase">'],
+  ["skill-test-scenario-detail.html", '<template x-if="currentSkill && (skillTestCase || route.name === \'skill-test-scenario-new\')">'],
   ["skill-test-scenario-review.html", '<template x-if="currentSkill && skillTestCase && skillTestReview">'],
   ["compiler-artifact-detail.html", '<template x-if="compilerArtifact">'],
   ["agent-prompt-detail.html", '<template x-if="agentPromptDetail">']
@@ -18,4 +18,38 @@ test("data-dependent page fragments are not instantiated before their data exist
     expect(html.trimStart().startsWith(guard)).toBe(true);
     expect(html.trimEnd().endsWith("</template>")).toBe(true);
   }
+});
+
+test("run live page is read-only and uses interaction data tabs", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
+
+  expect(html).not.toContain("sendTerminalInput");
+  expect(html).not.toContain("terminalInputForm");
+  expect(html).not.toContain("event.event_kind");
+  expect(html).not.toContain("event.mime_type");
+  expect(html).not.toContain("event.artifact_object_id");
+  expect(html).not.toContain("terminalEventActorIcon");
+  expect(html).not.toContain("terminalEventAvatarClass");
+  expect(html).toContain("liveRunInteractionTab === 'transcript'");
+  expect(html).toContain("liveRunInteractionTab === 'trace'");
+});
+
+test("skill compiler artifact opens as an independent detail page", () => {
+  const indexHtml = fs.readFileSync(path.join(__dirname, "../../../index.html"), "utf8");
+  const compilerHtml = fs.readFileSync(path.join(__dirname, "../../../pages/compiler-artifact-detail.html"), "utf8");
+  const skillDetailHtml = fs.readFileSync(path.join(__dirname, "../../../pages/skill-detail.html"), "utf8");
+  const compilerJs = fs.readFileSync(path.join(__dirname, "../../app/compiler.js"), "utf8");
+  const appJs = fs.readFileSync(path.join(__dirname, "../../app.js"), "utf8");
+  const coreJs = fs.readFileSync(path.join(__dirname, "../../app/core.js"), "utf8");
+
+  expect(indexHtml).toContain("skill-compiler-artifact");
+  expect(indexHtml).toContain("['compiler-artifact', 'skill-compiler-artifact'].includes(route.name)");
+  expect(compilerHtml).toContain("route.name === 'skill-compiler-artifact'");
+  expect(compilerHtml).toContain("openCurrentSkillCompiler()");
+  expect(compilerJs).toContain("buildSkillCompilerArtifactPath");
+  expect(compilerJs).toContain("navigate(buildSkillCompilerArtifactPath");
+  expect(compilerJs).not.toContain("compilerArtifactWorkspaceOpen");
+  expect(appJs).not.toContain("compilerArtifactWorkspaceOpen");
+  expect(skillDetailHtml).not.toContain("compilerArtifactWorkspaceOpen");
+  expect(coreJs).toContain('this.route.name === "skill-compiler-artifact"');
 });

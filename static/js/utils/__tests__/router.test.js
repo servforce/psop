@@ -11,6 +11,7 @@ const {
   buildSkillTestScenarioNewPath,
   buildSkillTestScenarioRunReviewPath,
   buildCompilerArtifactPath,
+  buildSkillCompilerArtifactPath,
   buildTasksPath
 } = require("../router.node.cjs");
 
@@ -77,6 +78,10 @@ test("resolveAdminRoute maps issue #1 runtime pages", () => {
     name: "skill-test-scenario-review",
     params: { skillId: "skill-123", scenarioId: "scenario-123", scenarioRunId: "scenario-run-123" }
   });
+  expect(resolveAdminRoute("/admin/skills/skill-123/compiler/artifacts/artifact-123")).toEqual({
+    name: "skill-compiler-artifact",
+    params: { skillId: "skill-123", artifactId: "artifact-123" }
+  });
   expect(resolveAdminRoute("/admin/replay")).toEqual({ name: "replay-list", params: {} });
   expect(resolveAdminRoute("/admin/replay/runs/run-123")).toEqual({
     name: "replay-detail",
@@ -98,4 +103,7 @@ test("runtime route builders create live and replay locations", () => {
     "/admin/skills/skill-123/tests/scenario-123/runs/scenario-run-123/review"
   );
   expect(buildCompilerArtifactPath("artifact-123")).toBe("/admin/compiler/artifacts/artifact-123");
+  expect(buildSkillCompilerArtifactPath("skill-123", "artifact-123")).toBe(
+    "/admin/skills/skill-123/compiler/artifacts/artifact-123"
+  );
 });

@@ -67,6 +67,7 @@
     --color-white: #fff;
     --spacing: 0.25rem;
     --container-md: 28rem;
+    --container-lg: 32rem;
     --container-xl: 36rem;
     --container-3xl: 48rem;
     --container-5xl: 64rem;
@@ -434,14 +435,14 @@
   .mb-0\.5 {
     margin-bottom: calc(var(--spacing) * 0.5);
   }
+  .mb-1 {
+    margin-bottom: calc(var(--spacing) * 1);
+  }
   .mb-2 {
     margin-bottom: calc(var(--spacing) * 2);
   }
   .ml-2 {
     margin-left: calc(var(--spacing) * 2);
-  }
-  .ml-auto {
-    margin-left: auto;
   }
   .block {
     display: block;
@@ -525,6 +526,12 @@
   .h-60 {
     height: calc(var(--spacing) * 60);
   }
+  .h-72 {
+    height: calc(var(--spacing) * 72);
+  }
+  .h-auto {
+    height: auto;
+  }
   .h-dvh {
     height: 100dvh;
   }
@@ -546,14 +553,17 @@
   .max-h-72 {
     max-height: calc(var(--spacing) * 72);
   }
+  .max-h-96 {
+    max-height: calc(var(--spacing) * 96);
+  }
   .max-h-\[32rem\] {
     max-height: 32rem;
   }
-  .max-h-\[35\%\] {
-    max-height: 35%;
-  }
   .max-h-\[92vh\] {
     max-height: 92vh;
+  }
+  .max-h-\[calc\(92vh-3rem\)\] {
+    max-height: calc(92vh - 3rem);
   }
   .max-h-\[calc\(92vh-5\.5rem\)\] {
     max-height: calc(92vh - 5.5rem);
@@ -597,14 +607,8 @@
   .min-h-\[28rem\] {
     min-height: 28rem;
   }
-  .min-h-\[30rem\] {
-    min-height: 30rem;
-  }
   .min-h-\[32rem\] {
     min-height: 32rem;
-  }
-  .min-h-\[34rem\] {
-    min-height: 34rem;
   }
   .w-1 {
     width: calc(var(--spacing) * 1);
@@ -651,6 +655,9 @@
   .w-80 {
     width: calc(var(--spacing) * 80);
   }
+  .w-auto {
+    width: auto;
+  }
   .w-fit {
     width: -moz-fit-content;
     width: fit-content;
@@ -676,6 +683,9 @@
   .max-w-\[30rem\] {
     max-width: 30rem;
   }
+  .max-w-\[96vw\] {
+    max-width: 96vw;
+  }
   .max-w-\[calc\(100\%-0\.5rem\)\] {
     max-width: calc(100% - 0.5rem);
   }
@@ -684,6 +694,9 @@
   }
   .max-w-full {
     max-width: 100%;
+  }
+  .max-w-lg {
+    max-width: var(--container-lg);
   }
   .max-w-md {
     max-width: var(--container-md);
@@ -721,14 +734,8 @@
   .flex-1 {
     flex: 1;
   }
-  .shrink {
-    flex-shrink: 1;
-  }
   .shrink-0 {
     flex-shrink: 0;
-  }
-  .basis-64 {
-    flex-basis: calc(var(--spacing) * 64);
   }
   .-translate-x-1\/2 {
     --tw-translate-x: calc(calc(1/2 * 100%) * -1);
@@ -857,6 +864,9 @@
   .justify-end {
     justify-content: flex-end;
   }
+  .justify-start {
+    justify-content: flex-start;
+  }
   .gap-0 {
     gap: calc(var(--spacing) * 0);
   }
@@ -933,6 +943,9 @@
   }
   .gap-y-0\.5 {
     row-gap: calc(var(--spacing) * 0.5);
+  }
+  .gap-y-1 {
+    row-gap: calc(var(--spacing) * 1);
   }
   .gap-y-2 {
     row-gap: calc(var(--spacing) * 2);
@@ -1323,6 +1336,9 @@
   .bg-\[\#09090b\] {
     background-color: #09090b;
   }
+  .bg-\[\#262626\] {
+    background-color: #262626;
+  }
   .bg-amber-50 {
     background-color: var(--color-amber-50);
   }
@@ -1357,6 +1373,12 @@
     background-color: color-mix(in srgb, #000 40%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
       background-color: color-mix(in oklab, var(--color-black) 40%, transparent);
+    }
+  }
+  .bg-black\/80 {
+    background-color: color-mix(in srgb, #000 80%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-black) 80%, transparent);
     }
   }
   .bg-cyan-400 {
@@ -1555,6 +1577,12 @@
     background-color: color-mix(in srgb, oklch(12.9% 0.042 264.695) 70%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
       background-color: color-mix(in oklab, var(--color-slate-950) 70%, transparent);
+    }
+  }
+  .bg-slate-950\/80 {
+    background-color: color-mix(in srgb, oklch(12.9% 0.042 264.695) 80%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-slate-950) 80%, transparent);
     }
   }
   .bg-slate-950\/95 {
@@ -2198,6 +2226,13 @@
   }
   .ring-inset {
     --tw-ring-inset: inset;
+  }
+  .group-hover\:scale-\[1\.01\] {
+    &:is(:where(.group):hover *) {
+      @media (hover: hover) {
+        scale: 1.01;
+      }
+    }
   }
   .group-hover\:border-sky-200 {
     &:is(:where(.group):hover *) {

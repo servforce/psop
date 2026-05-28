@@ -470,6 +470,313 @@
       },
 
 
+      terminalEventMimeType(event) {
+        return String(event?.mime_type || "").toLowerCase();
+      },
+
+
+      terminalEventFileExtension(event) {
+        const fileName = this.terminalEventFileName(event).toLowerCase();
+        const match = fileName.match(/\.([a-z0-9]+)$/);
+        return match ? match[1] : "";
+      },
+
+
+      terminalEventInferredMimeType(event) {
+        const eventKind = String(event?.event_kind || "").toLowerCase();
+        if (eventKind.includes(".image.")) {
+          return "image/*";
+        }
+        if (eventKind.includes(".audio.")) {
+          return "audio/*";
+        }
+        if (eventKind.includes(".video.")) {
+          return "video/*";
+        }
+        const extension = this.terminalEventFileExtension(event);
+        const mimeTypes = {
+          apng: "image/apng",
+          avif: "image/avif",
+          gif: "image/gif",
+          jpeg: "image/jpeg",
+          jpg: "image/jpeg",
+          png: "image/png",
+          svg: "image/svg+xml",
+          webp: "image/webp",
+          mp3: "audio/mpeg",
+          m4a: "audio/mp4",
+          ogg: "audio/ogg",
+          wav: "audio/wav",
+          weba: "audio/webm",
+          mp4: "video/mp4",
+          m4v: "video/mp4",
+          mov: "video/quicktime",
+          ogv: "video/ogg",
+          webm: "video/webm",
+          pdf: "application/pdf",
+          json: "application/json",
+          md: "text/markdown",
+          txt: "text/plain"
+        };
+        return mimeTypes[extension] || "";
+      },
+
+
+      terminalEventPresentationMimeType(event) {
+        const mimeType = this.terminalEventMimeType(event);
+        if (mimeType && mimeType !== "application/octet-stream") {
+          return mimeType;
+        }
+        return this.terminalEventInferredMimeType(event) || mimeType;
+      },
+
+
+      terminalEventPayloadObject(event) {
+        const payload = event?.payload_inline;
+        return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+      },
+
+
+      terminalEventPayloadTextValue(event, keys) {
+        const payload = this.terminalEventPayloadObject(event);
+        if (!payload) {
+          return "";
+        }
+        const match = keys.find((key) => {
+          const value = payload[key];
+          return value !== null && value !== undefined && typeof value !== "object" && String(value).trim();
+        });
+        return match ? String(payload[match]).trim() : "";
+      },
+
+
+      terminalEventDisplayText(event) {
+        const payload = event?.payload_inline;
+        if (typeof payload === "string") {
+          return payload;
+        }
+        if (payload === null || payload === undefined) {
+          return "";
+        }
+        return this.terminalEventPayloadTextValue(event, [
+          "caption",
+          "description",
+          "message",
+          "text",
+          "content",
+          "summary",
+          "user_input",
+          "final_response",
+          "output"
+        ]);
+      },
+
+
+      terminalEventJsonText(event) {
+        const payload = event?.payload_inline;
+        if (payload === null || payload === undefined) {
+          return "";
+        }
+        if (typeof payload === "string") {
+          return payload;
+        }
+        return JSON.stringify(payload, null, 2);
+      },
+
+
+      terminalEventSourceUrl(event) {
+        const payload = this.terminalEventPayloadObject(event);
+        if (!payload) {
+          return "";
+        }
+        const key = ["url", "src", "content_url", "preview_url", "data_url"].find(
+          (candidate) => typeof payload[candidate] === "string" && payload[candidate].trim()
+        );
+        return key ? payload[key].trim() : "";
+      },
+
+
+      terminalEventMediaUrl(event) {
+        const inlineUrl = this.terminalEventSourceUrl(event);
+        if (inlineUrl) {
+          return inlineUrl;
+        }
+        if (!event?.artifact_object_id || !event?.id) {
+          return "";
+        }
+        const runId = event.run_id || this.liveRun?.id || "";
+        if (!runId) {
+          return "";
+        }
+        return `${this.apiBaseUrl}/terminal/sessions/${encodeURIComponent(runId)}/events/${encodeURIComponent(event.id)}/content`;
+      },
+
+
+      terminalEventIsImage(event) {
+        return this.terminalEventPresentationMimeType(event).startsWith("image/");
+      },
+
+
+      terminalEventIsAudio(event) {
+        return this.terminalEventPresentationMimeType(event).startsWith("audio/");
+      },
+
+
+      terminalEventIsVideo(event) {
+        return this.terminalEventPresentationMimeType(event).startsWith("video/");
+      },
+
+
+      terminalEventIsJson(event) {
+        const mimeType = this.terminalEventPresentationMimeType(event);
+        return mimeType === "application/json" || mimeType.endsWith("+json");
+      },
+
+
+      terminalEventIsPdf(event) {
+        return this.terminalEventPresentationMimeType(event) === "application/pdf";
+      },
+
+
+      terminalEventIsGenericFile(event) {
+        const mimeType = this.terminalEventPresentationMimeType(event);
+        const eventKind = String(event?.event_kind || "").toLowerCase();
+        return Boolean(
+          this.terminalEventMediaUrl(event) &&
+            !this.terminalEventIsImage(event) &&
+            !this.terminalEventIsAudio(event) &&
+            !this.terminalEventIsVideo(event) &&
+            !this.terminalEventIsPdf(event) &&
+            !this.terminalEventIsJson(event) &&
+            (event?.artifact_object_id || eventKind.includes(".file.") || ["application/pdf", "application/octet-stream"].includes(mimeType))
+        );
+      },
+
+
+      terminalEventShouldShowJson(event) {
+        const payload = event?.payload_inline;
+        if (!payload || typeof payload !== "object") {
+          return false;
+        }
+        if (this.terminalEventIsJson(event)) {
+          return true;
+        }
+        if (
+          this.terminalEventIsImage(event) ||
+          this.terminalEventIsAudio(event) ||
+          this.terminalEventIsVideo(event) ||
+          this.terminalEventIsPdf(event) ||
+          this.terminalEventIsGenericFile(event)
+        ) {
+          return false;
+        }
+        return !this.terminalEventDisplayText(event);
+      },
+
+
+      terminalEventShouldShowPlainText(event) {
+        return Boolean(
+          this.terminalEventDisplayText(event) &&
+            !this.terminalEventShouldShowJson(event) &&
+            !this.terminalEventIsImage(event) &&
+            !this.terminalEventIsAudio(event) &&
+            !this.terminalEventIsVideo(event) &&
+            !this.terminalEventIsPdf(event)
+        );
+      },
+
+
+      terminalEventFileName(event) {
+        const payload = this.terminalEventPayloadObject(event);
+        const value =
+          payload?.filename ||
+          payload?.name ||
+          payload?.title ||
+          payload?.object_key ||
+          event?.event_kind ||
+          "terminal-attachment";
+        return String(value).split("/").filter(Boolean).pop() || "terminal-attachment";
+      },
+
+
+      terminalEventFileSize(event) {
+        const payload = this.terminalEventPayloadObject(event);
+        const size = Number(payload?.size_bytes ?? payload?.size ?? 0);
+        return Number.isFinite(size) && size > 0 ? size : 0;
+      },
+
+
+      terminalEventFileMeta(event) {
+        const size = this.terminalEventFileSize(event);
+        return size ? this.formatBytes(size) : "";
+      },
+
+
+      terminalEventFileIcon(event) {
+        const mimeType = this.terminalEventPresentationMimeType(event);
+        if (mimeType === "application/pdf") {
+          return "picture_as_pdf";
+        }
+        if (mimeType.startsWith("text/") || mimeType === "application/json") {
+          return "description";
+        }
+        return "draft";
+      },
+
+
+      terminalEventActorLabel(event) {
+        return String(event?.direction || "").toLowerCase() === "output" ? "Runtime" : "用户";
+      },
+
+
+      terminalEventRowClass(event) {
+        return String(event?.direction || "").toLowerCase() === "input" ? "justify-end" : "justify-start";
+      },
+
+
+      terminalEventMessageShellClass(event) {
+        return String(event?.direction || "").toLowerCase() === "input"
+          ? "w-fit max-w-3xl"
+          : "w-full max-w-3xl";
+      },
+
+
+      terminalEventMetaClass(event) {
+        return String(event?.direction || "").toLowerCase() === "input" ? "justify-end text-right" : "justify-start";
+      },
+
+
+      terminalEventBubbleClass(event) {
+        return "bg-[#262626]";
+      },
+
+
+      openTerminalMediaPreview(event) {
+        const src = this.terminalEventMediaUrl(event);
+        if (!src || !this.terminalEventIsImage(event)) {
+          return;
+        }
+        this.terminalMediaPreview = {
+          open: true,
+          kind: "image",
+          src,
+          title: this.terminalEventFileName(event),
+          caption: this.terminalEventDisplayText(event)
+        };
+      },
+
+
+      closeTerminalMediaPreview() {
+        this.terminalMediaPreview = {
+          open: false,
+          kind: "",
+          src: "",
+          title: "",
+          caption: ""
+        };
+      },
+
+
       scrollTerminalTranscriptToBottom() {
         this.$nextTick(() => {
           const element = this.$refs?.terminalTranscriptScroll;

@@ -76,6 +76,14 @@ export function resolveAdminRoute(pathname) {
     };
   }
 
+  const skillCompilerArtifactMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/compiler\/artifacts\/([^/]+)$/);
+  if (skillCompilerArtifactMatch) {
+    return {
+      name: "skill-compiler-artifact",
+      params: { skillId: skillCompilerArtifactMatch[1], artifactId: skillCompilerArtifactMatch[2] }
+    };
+  }
+
   if (normalized === "/admin/compiler") {
     return { name: "compiler-list", params: {} };
   }
@@ -151,4 +159,8 @@ export function buildSkillTestScenarioRunReviewPath(skillId, scenarioId, scenari
 
 export function buildCompilerArtifactPath(artifactId) {
   return `/admin/compiler/artifacts/${artifactId}`;
+}
+
+export function buildSkillCompilerArtifactPath(skillId, artifactId) {
+  return `/admin/skills/${skillId}/compiler/artifacts/${artifactId}`;
 }

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import mimetypes
 import posixpath
 import uuid
 from datetime import datetime
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Header, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Header, Query, Request, Response, WebSocket, WebSocketDisconnect, status
 from fastapi import File, Form, UploadFile
 from sqlalchemy.orm import Session
 
@@ -199,6 +201,39 @@ def list_terminal_events(
     return service.list_terminal_events(session, run_id, from_seq=from_seq, to_seq=to_seq)
 
 
+@terminal_router.get("/sessions/{run_id}/events/{event_id}/content")
+def get_terminal_event_content(
+    run_id: str,
+    event_id: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    object_store: ObjectStoreService = Depends(get_object_store),
+    service: RuntimeService = Depends(get_runtime_service),
+) -> Response:
+    event = service.get_terminal_event(session, run_id, event_id)
+    if not event.artifact_object_id:
+        raise SkillValidationError("当前 Terminal Event 没有可展示的对象内容。", details={"run_id": run_id, "event_id": event_id})
+    artifact_object = session.get(ArtifactObject, event.artifact_object_id)
+    if not artifact_object:
+        raise SkillValidationError(
+            "未找到 Terminal Event 对应的对象内容。",
+            details={"run_id": run_id, "event_id": event_id, "artifact_object_id": event.artifact_object_id},
+        )
+    try:
+        content = object_store.download_bytes(bucket=artifact_object.bucket, object_key=artifact_object.object_key)
+    except Exception as exc:
+        raise SkillsGatewayError(
+            "终端对象内容读取失败，请确认对象存储服务可用。",
+            details={"run_id": run_id, "event_id": event_id, "error": str(exc)},
+        ) from exc
+    return _inline_content_response(
+        content=content,
+        mime_type=_terminal_event_content_mime_type(event, artifact_object),
+        filename=_terminal_event_content_filename(event),
+        range_header=request.headers.get("range"),
+    )
+
+
 @terminal_router.post("/sessions/{run_id}/events", response_model=TerminalEventAppendResponse, status_code=202)
 async def append_terminal_event(
     run_id: str,
@@ -355,6 +390,90 @@ def _terminal_upload_event_kind(mime_type: str) -> str:
     if mime_type.startswith("video/"):
         return "terminal.video.input.v1"
     return "terminal.file.input.v1"
+
+
+def _terminal_event_content_filename(event: TerminalEventResponse) -> str:
+    payload = event.payload_inline
+    if isinstance(payload, dict):
+        for key in ("filename", "name", "title", "object_key"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return _safe_terminal_upload_filename(value)
+    return f"terminal-event-{event.seq_no}"
+
+
+def _terminal_event_content_mime_type(event: TerminalEventResponse, artifact_object: ArtifactObject) -> str:
+    mime_type = artifact_object.media_type or event.mime_type or "application/octet-stream"
+    if mime_type != "application/octet-stream":
+        return mime_type
+    guessed, _ = mimetypes.guess_type(_terminal_event_content_filename(event))
+    return guessed or mime_type
+
+
+def _inline_content_response(
+    *,
+    content: bytes,
+    mime_type: str,
+    filename: str,
+    range_header: str | None,
+) -> Response:
+    encoded_filename = quote(filename)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}",
+    }
+    size = len(content)
+    if not range_header:
+        headers["Content-Length"] = str(size)
+        return Response(content=content, media_type=mime_type, headers=headers)
+
+    byte_range = _parse_single_byte_range(range_header, size)
+    if byte_range is None:
+        return Response(
+            status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+            headers={**headers, "Content-Range": f"bytes */{size}"},
+        )
+
+    start, end = byte_range
+    partial = content[start : end + 1]
+    headers.update(
+        {
+            "Content-Range": f"bytes {start}-{end}/{size}",
+            "Content-Length": str(len(partial)),
+        }
+    )
+    return Response(
+        content=partial,
+        media_type=mime_type,
+        headers=headers,
+        status_code=status.HTTP_206_PARTIAL_CONTENT,
+    )
+
+
+def _parse_single_byte_range(range_header: str, size: int) -> tuple[int, int] | None:
+    if size <= 0:
+        return None
+    unit, separator, spec = range_header.partition("=")
+    if separator != "=" or unit.strip().lower() != "bytes":
+        return None
+    spec = spec.strip()
+    if not spec or "," in spec or "-" not in spec:
+        return None
+    start_text, end_text = [part.strip() for part in spec.split("-", 1)]
+    if not start_text:
+        if not end_text.isdigit():
+            return None
+        suffix_length = int(end_text)
+        if suffix_length <= 0:
+            return None
+        return max(size - suffix_length, 0), size - 1
+    if not start_text.isdigit() or (end_text and not end_text.isdigit()):
+        return None
+    start = int(start_text)
+    end = int(end_text) if end_text else size - 1
+    if start >= size or end < start:
+        return None
+    return start, min(end, size - 1)
 
 
 @replay_router.get("/runs", response_model=list[RunResponse])

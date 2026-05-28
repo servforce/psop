@@ -673,6 +673,12 @@ class RuntimeService:
             for item in self.repository.list_terminal_events(session, run_id, from_seq=from_seq, to_seq=to_seq)
         ]
 
+    def get_terminal_event(self, session: Session, run_id: str, event_id: str) -> TerminalEventResponse:
+        event = self.repository.get_terminal_event(session, event_id)
+        if not event or event.run_id != run_id:
+            raise SkillNotFoundError("未找到 Terminal Event。", details={"run_id": run_id, "event_id": event_id})
+        return self._build_terminal_event_response(event)
+
     def append_terminal_event(
         self,
         session: Session,

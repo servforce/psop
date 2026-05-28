@@ -1,50 +1,53 @@
 <template x-if="liveRun">
 <div class="h-full min-h-0">
   <section class="panel rounded-none border-0">
-    <div class="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
-      <nav class="breadcrumb-bar border-0 pb-0" aria-label="Breadcrumb">
-        <template x-if="route.name === 'skill-debug-live' && currentSkill">
-          <span class="inline-flex min-w-0 flex-wrap items-center gap-2">
-            <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
-            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
-            <button type="button" class="breadcrumb-link min-w-0 truncate" @click="openCurrentSkillDebug()" x-text="currentSkill.name"></button>
-            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
-            <button type="button" class="breadcrumb-link" @click="openCurrentSkillDebug()">调试</button>
-            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
-            <button type="button" class="breadcrumb-link font-medium text-slate-950" @click="loadRunLive(liveRun.id)">Run Live</button>
-          </span>
-        </template>
-        <template x-if="route.name === 'skill-run-live' && currentSkill">
-          <span class="inline-flex min-w-0 flex-wrap items-center gap-2">
-            <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
-            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
-            <button type="button" class="breadcrumb-link min-w-0 truncate" @click="openCurrentSkillRuntime()" x-text="currentSkill.name"></button>
-            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
-            <button type="button" class="breadcrumb-link" @click="openCurrentSkillRuntime()">运行</button>
-            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
-            <button type="button" class="breadcrumb-link font-medium text-slate-950" @click="loadRunLive(liveRun.id)">Run Live</button>
-          </span>
-        </template>
-        <template x-if="!['skill-run-live', 'skill-debug-live'].includes(route.name) || !currentSkill">
-          <span class="inline-flex min-w-0 flex-wrap items-center gap-2">
-            <button type="button" class="breadcrumb-link" @click="navigate('/admin/invocations')">运行</button>
-            <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
-            <button type="button" class="breadcrumb-link font-medium text-slate-950" @click="loadRunLive(liveRun.id)">Run Live</button>
-          </span>
-        </template>
-      </nav>
-      <div x-show="route.name !== 'skill-debug-live'" class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div class="min-w-0">
-          <p class="mono-field break-all" x-text="liveRun.id"></p>
-        </div>
-        <div class="flex flex-wrap gap-3">
-          <span class="status-badge" :class="statusBadgeTone(liveRun.status)" x-text="formatStatus(liveRun.status)"></span>
-          <button type="button" class="button-secondary" title="刷新" aria-label="刷新" @click="loadRunLive(liveRun.id)">
-            <span class="material-symbols-outlined text-[18px]">refresh</span>
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <div class="flex min-w-0 flex-col gap-1.5 xl:flex-row xl:items-center xl:justify-between">
+        <nav class="breadcrumb-bar h-7 min-h-0 min-w-0 flex-1 flex-nowrap gap-1.5 overflow-hidden border-0 p-0 text-xs" aria-label="Breadcrumb">
+          <template x-if="route.name === 'skill-debug-live' && currentSkill">
+            <span class="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5">
+              <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link min-w-0 truncate" @click="openCurrentSkillDebug()" x-text="currentSkill.name"></button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link" @click="openCurrentSkillDebug()">调试</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <span class="truncate font-semibold text-slate-100">运行记录</span>
+            </span>
+          </template>
+          <template x-if="route.name === 'skill-run-live' && currentSkill">
+            <span class="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5">
+              <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link min-w-0 truncate" @click="openCurrentSkillRuntime()" x-text="currentSkill.name"></button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link" @click="openCurrentSkillRuntime()">运行</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <span class="truncate font-semibold text-slate-100">运行记录</span>
+            </span>
+          </template>
+          <template x-if="!['skill-run-live', 'skill-debug-live'].includes(route.name) || !currentSkill">
+            <span class="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5">
+              <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link" @click="navigate('/admin/invocations')">运行</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <span class="truncate font-semibold text-slate-100">运行记录</span>
+            </span>
+          </template>
+        </nav>
+        <div x-show="route.name !== 'skill-debug-live'" class="flex shrink-0 flex-wrap items-center gap-2">
+          <span class="status-badge h-8 px-2.5 py-0 text-[10px]" :class="statusBadgeTone(liveRun.status)" x-text="formatStatus(liveRun.status)"></span>
+          <button type="button" class="button-secondary h-8 w-8 shrink-0" title="刷新" aria-label="刷新" @click="loadRunLive(liveRun.id)">
+            <span class="material-symbols-outlined text-[17px]">refresh</span>
             <span>刷新</span>
           </button>
-          <button type="button" class="button-primary" title="查看回放" aria-label="查看回放" x-show="liveRun.status === 'succeeded'" @click="navigate(runReplayPath(liveRun.id))">
-            <span class="material-symbols-outlined text-[18px]">history</span>
+          <button type="button" class="button-primary h-8 w-8 shrink-0" title="查看回放" aria-label="查看回放" x-show="liveRun.status === 'succeeded'" @click="navigate(runReplayPath(liveRun.id))">
+            <span class="material-symbols-outlined text-[17px]">history</span>
             <span>查看回放</span>
           </button>
         </div>
@@ -55,6 +58,10 @@
       <div class="grid h-full min-h-0 min-w-0 xl:grid-cols-[22rem_minmax(0,1fr)]">
         <aside class="min-h-0 min-w-0 overflow-auto border-b border-slate-200 bg-slate-50 p-5 xl:border-b-0 xl:border-r">
           <dl class="space-y-4 text-sm">
+            <div>
+              <dt class="field-label">Run ID</dt>
+              <dd class="mt-1 mono-field break-all" x-text="liveRun.id"></dd>
+            </div>
             <div>
               <dt class="field-label">状态</dt>
               <dd class="mt-1 font-medium text-slate-950" x-text="formatStatus(liveRun.status)"></dd>
@@ -120,95 +127,147 @@
         </aside>
 
         <main class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-          <section class="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <div class="flex items-center justify-between border-b border-slate-200 bg-white px-5 py-3">
-              <div>
-                <p class="text-sm font-semibold text-slate-950">Terminal Transcript</p>
-                <p class="mono-field" x-text="`${liveRunTerminalEvents.length} events · latest ${liveRun.latest_terminal_seq || 0}`"></p>
-              </div>
+          <section class="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950/20">
+            <div class="flex h-11 shrink-0 items-center overflow-x-auto overflow-y-hidden border-b border-slate-200 bg-white">
+              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'transcript' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'transcript'">
+                <span class="material-symbols-outlined text-[18px]">forum</span>
+                <span>Terminal Transcript</span>
+                <span class="mono-field" x-text="`${liveRunTerminalEvents.length} events`"></span>
+              </button>
+              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'trace' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'trace'">
+                <span class="material-symbols-outlined text-[18px]">timeline</span>
+                <span>Trace Events</span>
+                <span class="mono-field" x-text="`${liveRunTraceEvents.length} events`"></span>
+              </button>
             </div>
-            <div x-ref="terminalTranscriptScroll" class="min-h-0 flex-1 overflow-auto divide-y divide-slate-200">
-              <template x-for="event in liveRunTerminalEvents" :key="event.id">
-                <article class="px-5 py-4">
-                  <div class="flex flex-wrap items-center justify-between gap-3">
-                    <div class="flex items-center gap-3">
-                      <span class="status-badge" :class="terminalDirectionTone(event.direction)" x-text="terminalDirectionLabel(event.direction)"></span>
-                      <div>
-                        <p class="font-semibold text-slate-950" x-text="event.event_kind"></p>
-                        <p class="mono-field" x-text="formatDateTime(event.occurred_at)"></p>
-                      </div>
-                    </div>
-                    <div class="flex items-center gap-2">
-                      <span x-show="event._optimistic_status === 'sent'" class="status-badge border-emerald-500/25 bg-emerald-500/10 text-emerald-200">已发送</span>
-                      <span class="mono-field" x-text="`#${event.seq_no}`"></span>
-                    </div>
-                  </div>
-                  <pre class="mt-3 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-100" x-text="formatTerminalPayload(event.payload_inline)"></pre>
-                </article>
-              </template>
-            </div>
-            <form class="shrink-0 border-t border-slate-200 bg-slate-50 p-3" @submit.prevent="sendTerminalInput()">
-              <div class="flex min-w-0 gap-2">
-                <button type="button" class="button-secondary shrink-0" title="添加图片、音频或视频" aria-label="添加多模态文件" :disabled="!canAttachTerminalInputFile()" @click="$refs.terminalInputFile.click()">
-                  <span class="material-symbols-outlined text-[18px]">attach_file</span>
-                  <span>添加文件</span>
-                </button>
-                <input x-ref="terminalInputFile" type="file" class="hidden" accept="image/*,audio/*,video/*,application/pdf,application/json,text/*" @change="handleTerminalInputFile($event)" />
-                <input x-model="terminalInputForm.payload" class="input-field min-w-0 flex-1" :disabled="!canUseTerminalInput()" placeholder="输入文本，或添加图片 / 音频 / 视频后一起发送" />
-                <button type="submit" class="button-primary shrink-0" :disabled="!canSendTerminalInput()">
-                  <span class="material-symbols-outlined text-[18px]">send</span>
-                  <span x-text="busy.terminalInput ? '发送中...' : '发送'"></span>
-                </button>
-              </div>
-              <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
-                <p class="text-xs text-slate-500" x-text="terminalInputDisabledReason()"></p>
-                <button type="button" class="button-secondary shrink-0" x-show="route.name === 'skill-debug-live' && terminalRunEnded()" @click="openCurrentSkillDebug()">
-                  <span class="material-symbols-outlined text-[18px]">restart_alt</span>
-                  <span>开启新调试</span>
-                </button>
-              </div>
-              <template x-if="terminalInputForm.file">
-                <div class="mt-2 flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2">
-                  <div class="min-w-0">
-                    <p class="truncate text-xs font-medium text-slate-700" x-text="terminalInputForm.file?.name"></p>
-                    <p class="mono-field" x-text="`${terminalInputForm.file?.type || 'application/octet-stream'} · ${terminalInputForm.file?.size || 0} bytes`"></p>
-                  </div>
-                  <button type="button" class="icon-button shrink-0" title="移除附件" aria-label="移除附件" @click="clearTerminalInputFile()">
-                    <span class="material-symbols-outlined text-[18px]">close</span>
-                  </button>
+
+            <section x-show="liveRunInteractionTab === 'transcript'" class="min-h-0 flex-1 overflow-hidden">
+              <template x-if="liveRunTerminalEvents.length === 0">
+                <div class="empty-state h-full min-h-80">
+                  <span class="material-symbols-outlined text-[30px] text-slate-400">forum</span>
+                  <p class="mt-3 text-sm text-slate-500">暂无终端交互记录。</p>
                 </div>
               </template>
-            </form>
-          </section>
+              <div x-ref="terminalTranscriptScroll" class="h-full min-h-0 overflow-auto">
+                <div class="space-y-3 px-4 py-4">
+                  <template x-for="event in liveRunTerminalEvents" :key="event.id || event.seq_no">
+                    <article class="flex min-w-0" :class="terminalEventRowClass(event)">
+                      <div class="flex min-w-0" :class="terminalEventMessageShellClass(event)">
+                        <div class="min-w-0 flex-1">
+                          <div class="mb-1 flex flex-wrap items-center gap-2" :class="terminalEventMetaClass(event)">
+                            <span class="text-xs font-semibold text-slate-100" x-text="terminalEventActorLabel(event)"></span>
+                            <span class="mono-field" x-text="formatDateTime(event.occurred_at)"></span>
+                            <span class="mono-field" x-text="`#${event.seq_no}`"></span>
+                            <span x-show="event._optimistic_status === 'sent'" class="status-badge border-emerald-500/25 bg-emerald-500/10 text-emerald-200">已发送</span>
+                          </div>
+                          <div class="overflow-hidden rounded-md px-2.5 py-2" :class="terminalEventBubbleClass(event)">
+                            <template x-if="terminalEventIsImage(event) && terminalEventMediaUrl(event)">
+                              <figure class="space-y-2">
+                                <button type="button" class="group relative inline-flex max-w-md items-center justify-center overflow-hidden rounded-md border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(event)">
+                                  <img class="max-h-72 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventMediaUrl(event)" :alt="terminalEventFileName(event) || 'terminal image'" loading="lazy" />
+                                  <span class="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-md bg-slate-950/80 text-slate-100 opacity-0 transition group-hover:opacity-100">
+                                    <span class="material-symbols-outlined text-[18px]">zoom_in</span>
+                                  </span>
+                                </button>
+                                <figcaption x-show="terminalEventDisplayText(event)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventDisplayText(event)"></figcaption>
+                              </figure>
+                            </template>
 
-          <section x-show="route.name !== 'skill-debug-live'" class="max-h-[35%] shrink-0 overflow-auto border-t border-slate-200">
-            <div class="border-b border-slate-200 bg-white px-5 py-3">
-              <p class="text-sm font-semibold text-slate-950">Trace Events</p>
-              <p class="mono-field" x-text="`${liveRunTraceEvents.length} events`"></p>
-            </div>
-            <div class="divide-y divide-slate-200">
-              <template x-for="event in liveRunTraceEvents" :key="event.id">
-                <article class="px-5 py-4">
-                  <div class="flex flex-wrap items-center justify-between gap-3">
-                    <div class="flex items-center gap-3">
-                      <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
-                        <span class="material-symbols-outlined text-[18px]">timeline</span>
-                      </span>
-                      <div>
-                        <p class="font-semibold text-slate-950" x-text="event.event_type"></p>
-                        <p class="mono-field" x-text="formatDateTime(event.occurred_at)"></p>
+                            <template x-if="terminalEventIsAudio(event) && terminalEventMediaUrl(event)">
+                              <div class="space-y-2">
+                                <audio class="w-full max-w-md" controls preload="metadata" :src="terminalEventMediaUrl(event)"></audio>
+                                <p x-show="terminalEventDisplayText(event)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventDisplayText(event)"></p>
+                              </div>
+                            </template>
+
+                            <template x-if="terminalEventIsVideo(event) && terminalEventMediaUrl(event)">
+                              <div class="space-y-2">
+                                <video class="max-h-72 w-full max-w-md rounded-md border border-slate-700 bg-black object-contain" controls preload="metadata" :src="terminalEventMediaUrl(event)"></video>
+                                <p x-show="terminalEventDisplayText(event)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventDisplayText(event)"></p>
+                              </div>
+                            </template>
+
+                            <template x-if="terminalEventIsPdf(event) && terminalEventMediaUrl(event)">
+                              <div class="space-y-2">
+                                <iframe class="h-72 w-full max-w-lg rounded-md border border-slate-700 bg-slate-950" :src="terminalEventMediaUrl(event)" :title="terminalEventFileName(event)"></iframe>
+                                <p x-show="terminalEventDisplayText(event)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventDisplayText(event)"></p>
+                              </div>
+                            </template>
+
+                            <template x-if="terminalEventIsGenericFile(event)">
+                              <div class="flex min-w-0 items-center gap-2 rounded-md border border-slate-700 bg-slate-950/40 px-2.5 py-2 text-slate-200">
+                                <span class="material-symbols-outlined shrink-0 text-[22px]" x-text="terminalEventFileIcon(event)"></span>
+                                <span class="min-w-0 flex-1">
+                                  <span class="block truncate text-sm font-medium" x-text="terminalEventFileName(event)"></span>
+                                  <span class="mono-field block truncate" x-text="terminalEventFileMeta(event)"></span>
+                                </span>
+                              </div>
+                            </template>
+
+                            <template x-if="terminalEventShouldShowJson(event)">
+                              <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-700 bg-slate-950 px-2.5 py-2 text-xs leading-5 text-slate-100" x-text="terminalEventJsonText(event)"></pre>
+                            </template>
+
+                            <template x-if="terminalEventShouldShowPlainText(event)">
+                              <p class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventDisplayText(event)"></p>
+                            </template>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    <span class="mono-field" x-text="event.phase"></span>
-                  </div>
-                  <pre class="mt-3 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-100" x-text="JSON.stringify(event.payload, null, 2)"></pre>
-                </article>
+                    </article>
+                  </template>
+                </div>
+              </div>
+            </section>
+
+            <section x-show="liveRunInteractionTab === 'trace'" class="min-h-0 flex-1 overflow-auto">
+              <template x-if="liveRunTraceEvents.length === 0">
+                <div class="empty-state h-full min-h-80">
+                  <span class="material-symbols-outlined text-[30px] text-slate-400">timeline</span>
+                  <p class="mt-3 text-sm text-slate-500">暂无 Trace 事件。</p>
+                </div>
               </template>
-            </div>
+              <div class="divide-y divide-slate-200">
+                <template x-for="event in liveRunTraceEvents" :key="event.id">
+                  <article class="px-5 py-4">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <div class="flex min-w-0 items-center gap-3">
+                        <span class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-sky-50 text-sky-700">
+                          <span class="material-symbols-outlined text-[18px]">timeline</span>
+                        </span>
+                        <div class="min-w-0">
+                          <p class="truncate font-semibold text-slate-950" x-text="event.event_type"></p>
+                          <p class="mono-field" x-text="formatDateTime(event.occurred_at)"></p>
+                        </div>
+                      </div>
+                      <span class="mono-field" x-text="event.phase"></span>
+                    </div>
+                    <pre class="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-100" x-text="JSON.stringify(event.payload, null, 2)"></pre>
+                  </article>
+                </template>
+              </div>
+            </section>
           </section>
         </main>
       </div>
     </div>
   </section>
+
+  <div x-show="terminalMediaPreview.open" x-cloak class="fixed inset-0 z-50 flex min-h-0 items-center justify-center bg-black/80 p-4" @click.self="closeTerminalMediaPreview()" @keydown.escape.window="closeTerminalMediaPreview()">
+    <section class="flex max-h-[92vh] w-full max-w-[96vw] flex-col overflow-hidden rounded-md border border-slate-800 bg-slate-950">
+      <header class="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3">
+        <div class="min-w-0">
+          <p class="truncate text-sm font-semibold text-slate-100" x-text="terminalMediaPreview.title"></p>
+          <p x-show="terminalMediaPreview.caption" class="mono-field truncate" x-text="terminalMediaPreview.caption"></p>
+        </div>
+        <button type="button" class="icon-button shrink-0" title="关闭" aria-label="关闭" @click="closeTerminalMediaPreview()">
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </header>
+      <div class="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-black">
+        <img x-show="terminalMediaPreview.kind === 'image'" class="h-auto w-auto max-h-[calc(92vh-3rem)] max-w-full object-contain" :src="terminalMediaPreview.src" :alt="terminalMediaPreview.title" />
+      </div>
+    </section>
+  </div>
 </div>
 </template>

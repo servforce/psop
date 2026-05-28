@@ -14,12 +14,12 @@ const agentPromptsAppPath = path.join(__dirname, "../../app/agent-prompts.js");
 const skillTestAppPath = path.join(__dirname, "../../app/skill-test.js");
 const compiledCssPath = path.join(__dirname, "../../../css/style.compiled.css");
 
-test("skill test tab exposes timeline scenario management", () => {
-  const skillDetailHtml = fs.readFileSync(skillDetailPath, "utf8");
+test("skill test scenario editor exposes timeline management", () => {
+  const skillDetailHtml = fs.readFileSync(scenarioPath, "utf8");
   const appJs = fs.readFileSync(skillTestAppPath, "utf8");
   const shellJs = fs.readFileSync(appPath, "utf8");
 
-  expect(skillDetailHtml).toContain("新增时序测试场景");
+  expect(skillDetailHtml).toContain("新增场景");
   expect(skillDetailHtml).toContain("skillTestTimelineLanes()");
   expect(skillDetailHtml).toContain("skillTestTimelineEventsForLane(lane.id)");
   expect(skillDetailHtml).toContain(':key="item.render_key"');
@@ -120,7 +120,8 @@ test("scenario detail page provides lanes, assets, and runs", () => {
   expect(html).toContain('class="topbar-icon-button text-orange-200 hover:text-orange-100" title="运行场景"');
   expect(html).toContain('class="topbar-icon-button" title="保存场景"');
   expect(html).toContain('class="icon-button-danger" title="删除场景"');
-  expect(html).not.toContain("border-t border-slate-800 bg-slate-950/35 px-3 py-3");
+  expect(html).toContain("新增场景");
+  expect(html).toContain("@click=\"createSkillTestCase()\"");
   expect(html).toContain("运行历史");
   expect(html).toContain("暂无运行记录");
   expect(html).toContain("skillTestRunActivityLabel(testRun)");
@@ -193,9 +194,9 @@ test("scenario detail page provides lanes, assets, and runs", () => {
   expect(html).toContain("skillTestTimelineSelectedEditorEvent()");
   expect(html).toContain("updateSkillTestTimelineEventDraft('at_ms'");
   expect(html).toContain("skillTestTimelineSelectedAtMs()");
-  expect(html).not.toContain("isSkillTestTimelineEventExpanded(item.event)");
-  expect(html).not.toContain("skillTestTimelineExpandedEventLeftStyle(item.event)");
-  expect(html).not.toContain("skillTestTimelineLaneHasExpandedEvent(lane.id)");
+  expect(html).toContain("isSkillTestTimelineEventExpanded(item.event)");
+  expect(html).toContain("skillTestTimelineExpandedEventLeftStyle(item.event)");
+  expect(html).toContain("skillTestTimelineLaneHasExpandedEvent(lane.id)");
   expect(html).not.toContain("事件属性");
   expect(html).not.toContain("skillTestDurationUnit");
   expect(html).not.toContain("updateSkillTestTimelineDurationUnit");
@@ -254,7 +255,6 @@ test("scenario detail page provides lanes, assets, and runs", () => {
 test("scenario review provides scrub and fork actions", () => {
   const html = fs.readFileSync(reviewPath, "utf8");
   const detailHtml = fs.readFileSync(scenarioPath, "utf8");
-  const skillDetailHtml = fs.readFileSync(skillDetailPath, "utf8");
   const indexHtml = fs.readFileSync(indexPath, "utf8");
   const appJs = fs.readFileSync(skillTestAppPath, "utf8");
 
@@ -323,7 +323,6 @@ test("scenario review provides scrub and fork actions", () => {
   expect(html).toContain("absolute top-1/2 z-20 flex h-14 w-20 -translate-x-1/2 -translate-y-1/2");
   expect(html).toContain("tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'");
   expect(detailHtml).toContain("tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'");
-  expect(skillDetailHtml).toContain("tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'");
   expect(html).toContain("toggleSkillTestReviewPlayback()");
   expect(html).toContain('data-tooltip="播放/暂停"');
   expect(html).toContain("restartSkillTestReviewPlayback()");
@@ -369,6 +368,8 @@ test("scenario review provides scrub and fork actions", () => {
   expect(appJs).toContain("/fork-scenario");
   expect(appJs).toContain("/fork-debug");
   expect(indexHtml).toContain("skill-test-scenario-page");
+  expect(indexHtml).toContain("['skill-test-scenario', 'skill-test-scenario-new'].includes(route.name)");
+  expect(indexHtml).not.toContain("['skill-detail', 'skill-test-scenario-new'].includes(route.name)");
   expect(indexHtml).toContain("skill-test-scenario-review-page");
   expect(indexHtml).not.toContain("skill-test-live-page");
 });

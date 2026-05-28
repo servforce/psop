@@ -87,6 +87,9 @@ class RuntimeRepository:
         query = query.order_by(TerminalEvent.seq_no.asc())
         return list(session.scalars(query).all())
 
+    def get_terminal_event(self, session: Session, event_id: str) -> TerminalEvent | None:
+        return session.get(TerminalEvent, event_id)
+
     def get_terminal_event_by_external_id(
         self,
         session: Session,
