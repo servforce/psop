@@ -32,9 +32,6 @@
           if (this.filters.search.trim()) {
             params.set("search", this.filters.search.trim());
           }
-          if (this.filters.status) {
-            params.set("status", this.filters.status);
-          }
           const suffix = params.toString() ? `?${params}` : "";
           this.skills = await this.apiRequest(`/skills${suffix}`);
         } finally {
@@ -1428,8 +1425,7 @@
 
           return (
             nameMatched &&
-            this.inDateRange(skill.created_at, this.filters.created_from, this.filters.created_to) &&
-            this.inDateRange(skill.latest_published_at, this.filters.published_from, this.filters.published_to)
+            this.inDateRange(skill.created_at, this.filters.created_from, this.filters.created_to)
           );
         });
       },
@@ -1438,11 +1434,8 @@
       clearFilters() {
         this.filters = {
           search: "",
-          status: "",
           created_from: "",
-          created_to: "",
-          published_from: "",
-          published_to: ""
+          created_to: ""
         };
         this.loadSkills();
       },

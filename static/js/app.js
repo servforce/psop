@@ -623,11 +623,8 @@
       },
       filters: {
         search: "",
-        status: "",
         created_from: "",
-        created_to: "",
-        published_from: "",
-        published_to: ""
+        created_to: ""
       },
       metadataForm: {
         name: "",

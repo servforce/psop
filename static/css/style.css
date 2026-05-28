@@ -251,11 +251,11 @@
   }
 
   .skill-table-row {
-    @apply grid min-w-[62rem] grid-cols-[1.6fr_120px_190px_190px_190px] items-center gap-4 bg-slate-950/20 px-5 py-4 transition hover:bg-slate-900/60;
+    @apply grid min-w-[58rem] grid-cols-[minmax(16rem,1.6fr)_7rem_13rem_13rem_4rem] items-center gap-3 bg-slate-950/20 px-4 py-3 transition hover:bg-slate-900/60;
   }
 
   .skill-table-header {
-    @apply grid min-w-[62rem] grid-cols-[1.6fr_120px_190px_190px_190px] gap-4 border-b border-slate-800 bg-slate-950/70 px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500;
+    @apply grid min-w-[58rem] grid-cols-[minmax(16rem,1.6fr)_7rem_13rem_13rem_4rem] gap-3 border-b border-slate-800 bg-slate-950/70 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500;
   }
 
   .info-chip {
