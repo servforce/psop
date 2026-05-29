@@ -1,7 +1,7 @@
 agent_id: psop.skill_creation.conversational_draft
 version: v1
 scenario: skill_creation
-route_key: skill-creation
+route_key: text
 description: Build publishable document Skill drafts for AI-assisted real-world tasks from user intent, form definitions, and raw materials.
 outputs:
   - README.md draft

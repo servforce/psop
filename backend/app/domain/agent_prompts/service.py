@@ -23,6 +23,7 @@ from app.domain.agent_prompts.schemas import (
 )
 from app.domain.skills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.domain.skills.models import now_utc
+from app.gateway.inference import SUPPORTED_ROUTE_KEYS, TEXT_ROUTE_KEY
 
 
 DEFAULT_AGENT_PROMPT_SEEDS = [
@@ -171,7 +172,7 @@ class AgentPromptService:
                     "agent_id": payload.agent_id,
                     "version": "v1",
                     "scenario": payload.scenario,
-                    "route_key": payload.route_key or "default",
+                    "route_key": payload.route_key or TEXT_ROUTE_KEY,
                     "description": payload.description,
                 },
                 allow_unicode=True,
@@ -195,7 +196,7 @@ class AgentPromptService:
             version_no=1,
             version_label="v1",
             status="draft",
-            route_key=payload.route_key or "default",
+            route_key=payload.route_key or TEXT_ROUTE_KEY,
             files=files,
             content_hash=content_hash(files),
         )
@@ -246,7 +247,7 @@ class AgentPromptService:
             version_no=version_no,
             version_label=payload.version_label or f"v{version_no}",
             status="draft",
-            route_key=self._route_key_from_files(files, default=parent.route_key if parent else "default"),
+            route_key=self._route_key_from_files(files, default=parent.route_key if parent else TEXT_ROUTE_KEY),
             files=files,
             content_hash=content_hash(files),
             parent_version_id=parent.id if parent else None,
@@ -293,7 +294,7 @@ class AgentPromptService:
             raise SkillConflictError("已归档版本不可发布。", details={"version_id": version.id})
         metadata = validation.metadata
         version.status = "published"
-        version.route_key = str(metadata.get("route_key") or version.route_key or "default")
+        version.route_key = str(metadata.get("route_key") or version.route_key or TEXT_ROUTE_KEY)
         version.content_hash = content_hash(version.files)
         version.published_at = version.published_at or now_utc()
         definition.agent_id = str(metadata["agent_id"])
@@ -389,12 +390,12 @@ class AgentPromptService:
         return normalized
 
     @staticmethod
-    def _route_key_from_files(files: dict[str, str], *, default: str = "default") -> str:
+    def _route_key_from_files(files: dict[str, str], *, default: str = TEXT_ROUTE_KEY) -> str:
         try:
             spec = yaml.safe_load(files.get("agent.yaml") or "") or {}
         except yaml.YAMLError:
             return default
-        return str(spec.get("route_key") or default or "default") if isinstance(spec, dict) else default
+        return str(spec.get("route_key") or default or TEXT_ROUTE_KEY) if isinstance(spec, dict) else default
 
     def _validate_files(self, files: dict[str, str]) -> AgentPromptValidationResponse:
         errors: list[dict[str, Any]] = []
@@ -420,6 +421,15 @@ class AgentPromptService:
             value = spec.get(field)
             if not isinstance(value, str) or not value.strip():
                 errors.append({"path": "agent.yaml", "field": field, "message": f"{field} 不能为空。"})
+        route_key = spec.get("route_key")
+        if isinstance(route_key, str) and route_key.strip() and route_key not in SUPPORTED_ROUTE_KEYS:
+            errors.append(
+                {
+                    "path": "agent.yaml",
+                    "field": "route_key",
+                    "message": "route_key 只支持 text 或 multimodal。",
+                }
+            )
         if not errors:
             metadata = {
                 "agent_id": str(spec["agent_id"]),

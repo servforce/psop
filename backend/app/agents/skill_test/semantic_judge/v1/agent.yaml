@@ -1,7 +1,7 @@
 agent_id: psop.skill_test.semantic_judge
 version: v1
 scenario: skill_test
-route_key: skill-test-judge
+route_key: text
 description: Judge black-box timeline semantic expectations against real terminal outputs before a cutoff.
 inputs:
   - semantic expectation
@@ -15,4 +15,3 @@ constraints:
     - passed
     - failed
     - inconclusive
-

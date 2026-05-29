@@ -171,7 +171,7 @@ def _build_agent_prompt_pack(
         agent_id = _required_string(spec, "agent_id", root_path / "agent.yaml")
         version = str(spec.get("version") or version_label or root_path.name)
         scenario = str(spec.get("scenario") or key.split("/", 1)[0])
-        route_key = str(spec.get("route_key") or "default")
+        route_key = str(spec.get("route_key") or "text")
         description = str(spec.get("description") or "")
 
         return AgentPromptPack(

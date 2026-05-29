@@ -1,9 +1,18 @@
 from __future__ import annotations
 
-from app.gateway.inference import LlmAttachment, LlmCompletion, OpenAICompatibleInferenceGateway
+import pytest
+
+from app.domain.skills.exceptions import SkillsConfigurationError
+from app.gateway.inference import (
+    LlmAttachment,
+    LlmCompletion,
+    MULTIMODAL_ROUTE_KEY,
+    OpenAICompatibleInferenceGateway,
+    TEXT_ROUTE_KEY,
+)
 
 
-def test_multimodal_vision_route_uses_configured_model(monkeypatch) -> None:
+def test_multimodal_route_uses_configured_model(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_post_chat_completion(
@@ -36,8 +45,8 @@ def test_multimodal_vision_route_uses_configured_model(monkeypatch) -> None:
         provider="test",
         api_base_url="https://example.test/v1",
         api_key="test-key",
-        default_model="glm-5.1",
-        route_models={"vision": "qwen-vl-test"},
+        text_model="qwen3.7-plus",
+        multimodal_model="qwen3.6-plus",
     )
 
     completion = gateway.complete_multimodal(
@@ -48,13 +57,13 @@ def test_multimodal_vision_route_uses_configured_model(monkeypatch) -> None:
             LlmAttachment(filename="clip.mp4", media_type="video/mp4", content_base64="dmlkZW8="),
             LlmAttachment(filename="note.wav", media_type="audio/wav", content_base64="YXVkaW8="),
         ],
-        route_key="vision",
+        route_key=MULTIMODAL_ROUTE_KEY,
     )
 
-    assert completion.model == "qwen-vl-test"
-    assert captured["model"] == "qwen-vl-test"
-    assert captured["route_key"] == "vision"
-    assert captured["payload"]["model"] == "qwen-vl-test"
+    assert completion.model == "qwen3.6-plus"
+    assert captured["model"] == "qwen3.6-plus"
+    assert captured["route_key"] == MULTIMODAL_ROUTE_KEY
+    assert captured["payload"]["model"] == "qwen3.6-plus"
     user_content = captured["payload"]["messages"][1]["content"]
     assert [part["type"] for part in user_content] == ["text", "image_url", "video_url", "input_audio"]
     assert user_content[1]["image_url"]["url"] == "data:image/jpeg;base64,aW1hZ2U="
@@ -62,21 +71,51 @@ def test_multimodal_vision_route_uses_configured_model(monkeypatch) -> None:
     assert user_content[3]["input_audio"] == {"data": "YXVkaW8=", "format": "wav"}
 
 
-def test_named_route_without_mapping_still_uses_route_key_as_model() -> None:
+def test_gateway_only_accepts_text_and_multimodal_routes() -> None:
     gateway = OpenAICompatibleInferenceGateway(
         provider="test",
         api_base_url="https://example.test/v1",
         api_key="test-key",
-        default_model="glm-5.1",
-        route_models={"skill-creation": "qwen3.6-plus", "vision": "qwen-vl-test"},
+        text_model="qwen3.7-plus",
+        multimodal_model="qwen3.6-plus",
     )
 
-    assert gateway._resolve_model("skill-test-judge") == "skill-test-judge"
-    assert gateway._resolve_model("skill-creation") == "qwen3.6-plus"
-    assert gateway._resolve_model("default") == "glm-5.1"
+    assert gateway._resolve_model(TEXT_ROUTE_KEY) == "qwen3.7-plus"
+    assert gateway._resolve_model(MULTIMODAL_ROUTE_KEY) == "qwen3.6-plus"
+    with pytest.raises(SkillsConfigurationError) as exc_info:
+        gateway._resolve_model("skill-test-judge")
+    assert exc_info.value.details["supported_route_keys"] == ["multimodal", "text"]
 
 
-def test_skill_creation_route_can_attach_qwen_thinking_options(monkeypatch) -> None:
+def test_model_capabilities_expose_two_routes_without_credentials() -> None:
+    gateway = OpenAICompatibleInferenceGateway(
+        provider="test-provider",
+        api_base_url="https://example.test/v1",
+        api_key="test-key",
+        text_model="qwen3.7-plus",
+        multimodal_model="qwen3.6-plus",
+        text_payload_options={"enable_thinking": True, "thinking_budget": 8192},
+        multimodal_payload_options={"enable_thinking": True, "thinking_budget": 4096},
+    )
+
+    capabilities = gateway.list_model_capabilities()
+
+    assert [item.route_key for item in capabilities] == [TEXT_ROUTE_KEY, MULTIMODAL_ROUTE_KEY]
+    text_capability, multimodal_capability = capabilities
+    assert text_capability.model == "qwen3.7-plus"
+    assert text_capability.supports_text is True
+    assert text_capability.supports_attachments is False
+    assert text_capability.thinking_enabled is True
+    assert text_capability.thinking_budget == 8192
+    assert multimodal_capability.model == "qwen3.6-plus"
+    assert multimodal_capability.supports_text is True
+    assert multimodal_capability.supports_attachments is True
+    assert multimodal_capability.thinking_enabled is True
+    assert multimodal_capability.thinking_budget == 4096
+    assert not hasattr(text_capability, "api_key")
+
+
+def test_multimodal_route_can_attach_thinking_options(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_post_chat_completion(
@@ -96,17 +135,34 @@ def test_skill_creation_route_can_attach_qwen_thinking_options(monkeypatch) -> N
         provider="test",
         api_base_url="https://example.test/v1",
         api_key="test-key",
-        default_model="glm-5.1",
-        route_models={"skill-creation": "qwen3.6-plus"},
-        route_payload_options={"skill-creation": {"enable_thinking": True, "thinking_budget": 8192}},
+        text_model="qwen3.7-plus",
+        multimodal_model="qwen3.6-plus",
+        multimodal_payload_options={"enable_thinking": True, "thinking_budget": 8192},
     )
 
     gateway.complete_multimodal(
         system_prompt="system",
         user_prompt="user",
         attachments=[],
-        route_key="skill-creation",
     )
 
     assert captured["enable_thinking"] is True
     assert captured["thinking_budget"] == 8192
+
+
+def test_multimodal_completion_rejects_text_route() -> None:
+    gateway = OpenAICompatibleInferenceGateway(
+        provider="test",
+        api_base_url="https://example.test/v1",
+        api_key="test-key",
+        text_model="qwen3.7-plus",
+        multimodal_model="qwen3.6-plus",
+    )
+
+    with pytest.raises(SkillsConfigurationError):
+        gateway.complete_multimodal(
+            system_prompt="system",
+            user_prompt="user",
+            attachments=[],
+            route_key=TEXT_ROUTE_KEY,
+        )

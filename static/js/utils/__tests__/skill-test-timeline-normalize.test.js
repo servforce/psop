@@ -847,7 +847,7 @@ test("review judge debug exposes saved request and model response", () => {
         prompt_hash: "hash-1",
         raw_response: {
           request: {
-            route_key: "skill-test-judge",
+            route_key: "text",
             system_prompt: "system",
             user_prompt: "{\"expectation\":\"引导用户进行下一步操作\"}",
             prompt_payload: {
@@ -879,7 +879,7 @@ test("review judge debug exposes saved request and model response", () => {
   expect(app.selectedSkillTestReviewExpectationId).toBe("expected_9");
   expect(app.isSkillTestReviewExpectationSelected(event)).toBe(true);
   expect(app.selectedSkillTestReviewEvaluation().judge_model).toBe("judge-test");
-  expect(app.selectedSkillTestReviewJudgeRequest().route_key).toBe("skill-test-judge");
+  expect(app.selectedSkillTestReviewJudgeRequest().route_key).toBe("text");
   expect(app.selectedSkillTestReviewJudgePromptPayload().expectation).toBe("引导用户进行下一步操作");
   expect(app.selectedSkillTestReviewJudgeRawOutput()).toBe("{\"status\":\"inconclusive\"}");
   expect(app.selectedSkillTestReviewJudgeParsedOutput().status).toBe("inconclusive");

@@ -12,7 +12,7 @@ from typing import Any
 
 from app.domain.skills.exceptions import SkillsGatewayError
 from app.gateway.asr import AsrGateway, AsrTranscription
-from app.gateway.inference import LlmAttachment, LlmInferenceGateway
+from app.gateway.inference import LlmAttachment, LlmInferenceGateway, MULTIMODAL_ROUTE_KEY
 
 
 MAX_ANALYZED_KEYFRAMES = 120
@@ -392,7 +392,7 @@ def _recognize_keyframe(
                 content_base64=base64.b64encode(content).decode("ascii"),
             )
         ],
-        route_key="vision",
+        route_key=MULTIMODAL_ROUTE_KEY,
     )
     parsed = _parse_json_object(completion.content)
     caption = str(parsed.get("caption") or parsed.get("summary") or "").strip()

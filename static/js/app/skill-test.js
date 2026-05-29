@@ -78,7 +78,7 @@
 
       defaultSkillTestJudgePolicy() {
         return {
-          route_key: "skill-test-judge",
+          route_key: "text",
           confidence_threshold: 0.5,
           inconclusive_counts_as_failure: true
         };

@@ -16,7 +16,7 @@ def test_prompt_registry_loads_agent_prompt_packs() -> None:
     assert "SKILL 编译智能体" in compile_pack.system_prompt
     assert compile_pack.prompt_hash
     assert creation_pack.agent_id == "psop.skill_creation.conversational_draft"
-    assert creation_pack.route_key == "skill-creation"
+    assert creation_pack.route_key == "text"
     assert "Skill 构建智能体" in creation_pack.system_prompt
     assert "AI 协助人类完成现实任务" in creation_pack.system_prompt
     assert "物理世界 Skill" in creation_pack.system_prompt

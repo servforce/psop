@@ -49,7 +49,7 @@ from app.domain.runtime.schemas import (
 )
 from app.domain.skills.exceptions import SkillsError, SkillNotFoundError, SkillValidationError
 from app.domain.skills.models import now_utc
-from app.gateway.inference import LlmAttachment, LlmInferenceGateway
+from app.gateway.inference import LlmAttachment, LlmInferenceGateway, MULTIMODAL_ROUTE_KEY, TEXT_ROUTE_KEY
 from app.infra.object_store import ObjectStoreService
 
 LOGGER = logging.getLogger(__name__)
@@ -2025,8 +2025,12 @@ class RuntimeService:
                 token,
                 artifact_payload,
             )
-            route_key = artifact_payload.get("capability_summary", {}).get("llm_route_key", "default")
             attachments = self._resolve_llm_attachments(session, token)
+            route_key = (
+                MULTIMODAL_ROUTE_KEY
+                if attachments
+                else artifact_payload.get("capability_summary", {}).get("llm_route_key", TEXT_ROUTE_KEY)
+            )
             with start_span("gateway.inference", route_key=route_key, node_id=node.get("id")):
                 if attachments:
                     if not hasattr(self.inference_gateway, "complete_multimodal"):

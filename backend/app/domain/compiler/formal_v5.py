@@ -668,9 +668,9 @@ def _build_capability_summary(nodes: list[Any], runtime_contract: Any) -> dict[s
     normalized_nodes = [node for node in nodes if isinstance(node, dict)]
     llm_nodes = [node.get("id") for node in normalized_nodes if node.get("kind") == "llm"]
     tool_nodes = [node for node in normalized_nodes if node.get("kind") == "tool"]
-    route_key = "default"
+    route_key = "text"
     if isinstance(runtime_contract, dict):
-        route_key = str(runtime_contract.get("llm_route_key") or "default")
+        route_key = str(runtime_contract.get("llm_route_key") or "text")
     return {
         "llm_route_key": route_key,
         "llm_nodes": llm_nodes,

@@ -95,7 +95,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - PostgreSQL 与 GitLab 仍是基础必需配置，继续通过 `PSOP_DATABASE_*` 与 `PSOP_GITLAB_*` 注入。
 - 对象存储通过 `PSOP_OBJECT_STORE_*` 注入，用于保存 `EG Compile Artifact`、大对象证据与未来 terminal 二进制内容。
 - OpenTelemetry 通过 `PSOP_OTEL_*` 注入；本地默认使用 OTLP HTTP/protobuf `4318`，可关闭采集，但 trace 关联键和 `trace_event` 写入不能关闭。
-- LLM Inference Gateway 初始采用 OpenAI-compatible 配置：`PSOP_LLM_PROVIDER=openai-compatible`、`PSOP_LLM_API_BASE_URL`、`PSOP_LLM_API_KEY`、`PSOP_LLM_DEFAULT_MODEL`。
+- LLM Inference Gateway 初始采用 OpenAI-compatible 配置，并破坏式收敛为两类能力路由：`text` 与 `multimodal`。配置项为 `PSOP_LLM_PROVIDER`、`PSOP_LLM_API_BASE_URL`、`PSOP_LLM_API_KEY`、`PSOP_LLM_TEXT_MODEL`、`PSOP_LLM_TEXT_ENABLE_THINKING`、`PSOP_LLM_TEXT_THINKING_BUDGET`、`PSOP_LLM_MULTIMODAL_MODEL`、`PSOP_LLM_MULTIMODAL_ENABLE_THINKING`、`PSOP_LLM_MULTIMODAL_THINKING_BUDGET`。
 - Runtime worker 通过 `PSOP_RUNTIME_*` 控制是否启用、job lease、最大尝试次数和单步超时。
 - v1 默认不要求 Redis、Celery 或独立消息队列；所有 compile/runtime job 以 PostgreSQL 表作为事实源。
 
@@ -335,7 +335,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - timeline input event 可包含 `parts[]`；driver 必须把同一 timeline event 的文本和多个资源 part 一次性追加为同一个 `terminal_event`，保证黑盒测试输入模型与 Live Run 一致。
 - 输入事件即使发生在 Runtime 尚未进入 `waiting_input` 时，也先落库为终端事实；Runtime 后续在 `Sync` 阶段按 terminal cursor 消费。
 - 输出判断按“阶段时间点以前”执行：每条 `expected.semantic` 事件代表一个现实任务阶段，Judge 只消费 `occurred_at <= time_origin + at_ms` 的真实 terminal output。
-- Judge 必须通过 `LLM Inference Gateway`，默认 route key 为 `skill-test-judge`；评估结果保存状态、置信度、证据引用、理由、prompt hash 和 raw response。
+- Judge 必须通过 `LLM Inference Gateway`，默认 route key 为 `text`；评估结果保存状态、置信度、证据引用、理由、prompt hash 和 raw response。
 - Judge 系统提示词必须来自 `skill_test.semantic_judge` binding；raw response 的 request snapshot 必须记录 prompt pack metadata。
 - Review 输出 `stage_outputs[]`，聚合阶段 id、阶段期望、阶段窗口内真实输出、Judge 结果、人工判定占位与阶段 cursor；基于 `time_ms + terminal_seq + snapshot_seq` 的切面 fork 可 fork 新测试场景，也可 fork 到独立调试会话继续手动输入。
 
@@ -1189,8 +1189,8 @@ files=@startup.mp4;type=video/mp4
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/gateway/inference/providers` | provider 列表 | 无 | `inference provider list` |
 | `POST` | `/api/gateway/inference/providers` | 注册或更新 provider | `{ provider_key, endpoint, credential_ref }` | `inference provider detail` |
-| `GET` | `/api/gateway/inference/models` | model catalog | `query: provider_id` | `model list` |
-| `POST` | `/api/gateway/inference/routes` | 更新模型路由 | `{ provider_id, model_id, route_key, status }` | `model route detail` |
+| `GET` | `/api/gateway/inference/models` | 当前配置的两类能力路由模型 | 无 | `[{ route_key, provider, model, api_base_url, supports_text, supports_attachments, thinking_enabled, thinking_budget }]` |
+| `POST` | `/api/gateway/inference/routes` | post-MVP reserved：更新模型路由 | `{ provider_id, model_id, route_key, status }` | `model route detail` |
 
 ### 9.16 `/api/runtime/*`
 

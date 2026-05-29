@@ -51,7 +51,7 @@ from app.domain.skill_tests.schemas import (
 )
 from app.domain.skills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.domain.skills.models import SkillDefinition, now_utc
-from app.gateway.inference import LlmInferenceGateway
+from app.gateway.inference import LlmInferenceGateway, TEXT_ROUTE_KEY
 from app.infra.object_store import ObjectStoreService
 
 
@@ -819,7 +819,7 @@ class SkillTestService:
             usage_key="skill_test.semantic_judge",
             fallback_ref="skill_test/semantic_judge/v1",
         )
-        route_key = str(policy.get("route_key") or prompt_pack.route_key or "skill-test-judge")
+        route_key = str(policy.get("route_key") or prompt_pack.route_key or TEXT_ROUTE_KEY)
         prompt_payload = self._build_judge_prompt_payload(
             expectation=expectation,
             scoped_outputs=scoped_outputs,
@@ -1103,7 +1103,7 @@ class SkillTestService:
     @staticmethod
     def _normalize_judge_policy(value: dict[str, Any] | None) -> dict[str, Any]:
         policy = dict(value or {})
-        policy.setdefault("route_key", "skill-test-judge")
+        policy.setdefault("route_key", TEXT_ROUTE_KEY)
         policy.setdefault("confidence_threshold", 0.7)
         policy.setdefault("inconclusive_as", "failed")
         return policy

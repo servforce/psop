@@ -26,7 +26,7 @@ from tests.test_skills_api import (
 
 
 class FailingInferenceGateway:
-    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
+    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "text") -> LlmCompletion:
         raise RuntimeError("LLM provider unavailable")
 
 
@@ -35,8 +35,8 @@ class FailingSkillsGatewayInferenceGateway:
         "status_code": 500,
         "provider": "aliyun",
         "api_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "glm-5.1",
-        "route_key": "default",
+        "model": "qwen3.7-plus",
+        "route_key": "text",
         "body": json.dumps(
             {
                 "error": {
@@ -51,7 +51,7 @@ class FailingSkillsGatewayInferenceGateway:
         "api_key": "should-not-leak",
     }
 
-    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
+    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "text") -> LlmCompletion:
         raise SkillsGatewayError("LLM Inference Gateway 返回错误响应。", details=self.details)
 
 
@@ -60,7 +60,7 @@ class QueuedInferenceGateway:
         self.contents = contents
         self.calls: list[dict[str, str]] = []
 
-    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
+    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "text") -> LlmCompletion:
         self.calls.append({"system_prompt": system_prompt, "user_prompt": user_prompt, "route_key": route_key})
         content = self.contents.pop(0) if self.contents else "fallback"
         return LlmCompletion(
@@ -447,7 +447,7 @@ def test_formal_v5_validator_rejects_unsafe_or_incomplete_artifacts() -> None:
 
 def test_formal_v5_validator_rejects_generic_shell_without_skill_workflow() -> None:
     generic_shell = build_test_formal_v5_artifact()
-    generic_shell["runtime_contract"] = {"llm_route_key": "default", "skill_instruction": "遵循 SKILL.md。"}
+    generic_shell["runtime_contract"] = {"llm_route_key": "text", "skill_instruction": "遵循 SKILL.md。"}
 
     result = validate_and_normalize_artifact(generic_shell)
 
@@ -559,7 +559,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     ]
     assert "input" not in llm_trace_payloads[0]["observation"]
     assert llm_trace_payloads[0]["observation"]["input_summary"]["system_prompt_hash"]
-    assert llm_trace_payloads[0]["observation"]["input_summary"]["route_key"] == "default"
+    assert llm_trace_payloads[0]["observation"]["input_summary"]["route_key"] == "text"
     assert llm_trace_payloads[0]["observation"]["output"]["content"]
     assert llm_trace_payloads[0]["observation"]["usage"]["total_tokens"] == 15
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
@@ -842,8 +842,8 @@ def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(r
     assert payload["recoverable"] is False
     assert details["status_code"] == 500
     assert details["provider"] == "aliyun"
-    assert details["model"] == "glm-5.1"
-    assert details["route_key"] == "default"
+    assert details["model"] == "qwen3.7-plus"
+    assert details["route_key"] == "text"
     assert details["request_id"] == "request-test"
     assert details["provider_error_code"] == "ServiceUnavailable"
     assert "Too many requests" in details["provider_error_message"]

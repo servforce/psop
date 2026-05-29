@@ -64,7 +64,7 @@ class AgentPromptCreateRequest(BaseModel):
     scenario: str = Field(min_length=2, max_length=120)
     name: str = Field(min_length=2, max_length=255)
     description: str = ""
-    route_key: str = Field(default="default", max_length=120)
+    route_key: str = Field(default="text", max_length=120)
     files: dict[str, str] = Field(default_factory=dict)
 
 
@@ -91,4 +91,3 @@ class AgentPromptActivateRequest(BaseModel):
 class AgentPromptBindingUpdateRequest(BaseModel):
     definition_id: str
     active_version_id: str
-

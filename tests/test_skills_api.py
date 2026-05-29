@@ -224,7 +224,7 @@ class FakeInferenceGateway:
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
 
-    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
+    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "text") -> LlmCompletion:
         self.calls.append(
             {
                 "system_prompt": system_prompt,
@@ -289,7 +289,7 @@ class FakeInferenceGateway:
                 },
                 ensure_ascii=False,
             )
-        elif route_key == "skill-test-judge":
+        elif "黑盒时序测试 Judge" in system_prompt:
             content = json.dumps(
                 {
                     "status": "passed",
@@ -341,7 +341,7 @@ class FakeInferenceGateway:
         system_prompt: str,
         user_prompt: str,
         attachments: list[LlmAttachment],
-        route_key: str = "default",
+        route_key: str = "multimodal",
     ) -> LlmCompletion:
         self.calls.append(
             {
@@ -591,7 +591,7 @@ def build_test_formal_v5_artifact() -> dict:
             {"from": "final_verify", "to": "terminal"},
         ],
         "runtime_contract": {
-            "llm_route_key": "default",
+            "llm_route_key": "text",
             "skill_instruction": "遵循 SKILL.md 完成任务。",
             "execution_goal": "帮助用户在现实世界完成当前 Skill 目标。",
             "applicability": {
@@ -808,7 +808,7 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
     assert image_response.json()["status"] == "ready"
     assert image_response.json()["analysis_result"]["debug"]["processor"] == "llm_multimodal"
     assert any(
-        call.get("attachments") == "panel.png" and call.get("route_key") == "vision"
+        call.get("attachments") == "panel.png" and call.get("route_key") == "multimodal"
         for call in fake_inference.calls
     )
     assert any(job["token_usage"] and job["token_usage"]["total_tokens"] == 30 for job in jobs_response.json())
@@ -960,7 +960,7 @@ def test_skill_raw_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
     assert len(video_analysis_response.json()["derived_assets"]) == 2
     assert len(list_response.json()) == 3
     assert any(
-        call.get("attachments") == "notes.wav" and call.get("route_key") == "default"
+        call.get("attachments") == "notes.wav" and call.get("route_key") == "multimodal"
         for call in fake_inference.calls
     )
 
@@ -1145,7 +1145,7 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
         call for call in fake_inference.calls if "generate_psop_skill_source_from_raw_materials" in call["user_prompt"]
     )
     generation_prompt = json.loads(generation_call["user_prompt"])
-    assert generation_call["route_key"] == "skill-creation"
+    assert generation_call["route_key"] == "text"
     assert "psop_skill_form_definition" in generation_prompt
     assert "physical_world_skill_guidance" in generation_prompt
     assert "publishable_document_skill_standard" in generation_prompt
@@ -1999,7 +1999,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
                 "description": "时间轴驱动输入，时间点以前判断输出。",
                 "duration_ms": 5000,
                 "timeline": timeline,
-                "judge_policy": {"route_key": "skill-test-judge", "confidence_threshold": 0.7},
+                "judge_policy": {"route_key": "text", "confidence_threshold": 0.7},
             },
         )
         scenario = scenario_response.json()
@@ -2101,7 +2101,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
         and job["token_usage"]["total_tokens"] >= 15
         for job in jobs_response.json()
     )
-    assert any(call["route_key"] == "skill-test-judge" for call in fake_inference.calls)
+    assert any(call["route_key"] == "text" and "黑盒时序测试 Judge" in call["system_prompt"] for call in fake_inference.calls)
 
     assert evaluate_response.status_code == 200
     assert evaluate_response.json()["status"] == "passed"
@@ -2111,7 +2111,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert review["expectation_evaluations"][0]["expectation_id"] == "expect_completion"
     assert review["expectation_evaluations"][0]["status"] == "passed"
     judge_raw_response = review["expectation_evaluations"][0]["raw_response"]
-    assert judge_raw_response["request"]["route_key"] == "skill-test-judge"
+    assert judge_raw_response["request"]["route_key"] == "text"
     assert judge_raw_response["request"]["prompt_payload"]["expectation"] == "系统应确认现场步骤已完成。"
     assert judge_raw_response["request"]["prompt_payload"]["run_status"] == "succeeded"
     assert judge_raw_response["request"]["user_prompt"] == json.dumps(

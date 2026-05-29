@@ -51,6 +51,27 @@ def test_api_service_info() -> None:
     assert response.json()["api_prefix"] == "/api/v1"
 
 
+def test_inference_models_api_lists_two_configured_capabilities() -> None:
+    settings = create_test_settings()
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/api/v1/gateway/inference/models")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["route_key"] for item in payload] == ["text", "multimodal"]
+    assert payload[0]["model"] == settings.llm_text_model
+    assert payload[0]["supports_text"] is True
+    assert payload[0]["supports_attachments"] is False
+    assert payload[0]["thinking_enabled"] is settings.llm_text_enable_thinking
+    assert payload[0]["thinking_budget"] == settings.llm_text_thinking_budget
+    assert payload[1]["model"] == settings.llm_multimodal_model
+    assert payload[1]["supports_text"] is True
+    assert payload[1]["supports_attachments"] is True
+    assert payload[1]["thinking_enabled"] is settings.llm_multimodal_enable_thinking
+    assert payload[1]["thinking_budget"] == settings.llm_multimodal_thinking_budget
+    assert all("api_key" not in item for item in payload)
+
+
 def test_settings_build_database_url() -> None:
     settings = Settings(
         database_url=None,

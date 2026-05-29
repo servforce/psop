@@ -141,6 +141,8 @@ scripts/dev/start-background.sh
 
 开发脚本会读取根目录 `.env` 与 `backend/.env`，并为缺失的 host、port 等本地联调参数补齐默认值。
 
+LLM Inference Gateway 只暴露两类能力路由：`text` 与 `multimodal`。旧的 `PSOP_LLM_DEFAULT_MODEL`、`PSOP_LLM_SKILL_CREATION_*`、`PSOP_LLM_VISION_MODEL` 已废弃；请改用 `PSOP_LLM_TEXT_*` 与 `PSOP_LLM_MULTIMODAL_*`。
+
 ## 开发命令
 
 常用根目录脚本：

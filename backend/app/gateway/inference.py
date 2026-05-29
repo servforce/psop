@@ -13,6 +13,10 @@ from app.domain.skills.exceptions import SkillsConfigurationError, SkillsGateway
 
 LOGGER = logging.getLogger(__name__)
 
+TEXT_ROUTE_KEY = "text"
+MULTIMODAL_ROUTE_KEY = "multimodal"
+SUPPORTED_ROUTE_KEYS = {TEXT_ROUTE_KEY, MULTIMODAL_ROUTE_KEY}
+
 
 @dataclass(slots=True)
 class LlmCompletion:
@@ -30,8 +34,20 @@ class LlmAttachment:
     content_base64: str
 
 
+@dataclass(slots=True)
+class LlmModelCapability:
+    route_key: str
+    provider: str
+    model: str
+    api_base_url: str
+    supports_text: bool
+    supports_attachments: bool
+    thinking_enabled: bool
+    thinking_budget: int | None = None
+
+
 class LlmInferenceGateway(Protocol):
-    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
+    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = TEXT_ROUTE_KEY) -> LlmCompletion:
         ...
 
     def complete_multimodal(
@@ -40,8 +56,11 @@ class LlmInferenceGateway(Protocol):
         system_prompt: str,
         user_prompt: str,
         attachments: list[LlmAttachment],
-        route_key: str = "default",
+        route_key: str = MULTIMODAL_ROUTE_KEY,
     ) -> LlmCompletion:
+        ...
+
+    def list_model_capabilities(self) -> list[LlmModelCapability]:
         ...
 
 
@@ -54,53 +73,90 @@ class OpenAICompatibleInferenceGateway:
         provider: str,
         api_base_url: str,
         api_key: str | None,
-        default_model: str,
-        route_models: dict[str, str] | None = None,
-        route_payload_options: dict[str, dict[str, object]] | None = None,
+        text_model: str,
+        multimodal_model: str,
+        text_payload_options: dict[str, object] | None = None,
+        multimodal_payload_options: dict[str, object] | None = None,
         timeout_seconds: float = 60.0,
     ) -> None:
         self.provider = provider
         self.api_base_url = api_base_url.rstrip("/")
         self.api_key = api_key
-        self.default_model = default_model
         self.route_models = {
-            str(route_key): str(model)
-            for route_key, model in (route_models or {}).items()
-            if str(route_key).strip() and str(model).strip()
+            TEXT_ROUTE_KEY: text_model,
+            MULTIMODAL_ROUTE_KEY: multimodal_model,
         }
         self.route_payload_options = {
-            str(route_key): dict(options)
-            for route_key, options in (route_payload_options or {}).items()
-            if str(route_key).strip() and isinstance(options, dict)
+            TEXT_ROUTE_KEY: dict(text_payload_options or {}),
+            MULTIMODAL_ROUTE_KEY: dict(multimodal_payload_options or {}),
         }
         self.timeout_seconds = timeout_seconds
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "OpenAICompatibleInferenceGateway":
-        skill_creation_options: dict[str, object] = {}
-        if settings.llm_skill_creation_enable_thinking:
-            skill_creation_options["enable_thinking"] = True
-            if settings.llm_skill_creation_thinking_budget:
-                skill_creation_options["thinking_budget"] = settings.llm_skill_creation_thinking_budget
         return cls(
             provider=settings.llm_provider,
             api_base_url=settings.llm_api_base_url,
             api_key=settings.llm_api_key,
-            default_model=settings.llm_default_model,
-            route_models={
-                "skill-creation": settings.llm_skill_creation_model or "",
-                "vision": settings.llm_vision_model or "",
-            },
-            route_payload_options={"skill-creation": skill_creation_options},
+            text_model=settings.llm_text_model,
+            multimodal_model=settings.llm_multimodal_model,
+            text_payload_options=_thinking_options(
+                enabled=settings.llm_text_enable_thinking,
+                budget=settings.llm_text_thinking_budget,
+            ),
+            multimodal_payload_options=_thinking_options(
+                enabled=settings.llm_multimodal_enable_thinking,
+                budget=settings.llm_multimodal_thinking_budget,
+            ),
             timeout_seconds=settings.llm_timeout_seconds,
         )
 
     def _resolve_model(self, route_key: str) -> str:
-        if not route_key or route_key == "default":
-            return self.default_model
-        return self.route_models.get(route_key, route_key)
+        normalized_route_key = str(route_key or TEXT_ROUTE_KEY)
+        if normalized_route_key not in SUPPORTED_ROUTE_KEYS:
+            raise SkillsConfigurationError(
+                "不支持的 LLM route_key。",
+                details={
+                    "route_key": normalized_route_key,
+                    "supported_route_keys": sorted(SUPPORTED_ROUTE_KEYS),
+                },
+            )
+        return self.route_models[normalized_route_key]
 
-    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
+    def list_model_capabilities(self) -> list[LlmModelCapability]:
+        return [
+            self._build_model_capability(
+                route_key=TEXT_ROUTE_KEY,
+                supports_text=True,
+                supports_attachments=False,
+            ),
+            self._build_model_capability(
+                route_key=MULTIMODAL_ROUTE_KEY,
+                supports_text=True,
+                supports_attachments=True,
+            ),
+        ]
+
+    def _build_model_capability(
+        self,
+        *,
+        route_key: str,
+        supports_text: bool,
+        supports_attachments: bool,
+    ) -> LlmModelCapability:
+        options = self.route_payload_options.get(route_key, {})
+        return LlmModelCapability(
+            route_key=route_key,
+            provider=self.provider,
+            model=self.route_models[route_key],
+            api_base_url=self.api_base_url,
+            supports_text=supports_text,
+            supports_attachments=supports_attachments,
+            thinking_enabled=bool(options.get("enable_thinking")),
+            thinking_budget=_coerce_int(options.get("thinking_budget")),
+        )
+
+    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = TEXT_ROUTE_KEY) -> LlmCompletion:
         if not self.api_key:
             raise SkillsConfigurationError("未配置 LLM API Key，无法执行真实运行链路。")
 
@@ -255,10 +311,18 @@ class OpenAICompatibleInferenceGateway:
         system_prompt: str,
         user_prompt: str,
         attachments: list[LlmAttachment],
-        route_key: str = "default",
+        route_key: str = MULTIMODAL_ROUTE_KEY,
     ) -> LlmCompletion:
         if not self.api_key:
             raise SkillsConfigurationError("未配置 LLM API Key，无法执行真实运行链路。")
+        if route_key != MULTIMODAL_ROUTE_KEY:
+            raise SkillsConfigurationError(
+                "多模态 LLM 调用必须使用 multimodal route_key。",
+                details={
+                    "route_key": route_key,
+                    "supported_route_keys": [MULTIMODAL_ROUTE_KEY],
+                },
+            )
 
         model = self._resolve_model(route_key)
         content_parts: list[dict[str, object]] = [{"type": "text", "text": user_prompt}]
@@ -413,6 +477,15 @@ class OpenAICompatibleInferenceGateway:
                 raw_response=data,
                 usage=usage,
             )
+
+
+def _thinking_options(*, enabled: bool, budget: int | None) -> dict[str, object]:
+    if not enabled:
+        return {}
+    options: dict[str, object] = {"enable_thinking": True}
+    if budget:
+        options["thinking_budget"] = budget
+    return options
 
 
 def _normalize_usage(raw_usage: object) -> dict[str, int | dict[str, object]]:

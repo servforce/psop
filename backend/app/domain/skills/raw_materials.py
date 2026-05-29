@@ -15,7 +15,7 @@ from typing import Any
 
 from app.core.config import Settings
 from app.domain.skills.exceptions import SkillValidationError, SkillsGatewayError
-from app.gateway.inference import LlmAttachment, LlmCompletion, LlmInferenceGateway
+from app.gateway.inference import LlmAttachment, LlmCompletion, LlmInferenceGateway, MULTIMODAL_ROUTE_KEY
 from app.infra.object_store import ObjectStoreService, StoredObject
 
 
@@ -246,7 +246,6 @@ class RawMaterialProcessor:
             ensure_ascii=False,
             sort_keys=True,
         )
-        route_key = "vision" if mime_type.startswith("image/") else "default"
         completion: LlmCompletion = self.inference_gateway.complete_multimodal(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -257,7 +256,7 @@ class RawMaterialProcessor:
                     content_base64=base64.b64encode(content).decode("ascii"),
                 )
             ],
-            route_key=route_key,
+            route_key=MULTIMODAL_ROUTE_KEY,
         )
         parsed = _parse_json_object(completion.content)
         summary = str(parsed.get("summary") or "多模态素材解析完成。").strip()

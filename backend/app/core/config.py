@@ -67,11 +67,12 @@ class Settings(BaseSettings):
     llm_provider: str = "openai-compatible"
     llm_api_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str | None = None
-    llm_default_model: str = "gpt-4.1-mini"
-    llm_skill_creation_model: str | None = None
-    llm_skill_creation_enable_thinking: bool = False
-    llm_skill_creation_thinking_budget: int | None = None
-    llm_vision_model: str | None = None
+    llm_text_model: str = "qwen3.7-plus"
+    llm_text_enable_thinking: bool = True
+    llm_text_thinking_budget: int | None = 8192
+    llm_multimodal_model: str = "qwen3.6-plus"
+    llm_multimodal_enable_thinking: bool = True
+    llm_multimodal_thinking_budget: int | None = 8192
     llm_timeout_seconds: float = 600.0
     asr_api_base_url: str = "http://10.0.0.20:12302"
     asr_language: str | None = "zh"

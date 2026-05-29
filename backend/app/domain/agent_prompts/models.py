@@ -57,7 +57,7 @@ class AgentPromptVersion(Base):
     version_no: Mapped[int] = mapped_column(nullable=False)
     version_label: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
-    route_key: Mapped[str] = mapped_column(String(120), default="default", nullable=False)
+    route_key: Mapped[str] = mapped_column(String(120), default="text", nullable=False)
     files: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     parent_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -99,4 +99,3 @@ class AgentPromptBinding(Base):
     )
 
     definition: Mapped["AgentPromptDefinition"] = relationship(back_populates="bindings")
-
