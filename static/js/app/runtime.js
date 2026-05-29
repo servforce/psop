@@ -116,23 +116,43 @@
       async loadRunLive(runId) {
         this.busy.liveRun = true;
         try {
-          const [run, bindings, terminalSession, terminalEvents, traceEvents] = await Promise.all([
+          const isSameRun = this.liveRunLoadedRunId === runId;
+          if (!isSameRun) {
+            this.selectedLiveRunReplayItemKey = "";
+          }
+          const [run, bindings, terminalSession, terminalEvents, traceEvents, replayDetail] = await Promise.all([
             this.apiRequest(`/runs/${runId}`),
             this.apiRequest(`/runs/${runId}/bindings`),
             this.apiRequest(`/terminal/sessions/${runId}`),
             this.apiRequest(`/terminal/sessions/${runId}/events`),
-            this.apiRequest(`/runs/${runId}/trace-events`)
+            this.apiRequest(`/runs/${runId}/trace-events`),
+            this.apiRequest(`/replay/runs/${runId}`)
           ]);
           this.liveRun = run;
+          this.liveRunLoadedRunId = runId;
           this.liveRunBindings = bindings;
           this.liveRunTerminalSession = terminalSession.terminal_session;
           this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq([], terminalEvents);
           this.updateLiveRunLatestTerminalSeq();
           this.scrollTerminalTranscriptToBottom();
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], traceEvents);
+          this.replayDetail = replayDetail;
+          this.syncLiveRunInteractionTabFromRoute(isSameRun);
           this.connectRunWebSocket(runId);
         } finally {
           this.busy.liveRun = false;
+        }
+      },
+
+
+      syncLiveRunInteractionTabFromRoute(isSameRun = false) {
+        const allowedTabs = new Set(["terminal", "replay"]);
+        if (this.route?.params?.view === "replay") {
+          this.liveRunInteractionTab = "replay";
+          return;
+        }
+        if (!isSameRun || !allowedTabs.has(this.liveRunInteractionTab)) {
+          this.liveRunInteractionTab = "terminal";
         }
       },
 
@@ -983,6 +1003,127 @@
         return this.currentSkill?.id
           ? buildSkillReplayPath(this.currentSkill.id, runId)
           : buildReplayPath(runId);
+      },
+
+
+      liveRunReplayTimeline() {
+        if (!this.replayDetail || this.replayDetail.run?.id !== this.liveRun?.id) {
+          return [];
+        }
+        return this.replayDetail.timeline || [];
+      },
+
+
+      liveRunReplayItemKey(item) {
+        return [
+          item?.seq_no ?? "",
+          item?.event_type || "",
+          item?.occurred_at || ""
+        ].join(":");
+      },
+
+
+      selectLiveRunReplayItem(item) {
+        this.selectedLiveRunReplayItemKey = this.liveRunReplayItemKey(item);
+      },
+
+
+      selectedLiveRunReplayItem() {
+        const timeline = this.liveRunReplayTimeline();
+        if (!timeline.length) {
+          return null;
+        }
+        return (
+          timeline.find((item) => this.liveRunReplayItemKey(item) === this.selectedLiveRunReplayItemKey) ||
+          timeline[0]
+        );
+      },
+
+
+      isLiveRunReplayItemSelected(item) {
+        const selected = this.selectedLiveRunReplayItem();
+        return Boolean(selected) && this.liveRunReplayItemKey(item) === this.liveRunReplayItemKey(selected);
+      },
+
+
+      liveRunReplayItemClass(item) {
+        return this.isLiveRunReplayItemSelected(item)
+          ? "border-l-2 border-orange-500 bg-orange-500/10"
+          : "border-l-2 border-transparent hover:bg-slate-900/60";
+      },
+
+
+      liveRunReplayEventIcon(item) {
+        const eventType = String(item?.event_type || "").toLowerCase();
+        if (eventType.includes("terminal")) {
+          return "forum";
+        }
+        if (eventType.includes("snapshot") || eventType.includes("token")) {
+          return "account_tree";
+        }
+        if (eventType.includes("llm") || eventType.includes("model")) {
+          return "psychology";
+        }
+        if (eventType.includes("tool") || eventType.includes("capability")) {
+          return "handyman";
+        }
+        if (eventType.includes("wait")) {
+          return "hourglass_empty";
+        }
+        return "timeline";
+      },
+
+
+      liveRunReplayEventTone(item) {
+        const eventType = String(item?.event_type || "").toLowerCase();
+        if (eventType.includes("terminal")) {
+          return "bg-orange-500/15 text-orange-200";
+        }
+        if (eventType.includes("snapshot") || eventType.includes("token")) {
+          return "bg-emerald-500/15 text-emerald-200";
+        }
+        if (eventType.includes("llm") || eventType.includes("model")) {
+          return "bg-violet-500/15 text-violet-200";
+        }
+        if (eventType.includes("wait")) {
+          return "bg-amber-500/15 text-amber-200";
+        }
+        return "bg-sky-500/15 text-sky-200";
+      },
+
+
+      liveRunReplaySelectedPayloadText() {
+        const selected = this.selectedLiveRunReplayItem();
+        return selected ? this.formatJson(selected.payload || {}) : "{}";
+      },
+
+
+      liveRunReplaySnapshots() {
+        if (!this.replayDetail || this.replayDetail.run?.id !== this.liveRun?.id) {
+          return [];
+        }
+        return this.replayDetail.snapshots || [];
+      },
+
+
+      liveRunReplayTerminalCount() {
+        return this.replayDetail?.run?.id === this.liveRun?.id ? this.replayDetail.terminal_events?.length || 0 : 0;
+      },
+
+
+      liveRunReplayTraceCount() {
+        return this.replayDetail?.run?.id === this.liveRun?.id ? this.replayDetail.trace_events?.length || 0 : 0;
+      },
+
+
+      replaySnapshotSummary(snapshot) {
+        const summary = snapshot?.selection_summary;
+        if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+          return "无 selection summary";
+        }
+        const enabled = Array.isArray(snapshot?.enabled_set) ? snapshot.enabled_set.length : 0;
+        const keys = Object.keys(summary);
+        return [`${keys.length} summary keys`, `${enabled} enabled items`].join(" · ");
       },
 
 

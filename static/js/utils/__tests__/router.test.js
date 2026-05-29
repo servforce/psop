@@ -58,13 +58,17 @@ test("resolveAdminRoute maps issue #1 runtime pages", () => {
     name: "skill-run-live",
     params: { skillId: "skill-123", runId: "run-123" }
   });
+  expect(resolveAdminRoute("/admin/skills/skill-123/runs/run-123/live/replay")).toEqual({
+    name: "skill-run-live",
+    params: { skillId: "skill-123", runId: "run-123", view: "replay" }
+  });
   expect(resolveAdminRoute("/admin/skills/skill-123/debug/runs/run-123/live")).toEqual({
     name: "skill-debug-live",
     params: { skillId: "skill-123", runId: "run-123" }
   });
   expect(resolveAdminRoute("/admin/skills/skill-123/runs/run-123/replay")).toEqual({
-    name: "skill-replay-detail",
-    params: { skillId: "skill-123", runId: "run-123" }
+    name: "skill-run-live",
+    params: { skillId: "skill-123", runId: "run-123", view: "replay" }
   });
   expect(resolveAdminRoute("/admin/skills/skill-123/tests/new")).toEqual({
     name: "skill-test-scenario-new",
@@ -84,8 +88,12 @@ test("resolveAdminRoute maps issue #1 runtime pages", () => {
   });
   expect(resolveAdminRoute("/admin/replay")).toEqual({ name: "replay-list", params: {} });
   expect(resolveAdminRoute("/admin/replay/runs/run-123")).toEqual({
-    name: "replay-detail",
-    params: { runId: "run-123" }
+    name: "run-live",
+    params: { runId: "run-123", view: "replay" }
+  });
+  expect(resolveAdminRoute("/admin/runs/run-123/live/replay")).toEqual({
+    name: "run-live",
+    params: { runId: "run-123", view: "replay" }
   });
 });
 
@@ -95,8 +103,8 @@ test("runtime route builders create live and replay locations", () => {
   expect(buildSkillDebugRunLivePath("skill-123", "run-123")).toBe(
     "/admin/skills/skill-123/debug/runs/run-123/live"
   );
-  expect(buildReplayPath("run-123")).toBe("/admin/replay/runs/run-123");
-  expect(buildSkillReplayPath("skill-123", "run-123")).toBe("/admin/skills/skill-123/runs/run-123/replay");
+  expect(buildReplayPath("run-123")).toBe("/admin/runs/run-123/live/replay");
+  expect(buildSkillReplayPath("skill-123", "run-123")).toBe("/admin/skills/skill-123/runs/run-123/live/replay");
   expect(buildSkillTestScenarioNewPath("skill-123")).toBe("/admin/skills/skill-123/tests/new");
   expect(buildSkillTestScenarioPath("skill-123", "scenario-123")).toBe("/admin/skills/skill-123/tests/scenario-123");
   expect(buildSkillTestScenarioRunReviewPath("skill-123", "scenario-123", "scenario-run-123")).toBe(

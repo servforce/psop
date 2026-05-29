@@ -4,7 +4,6 @@ const path = require("path");
 const guardedFragments = [
   ["skill-detail.html", '<template x-if="currentSkill">'],
   ["run-live.html", '<template x-if="liveRun">'],
-  ["replay-detail.html", '<template x-if="replayDetail">'],
   ["skill-test-scenario-detail.html", '<template x-if="currentSkill && (skillTestCase || route.name === \'skill-test-scenario-new\')">'],
   ["skill-test-scenario-review.html", '<template x-if="currentSkill && skillTestCase && skillTestReview">'],
   ["compiler-artifact-detail.html", '<template x-if="compilerArtifact">'],
@@ -28,8 +27,17 @@ test("run live page is read-only and uses interaction data tabs", () => {
   expect(html).not.toContain("event.artifact_object_id");
   expect(html).not.toContain("terminalEventActorIcon");
   expect(html).not.toContain("terminalEventAvatarClass");
-  expect(html).toContain("liveRunInteractionTab === 'transcript'");
-  expect(html).toContain("liveRunInteractionTab === 'trace'");
+  expect(html).toContain("liveRunInteractionTab === 'terminal'");
+  expect(html).toContain("liveRunInteractionTab === 'replay'");
+  expect(html).toContain("<span>terminal</span>");
+  expect(html).toContain("<span>replay</span>");
+  expect(html).not.toContain("liveRunInteractionTab === 'trace'");
+  expect(html).not.toContain("Trace Events");
+  expect(html).toContain("liveRunReplayTimeline()");
+  expect(html).toContain("liveRunReplaySnapshots()");
+  expect(html).toContain("selectLiveRunReplayItem(item)");
+  expect(html).toContain("selectedLiveRunReplayItem()");
+  expect(html).toContain("Event Details");
   expect(html).not.toContain("terminalInputForm");
   expect(html).not.toContain("terminalInputAttachments()");
   expect(html).not.toContain("handleTerminalInputFile($event)");

@@ -53,7 +53,7 @@
               <button
                 type="button"
                 class="sidebar-link"
-                :class="[['skills-list', 'skill-detail', 'skill-compiler-artifact', 'skill-run-live', 'skill-debug-live', 'skill-replay-detail', 'skill-test-scenario-new', 'skill-test-scenario', 'skill-test-scenario-review'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                :class="[['skills-list', 'skill-detail', 'skill-compiler-artifact', 'skill-run-live', 'skill-debug-live', 'skill-test-scenario-new', 'skill-test-scenario', 'skill-test-scenario-review'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
                 title="Skills"
                 @click="navigate('/admin/skills')"
               >
@@ -138,7 +138,6 @@
               <div id="skill-test-scenario-page" class="h-full" x-show="!loadingPage && ['skill-test-scenario', 'skill-test-scenario-new'].includes(route.name) && currentSkill && (skillTestCase || route.name === 'skill-test-scenario-new')"></div>
               <div id="skill-test-scenario-review-page" class="h-full" x-show="!loadingPage && route.name === 'skill-test-scenario-review' && currentSkill && skillTestReview"></div>
               <div id="replay-list-page" class="h-full" x-show="!loadingPage && route.name === 'replay-list'"></div>
-              <div id="replay-detail-page" class="h-full" x-show="!loadingPage && ['replay-detail', 'skill-replay-detail'].includes(route.name) && replayDetail"></div>
             </section>
         </main>
 

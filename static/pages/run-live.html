@@ -2,7 +2,7 @@
 <div class="h-full min-h-0">
   <section class="panel rounded-none border-0">
     <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
-      <div class="flex min-w-0 flex-col gap-1.5 xl:flex-row xl:items-center xl:justify-between">
+      <div class="flex min-w-0 items-center">
         <nav class="breadcrumb-bar h-7 min-h-0 min-w-0 flex-1 flex-nowrap gap-1.5 overflow-hidden border-0 p-0 text-xs" aria-label="Breadcrumb">
           <template x-if="['skill-run-live', 'skill-debug-live'].includes(route.name) && currentSkill">
             <span class="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5">
@@ -14,7 +14,7 @@
               <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
               <button type="button" class="breadcrumb-link" @click="openCurrentSkillRuntime()">运行</button>
               <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
-              <span class="truncate font-semibold text-slate-100">运行记录</span>
+              <span class="truncate font-semibold text-slate-100">运行详情</span>
             </span>
           </template>
           <template x-if="!['skill-run-live', 'skill-debug-live'].includes(route.name) || !currentSkill">
@@ -23,21 +23,10 @@
               <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
               <button type="button" class="breadcrumb-link" @click="navigate('/admin/invocations')">运行</button>
               <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
-              <span class="truncate font-semibold text-slate-100">运行记录</span>
+              <span class="truncate font-semibold text-slate-100">运行详情</span>
             </span>
           </template>
         </nav>
-        <div class="flex shrink-0 flex-wrap items-center gap-2">
-          <span class="status-badge h-8 px-2.5 py-0 text-[10px]" :class="statusBadgeTone(liveRun.status)" x-text="formatStatus(liveRun.status)"></span>
-          <button type="button" class="button-secondary h-8 w-8 shrink-0" title="刷新" aria-label="刷新" @click="loadRunLive(liveRun.id)">
-            <span class="material-symbols-outlined text-[17px]">refresh</span>
-            <span>刷新</span>
-          </button>
-          <button type="button" class="button-primary h-8 w-8 shrink-0" title="查看回放" aria-label="查看回放" x-show="liveRun.status === 'succeeded'" @click="navigate(runReplayPath(liveRun.id))">
-            <span class="material-symbols-outlined text-[17px]">history</span>
-            <span>查看回放</span>
-          </button>
-        </div>
       </div>
     </div>
 
@@ -116,19 +105,19 @@
         <main class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
           <section class="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950/20">
             <div class="flex h-11 shrink-0 items-center overflow-x-auto overflow-y-hidden border-b border-slate-200 bg-white">
-              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'transcript' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'transcript'">
+              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'terminal' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'terminal'">
                 <span class="material-symbols-outlined text-[18px]">forum</span>
-                <span>Terminal Transcript</span>
+                <span>terminal</span>
                 <span class="mono-field" x-text="`${liveRunTerminalEvents.length} events`"></span>
               </button>
-              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'trace' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'trace'">
-                <span class="material-symbols-outlined text-[18px]">timeline</span>
-                <span>Trace Events</span>
-                <span class="mono-field" x-text="`${liveRunTraceEvents.length} events`"></span>
+              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'replay' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'replay'">
+                <span class="material-symbols-outlined text-[18px]">history</span>
+                <span>replay</span>
+                <span class="mono-field" x-text="`${liveRunReplayTimeline().length} events`"></span>
               </button>
             </div>
 
-            <section x-show="liveRunInteractionTab === 'transcript'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <section x-show="liveRunInteractionTab === 'terminal'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
               <template x-if="liveRunTerminalEvents.length === 0">
                 <div class="empty-state h-full min-h-80">
                   <span class="material-symbols-outlined text-[30px] text-slate-400">forum</span>
@@ -231,31 +220,158 @@
               </div>
             </section>
 
-            <section x-show="liveRunInteractionTab === 'trace'" class="min-h-0 flex-1 overflow-auto">
-              <template x-if="liveRunTraceEvents.length === 0">
-                <div class="empty-state h-full min-h-80">
-                  <span class="material-symbols-outlined text-[30px] text-slate-400">timeline</span>
-                  <p class="mt-3 text-sm text-slate-500">暂无 Trace 事件。</p>
-                </div>
-              </template>
-              <div class="divide-y divide-slate-200">
-                <template x-for="event in liveRunTraceEvents" :key="event.id">
-                  <article class="px-5 py-4">
+            <section x-show="liveRunInteractionTab === 'replay'" class="min-h-0 flex-1 overflow-hidden">
+              <div class="grid h-full min-h-0 min-w-0 xl:grid-cols-[minmax(0,1fr)_26rem]">
+                <div class="min-h-0 min-w-0 overflow-auto border-b border-slate-800 bg-slate-950/40 xl:border-b-0 xl:border-r">
+                  <header class="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/95 px-4 py-2.5">
                     <div class="flex flex-wrap items-center justify-between gap-3">
-                      <div class="flex min-w-0 items-center gap-3">
-                        <span class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-sky-50 text-sky-700">
-                          <span class="material-symbols-outlined text-[18px]">timeline</span>
-                        </span>
-                        <div class="min-w-0">
-                          <p class="truncate font-semibold text-slate-950" x-text="event.event_type"></p>
-                          <p class="mono-field" x-text="formatDateTime(event.occurred_at)"></p>
-                        </div>
+                      <p class="text-sm font-semibold text-slate-100">Replay Timeline</p>
+                      <div class="flex flex-wrap gap-1.5 text-[11px]">
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayTerminalCount()} terminal`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayTraceCount()} trace`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplaySnapshots().length} snapshots`"></span>
                       </div>
-                      <span class="mono-field" x-text="event.phase"></span>
                     </div>
-                    <pre class="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-100" x-text="JSON.stringify(event.payload, null, 2)"></pre>
-                  </article>
-                </template>
+                  </header>
+
+                  <template x-if="liveRunReplayTimeline().length === 0">
+                    <div class="empty-state min-h-80">
+                      <span class="material-symbols-outlined text-[30px] text-slate-400">history</span>
+                      <p class="mt-3 text-sm text-slate-500">暂无可回放的时间线事件。</p>
+                    </div>
+                  </template>
+
+                  <div class="divide-y divide-slate-800">
+                    <template x-for="item in liveRunReplayTimeline()" :key="`${item.seq_no}-${item.event_type}`">
+                      <article
+                        class="cursor-pointer px-4 py-2.5 transition"
+                        :class="liveRunReplayItemClass(item)"
+                        role="button"
+                        tabindex="0"
+                        @click="selectLiveRunReplayItem(item)"
+                        @keydown.enter.prevent="selectLiveRunReplayItem(item)"
+                        @keydown.space.prevent="selectLiveRunReplayItem(item)"
+                      >
+                        <div class="flex flex-wrap items-start justify-between gap-2">
+                          <div class="flex min-w-0 items-start gap-2.5">
+                            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md" :class="liveRunReplayEventTone(item)">
+                              <span class="material-symbols-outlined text-[16px]" x-text="liveRunReplayEventIcon(item)"></span>
+                            </span>
+                            <div class="min-w-0">
+                              <p class="truncate text-sm font-semibold text-slate-100" x-text="item.title"></p>
+                              <p class="mono-field" x-text="formatDateTime(item.occurred_at)"></p>
+                            </div>
+                          </div>
+                          <span class="status-badge" :class="statusBadgeTone(item.phase)" x-text="item.phase"></span>
+                        </div>
+                        <p class="mt-2 line-clamp-2 whitespace-pre-wrap break-words text-sm leading-5 text-slate-300" x-text="item.summary"></p>
+                      </article>
+                    </template>
+                  </div>
+                </div>
+
+                <aside class="min-h-0 min-w-0 overflow-auto bg-slate-950">
+                  <template x-if="!selectedLiveRunReplayItem()">
+                    <div class="empty-state min-h-72">
+                      <span class="material-symbols-outlined text-[30px] text-slate-500">data_object</span>
+                      <p class="mt-3 text-sm text-slate-400">请选择一个回放事件。</p>
+                    </div>
+                  </template>
+
+                  <template x-if="selectedLiveRunReplayItem()">
+                    <div class="flex min-h-full flex-col">
+                      <header class="shrink-0 border-b border-slate-800 bg-slate-950 px-4 py-2.5">
+                        <div class="flex items-center justify-between gap-3">
+                          <div class="min-w-0">
+                            <p class="text-sm font-semibold text-slate-100">Event Details</p>
+                          </div>
+                        </div>
+                      </header>
+
+                      <div class="min-h-0 flex-1 overflow-auto divide-y divide-slate-800">
+                        <section class="px-4 py-3">
+                          <div class="flex items-start gap-2.5">
+                            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md" :class="liveRunReplayEventTone(selectedLiveRunReplayItem())">
+                              <span class="material-symbols-outlined text-[16px]" x-text="liveRunReplayEventIcon(selectedLiveRunReplayItem())"></span>
+                            </span>
+                            <div class="min-w-0">
+                              <p class="text-sm font-semibold text-slate-100" x-text="selectedLiveRunReplayItem().title"></p>
+                              <p class="mt-1 text-sm leading-5 text-slate-300" x-text="selectedLiveRunReplayItem().summary"></p>
+                            </div>
+                          </div>
+                        </section>
+
+                        <section class="min-h-[22rem] px-4 py-3">
+                          <div class="flex items-center justify-between gap-3">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-orange-200">Payload</p>
+                            <span class="font-mono text-[11px] text-slate-500" x-text="`#${selectedLiveRunReplayItem().seq_no}`"></span>
+                          </div>
+                          <pre class="mt-2 max-h-[52vh] min-h-[18rem] overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-700 bg-black/60 p-3 text-xs leading-5 text-slate-100" x-text="liveRunReplaySelectedPayloadText()"></pre>
+                        </section>
+
+                        <details class="px-4 py-3">
+                          <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">Meta</summary>
+                          <div class="mt-3 grid grid-cols-2 gap-2 text-sm">
+                            <div>
+                              <p class="field-label">Phase</p>
+                              <p class="mt-1 text-slate-100" x-text="selectedLiveRunReplayItem().phase"></p>
+                            </div>
+                            <div>
+                              <p class="field-label">Seq</p>
+                              <p class="mt-1 font-mono text-slate-100" x-text="`#${selectedLiveRunReplayItem().seq_no}`"></p>
+                            </div>
+                            <div class="col-span-2">
+                              <p class="field-label">Occurred At</p>
+                              <p class="mt-1 mono-field" x-text="formatDateTime(selectedLiveRunReplayItem().occurred_at)"></p>
+                            </div>
+                          </div>
+                        </details>
+
+                        <details class="px-4 py-3">
+                          <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <span>Session Token Snapshots</span>
+                            <span class="ml-2 font-mono text-[11px] text-slate-500" x-text="liveRunReplaySnapshots().length"></span>
+                          </summary>
+
+                          <template x-if="liveRunReplaySnapshots().length === 0">
+                            <div class="mt-3 rounded-md border border-slate-800 bg-slate-900/50 px-3 py-4 text-sm text-slate-400">暂无 Session Token 快照。</div>
+                          </template>
+
+                          <div class="mt-3 divide-y divide-slate-800 border-y border-slate-800">
+                            <template x-for="snapshot in liveRunReplaySnapshots()" :key="snapshot.id || snapshot.seq_no">
+                              <details class="px-0 py-3">
+                                <summary class="cursor-pointer list-none">
+                                  <div class="flex items-start justify-between gap-3">
+                                    <div class="min-w-0">
+                                      <p class="text-sm font-semibold text-slate-100" x-text="`Snapshot #${snapshot.seq_no}`"></p>
+                                      <p class="mono-field" x-text="formatDateTime(snapshot.created_at)"></p>
+                                      <p class="mt-1 truncate text-xs text-slate-400" x-text="replaySnapshotSummary(snapshot)"></p>
+                                    </div>
+                                    <span class="material-symbols-outlined shrink-0 text-[18px] text-slate-500">expand_more</span>
+                                  </div>
+                                </summary>
+                                <div class="mt-3 space-y-3">
+                                  <div>
+                                    <p class="field-label">Snapshot Hash</p>
+                                    <p class="mt-1 mono-field break-all" x-text="snapshot.snapshot_hash || 'N/A'"></p>
+                                  </div>
+                                  <div>
+                                    <p class="field-label">Selection Summary</p>
+                                    <pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="formatJson(snapshot.selection_summary || {})"></pre>
+                                  </div>
+                                  <div>
+                                    <p class="field-label">Enabled Set</p>
+                                    <pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="formatJson(snapshot.enabled_set || [])"></pre>
+                                  </div>
+                                </div>
+                              </details>
+                            </template>
+                          </div>
+                        </details>
+                      </div>
+                    </div>
+                  </template>
+                </aside>
               </div>
             </section>
           </section>

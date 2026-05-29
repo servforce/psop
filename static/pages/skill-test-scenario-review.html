@@ -35,7 +35,7 @@
           <span class="material-symbols-outlined text-[18px]" x-text="busy.skillTestCancel ? 'hourglass_empty' : 'stop_circle'"></span>
           <span class="sr-only">终止运行</span>
         </button>
-        <button type="button" class="topbar-icon-button" title="Replay" aria-label="Replay" data-tooltip="Replay" x-show="skillTestRun?.run_id" @click="navigate(`/admin/skills/${currentSkill.id}/runs/${skillTestRun.run_id}/replay`)">
+        <button type="button" class="topbar-icon-button" title="Replay" aria-label="Replay" data-tooltip="Replay" x-show="skillTestRun?.run_id" @click="navigate(runReplayPath(skillTestRun.run_id))">
           <span class="material-symbols-outlined text-[18px]">history</span>
           <span class="sr-only">Replay</span>
         </button>

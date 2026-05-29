@@ -33,6 +33,14 @@
       };
     }
 
+    const skillRunReplayMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/runs\/([^/]+)\/live\/replay$/);
+    if (skillRunReplayMatch) {
+      return {
+        name: "skill-run-live",
+        params: { skillId: skillRunReplayMatch[1], runId: skillRunReplayMatch[2], view: "replay" }
+      };
+    }
+
     const skillDebugRunLiveMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/debug\/runs\/([^/]+)\/live$/);
     if (skillDebugRunLiveMatch) {
       return {
@@ -44,8 +52,8 @@
     const skillReplayRunMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/runs\/([^/]+)\/replay$/);
     if (skillReplayRunMatch) {
       return {
-        name: "skill-replay-detail",
-        params: { skillId: skillReplayRunMatch[1], runId: skillReplayRunMatch[2] }
+        name: "skill-run-live",
+        params: { skillId: skillReplayRunMatch[1], runId: skillReplayRunMatch[2], view: "replay" }
       };
     }
 
@@ -114,13 +122,18 @@
       return { name: "run-live", params: { runId: runLiveMatch[1] } };
     }
 
+    const runReplayMatch = normalized.match(/^\/admin\/runs\/([^/]+)\/live\/replay$/);
+    if (runReplayMatch) {
+      return { name: "run-live", params: { runId: runReplayMatch[1], view: "replay" } };
+    }
+
     if (normalized === "/admin/replay") {
       return { name: "replay-list", params: {} };
     }
 
     const replayRunMatch = normalized.match(/^\/admin\/replay\/runs\/([^/]+)$/);
     if (replayRunMatch) {
-      return { name: "replay-detail", params: { runId: replayRunMatch[1] } };
+      return { name: "run-live", params: { runId: replayRunMatch[1], view: "replay" } };
     }
 
     return { name: "skills-list", params: {} };
@@ -147,11 +160,11 @@
   }
 
   function buildReplayPath(runId) {
-    return `/admin/replay/runs/${runId}`;
+    return `/admin/runs/${runId}/live/replay`;
   }
 
   function buildSkillReplayPath(skillId, runId) {
-    return `/admin/skills/${skillId}/runs/${runId}/replay`;
+    return `/admin/skills/${skillId}/runs/${runId}/live/replay`;
   }
 
   function buildSkillTestScenarioPath(skillId, scenarioId) {
@@ -585,7 +598,9 @@
       liveRunTerminalSession: null,
       liveRunTerminalEvents: [],
       liveRunTraceEvents: [],
-      liveRunInteractionTab: "transcript",
+      liveRunInteractionTab: "terminal",
+      liveRunLoadedRunId: "",
+      selectedLiveRunReplayItemKey: "",
       terminalMediaPreview: {
         open: false,
         kind: "",

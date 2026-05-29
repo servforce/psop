@@ -331,7 +331,6 @@
           ["skill-test-scenario-page", "/pages/skill-test-scenario-detail.html"],
           ["skill-test-scenario-review-page", "/pages/skill-test-scenario-review.html"],
           ["replay-list-page", "/pages/replay-list.html"],
-          ["replay-detail-page", "/pages/replay-detail.html"],
           ["create-skill-modal-page", "/pages/create-skill-modal.html"],
           ["publish-skill-drawer-page", "/pages/publish-skill-drawer.html"],
           ["delete-skill-modal-page", "/pages/delete-skill-modal.html"]
@@ -438,6 +437,7 @@
         this.clearNotice();
         if (!["run-live", "skill-run-live", "skill-debug-live"].includes(this.route.name)) {
           this.disconnectRunWebSocket();
+          this.replayDetail = null;
         }
         if (this.route.name !== "skill-test-scenario-review") {
           this.stopSkillTestReviewPlayback?.();
@@ -485,13 +485,6 @@
             this.activeDetailTab = "runtime";
             await this.loadSkillDetail(this.route.params.skillId);
             await this.loadRunLive(this.route.params.runId);
-            return;
-          }
-
-          if (this.route.name === "skill-replay-detail") {
-            this.activeDetailTab = "runtime";
-            await this.loadSkillDetail(this.route.params.skillId);
-            await this.loadReplayDetail(this.route.params.runId);
             return;
           }
 
@@ -574,10 +567,6 @@
             return;
           }
 
-          if (this.route.name === "replay-detail") {
-            this.currentSkill = null;
-            await this.loadReplayDetail(this.route.params.runId);
-          }
         } catch (error) {
           this.showNotice("error", error.message || "页面加载失败。");
         } finally {
@@ -750,7 +739,6 @@
             "skill-compiler-artifact",
             "skill-run-live",
             "skill-debug-live",
-            "skill-replay-detail",
             "skill-test-scenario-new",
             "skill-test-scenario",
             "skill-test-scenario-review"
@@ -784,10 +772,10 @@
           return "运行";
         }
         if (this.route.name === "run-live") {
-          return "运行现场";
+          return "运行详情";
         }
-        if (this.route.name === "replay-list" || this.route.name === "replay-detail") {
-          return "运行回放";
+        if (this.route.name === "replay-list") {
+          return "运行记录";
         }
 
         return "Skills";
