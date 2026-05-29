@@ -43,7 +43,11 @@ def test_multimodal_vision_route_uses_configured_model(monkeypatch) -> None:
     completion = gateway.complete_multimodal(
         system_prompt="识别图片",
         user_prompt="请描述画面",
-        attachments=[LlmAttachment(filename="frame.jpg", media_type="image/jpeg", content_base64="ZmFrZQ==")],
+        attachments=[
+            LlmAttachment(filename="frame.jpg", media_type="image/jpeg", content_base64="aW1hZ2U="),
+            LlmAttachment(filename="clip.mp4", media_type="video/mp4", content_base64="dmlkZW8="),
+            LlmAttachment(filename="note.wav", media_type="audio/wav", content_base64="YXVkaW8="),
+        ],
         route_key="vision",
     )
 
@@ -51,6 +55,11 @@ def test_multimodal_vision_route_uses_configured_model(monkeypatch) -> None:
     assert captured["model"] == "qwen-vl-test"
     assert captured["route_key"] == "vision"
     assert captured["payload"]["model"] == "qwen-vl-test"
+    user_content = captured["payload"]["messages"][1]["content"]
+    assert [part["type"] for part in user_content] == ["text", "image_url", "video_url", "input_audio"]
+    assert user_content[1]["image_url"]["url"] == "data:image/jpeg;base64,aW1hZ2U="
+    assert user_content[2]["video_url"]["url"] == "data:video/mp4;base64,dmlkZW8="
+    assert user_content[3]["input_audio"] == {"data": "YXVkaW8=", "format": "wav"}
 
 
 def test_named_route_without_mapping_still_uses_route_key_as_model() -> None:

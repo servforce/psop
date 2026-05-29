@@ -140,24 +140,19 @@
       async sendTerminalInput() {
         const runId = this.liveRun?.id;
         const textPayload = this.terminalInputText();
-        const filePayload = this.terminalInputForm.file;
+        const attachments = this.terminalInputAttachments();
         if (!runId || !this.canSendTerminalInput()) {
           return;
         }
         this.busy.terminalInput = true;
-        const optimisticEvent = this.buildOptimisticTerminalInputEvent(runId, textPayload, filePayload);
+        const optimisticEvent = this.buildOptimisticTerminalInputEvent(runId, textPayload, attachments);
         let acceptedByServer = false;
         this.mergeTerminalEvents([optimisticEvent]);
         this.terminalInputForm.payload = "";
-        this.clearTerminalInputFile();
+        this.clearTerminalInputAttachments();
         try {
-          if (filePayload) {
-            const result = await this.uploadTerminalRuntimeFile(
-              runId,
-              filePayload,
-              textPayload,
-              optimisticEvent.external_event_id
-            );
+          if (attachments.length) {
+            const result = await this.sendTerminalRuntimeMultipartEvent(runId, textPayload, attachments, optimisticEvent.external_event_id);
             acceptedByServer = true;
             this.mergeTerminalEvents([result.event]);
           } else {
@@ -165,9 +160,7 @@
               method: "POST",
               body: JSON.stringify({
                 direction: "input",
-                event_kind: "terminal.text.input.v1",
-                mime_type: "text/plain",
-                payload_inline: textPayload,
+                text: textPayload,
                 source: {
                   kind: "web"
                 },
@@ -185,7 +178,7 @@
           if (!acceptedByServer) {
             this.removeOptimisticTerminalEvent(optimisticEvent.id);
             this.terminalInputForm.payload = textPayload;
-            this.terminalInputForm.file = filePayload;
+            this.terminalInputForm.attachments = attachments;
           } else {
             try {
               await this.loadRunLive(runId);
@@ -203,29 +196,54 @@
 
 
       handleTerminalInputFile(event) {
-        this.terminalInputForm.file = event.target.files?.[0] || null;
-      },
-
-
-      clearTerminalInputFile() {
-        this.terminalInputForm.file = null;
+        const files = Array.from(event.target.files || []);
+        const nextAttachments = files.map((file) => ({
+          id: `attachment-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+          file
+        }));
+        this.terminalInputForm.attachments = [...this.terminalInputAttachments(), ...nextAttachments];
         if (this.$refs?.terminalInputFile) {
           this.$refs.terminalInputFile.value = "";
         }
       },
 
 
-      async uploadTerminalRuntimeFile(runId, file, caption = "", externalEventId = "") {
-        if (!runId || !file) {
+      clearTerminalInputAttachments() {
+        this.terminalInputForm.attachments = [];
+        if (this.$refs?.terminalInputFile) {
+          this.$refs.terminalInputFile.value = "";
+        }
+      },
+
+
+      removeTerminalInputAttachment(attachmentId) {
+        const removed = this.terminalInputAttachments().find((attachment) => attachment.id === attachmentId);
+        if (removed?.preview_url) {
+          URL.revokeObjectURL(removed.preview_url);
+        }
+        this.terminalInputForm.attachments = this.terminalInputAttachments().filter((attachment) => attachment.id !== attachmentId);
+      },
+
+
+      async sendTerminalRuntimeMultipartEvent(runId, textPayload = "", attachments = [], externalEventId = "") {
+        if (!runId || !attachments.length) {
           throw new Error("当前运行不可上传多模态数据。");
         }
 
         const formData = new FormData();
-        formData.append("file", file);
-        if (caption) {
-          formData.append("caption", caption);
-        }
-        return this.apiRequest(`/terminal/sessions/${runId}/files`, {
+        attachments.forEach((attachment) => {
+          formData.append("files", attachment.file);
+        });
+        formData.append(
+          "event",
+          JSON.stringify({
+            direction: "input",
+            text: textPayload,
+            source: { kind: "web" },
+            external_event_id: externalEventId
+          })
+        );
+        return this.apiRequest(`/terminal/sessions/${runId}/events`, {
           method: "POST",
           headers: externalEventId ? { "Idempotency-Key": externalEventId } : {},
           body: formData
@@ -341,27 +359,91 @@
       },
 
 
-      buildOptimisticTerminalInputEvent(runId, textPayload, filePayload = null) {
+      terminalInputPartKindForMime(mimeType = "") {
+        if (mimeType.startsWith("image/")) {
+          return "image";
+        }
+        if (mimeType.startsWith("audio/")) {
+          return "audio";
+        }
+        if (mimeType.startsWith("video/")) {
+          return "video";
+        }
+        return "file";
+      },
+
+
+      terminalInputAttachments() {
+        return Array.isArray(this.terminalInputForm.attachments) ? this.terminalInputForm.attachments : [];
+      },
+
+
+      terminalInputAttachmentIcon(attachment) {
+        const kind = this.terminalInputPartKindForMime(attachment?.file?.type || "");
+        if (kind === "image") {
+          return "image";
+        }
+        if (kind === "audio") {
+          return "graphic_eq";
+        }
+        if (kind === "video") {
+          return "movie";
+        }
+        return "draft";
+      },
+
+
+      terminalInputAttachmentMeta(attachment) {
+        const file = attachment?.file;
+        if (!file) {
+          return "";
+        }
+        return [file.type || "application/octet-stream", this.formatBytes(file.size || 0)].filter(Boolean).join(" · ");
+      },
+
+
+      buildOptimisticTerminalInputEvent(runId, textPayload, attachments = []) {
         const now = new Date().toISOString();
         const id = `local-terminal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-        const mimeType = filePayload ? filePayload.type || "application/octet-stream" : "text/plain";
+        const parts = [];
+        if (textPayload) {
+          parts.push({
+            part_id: "text_1",
+            order_index: 1,
+            kind: "text",
+            mime_type: "text/plain",
+            text: textPayload,
+            metadata: {}
+          });
+        }
+        attachments.forEach((attachment, index) => {
+          const file = attachment.file;
+          const previewUrl = URL.createObjectURL(file);
+          attachment.preview_url = previewUrl;
+          parts.push({
+            part_id: `file_${index + 1}`,
+            order_index: parts.length + 1,
+            kind: this.terminalInputPartKindForMime(file.type || ""),
+            mime_type: file.type || "application/octet-stream",
+            text: "",
+            size_bytes: file.size || 0,
+            metadata: {
+              filename: file.name,
+              name: file.name,
+              preview_url: previewUrl
+            },
+            _local_url: previewUrl
+          });
+        });
         return {
           id,
           terminal_session_id: this.liveRun?.terminal_session_id || this.liveRunTerminalSession?.id || "",
           run_id: runId,
           direction: "input",
-          event_kind: filePayload ? this.terminalInputEventKindForMime(mimeType) : "terminal.text.input.v1",
-          mime_type: mimeType,
-          payload_inline: filePayload
-            ? {
-                filename: filePayload.name,
-                name: filePayload.name,
-                description: textPayload || "",
-                caption: textPayload || "",
-                size_bytes: filePayload.size || 0,
-                status: "sent"
-              }
-            : textPayload,
+          event_kind: "terminal.multimodal.input.v1",
+          mime_type: "multipart/mixed",
+          payload_inline: textPayload || attachments.map((attachment) => attachment.file?.name || "").filter(Boolean).join("\n"),
+          parts,
           seq_no: this.nextOptimisticTerminalSeq(),
           external_event_id: id,
           source_ref: {
@@ -417,7 +499,7 @@
 
 
       terminalInputHasContent() {
-        return Boolean(this.terminalInputText() || this.terminalInputForm.file);
+        return Boolean(this.terminalInputText() || this.terminalInputAttachments().length);
       },
 
 
@@ -467,6 +549,72 @@
           return "输入文本或添加文件后可发送。";
         }
         return "";
+      },
+
+
+      terminalEventParts(event) {
+        return Array.isArray(event?.parts) ? event.parts : [];
+      },
+
+
+      terminalEventHasParts(event) {
+        return this.terminalEventParts(event).length > 0;
+      },
+
+
+      terminalEventPartMimeType(part) {
+        return String(part?.mime_type || "").toLowerCase();
+      },
+
+
+      terminalEventPartIsText(part) {
+        return String(part?.kind || "").toLowerCase() === "text" || this.terminalEventPartMimeType(part).startsWith("text/");
+      },
+
+
+      terminalEventPartIsImage(part) {
+        return String(part?.kind || "").toLowerCase() === "image" || this.terminalEventPartMimeType(part).startsWith("image/");
+      },
+
+
+      terminalEventPartIsAudio(part) {
+        return String(part?.kind || "").toLowerCase() === "audio" || this.terminalEventPartMimeType(part).startsWith("audio/");
+      },
+
+
+      terminalEventPartIsVideo(part) {
+        return String(part?.kind || "").toLowerCase() === "video" || this.terminalEventPartMimeType(part).startsWith("video/");
+      },
+
+
+      terminalEventPartDisplayText(part) {
+        return String(part?.text || "").trim();
+      },
+
+
+      terminalEventPartFileName(part) {
+        const metadata = part?.metadata && typeof part.metadata === "object" ? part.metadata : {};
+        const value = metadata.filename || metadata.name || part?.part_id || "terminal-attachment";
+        return String(value).split("/").filter(Boolean).pop() || "terminal-attachment";
+      },
+
+
+      terminalEventPartMediaUrl(event, part) {
+        if (part?._local_url) {
+          return part._local_url;
+        }
+        const metadata = part?.metadata && typeof part.metadata === "object" ? part.metadata : {};
+        if (metadata.preview_url) {
+          return metadata.preview_url;
+        }
+        if (!part?.artifact_object_id || !event?.id || !part?.part_id) {
+          return "";
+        }
+        const runId = event.run_id || this.liveRun?.id || "";
+        if (!runId) {
+          return "";
+        }
+        return `${this.apiBaseUrl}/terminal/sessions/${encodeURIComponent(runId)}/events/${encodeURIComponent(event.id)}/parts/${encodeURIComponent(part.part_id)}/content`;
       },
 
 
@@ -559,7 +707,6 @@
           return "";
         }
         return this.terminalEventPayloadTextValue(event, [
-          "caption",
           "description",
           "message",
           "text",
@@ -735,9 +882,17 @@
 
 
       terminalEventMessageShellClass(event) {
-        return String(event?.direction || "").toLowerCase() === "input"
-          ? "w-fit max-w-3xl"
-          : "w-full max-w-3xl";
+        return "w-fit";
+      },
+
+
+      terminalEventMessageShellStyle(event) {
+        return "max-width: 70%;";
+      },
+
+
+      terminalEventContentClass(event) {
+        return String(event?.direction || "").toLowerCase() === "input" ? "items-end" : "items-start";
       },
 
 
@@ -747,21 +902,24 @@
 
 
       terminalEventBubbleClass(event) {
-        return "bg-[#262626]";
+        return String(event?.direction || "").toLowerCase() === "input"
+          ? "w-fit max-w-full bg-[#262626]"
+          : "w-fit max-w-full bg-[#262626]";
       },
 
 
-      openTerminalMediaPreview(event) {
-        const src = this.terminalEventMediaUrl(event);
-        if (!src || !this.terminalEventIsImage(event)) {
+      openTerminalMediaPreview(event, part = null) {
+        const src = part ? this.terminalEventPartMediaUrl(event, part) : this.terminalEventMediaUrl(event);
+        const isImage = part ? this.terminalEventPartIsImage(part) : this.terminalEventIsImage(event);
+        if (!src || !isImage) {
           return;
         }
         this.terminalMediaPreview = {
           open: true,
           kind: "image",
           src,
-          title: this.terminalEventFileName(event),
-          caption: this.terminalEventDisplayText(event)
+          title: part ? this.terminalEventPartFileName(part) : this.terminalEventFileName(event),
+          description: part ? this.terminalEventPartDisplayText(part) : this.terminalEventDisplayText(event)
         };
       },
 
@@ -772,7 +930,7 @@
           kind: "",
           src: "",
           title: "",
-          caption: ""
+          description: ""
         };
       },
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -21,6 +22,7 @@ from app.domain.runtime.models import (
     SessionTokenSnapshot,
     SkillInvocation,
     TerminalEvent,
+    TerminalEventPart,
     TerminalSession,
     TraceEvent,
 )
@@ -42,10 +44,13 @@ from app.domain.runtime.schemas import (
     TerminalSessionResponse,
     TerminalTranscriptSummary,
     TraceEventResponse,
+    TerminalEventPartInput,
+    TerminalEventPartResponse,
 )
 from app.domain.skills.exceptions import SkillsError, SkillNotFoundError, SkillValidationError
 from app.domain.skills.models import now_utc
-from app.gateway.inference import LlmInferenceGateway
+from app.gateway.inference import LlmAttachment, LlmInferenceGateway
+from app.infra.object_store import ObjectStoreService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -61,12 +66,14 @@ class RuntimeService:
         repository: RuntimeRepository | None = None,
         job_repository: JobRepository | None = None,
         agent_prompt_service: AgentPromptService | None = None,
+        object_store: ObjectStoreService | None = None,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
         self.repository = repository or RuntimeRepository()
         self.job_repository = job_repository or JobRepository()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
+        self.object_store = object_store
 
     def create_invocation(self, session: Session, payload: CreateInvocationRequest) -> InvocationResponse:
         skill_definition = self.repository.get_skill_definition_by_key(session, payload.skill_key)
@@ -282,6 +289,19 @@ class RuntimeService:
 
         copied_terminal_events: list[dict[str, Any]] = []
         for source_event in self.repository.list_terminal_events(session, source_run_id, to_seq=terminal_seq):
+            source_parts = [
+                TerminalEventPartInput(
+                    part_id=part.part_id,
+                    kind=part.kind,
+                    mime_type=part.mime_type,
+                    text=part.text_inline,
+                    artifact_object_id=part.artifact_object_id,
+                    size_bytes=part.size_bytes,
+                    checksum=part.checksum,
+                    metadata=part.part_metadata,
+                )
+                for part in self.repository.list_terminal_event_parts(session, source_event.id)
+            ]
             copied = self._append_terminal_event(
                 session,
                 run=run,
@@ -291,6 +311,7 @@ class RuntimeService:
                 mime_type=source_event.mime_type,
                 payload_inline=source_event.payload_inline,
                 artifact_object_id=source_event.artifact_object_id,
+                parts=source_parts,
                 binding_id=self._default_binding_id(bindings, source_event.direction),
                 source_ref={
                     **(source_event.source_ref or {}),
@@ -303,7 +324,7 @@ class RuntimeService:
                 external_event_id=f"fork:{run.id}:terminal:{source_event.seq_no}",
                 occurred_at=source_event.occurred_at,
             )
-            copied_terminal_events.append(self._terminal_event_token_payload(copied))
+            copied_terminal_events.append(self._terminal_event_token_payload_with_parts(session, copied))
 
         terminal = token.setdefault("terminal", {})
         terminal["events"] = copied_terminal_events
@@ -669,7 +690,7 @@ class RuntimeService:
         if not self.repository.get_run(session, run_id):
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
         return [
-            self._build_terminal_event_response(item)
+            self._build_terminal_event_response(session, item)
             for item in self.repository.list_terminal_events(session, run_id, from_seq=from_seq, to_seq=to_seq)
         ]
 
@@ -677,7 +698,25 @@ class RuntimeService:
         event = self.repository.get_terminal_event(session, event_id)
         if not event or event.run_id != run_id:
             raise SkillNotFoundError("未找到 Terminal Event。", details={"run_id": run_id, "event_id": event_id})
-        return self._build_terminal_event_response(event)
+        return self._build_terminal_event_response(session, event)
+
+    def get_terminal_event_part(
+        self,
+        session: Session,
+        run_id: str,
+        event_id: str,
+        part_id: str,
+    ) -> TerminalEventPartResponse:
+        event = self.repository.get_terminal_event(session, event_id)
+        if not event or event.run_id != run_id:
+            raise SkillNotFoundError("未找到 Terminal Event。", details={"run_id": run_id, "event_id": event_id})
+        part = self.repository.get_terminal_event_part_by_public_id(session, terminal_event_id=event_id, part_id=part_id)
+        if not part or part.run_id != run_id:
+            raise SkillNotFoundError(
+                "未找到 Terminal Event Part。",
+                details={"run_id": run_id, "event_id": event_id, "part_id": part_id},
+            )
+        return self._build_terminal_event_part_response(part)
 
     def append_terminal_event(
         self,
@@ -700,7 +739,7 @@ class RuntimeService:
                 external_event_id=external_event_id,
             )
             if existing:
-                event_response = self._build_terminal_event_response(existing)
+                event_response = self._build_terminal_event_response(session, existing)
                 return TerminalEventAppendResponse(
                     accepted=True,
                     event_id=existing.id,
@@ -723,6 +762,7 @@ class RuntimeService:
             mime_type=payload.mime_type,
             payload_inline=payload.payload_inline,
             artifact_object_id=payload.artifact_object_id,
+            parts=payload.parts,
             binding_id=payload.binding_id,
             source_ref=payload.source.model_dump(),
             external_event_id=external_event_id,
@@ -736,7 +776,7 @@ class RuntimeService:
             event = session.get(TerminalEvent, event.id) or event
         else:
             session.commit()
-        event_response = self._build_terminal_event_response(event)
+        event_response = self._build_terminal_event_response(session, event)
         return TerminalEventAppendResponse(
             accepted=True,
             event_id=event.id,
@@ -1513,6 +1553,7 @@ class RuntimeService:
         payload_inline: Any | None,
         binding_id: str | None = None,
         artifact_object_id: str | None = None,
+        parts: list[TerminalEventPartInput] | None = None,
         source_ref: dict[str, Any] | None = None,
         external_event_id: str | None = None,
         trace_event_id: str | None = None,
@@ -1556,7 +1597,95 @@ class RuntimeService:
         )
         session.add(event)
         session.flush()
+        for order_index, part in enumerate(self._normalize_terminal_event_parts(event, parts or []), start=1):
+            if part.artifact_object_id and not self.repository.get_artifact_object(session, part.artifact_object_id):
+                raise SkillValidationError(
+                    "terminal event part artifact_object_id 无效。",
+                    details={"part_id": part.part_id, "artifact_object_id": part.artifact_object_id},
+                )
+            session.add(
+                TerminalEventPart(
+                    terminal_event_id=event.id,
+                    run_id=run.id,
+                    artifact_object_id=part.artifact_object_id,
+                    part_id=part.part_id,
+                    order_index=order_index,
+                    kind=part.kind,
+                    mime_type=part.mime_type,
+                    text_inline=part.text or "",
+                    size_bytes=int(part.size_bytes or 0),
+                    checksum=part.checksum or "",
+                    part_metadata=part.metadata,
+                )
+            )
+        session.flush()
         return event
+
+    def _normalize_terminal_event_parts(
+        self,
+        event: TerminalEvent,
+        parts: list[TerminalEventPartInput],
+    ) -> list[TerminalEventPartInput]:
+        if parts:
+            normalized_parts: list[TerminalEventPartInput] = []
+            part_counts: dict[str, int] = {}
+            for index, part in enumerate(parts):
+                normalized_parts.append(self._validate_terminal_event_part(part, index, part_counts))
+            return normalized_parts
+        if event.direction != "input":
+            return []
+        if event.artifact_object_id:
+            return []
+        text = self._terminal_input_text_from_payload(event.payload_inline)
+        if text:
+            return [
+                TerminalEventPartInput(
+                    part_id="text_1",
+                    kind="text",
+                    mime_type="text/plain",
+                    text=text,
+                )
+            ]
+        return []
+
+    def _validate_terminal_event_part(
+        self,
+        part: TerminalEventPartInput,
+        index: int,
+        part_counts: dict[str, int] | None = None,
+    ) -> TerminalEventPartInput:
+        kind = (part.kind or "").strip().lower()
+        if not kind:
+            kind = self._part_kind_for_mime_type((part.mime_type or "").strip().lower())
+        if kind not in {"text", "image", "video", "audio"}:
+            raise SkillValidationError("terminal event part kind 仅支持 text/image/video/audio。", details={"kind": part.kind})
+        if kind == "text" and not str(part.text or "").strip():
+            raise SkillValidationError("text part 必须包含 text。", details={"part_id": part.part_id})
+        if kind != "text" and not part.artifact_object_id:
+            raise SkillValidationError("多模态 part 必须绑定 artifact_object_id。", details={"part_id": part.part_id})
+        mime_type = (part.mime_type or "").strip().lower()
+        if kind != "text" and not mime_type.startswith(f"{kind}/"):
+            raise SkillValidationError(
+                "terminal event part kind 与 mime_type 不匹配。",
+                details={"part_id": part.part_id, "kind": kind, "mime_type": part.mime_type},
+            )
+        part_id = (part.part_id or "").strip()
+        kind_index = index + 1
+        if part_counts is not None:
+            part_counts[kind] = part_counts.get(kind, 0) + 1
+            kind_index = part_counts[kind]
+        if not part_id:
+            part_id = f"{kind}_{kind_index}"
+        return TerminalEventPartInput(
+            part_id=part_id,
+            kind=kind,
+            mime_type=part.mime_type or ("text/plain" if kind == "text" else "application/octet-stream"),
+            text=part.text,
+            artifact_object_id=part.artifact_object_id,
+            size_bytes=part.size_bytes,
+            checksum=part.checksum,
+            metadata=part.metadata,
+        )
 
     def _sync_terminal_events(self, session: Session, *, run: Run, token: dict[str, Any]) -> dict[str, Any]:
         cursor = int(_get_path(token, "metadata.terminal_cursor") or 0)
@@ -1569,12 +1698,12 @@ class RuntimeService:
         token_events = terminal.setdefault("events", [])
         input_envelope = next_token.setdefault("input_envelope", {})
         for event in events:
-            event_payload = self._terminal_event_token_payload(event)
+            event_payload = self._terminal_event_token_payload_with_parts(session, event)
             token_events.append(event_payload)
             terminal["latest_seq"] = event.seq_no
             next_token.setdefault("metadata", {})["terminal_cursor"] = event.seq_no
             if event.direction == "input":
-                input_text = self._terminal_input_text(event)
+                input_text = self._terminal_input_text(event, event_payload.get("parts") if isinstance(event_payload.get("parts"), list) else None)
                 if input_text:
                     input_envelope["user_input"] = input_text
                     input_envelope.setdefault("text", input_text)
@@ -1583,6 +1712,8 @@ class RuntimeService:
                     evidence = {
                         **event_payload,
                         "text": input_text,
+                        "input_bundle": event_payload.get("input_bundle")
+                        or self._terminal_input_bundle_from_parts(event, event_payload.get("parts") or []),
                     }
                     wait.setdefault("evidence", []).append(evidence)
                     wait["latest_event_seq"] = event.seq_no
@@ -1688,18 +1819,86 @@ class RuntimeService:
             "occurred_at": event.occurred_at.isoformat(),
         }
 
+    def _terminal_event_token_payload_with_parts(self, session: Session, event: TerminalEvent) -> dict[str, Any]:
+        payload = self._terminal_event_token_payload(event)
+        parts = [self._terminal_event_part_token_payload(part) for part in self.repository.list_terminal_event_parts(session, event.id)]
+        if parts:
+            payload["parts"] = parts
+            payload["input_bundle"] = self._terminal_input_bundle_from_parts(event, parts)
+        return payload
+
     @staticmethod
-    def _terminal_input_text(event: TerminalEvent) -> str:
-        value = event.payload_inline
+    def _terminal_event_part_token_payload(part: TerminalEventPart) -> dict[str, Any]:
+        return {
+            "id": part.id,
+            "part_id": part.part_id,
+            "order_index": part.order_index,
+            "kind": part.kind,
+            "mime_type": part.mime_type,
+            "text": part.text_inline,
+            "artifact_object_id": part.artifact_object_id,
+            "size_bytes": part.size_bytes,
+            "checksum": part.checksum,
+            "metadata": part.part_metadata,
+        }
+
+    @classmethod
+    def _terminal_input_bundle_from_parts(cls, event: TerminalEvent, parts: list[dict[str, Any]]) -> dict[str, Any]:
+        summary = cls._terminal_input_summary(parts, event.payload_inline)
+        return {
+            "event_id": event.id,
+            "seq_no": event.seq_no,
+            "event_kind": event.event_kind,
+            "mime_type": event.mime_type,
+            "text": summary,
+            "parts": parts,
+        }
+
+    @classmethod
+    def _terminal_input_text(cls, event: TerminalEvent, parts: list[dict[str, Any]] | None = None) -> str:
+        if parts:
+            return cls._terminal_input_summary(parts, event.payload_inline)
+        return cls._terminal_input_text_from_payload(event.payload_inline)
+
+    @staticmethod
+    def _terminal_input_text_from_payload(value: Any) -> str:
         if isinstance(value, str):
             return value
         if isinstance(value, dict):
-            for key in ("user_input", "text", "value", "content"):
+            for key in ("user_input", "text", "value", "content", "description", "summary", "name", "filename"):
                 if value.get(key):
                     return str(value[key])
         if value is None:
             return ""
         return json.dumps(value, ensure_ascii=False)
+
+    @staticmethod
+    def _part_kind_for_mime_type(mime_type: str) -> str:
+        if mime_type.startswith("image/"):
+            return "image"
+        if mime_type.startswith("audio/"):
+            return "audio"
+        if mime_type.startswith("video/"):
+            return "video"
+        return "text" if mime_type.startswith("text/") else "file"
+
+    @classmethod
+    def _terminal_input_summary(cls, parts: list[dict[str, Any]], payload_inline: Any | None = None) -> str:
+        lines: list[str] = []
+        for part in parts:
+            kind = str(part.get("kind") or "")
+            text = str(part.get("text") or "").strip()
+            metadata = part.get("metadata") if isinstance(part.get("metadata"), dict) else {}
+            filename = str(metadata.get("filename") or metadata.get("name") or "").strip()
+            if kind == "text" and text:
+                lines.append(text)
+            elif filename:
+                lines.append(f"{kind or 'attachment'}: {filename}")
+            elif kind:
+                lines.append(f"{kind} input")
+        if lines:
+            return "\n".join(lines)
+        return cls._terminal_input_text_from_payload(payload_inline)
 
     @staticmethod
     def _capability_for_requirement(requirement_key: str) -> str:
@@ -1827,12 +2026,23 @@ class RuntimeService:
                 artifact_payload,
             )
             route_key = artifact_payload.get("capability_summary", {}).get("llm_route_key", "default")
+            attachments = self._resolve_llm_attachments(session, token)
             with start_span("gateway.inference", route_key=route_key, node_id=node.get("id")):
-                llm_completion = self.inference_gateway.complete(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    route_key=route_key,
-                )
+                if attachments:
+                    if not hasattr(self.inference_gateway, "complete_multimodal"):
+                        raise RuntimeError("当前 LLM Inference Gateway 不支持多模态输入。")
+                    llm_completion = self.inference_gateway.complete_multimodal(
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        attachments=attachments,
+                        route_key=route_key,
+                    )
+                else:
+                    llm_completion = self.inference_gateway.complete(
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        route_key=route_key,
+                    )
             budgets = token.setdefault("budgets", {})
             budgets["llm_calls"] = int(budgets.get("llm_calls", 0)) + 1
             self._accumulate_llm_usage(budgets, llm_completion.usage)
@@ -1846,6 +2056,7 @@ class RuntimeService:
                     route_key=route_key,
                     agent_prompt=prompt_metadata,
                 ),
+                "input_parts": self._llm_attachment_summary(attachments),
                 "output": {"content": llm_completion.content},
                 "usage": llm_completion.usage,
                 "summary": "LLM 节点执行完成。",
@@ -1940,6 +2151,57 @@ class RuntimeService:
             },
         }
         return _render_template(system_template, context), _render_template(user_template, context), prompt_metadata
+
+    def _resolve_llm_attachments(self, session: Session, token: dict[str, Any]) -> list[LlmAttachment]:
+        parts = self._latest_input_parts(token)
+        attachments: list[LlmAttachment] = []
+        for part in parts:
+            kind = str(part.get("kind") or "").lower()
+            artifact_object_id = str(part.get("artifact_object_id") or "")
+            if kind == "text" or not artifact_object_id:
+                continue
+            artifact_object = self.repository.get_artifact_object(session, artifact_object_id)
+            if not artifact_object:
+                raise RuntimeError(f"Terminal input attachment `{artifact_object_id}` not found.")
+            if self.object_store is None:
+                raise RuntimeError("RuntimeService 未配置对象存储，无法读取多模态输入。")
+            content = self.object_store.download_bytes(bucket=artifact_object.bucket, object_key=artifact_object.object_key)
+            metadata = part.get("metadata") if isinstance(part.get("metadata"), dict) else {}
+            filename = str(metadata.get("filename") or metadata.get("name") or f"{part.get('part_id') or artifact_object_id}")
+            media_type = str(part.get("mime_type") or artifact_object.media_type or "application/octet-stream")
+            attachments.append(
+                LlmAttachment(
+                    filename=filename,
+                    media_type=media_type,
+                    content_base64=base64.b64encode(content).decode("ascii"),
+                )
+            )
+        return attachments
+
+    @staticmethod
+    def _latest_input_parts(token: dict[str, Any]) -> list[dict[str, Any]]:
+        control = token.get("control") if isinstance(token.get("control"), dict) else {}
+        latest_evidence = control.get("latest_evidence") if isinstance(control, dict) else None
+        if isinstance(latest_evidence, dict) and isinstance(latest_evidence.get("parts"), list):
+            return [part for part in latest_evidence["parts"] if isinstance(part, dict)]
+        terminal = token.get("terminal") if isinstance(token.get("terminal"), dict) else {}
+        events = terminal.get("events") if isinstance(terminal, dict) else []
+        if isinstance(events, list):
+            for event in reversed(events):
+                if isinstance(event, dict) and event.get("direction") == "input" and isinstance(event.get("parts"), list):
+                    return [part for part in event["parts"] if isinstance(part, dict)]
+        return []
+
+    @staticmethod
+    def _llm_attachment_summary(attachments: list[LlmAttachment]) -> list[dict[str, Any]]:
+        return [
+            {
+                "filename": attachment.filename,
+                "media_type": attachment.media_type,
+                "content_base64_chars": len(attachment.content_base64),
+            }
+            for attachment in attachments
+        ]
 
     @staticmethod
     def _parse_evaluation_observation(content: str, *, node: dict[str, Any]) -> dict[str, Any]:
@@ -2130,8 +2392,7 @@ class RuntimeService:
             created_at=terminal_session.created_at,
         )
 
-    @staticmethod
-    def _build_terminal_event_response(event: TerminalEvent) -> TerminalEventResponse:
+    def _build_terminal_event_response(self, session: Session, event: TerminalEvent) -> TerminalEventResponse:
         return TerminalEventResponse(
             id=event.id,
             terminal_session_id=event.terminal_session_id,
@@ -2146,8 +2407,30 @@ class RuntimeService:
             seq_no=event.seq_no,
             external_event_id=event.external_event_id,
             source_ref=event.source_ref,
+            parts=[
+                self._build_terminal_event_part_response(part)
+                for part in self.repository.list_terminal_event_parts(session, event.id)
+            ],
             occurred_at=event.occurred_at,
             created_at=event.created_at,
+        )
+
+    @staticmethod
+    def _build_terminal_event_part_response(part: TerminalEventPart) -> TerminalEventPartResponse:
+        return TerminalEventPartResponse(
+            id=part.id,
+            terminal_event_id=part.terminal_event_id,
+            run_id=part.run_id,
+            artifact_object_id=part.artifact_object_id,
+            part_id=part.part_id,
+            order_index=part.order_index,
+            kind=part.kind,
+            mime_type=part.mime_type,
+            text=part.text_inline,
+            size_bytes=part.size_bytes,
+            checksum=part.checksum,
+            metadata=part.part_metadata,
+            created_at=part.created_at,
         )
 
     @staticmethod
@@ -2260,7 +2543,17 @@ class RuntimeService:
     @staticmethod
     def _build_terminal_timeline_item(event: TerminalEventResponse) -> ReplayTimelineItem:
         title = "终端输入" if event.direction == "input" else "终端输出"
-        if isinstance(event.payload_inline, str):
+        if event.parts:
+            summary = "\n".join(
+                filter(
+                    None,
+                    [
+                        part.text or part.metadata.get("filename") or part.part_id
+                        for part in event.parts
+                    ],
+                )
+            )
+        elif isinstance(event.payload_inline, str):
             summary = event.payload_inline
         elif event.payload_inline is None:
             summary = event.event_kind

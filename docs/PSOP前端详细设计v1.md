@@ -293,13 +293,13 @@
 
 #### 7.4.3 `Run Live` `/admin/runs/:runId/live`
 
-- 页面目标：围绕当前现实步骤实时协作执行 skill，并在 Runtime 等待时提交文本、图片、视频、文件或设备反馈等现场证据。
+- 页面目标：围绕当前现实步骤实时协作执行 skill，并在 Runtime 等待时提交文本、图片、视频、音频或设备反馈等现场证据。
 - 核心区块：
   - run 状态头，展示 `status`、`runtime_phase`、`terminal_session_id`
   - 当前任务摘要、适用边界、安全提醒和准备事项
   - 当前现实步骤：`current_step`、步骤标题、步骤目标、当前指令
   - 等待上下文：`wait_reason`、`expected_inputs`、`checkpoint_id`、最近 evaluation decision
-  - 多模态输入区：文本、图片、视频、音频、文件或设备反馈入口
+  - 多模态输入区：一个输入事件内的文本框与 `attachments[]` 队列，支持同时选择图片、视频、音频；自然语言说明统一作为文本输入提交
   - binding summary
   - node execution timeline
   - session token 摘要
@@ -307,7 +307,7 @@
   - trace event stream
   - node / actor inspector
 - 关键动作：
-  - 通过 `/api/terminal/sessions/{run_id}/events` 注入当前 checkpoint 所需的 terminal input / evidence
+  - 通过 `/api/terminal/sessions/{run_id}/events` 注入当前 checkpoint 所需的 terminal input / evidence；纯文本走 JSON，含附件时构造 `multipart/form-data`，其中 `event` JSON 只保存 `text`、`source`、`external_event_id` 等事件级字段，文件使用重复的 `files` 字段提交，`parts[]` 由服务端返回
   - 暂停自动滚动
   - 按 event type 过滤 trace
   - 打开 OTel trace
@@ -318,6 +318,7 @@
   - WS 发送 terminal input 只作为后续低延迟优化；服务端仍必须先落成 `terminal_event` 后再广播
   - 页面不得把 terminal output 都当作最终结果；只有 run 终态和 final verification 成立后才展示为最终完成
   - `waiting_input` 时必须突出当前等待原因与期望输入类型，避免退化成普通聊天框
+  - 乐观消息、REST transcript 与 WS 增量事件均按 `event.parts[]` 渲染，同一条气泡内可同时展示文本、图片缩略图、音频播放器和视频播放器；媒体读取使用 `/events/{event_id}/parts/{part_id}/content`
   - 结束后自动提示进入 replay
 
 ### 7.4.4 `Skill Test Scenario` `/admin/skills/:skillId/tests/new` 与 `/admin/skills/:skillId/tests/:scenarioId`
@@ -331,16 +332,17 @@
   - 右侧基础信息：场景名称、描述；目标运行产物默认使用 latest published ready artifact，不在普通表单中暴露版本/artifact 选择
   - 主体时间轴：输入分组包含 GPS、三轴定位、文本、图片、音频、视频信道；输出分组包含单一阶段文本信道；底部时间行以分钟配置总时长，默认 30 分钟
   - 事件创建：用户点击某个信道的时间位置即可新增事件；拖动事件可改变 `at_ms`，右侧属性面板编辑内容
-  - 多模态输入：图片、音频、视频事件可在事件属性中直接上传并绑定资源，也可选择已有场景资源
+  - 多模态输入：同一个 input event 可在事件属性中配置文本 part 和多个图片、音频、视频资源 part；资源可直接上传并绑定，也可选择已有场景资源
   - 传感器输入：GPS 事件编辑 `{ latitude, longitude, altitude?, accuracy_m?, timestamp? }`，三轴定位事件编辑 `{ x, y, z, roll?, pitch?, yaw?, timestamp? }`
   - 阶段输出：`expected.semantic` 的每个事件代表一个现实任务阶段，只配置阶段时间点与 `expectation`；判断语义为“该阶段时间点以前已经满足”
   - 高级 JSON：保留 `timeline` 与 `judge_policy` 的 JSON 编辑入口，但默认流程不要求用户手写 JSON
 - 状态要求：
   - `timeline.schema_version` 固定为 `psop-skill-test-timeline/v1`
-  - 输入事件保存 `id`、`lane_id`、`at_ms`、`event_kind`、`mime_type`、`payload_inline` 或 `asset_id`；sensor lane 的 `payload_inline` 必须是结构化对象
+  - 输入事件保存 `id`、`lane_id`、`at_ms`、`event_kind`、`mime_type`、`payload_inline` 与可选 `parts[]`；Skill Test 内部 `parts[]` 字段包含 `part_id`、`kind=text|image|video|audio`、`mime_type`、`text?`、`asset_id?`，自然语言说明使用 text part；sensor lane 的 `payload_inline` 必须是结构化对象
   - 输出期望事件保存 `id`、`lane_id="expected.semantic"`、`at_ms`、`expectation`，其中 `id` 即阶段 id
-  - 场景资源上传进入对象存储，并以 `skill_test_asset.artifact_object_id` 被 timeline 事件引用
-  - 新建场景时如果存在本地暂存资源，前端先创建 scenario，再上传资源并 patch timeline 中的临时 `asset_id`
+  - 场景资源上传进入对象存储，并以 `skill_test_asset.artifact_object_id` 被 timeline event 的 `parts[].asset_id` 引用
+  - 新建场景时如果存在本地暂存资源，前端先创建 scenario，再上传资源并 patch timeline 中的临时 `parts[].asset_id`
+  - 顶层 `asset_id` 只用于读取历史单资源事件；前端新建和编辑流程统一写入 `parts[]`
 
 ### 7.4.5 `Skill Test Scenario Review` `/admin/skills/:skillId/tests/:scenarioId/runs/:scenarioRunId/review`
 
@@ -354,6 +356,7 @@
   - Fork 操作：当前切面可 `Fork Scenario` 或 `Fork Debug`；选中阶段事件时优先使用该阶段 `stage_outputs[].cursor`，Fork Scenario 的时间轴总时长默认保持原测试场景不变，并保留切面时间点及以前的 timeline 事件，也可打开真实 Run Replay
 - 状态要求：
   - Review 优先消费 `/api/skill-test-scenario-runs/{scenario_run_id}/review`，并使用其中的 `stage_outputs[]` 驱动阶段详情
+  - Review transcript 遍历 terminal event 的 `parts[]`，把一次现场提交展示为一条多模态输入，不把同一批证据拆成多条独立消息
   - 游标以 `time_ms`、`terminal_seq`、`snapshot_seq` 三元组表示，保证 fork 使用精确 Session Token Snapshot 与 terminal prefix
   - Review 不模拟运行结果，只基于已持久化的 replay timeline、terminal events、trace events、snapshots 与 evaluation records
 
@@ -381,6 +384,8 @@
   - 跳转指定 trace event
   - 导出 replay URL
   - 打开对应 compile artifact
+- 状态要求：
+  - Replay transcript 与 Live Run 使用同一套 `event.parts[]` 渲染逻辑，保证历史回放中的多模态输入仍保持同事件整体语义和媒体预览能力
 
 #### 7.5.3 `Trace Detail` `/admin/replay/traces/:traceId`
 

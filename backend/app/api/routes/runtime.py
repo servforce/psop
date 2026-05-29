@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import mimetypes
+import json
 import posixpath
 import uuid
 from datetime import datetime
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, WebSocket, WebSocketDisconnect, status
-from fastapi import File, Form, UploadFile
+from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import (
@@ -32,6 +34,7 @@ from app.domain.runtime.schemas import (
     RunResponse,
     SessionTokenSnapshotResponse,
     TerminalEventAppendResponse,
+    TerminalEventPartInput,
     TerminalEventResponse,
     TerminalSessionDetailResponse,
     TraceEventResponse,
@@ -234,14 +237,60 @@ def get_terminal_event_content(
     )
 
 
+@terminal_router.get("/sessions/{run_id}/events/{event_id}/parts/{part_id}/content")
+def get_terminal_event_part_content(
+    run_id: str,
+    event_id: str,
+    part_id: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    object_store: ObjectStoreService = Depends(get_object_store),
+    service: RuntimeService = Depends(get_runtime_service),
+) -> Response:
+    part = service.get_terminal_event_part(session, run_id, event_id, part_id)
+    if not part.artifact_object_id:
+        raise SkillValidationError(
+            "当前 Terminal Event Part 没有可展示的对象内容。",
+            details={"run_id": run_id, "event_id": event_id, "part_id": part_id},
+        )
+    artifact_object = session.get(ArtifactObject, part.artifact_object_id)
+    if not artifact_object:
+        raise SkillValidationError(
+            "未找到 Terminal Event Part 对应的对象内容。",
+            details={"run_id": run_id, "event_id": event_id, "part_id": part_id, "artifact_object_id": part.artifact_object_id},
+        )
+    try:
+        content = object_store.download_bytes(bucket=artifact_object.bucket, object_key=artifact_object.object_key)
+    except Exception as exc:
+        raise SkillsGatewayError(
+            "终端对象内容读取失败，请确认对象存储服务可用。",
+            details={"run_id": run_id, "event_id": event_id, "part_id": part_id, "error": str(exc)},
+        ) from exc
+    return _inline_content_response(
+        content=content,
+        mime_type=part.mime_type or artifact_object.media_type or "application/octet-stream",
+        filename=_terminal_part_content_filename(part.model_dump(mode="json")),
+        range_header=request.headers.get("range"),
+    )
+
+
 @terminal_router.post("/sessions/{run_id}/events", response_model=TerminalEventAppendResponse, status_code=202)
 async def append_terminal_event(
     run_id: str,
-    payload: AppendTerminalEventRequest,
+    request: Request,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_app_settings),
+    object_store: ObjectStoreService = Depends(get_object_store),
     service: RuntimeService = Depends(get_runtime_service),
 ) -> TerminalEventAppendResponse:
+    payload = await _parse_terminal_event_request(
+        run_id=run_id,
+        request=request,
+        session=session,
+        settings=settings,
+        object_store=object_store,
+    )
     previous_terminal_seq = service.get_run(session, run_id).latest_terminal_seq
     result = service.append_terminal_event(session, run_id, payload, idempotency_key=idempotency_key)
     await _broadcast_terminal_events_after(
@@ -253,52 +302,174 @@ async def append_terminal_event(
     return result
 
 
-@terminal_router.post("/sessions/{run_id}/files", response_model=TerminalEventAppendResponse, status_code=202)
-async def upload_terminal_file(
+async def _parse_terminal_event_request(
+    *,
     run_id: str,
-    file: UploadFile = File(...),
-    caption: str | None = Form(default=None),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    session: Session = Depends(get_db_session),
-    settings: Settings = Depends(get_app_settings),
-    object_store: ObjectStoreService = Depends(get_object_store),
-    service: RuntimeService = Depends(get_runtime_service),
-) -> TerminalEventAppendResponse:
-    terminal_session = service.get_terminal_session(session, run_id).terminal_session
-    if terminal_session.status != "open":
-        raise SkillValidationError("当前 Terminal Session 已关闭，不能上传文件。", details={"run_id": run_id})
+    request: Request,
+    session: Session,
+    settings: Settings,
+    object_store: ObjectStoreService,
+) -> AppendTerminalEventRequest:
+    content_type = request.headers.get("content-type", "").lower()
+    if content_type.startswith("multipart/form-data"):
+        return await _parse_multipart_terminal_event_request(
+            run_id=run_id,
+            request=request,
+            session=session,
+            settings=settings,
+            object_store=object_store,
+        )
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        raise SkillValidationError("terminal event JSON 请求体无效。", details={"error": str(exc)}) from exc
+    if not isinstance(body, dict):
+        raise SkillValidationError("terminal event 请求体必须是对象。")
+    if "parts" in body:
+        raise SkillValidationError("terminal event 请求不接收客户端 parts；请使用 text 字段和 multipart 文件字段提交。")
+    body = _normalize_json_terminal_event_body(body)
+    payload = AppendTerminalEventRequest.model_validate(body)
+    if any(str(part.kind or "").lower() != "text" for part in payload.parts):
+        raise SkillValidationError("包含二进制 part 的 terminal event 必须使用 multipart/form-data 提交。")
+    return payload
 
-    filename = _safe_terminal_upload_filename(file.filename or "upload.bin")
-    mime_type = file.content_type or "application/octet-stream"
-    content = await file.read()
-    _validate_terminal_upload(settings=settings, filename=filename, content=content, mime_type=mime_type)
 
-    object_key = posixpath.join("terminal-uploads", run_id, f"{uuid.uuid4()}-{filename}")
+async def _parse_multipart_terminal_event_request(
+    *,
+    run_id: str,
+    request: Request,
+    session: Session,
+    settings: Settings,
+    object_store: ObjectStoreService,
+) -> AppendTerminalEventRequest:
+    form = await request.form()
+    raw_event = form.get("event")
+    if not isinstance(raw_event, str) or not raw_event.strip():
+        raise SkillValidationError("multipart terminal event 必须包含 event JSON 字段。")
+    try:
+        event_body = json.loads(raw_event)
+    except json.JSONDecodeError as exc:
+        raise SkillValidationError("multipart terminal event.event 不是有效 JSON。", details={"error": str(exc)}) from exc
+    if not isinstance(event_body, dict):
+        raise SkillValidationError("multipart terminal event.event 必须是 JSON 对象。")
+    if "parts" in event_body:
+        raise SkillValidationError("multipart terminal event.event 不接收 parts；请将自然语言放入 text，文件作为表单文件字段提交。")
+
+    uploads: list[tuple[str, UploadFile]] = []
+    for key, value in form.multi_items():
+        if hasattr(value, "filename") and hasattr(value, "read"):
+            uploads.append((str(key), value))  # type: ignore[arg-type]
+
+    parsed_parts: list[TerminalEventPartInput] = []
+    part_counts: dict[str, int] = {}
+    event_text = _terminal_event_text_from_body(event_body)
+    if event_text:
+        parsed_parts.append(
+            TerminalEventPartInput(
+                part_id=_next_terminal_part_id("text", part_counts),
+                kind="text",
+                mime_type="text/plain",
+                text=event_text,
+            )
+        )
+
+    for field_name, upload in uploads:
+        parsed_parts.append(
+            await _store_terminal_upload_part(
+                run_id=run_id,
+                upload=upload,
+                field_name=field_name,
+                session=session,
+                settings=settings,
+                object_store=object_store,
+                part_counts=part_counts,
+            )
+        )
+
+    if not parsed_parts:
+        raise SkillValidationError("terminal event 必须包含文本或至少一个图片、音频、视频文件。")
+
+    event_body["parts"] = [part.model_dump(mode="json") for part in parsed_parts]
+    event_body["text"] = event_text or None
+    event_body.setdefault("direction", "input")
+    event_body.setdefault("event_kind", "terminal.multimodal.input.v1")
+    event_body.setdefault("mime_type", "multipart/mixed")
+    event_body.setdefault("payload_inline", _multipart_event_payload(parsed_parts))
+    return AppendTerminalEventRequest.model_validate(event_body)
+
+
+def _normalize_json_terminal_event_body(body: dict[str, Any]) -> dict[str, Any]:
+    event_body = dict(body)
+    event_text = _terminal_event_text_from_body(event_body)
+    if event_text:
+        event_body["text"] = event_text
+        event_body.setdefault("payload_inline", event_text)
+    if not event_body.get("parts") and event_text:
+        event_body["parts"] = [
+            {
+                "kind": "text",
+                "mime_type": "text/plain",
+                "text": event_text,
+            }
+        ]
+    event_body.setdefault("direction", "input")
+    event_body.setdefault("event_kind", "terminal.multimodal.input.v1")
+    event_body.setdefault("mime_type", "multipart/mixed")
+    return event_body
+
+
+def _terminal_event_text_from_body(event_body: dict[str, Any]) -> str:
+    text = event_body.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    payload_inline = event_body.get("payload_inline")
+    if isinstance(payload_inline, str) and payload_inline.strip():
+        return payload_inline.strip()
+    if isinstance(payload_inline, dict):
+        for key in ("user_input", "text", "value", "content", "summary"):
+            value = payload_inline.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _next_terminal_part_id(kind: str, counts: dict[str, int]) -> str:
+    normalized_kind = kind if kind in {"text", "image", "audio", "video"} else "part"
+    counts[normalized_kind] = counts.get(normalized_kind, 0) + 1
+    return f"{normalized_kind}_{counts[normalized_kind]}"
+
+
+async def _store_terminal_upload_part(
+    *,
+    run_id: str,
+    upload: UploadFile,
+    field_name: str,
+    session: Session,
+    settings: Settings,
+    object_store: ObjectStoreService,
+    part_counts: dict[str, int],
+) -> TerminalEventPartInput:
+    filename = _safe_terminal_upload_filename(upload.filename or "upload.bin")
+    upload_mime_type = upload.content_type or "application/octet-stream"
+    kind = _terminal_part_kind_for_mime_type(upload_mime_type)
+    if kind not in {"image", "video", "audio"}:
+        raise SkillValidationError("多模态文件仅支持 image/audio/video MIME 类型。", details={"mime_type": upload_mime_type})
+    content = await upload.read()
+    _validate_terminal_upload(settings=settings, filename=filename, content=content, mime_type=upload_mime_type)
+    part_id = _next_terminal_part_id(kind, part_counts)
+    object_key = posixpath.join("terminal-event-parts", run_id, f"{uuid.uuid4()}-{filename}")
     try:
         stored = object_store.upload_bytes(
             object_key=object_key,
             content=content,
-            media_type=mime_type,
-            metadata={
-                "filename": filename,
-                "run_id": run_id,
-                "source": "terminal",
-            },
+            media_type=upload_mime_type,
+            metadata={"filename": filename, "run_id": run_id, "source": "terminal_event", "part_id": part_id},
         )
     except Exception as exc:
         raise SkillsGatewayError(
             "终端文件上传到对象存储失败，请确认对象存储服务可用。",
-            details={"run_id": run_id, "filename": filename, "error": str(exc)},
+            details={"run_id": run_id, "filename": filename, "part_id": part_id, "error": str(exc)},
         ) from exc
-    event_payload = {
-        "filename": filename,
-        "name": filename,
-        "description": caption or "",
-        "caption": caption or "",
-        "size_bytes": stored.size_bytes,
-        "checksum": stored.checksum,
-        "object_key": stored.object_key,
-    }
     artifact_object = ArtifactObject(
         bucket=stored.bucket,
         object_key=stored.object_key,
@@ -306,35 +477,43 @@ async def upload_terminal_file(
         size_bytes=stored.size_bytes,
         checksum=stored.checksum,
         content_json={
-            "kind": "terminal_upload",
+            "kind": "terminal_event_part",
             "run_id": run_id,
+            "part_id": part_id,
             "filename": filename,
-            "caption": caption or "",
             "metadata": stored.metadata,
         },
     )
     session.add(artifact_object)
     session.flush()
-    previous_terminal_seq = service.get_run(session, run_id).latest_terminal_seq
-    result = service.append_terminal_event(
-        session,
-        run_id,
-        AppendTerminalEventRequest(
-            direction="input",
-            event_kind=_terminal_upload_event_kind(stored.media_type),
-            mime_type=stored.media_type,
-            payload_inline=event_payload,
-            artifact_object_id=artifact_object.id,
-            external_event_id=idempotency_key or f"terminal-upload:{run_id}:{uuid.uuid4()}",
+    part_metadata = {
+        "filename": filename,
+        "name": filename,
+        "field_name": field_name,
+    }
+    return TerminalEventPartInput(
+        part_id=part_id,
+        kind=kind,
+        mime_type=stored.media_type,
+        artifact_object_id=artifact_object.id,
+        size_bytes=stored.size_bytes,
+        checksum=stored.checksum,
+        metadata=part_metadata,
+    )
+
+def _multipart_event_payload(parts: list[TerminalEventPartInput]) -> dict[str, Any]:
+    return {
+        "summary": "\n".join(
+            filter(
+                None,
+                [
+                    part.text or str((part.metadata or {}).get("filename") or "")
+                    for part in parts
+                ],
+            )
         ),
-    )
-    await _broadcast_terminal_events_after(
-        run_id,
-        previous_terminal_seq,
-        session=session,
-        service=service,
-    )
-    return result
+        "part_count": len(parts),
+    }
 
 
 async def _broadcast_terminal_events_after(
@@ -372,9 +551,9 @@ def _validate_terminal_upload(*, settings: Settings, filename: str, content: byt
 
 
 def _is_allowed_terminal_upload_mime_type(mime_type: str) -> bool:
-    if mime_type.startswith(("text/", "image/", "audio/", "video/")):
+    if mime_type.startswith(("image/", "audio/", "video/")):
         return True
-    return mime_type in {"application/json", "application/pdf", "application/octet-stream"}
+    return False
 
 
 def _safe_terminal_upload_filename(filename: str) -> str:
@@ -382,14 +561,14 @@ def _safe_terminal_upload_filename(filename: str) -> str:
     return cleaned or "upload.bin"
 
 
-def _terminal_upload_event_kind(mime_type: str) -> str:
+def _terminal_part_kind_for_mime_type(mime_type: str) -> str:
     if mime_type.startswith("image/"):
-        return "terminal.image.input.v1"
+        return "image"
     if mime_type.startswith("audio/"):
-        return "terminal.audio.input.v1"
+        return "audio"
     if mime_type.startswith("video/"):
-        return "terminal.video.input.v1"
-    return "terminal.file.input.v1"
+        return "video"
+    return "text"
 
 
 def _terminal_event_content_filename(event: TerminalEventResponse) -> str:
@@ -400,6 +579,16 @@ def _terminal_event_content_filename(event: TerminalEventResponse) -> str:
             if isinstance(value, str) and value.strip():
                 return _safe_terminal_upload_filename(value)
     return f"terminal-event-{event.seq_no}"
+
+
+def _terminal_part_content_filename(part: dict[str, Any]) -> str:
+    metadata = part.get("metadata") if isinstance(part.get("metadata"), dict) else {}
+    for source in (metadata, part):
+        for key in ("filename", "name", "title", "object_key", "part_id"):
+            value = source.get(key) if isinstance(source, dict) else None
+            if isinstance(value, str) and value.strip():
+                return _safe_terminal_upload_filename(value)
+    return "terminal-event-part"
 
 
 def _terminal_event_content_mime_type(event: TerminalEventResponse, artifact_object: ArtifactObject) -> str:

@@ -591,7 +591,7 @@
         kind: "",
         src: "",
         title: "",
-        caption: ""
+        description: ""
       },
       liveRunWs: null,
       liveRunWsRunId: "",
@@ -606,7 +606,7 @@
       },
       terminalInputForm: {
         payload: "",
-        file: null
+        attachments: []
       },
       copyFeedback: {},
       buttonTooltipInstalled: false,

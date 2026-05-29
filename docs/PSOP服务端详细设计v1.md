@@ -121,7 +121,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
   - `environment context`：终端、设备、现场、操作系统、网络、传感器或外部系统上下文
   - `workflow steps`：现实操作步骤，不是 LLM 自动执行步骤
   - `step completion criteria`：每个现实步骤的完成标准
-  - `evidence requirements`：每步可接受的文本、图片、视频、音频、文件、传感器或设备反馈
+  - `evidence requirements`：每步可接受的文本、图片、视频、音频、传感器或设备反馈
   - `safety constraints`：风险提示、禁止操作、降级条件和必须停止的情形
   - `recovery paths`：失败、证据不足、不适用、用户中断或危险状态时如何恢复、重试、退出或转人工
   - `final acceptance criteria`：什么时候才算 skill 真正帮助用户完成现实目标
@@ -286,9 +286,11 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 把外部输入输出统一封装为 append-only `terminal_event`，不直接改写运行时状态。
 - 对 WebSocket、MQTT、OPC-UA、Modbus、设备 SDK 等外部协议只做 adapter 接入和 DTO 归一化；原始协议不得直接进入 RuntimeKernel。
 - 校验 `run_id`、`terminal_session_id`、`run_capability_binding_id`、`event_kind`、`mime_type`、schema、幂等键、大小限制、速率限制与 policy 后才允许追加事件。
-- 小文本、小 JSON 可写入 `payload_inline`；图片、音频、视频、大日志与大批量传感器数据必须写入对象存储并通过 `artifact_object_id` 引用。
+- 单个输入 `terminal_event` 表示一次现场提交 envelope；终端请求只提交自然语言 `text` 与文件字段，服务端生成 `terminal_event_part` 并从 MIME 推导 `kind=text | image | video | audio`。
+- 小文本可作为 text part 写入 `terminal_event_part.text_inline`；图片、音频、视频 part 必须由服务端在同一次 `POST events` 请求内写入对象存储，并通过 part 级 `artifact_object_id` 引用。
+- `terminal_event.artifact_object_id` 仅保留为单对象/兼容事件引用；主链路多模态输入不得要求客户端先上传二进制对象或传入对象存储 key。
 - `direction=output` 可记录 Runtime 给用户的任务摘要、准备事项、现实步骤指令、补充证据请求、失败说明和最终结果。
-- `direction=input` 可记录用户确认、文本描述、图片、视频、文件、设备 ACK、传感器读数等现场证据。
+- `direction=input` 可记录用户确认、文本描述、图片、视频、音频、设备 ACK、传感器读数等现场证据。
 - 事件落库后可以通过内部 bus / queue 唤醒 worker 或通知前端，但 bus 不是状态源，丢失通知时 Runtime 必须能从 `terminal_event` 补读恢复。
 
 ### 6.8 `MCPGateway`
@@ -300,6 +302,8 @@ sandbox       -> 按需创建的进程或容器，不常驻
 
 - 提供模型 provider、模型路由、结构化输出、fallback、配额与调用审计。
 - 统一所有模型调用，避免业务节点直连 provider。
+- 运行时 LLM 节点如消费的最新 `input_bundle.parts[]` 含非文本 part，必须走多模态推理路径；纯文本输入继续走文本推理路径。
+- OpenAI-compatible provider adapter 负责把 part 映射为模型 content：文本为 `text`，图片为 `image_url`，视频为 `video_url`，音频为 `input_audio`；不得丢弃任一 part。
 
 ### 6.10 `AgentModule`
 
@@ -328,6 +332,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 - 测试执行必须创建真实 `skill_invocation / run / terminal_session`，并复用 Terminal Gateway、RuntimeKernel、Replay 与 OTel；测试层不模拟 Runtime，也不直接写 Session Token。
 - 测试场景使用 `timeline.schema_version = psop-skill-test-timeline/v1` 描述相对时间轴：输入信道包含 GPS、三轴空间定位、文本、图片、音频与视频，输出信道包含阶段型文本期望。
 - 场景运行创建真实 invocation/run 后写入 `runtime_job.job_type = skill_test_timeline_driver`；driver 按 `event.at_ms` 到点调用 `RuntimeService.append_terminal_event(...)` 追加真实 terminal input。
+- timeline input event 可包含 `parts[]`；driver 必须把同一 timeline event 的文本和多个资源 part 一次性追加为同一个 `terminal_event`，保证黑盒测试输入模型与 Live Run 一致。
 - 输入事件即使发生在 Runtime 尚未进入 `waiting_input` 时，也先落库为终端事实；Runtime 后续在 `Sync` 阶段按 terminal cursor 消费。
 - 输出判断按“阶段时间点以前”执行：每条 `expected.semantic` 事件代表一个现实任务阶段，Judge 只消费 `occurred_at <= time_origin + at_ms` 的真实 terminal output。
 - Judge 必须通过 `LLM Inference Gateway`，默认 route key 为 `skill-test-judge`；评估结果保存状态、置信度、证据引用、理由、prompt hash 和 raw response。
@@ -337,7 +342,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 ### 6.13 `ObjectStoreService`
 
 - 封装 S3-compatible / MinIO 上传能力，负责 bucket、object_key、media_type、size、checksum 与 metadata 的一致性。
-- 小文本/JSON 仍可走 `payload_inline`；图片、音频、视频、PDF、大日志等测试数据必须走对象存储。
+- 小文本/JSON 仍可走 `payload_inline` 或 text part；图片、音频、视频、PDF、大日志等测试数据必须走对象存储，并通过 `artifact_object` 被 terminal part、测试资源或 compile artifact 引用。
 
 ### 6.14 `JobSystem`
 
@@ -381,7 +386,7 @@ sandbox       -> 按需创建的进程或容器，不常驻
 8. 如果 actor 需要 terminal、MCP、LLM、设备或 sandbox 能力，则经 `CapabilityHost` 调用对应 gateway。
 9. 中间 terminal 指令以 `terminal_event(direction=output)` 落库；若该指令需要用户完成现实动作，Runtime 写入 wait checkpoint 并将 run 置为 `waiting_input`。
 10. 终端输入进入 `TerminalGateway` 后先追加为 `terminal_event`，再通过内部 bus / queue 唤醒 worker；bus 不是状态源。
-11. `RuntimeKernel` 在下一轮 `Sync` 按 `run_id + seq_no cursor` 消费 terminal events，把文本、图片、视频、文件、传感器或设备反馈绑定到当前 wait checkpoint，并在 `Merge` 后更新正式 `Session Token`。
+11. `RuntimeKernel` 在下一轮 `Sync` 按 `run_id + seq_no cursor` 消费 terminal events，把一次输入事件的 summary text 与完整 `parts[]` 组成 `input_bundle`，绑定到当前 wait checkpoint，并在 `Merge` 后更新正式 `Session Token`。
 12. evaluation 节点根据证据判断进入下一步、重试、要求补充证据、终止或最终验证。
 13. 每次推进都生成新的 snapshot 与 trace event，直到完成标准被验证后成功、失败条件成立、用户取消或再次进入等待输入状态。
 
@@ -397,7 +402,7 @@ POST /api/gateway/invocations with terminal_context
 -> introduce task / safety boundary / first actionable instruction
 -> append terminal output event
 -> write wait checkpoint and run waiting_input
--> terminal input append terminal_event
+-> terminal input append terminal_event with ordered parts
 -> bus wakeup worker
 -> RuntimeKernel Sync consumes events as checkpoint evidence
 -> Merge updates Session Token
@@ -585,10 +590,24 @@ POST /api/gateway/invocations with terminal_context
 - 唯一约束：`uk_terminal_event_session_seq`
 - 索引：`idx_terminal_event_run_seq`、`idx_terminal_event_binding_seq`
 - 审计字段：`created_at`、`occurred_at`
-- 主链路关联：terminal transcript 与输入输出审计
+- 主链路关联：terminal transcript、一次现场输入 envelope 与输入输出审计
 - 约束：`seq_no` 由服务端分配；`external_event_id` 或 `Idempotency-Key` 用于输入幂等。
-- 约束：小文本、小 JSON 使用 `payload_inline`；图片、音频、视频、大日志、大批量传感器数据使用 `artifact_object_id`。
+- 约束：`payload_inline` 只保存事件级摘要或结构化小 JSON；多模态输入的正式内容在 `terminal_event_part` 中表达。
+- 约束：`artifact_object_id` 只用于单对象/兼容事件；主链路二进制输入必须使用 part 级 `artifact_object_id`。
 - 约束：IoT、MQTT、OPC-UA、Modbus 等原始协议不直接进入 Runtime，必须先由 adapter 转为内部 terminal event DTO。
+
+#### 8.2.12.1 `terminal_event_part`
+
+- 主键：`id UUID`
+- 外键：`terminal_event_id -> terminal_event.id`、`run_id -> run.id`、`artifact_object_id -> artifact_object.id`
+- 关键字段：`part_id`、`order_index`、`kind`、`mime_type`、`text_inline`、`size_bytes`、`checksum`、`metadata JSONB`
+- 状态枚举：无独立状态
+- 唯一约束：`uk_terminal_event_part_event_part`、`uk_terminal_event_part_event_order`
+- 索引：`idx_terminal_event_part_event_order`、`idx_terminal_event_part_run`
+- 审计字段：`created_at`
+- 主链路关联：一个 terminal input event 内由服务端生成的内容单元；Runtime `Sync` 读取 part 生成 `input_bundle.parts[]`，LLM 节点据此选择文本或多模态推理路径。
+- 约束：`kind` 固定为 `text | image | video | audio`；text part 必须有 `text_inline`，非文本 part 必须绑定 `artifact_object_id` 且 `mime_type` 与 kind 匹配。
+- 约束：`metadata` 可保存 `filename`、`name`、来源 asset 等展示信息，不保存 MinIO 内部 object key 作为正式推理输入。
 
 #### 8.2.13 `skill_test_scenario`
 
@@ -599,7 +618,7 @@ POST /api/gateway/invocations with terminal_context
 - 索引：`idx_skill_test_scenario_skill_status_updated_at`
 - 审计字段：`created_at`、`updated_at`
 - 主链路关联：skill 级黑盒时序测试场景定义；普通创建默认使用 latest published ready artifact，`target_compile_artifact_id` 仅作为高级/兼容指定入口。
-- 约束：`timeline.schema_version` 为 `psop-skill-test-timeline/v1`，`duration_ms` 默认 30 分钟；输入事件按 `at_ms` 排序，输出期望事件固定使用 `lane_id = expected.semantic`。
+- 约束：`timeline.schema_version` 为 `psop-skill-test-timeline/v1`，`duration_ms` 默认 30 分钟；输入事件按 `at_ms` 排序，同一输入事件可通过 `parts[]` 组合文本与多个图片/视频/音频资源；输出期望事件固定使用 `lane_id = expected.semantic`。
 
 #### 8.2.14 `skill_test_asset`
 
@@ -609,7 +628,7 @@ POST /api/gateway/invocations with terminal_context
 - 状态枚举：无独立状态，删除场景时级联删除引用；对象内容仍由对象存储与 `artifact_object` 管理
 - 索引：`idx_skill_test_asset_scenario_created_at`
 - 审计字段：`created_at`
-- 主链路关联：场景时间轴中图片、音频、视频等多模态输入事件的资源引用。
+- 主链路关联：场景时间轴中 `parts[].asset_id` 引用的图片、音频、视频等多模态输入资源。
 
 #### 8.2.15 `skill_test_scenario_run`
 
@@ -782,7 +801,7 @@ POST /api/gateway/invocations with terminal_context
 
 ### 9.1 协议约定
 
-- 所有 REST 接口使用 `JSON UTF-8`。
+- REST 默认使用 `JSON UTF-8`；terminal 输入事件和测试资源上传允许使用 `multipart/form-data`。
 - 所有 ID 使用 `UUID` 字符串。
 - 时间字段统一使用 `ISO-8601 UTC`。
 - 写接口支持 `Idempotency-Key` 头。
@@ -890,7 +909,7 @@ POST /api/gateway/invocations with terminal_context
 - `POST` 只负责创建 invocation、run、terminal session、初始 snapshot 与必要的 runtime job，不直接把用户输入写入正式 Runtime 状态。
 - `POST` 的正常语义是“建立连接和能力绑定”；Runtime 后续可主动输出任务摘要、安全边界、准备事项和第一步指令。
 - `terminal_context` 用于描述本次入口是 `web | device | simulator` 以及可选 `device_id`；`binding_preferences` 只表达偏好，最终绑定以 `run_capability_binding` 为准。
-- 新 terminal 调用方应把用户文本、图片、视频、文件、传感器读数或设备反馈作为后续 `terminal_event` 注入；`input_envelope.user_input` 仅作为旧 Web MVP 的兼容入口，不是新运行链路的正常入口。
+- 新 terminal 调用方应把用户文本、图片、视频、音频、传感器读数或设备反馈作为后续 `terminal_event` 注入；`input_envelope.user_input` 仅作为旧 Web MVP 的兼容入口，不是新运行链路的正常入口。
 
 `POST /api/gateway/invocations` 请求示例：
 
@@ -903,9 +922,11 @@ POST /api/gateway/invocations with terminal_context
     "terminal_kind": "web",
     "device_id": null,
     "supported_inputs": [
+      "terminal.multimodal.input.v1",
       "terminal.text.input.v1",
-      "terminal.file.input.v1",
-      "terminal.image.input.v1"
+      "terminal.image.input.v1",
+      "terminal.video.input.v1",
+      "terminal.audio.input.v1"
     ],
     "supported_outputs": [
       "terminal.text.output.v1",
@@ -952,28 +973,31 @@ POST /api/gateway/invocations with terminal_context
 | Method | Path | 用途 | Request | Response |
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/terminal/sessions/{run_id}` | 获取 run 的 terminal session | 无 | `{ terminal_session, transcript_summary }` |
-| `POST` | `/api/terminal/sessions/{run_id}/events` | 注入 terminal input 或记录 output | `{ direction, event_kind, mime_type, payload_inline, artifact_object_id?, binding_id?, source?, external_event_id?, occurred_at? }` | `{ accepted, event_id, seq_no }` |
+| `POST` | `/api/terminal/sessions/{run_id}/events` | 注入 terminal input 或记录 output；主链路唯一现场输入入口 | `application/json` 或 `multipart/form-data: event JSON + file fields` | `{ accepted, event_id, seq_no, event }` |
 | `GET` | `/api/terminal/sessions/{run_id}/events` | transcript 列表 | `query: from_seq,to_seq` | `terminal events` |
+| `GET` | `/api/terminal/sessions/{run_id}/events/{event_id}/content` | 读取单对象/兼容事件内容 | `Range?` | inline bytes |
+| `GET` | `/api/terminal/sessions/{run_id}/events/{event_id}/parts/{part_id}/content` | 读取 terminal event part 的二进制内容 | `Range?` | inline bytes |
 
 状态要求：
 
-- `POST events` 必须先校验 terminal session、run binding、event kind、mime type、schema、幂等键与 policy，再追加 append-only `terminal_event`。
+- `POST events` 必须先校验 terminal session、run binding、event kind、mime type、schema、幂等键与 policy，再追加 append-only `terminal_event` 和服务端生成的 `terminal_event_part`。
+- `application/json` 请求只能提交纯文本输入，正式请求字段为 `direction`、`text`、`source?`、`external_event_id?`、`occurred_at?`。
+- `multipart/form-data` 必须包含 `event` JSON 字段和零个或多个文件字段；`event` JSON 不接收客户端构造的 `parts[]`，自然语言统一放入 `event.text`，图片、视频、音频作为文件字段提交。
+- 服务端根据 `event.text` 和每个文件的 MIME 生成 `terminal_event_part.part_id`、`kind`、`mime_type`、`order_index` 和媒体对象引用。服务端在同一事务内写对象存储、创建 `artifact_object`，再写 `terminal_event_part.artifact_object_id`。服务端不接受客户端传 MinIO/object key 作为正式输入。
 - `binding_id` 指向 `run_capability_binding.id`，缺省时只允许使用该 run 的默认 Web terminal binding。
 - `direction=input` 的事件只在 RuntimeKernel 后续 `Sync -> Merge` 后影响正式状态；`direction=output` 的事件用于 terminal transcript、前端展示与设备下发审计。
 - `direction=output` 可表示任务介绍、步骤指令、补充证据请求、恢复建议、失败说明或最终结果；只有最终完成标准验证后的 output 才可被视为 final output。
-- `direction=input` 可表示用户确认、文本描述、图片、视频、文件、设备 ACK、传感器读数等现场证据，并应由 RuntimeKernel 绑定到当前 wait checkpoint。
+- `direction=input` 可表示用户确认、文本描述、图片、视频、音频、设备 ACK、传感器读数等现场证据，并应由 RuntimeKernel 绑定到当前 wait checkpoint。
+- Runtime `Sync` 必须为输入事件生成 `input_bundle = { event_id, seq_no, event_kind, mime_type, text, parts[] }`；`text` 是文本 part 与文件名组成的可读摘要，不得退化成对象存储 metadata JSON。
+- LLM 节点消费到含非文本 part 的最新 evidence 时必须走多模态路径，并把同一事件内的所有 part 提供给 `LLM Inference Gateway`。
 - WebSocket 可承载低延迟输入命令，但服务端仍必须先落库为 `terminal_event`，再广播 `terminal.event.appended`。
 
-`POST /api/terminal/sessions/{run_id}/events` 请求示例：
+`POST /api/terminal/sessions/{run_id}/events` 纯文本 JSON 请求示例：
 
 ```json
 {
   "direction": "input",
-  "event_kind": "terminal.text.input.v1",
-  "mime_type": "text/plain",
-  "payload_inline": "继续执行",
-  "artifact_object_id": null,
-  "binding_id": "uuid",
+  "text": "继续执行",
   "source": {
     "kind": "web",
     "device_id": null,
@@ -982,6 +1006,24 @@ POST /api/gateway/invocations with terminal_context
   "external_event_id": "client-msg-001",
   "occurred_at": "2026-05-06T10:00:00Z"
 }
+```
+
+`multipart/form-data` 中的 `event` JSON 示例：
+
+```json
+{
+  "direction": "input",
+  "text": "现场电控柜启动后抖动，请结合照片和视频判断。",
+  "source": { "kind": "web" },
+  "external_event_id": "client-msg-002"
+}
+```
+
+同一个 multipart 请求中的文件字段示例：
+
+```text
+files=@panel.png;type=image/png
+files=@startup.mp4;type=video/mp4
 ```
 
 ### 9.9 `/api/skills/{skill_id}/test-scenarios/*`
@@ -1020,9 +1062,29 @@ POST /api/gateway/invocations with terminal_context
       "id": "initial_fault_context",
       "lane_id": "input.text",
       "at_ms": 0,
-      "event_kind": "terminal.text.input.v1",
-      "mime_type": "text/plain",
-      "payload_inline": "现场描述文本",
+      "event_kind": "terminal.multimodal.input.v1",
+      "mime_type": "multipart/mixed",
+      "payload_inline": { "summary": "现场描述文本 + 面板照片 + 启动视频" },
+      "parts": [
+        {
+          "part_id": "text_1",
+          "kind": "text",
+          "mime_type": "text/plain",
+          "text": "现场描述文本"
+        },
+        {
+          "part_id": "image_1",
+          "kind": "image",
+          "mime_type": "image/png",
+          "asset_id": "uuid"
+        },
+        {
+          "part_id": "video_1",
+          "kind": "video",
+          "mime_type": "video/mp4",
+          "asset_id": "uuid"
+        }
+      ],
       "required": true
     },
     {
@@ -1060,12 +1122,14 @@ POST /api/gateway/invocations with terminal_context
 | --- | --- | --- | --- | --- |
 | `POST` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/assets` | 上传场景资源 | `multipart/form-data: file,name?,description?,lane_id?` | `skill test asset` |
 | `GET` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/assets` | 场景资源列表 | 无 | `skill test asset list` |
+| `GET` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}/content` | 读取场景资源内容 | 无 | inline bytes |
 | `DELETE` | `/api/skills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}` | 删除场景资源引用 | 无 | `{ deleted, asset_id }` |
 
 状态要求：
 
 - 上传内容进入对象存储，并创建 `artifact_object`；`skill_test_asset` 只保存场景级引用与文件元数据。
-- 图片、音频、视频输入事件通过 `asset_id` 引用场景资源；driver 发送时转换为 `terminal_event.artifact_object_id`。
+- 图片、音频、视频 part 通过 `parts[].asset_id` 引用场景资源；driver 发送时把同一 timeline event 的所有 part 一次性转换为真实 `terminal_event_part`，并通过 part 级 `artifact_object_id` 绑定对象。
+- timeline 顶层 `asset_id` 仅作为历史单资源事件的迁移入口；新建和编辑流程必须写入 `parts[].asset_id`。
 
 ### 9.11 `/api/skill-test-scenario-runs/*`
 
@@ -1083,9 +1147,9 @@ POST /api/gateway/invocations with terminal_context
 
 - 启动场景运行时创建真实 `skill_invocation / run / terminal_session / run_capability_binding`，`terminal_context.operator_mode = test`，`test_context.kind = skill_blackbox_timeline_test`。
 - 服务端写入 `skill_test_timeline_driver` job；driver 以 scenario run 的 `time_origin` 为原点，按输入事件的 `at_ms` 到点追加真实 terminal input。
-- driver 追加输入时使用幂等 `external_event_id = skill-test-scenario-run:{scenario_run_id}:timeline:{event_id}`，并记录 `scheduled_at / actual_sent_at / drift_ms / terminal_event_id / terminal_seq`。
+- driver 追加输入时使用幂等 `external_event_id = skill-test-scenario-run:{scenario_run_id}:timeline:{event_id}`，并记录 `scheduled_at / actual_sent_at / drift_ms / terminal_event_id / terminal_seq`；同一 timeline input event 的 `parts[]` 不得拆成多条 terminal input。
 - 输出期望评估只向 Judge 提供阶段切面以前的真实 terminal output；Review 的 `stage_outputs[].actual_outputs` 只绑定上一阶段之后、当前阶段以前的真实输出；Judge 失败、JSON 不合法或证据不足均落为 `inconclusive`，默认按失败计入。
-- `fork-scenario` 保存 `fork_seed`，保留原场景默认时间轴总时长，并把切面时间点及以前的 timeline 事件以原 `at_ms` 放入新场景；若这些事件引用图片、音频、视频等测试资源，服务端会复制对应 `SkillTestAsset` 记录并把 fork 后 timeline 的 `asset_id` 重写为新场景内的资源 ID。`fork-debug` 使用指定 snapshot 与 terminal prefix 创建真实 debug invocation。请求结构保持 `{ cursor: { time_ms, terminal_seq, snapshot_seq } }`，前端可从阶段事件反推 cursor。
+- `fork-scenario` 保存 `fork_seed`，保留原场景默认时间轴总时长，并把切面时间点及以前的 timeline 事件以原 `at_ms` 放入新场景；若这些事件的 `parts[].asset_id` 引用图片、音频、视频等测试资源，服务端会复制对应 `SkillTestAsset` 记录并把 fork 后 timeline 的 `parts[].asset_id` 重写为新场景内的资源 ID。`fork-debug` 使用指定 snapshot 与 terminal prefix 创建真实 debug invocation。请求结构保持 `{ cursor: { time_ms, terminal_seq, snapshot_seq } }`，前端可从阶段事件反推 cursor。
 
 ### 9.12 `/api/terminal/devices/*` post-MVP reserved
 
@@ -1098,7 +1162,7 @@ POST /api/gateway/invocations with terminal_context
 | `GET` | `/api/terminal/devices/{device_id}` | 设备详情 | 无 | `terminal device detail` |
 | `PATCH` | `/api/terminal/devices/{device_id}/manifest` | 更新设备 capability manifest | `{ capability_manifest }` | `terminal device detail` |
 | `POST` | `/api/terminal/devices/{device_id}/heartbeat` | 设备心跳 | `{ status, connection_info? }` | `{ accepted }` |
-| `POST` | `/api/terminal/devices/{device_id}/events` | 设备事件入口，由 adapter 归一为 terminal event | `{ run_id, terminal_session_id, binding_id, event_kind, mime_type, payload_inline?, artifact_object_id?, external_event_id?, occurred_at? }` | `{ accepted, event_id, seq_no }` |
+| `POST` | `/api/terminal/devices/{device_id}/events` | 设备事件入口，由 adapter 归一为 terminal event | `{ run_id, terminal_session_id, binding_id, event_kind, mime_type, payload_inline?, parts?, external_event_id?, occurred_at? }` | `{ accepted, event_id, seq_no }` |
 
 `capability_manifest` 至少表达 `inputs`、`outputs`、`event_kind`、`mime_type`、`schema_ref`、`streaming`、`ack_required`、`requires_approval`。MQTT、OPC-UA、Modbus 等协议由 adapter 转换为内部 DTO 后再进入 `TerminalGateway`。
 

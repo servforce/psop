@@ -482,7 +482,7 @@
           }
 
           if (this.route.name === "skill-debug-live") {
-            this.activeDetailTab = "debug";
+            this.activeDetailTab = "runtime";
             await this.loadSkillDetail(this.route.params.skillId);
             await this.loadRunLive(this.route.params.runId);
             return;

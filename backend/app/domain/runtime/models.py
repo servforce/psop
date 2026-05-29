@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.skills.models import generate_uuid, now_utc
@@ -210,4 +210,34 @@ class TerminalEvent(Base):
     external_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_ref: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+
+
+class TerminalEventPart(Base):
+    __tablename__ = "terminal_event_part"
+    __table_args__ = (
+        UniqueConstraint("terminal_event_id", "part_id", name="uk_terminal_event_part_event_part"),
+        UniqueConstraint("terminal_event_id", "order_index", name="uk_terminal_event_part_event_order"),
+        Index("idx_terminal_event_part_event_order", "terminal_event_id", "order_index"),
+        Index("idx_terminal_event_part_run", "run_id", "order_index"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    terminal_event_id: Mapped[str] = mapped_column(
+        ForeignKey("terminal_event.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(ForeignKey("run.id", ondelete="CASCADE"), nullable=False)
+    artifact_object_id: Mapped[str | None] = mapped_column(
+        ForeignKey("artifact_object.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    part_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), default="text/plain", nullable=False)
+    text_inline: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    part_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)

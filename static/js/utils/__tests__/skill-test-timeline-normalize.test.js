@@ -458,6 +458,66 @@ test("multimodal timeline events resolve preview urls from bound assets", () => 
   expect(app.skillTestTimelineAssetPreviewMeta(event)).toBe("image/png · 9 B");
 });
 
+test("timeline input events can hold ordered text and asset parts", () => {
+  const app = createTimelineHarness();
+  app.apiBaseUrl = "/api/v1";
+  app.currentSkill = { id: "skill-1" };
+  app.skillTestCase = { id: "scenario-1", skill_definition_id: "skill-1" };
+  app.skillTestDataObjects = [
+    {
+      id: "asset-image",
+      skill_definition_id: "skill-1",
+      scenario_id: "scenario-1",
+      name: "面板照片",
+      filename: "panel.png",
+      mime_type: "image/png",
+      size_bytes: 9
+    },
+    {
+      id: "asset-video",
+      skill_definition_id: "skill-1",
+      scenario_id: "scenario-1",
+      name: "启动视频",
+      filename: "startup.mp4",
+      mime_type: "video/mp4",
+      size_bytes: 12
+    }
+  ];
+
+  const timeline = app.normalizeSkillTestTimelineDraft({
+    schema_version: "psop-skill-test-timeline/v1",
+    duration_ms: 600000,
+    events: [
+      {
+        id: "site_bundle",
+        lane_id: "input.text",
+        at_ms: 0,
+        parts: [
+          { part_id: "text_1", kind: "text", text: "现场说明" },
+          { part_id: "image_1", kind: "image", asset_id: "asset-image" },
+          { part_id: "video_1", kind: "video", asset_id: "asset-video" }
+        ]
+      }
+    ]
+  });
+  const event = timeline.events[0];
+
+  expect(event.event_kind).toBe("terminal.multimodal.input.v1");
+  expect(event.mime_type).toBe("multipart/mixed");
+  expect(app.skillTestTimelineEventParts(event).map((part) => part.part_id)).toEqual(["text_1", "image_1", "video_1"]);
+  expect(app.skillTestTimelineEventLabel(event)).toBe("现场说明 + 面板照片 + 启动视频");
+  expect(app.skillTestTimelineEventTextValue(event)).toBe("现场说明");
+  expect(app.skillTestTimelinePartPreviewUrl(event.parts[1])).toBe(
+    "/api/v1/skills/skill-1/test-scenarios/scenario-1/assets/asset-image/content"
+  );
+
+  const remapped = app.skillTestTimelineWithAssetIdMap(timeline, {
+    "asset-image": "server-image",
+    "asset-video": "server-video"
+  });
+  expect(remapped.events[0].parts.map((part) => part.asset_id).filter(Boolean)).toEqual(["server-image", "server-video"]);
+});
+
 test("review playback marks events as they reach the playhead", () => {
   const app = createTimelineHarness();
   app.skillTestReview = {

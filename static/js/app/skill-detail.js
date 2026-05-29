@@ -109,7 +109,7 @@
             description: detail.description
           };
           this.resetLazyDetailState(skillId);
-          if (!["overview", "source", "materials", "publish", "compiler", "debug", "runtime", "test"].includes(this.activeDetailTab)) {
+          if (!["overview", "source", "materials", "publish", "compiler", "runtime", "test"].includes(this.activeDetailTab)) {
             this.activeDetailTab = "overview";
           }
           if (this.activeDetailTab === "materials") {
@@ -120,9 +120,6 @@
           }
           if (this.activeDetailTab === "runtime") {
             this.invocationForm.skill_key = detail.key;
-            await this.loadInvocations(detail.key);
-          }
-          if (this.activeDetailTab === "debug") {
             await this.loadInvocations(detail.key);
           }
           if (this.activeDetailTab === "test" && options.loadTestCases !== false) {
@@ -1344,7 +1341,7 @@
           return;
         }
 
-        this.activeDetailTab = "debug";
+        this.activeDetailTab = "runtime";
         await this.navigate(buildSkillDetailPath(this.currentSkill.id));
       },
 
@@ -1391,9 +1388,6 @@
           }
           if (tabName === "compiler") {
             await this.loadCompilerRequests(this.currentSkill.id);
-          }
-          if (tabName === "debug") {
-            await this.loadInvocations(this.currentSkill.key);
           }
           if (tabName === "runtime") {
             this.invocationForm.skill_key = this.currentSkill.key;

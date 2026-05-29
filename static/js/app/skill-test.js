@@ -369,17 +369,83 @@
                     : fallbackExpectation;
                 delete normalized.payload_inline;
                 delete normalized.asset_id;
+                delete normalized.parts;
                 delete normalized.event_kind;
                 delete normalized.mime_type;
               } else if (this.isSkillTestSensorLane(laneId)) {
                 normalized.payload_inline = this.normalizeSkillTestSensorPayload(laneId, event.payload_inline);
                 delete normalized.asset_id;
+                delete normalized.parts;
+              } else if (Array.isArray(event.parts) && event.parts.length) {
+                normalized.parts = this.normalizeSkillTestTimelineParts(event.parts);
+                normalized.event_kind = "terminal.multimodal.input.v1";
+                normalized.mime_type = "multipart/mixed";
               }
               normalizedEvents.push(normalized);
               return normalized;
             })
             .sort((left, right) => Number(left.at_ms || 0) - Number(right.at_ms || 0))
         };
+      },
+
+
+      normalizeSkillTestTimelineParts(parts) {
+        const seenIds = new Set();
+        return (parts || [])
+          .filter((part) => part && typeof part === "object" && !Array.isArray(part))
+          .map((part, index) => {
+            const kind = this.normalizeSkillTestTimelinePartKind(part.kind || part.mime_type || "");
+            let partId = String(part.part_id || `${kind || "part"}_${index + 1}`).trim();
+            if (!partId || seenIds.has(partId)) {
+              partId = `part_${index + 1}`;
+            }
+            seenIds.add(partId);
+            return {
+              ...part,
+              part_id: partId,
+              kind,
+              mime_type: part.mime_type || (kind === "text" ? "text/plain" : `${kind}/*`)
+            };
+          })
+          .filter((part) => ["text", "image", "video", "audio"].includes(part.kind));
+      },
+
+
+      normalizeSkillTestTimelinePartKind(value) {
+        const raw = String(value || "").toLowerCase();
+        if (raw === "text" || raw.startsWith("text/")) {
+          return "text";
+        }
+        if (raw === "audio" || raw.startsWith("audio/")) {
+          return "audio";
+        }
+        if (raw === "video" || raw.startsWith("video/")) {
+          return "video";
+        }
+        return "image";
+      },
+
+
+      syncSkillTestTimelineTextPart(parts, text) {
+        const normalized = this.normalizeSkillTestTimelineParts(parts);
+        const textValue = String(text || "");
+        const textIndex = normalized.findIndex((part) => part.kind === "text");
+        if (textIndex >= 0) {
+          normalized[textIndex] = { ...normalized[textIndex], text: textValue, mime_type: "text/plain" };
+          return normalized;
+        }
+        if (!textValue.trim()) {
+          return normalized;
+        }
+        return [
+          {
+            part_id: "text_1",
+            kind: "text",
+            mime_type: "text/plain",
+            text: textValue
+          },
+          ...normalized
+        ];
       },
 
 
@@ -734,6 +800,11 @@
       },
 
 
+      skillTestTimelineEventCanAttachParts(event) {
+        return Boolean(event && !this.isSkillTestTimelineExpectationEvent(event) && !this.isSkillTestSensorLane(event.lane_id));
+      },
+
+
       skillTestTimelineAcceptForLane(laneId) {
         if (laneId === "input.audio") {
           return "audio/*";
@@ -742,6 +813,11 @@
           return "video/*";
         }
         return "image/*";
+      },
+
+
+      skillTestTimelinePartsAccept() {
+        return "image/*,audio/*,video/*";
       },
 
 
@@ -774,6 +850,162 @@
       },
 
 
+      skillTestTimelineEventParts(event) {
+        return Array.isArray(event?.parts) ? event.parts : [];
+      },
+
+
+      skillTestTimelineEventHasParts(event) {
+        return this.skillTestTimelineEventParts(event).length > 0;
+      },
+
+
+      skillTestTimelinePartAsset(part) {
+        if (!part?.asset_id) {
+          return null;
+        }
+        return this.skillTestAssetById(part.asset_id);
+      },
+
+
+      skillTestTimelinePartLabel(part) {
+        if (!part) {
+          return "";
+        }
+        if (part.kind === "text") {
+          return part.text || "文本";
+        }
+        const asset = this.skillTestTimelinePartAsset(part);
+        const metadata = part.metadata && typeof part.metadata === "object" ? part.metadata : {};
+        return asset ? this.skillTestAssetLabel(asset) : metadata.name || metadata.filename || part.asset_id || part.part_id || "素材";
+      },
+
+
+      skillTestTimelinePartMeta(part) {
+        if (!part) {
+          return "";
+        }
+        if (part.kind === "text") {
+          return "text/plain";
+        }
+        const asset = this.skillTestTimelinePartAsset(part);
+        const values = [part.kind || "", asset?.mime_type || part.mime_type || ""].filter(Boolean);
+        return values.join(" · ");
+      },
+
+
+      skillTestTimelinePartIcon(part) {
+        if (part?.kind === "audio") {
+          return "graphic_eq";
+        }
+        if (part?.kind === "video") {
+          return "movie";
+        }
+        if (part?.kind === "text") {
+          return "text_fields";
+        }
+        return "image";
+      },
+
+
+      skillTestTimelinePartPreviewUrl(part) {
+        const asset = this.skillTestTimelinePartAsset(part);
+        if (!asset) {
+          return "";
+        }
+        return this.skillTestAssetContentUrl(asset);
+      },
+
+
+      removeSkillTestTimelineEventPart(partId) {
+        const draft = this.ensureSkillTestTimelineEventDraft();
+        if (!draft || !Array.isArray(draft.parts)) {
+          return;
+        }
+        this.updateSkillTestTimelineEventDraft("parts", draft.parts.filter((part) => part.part_id !== partId));
+      },
+
+
+      nextSkillTestTimelinePartId(parts, kind) {
+        const prefix = kind || "part";
+        const usedIds = new Set((parts || []).map((part) => String(part?.part_id || "")).filter(Boolean));
+        let index = 1;
+        while (usedIds.has(`${prefix}_${index}`)) {
+          index += 1;
+        }
+        return `${prefix}_${index}`;
+      },
+
+
+      skillTestTimelineEventPartsFromDraft(event) {
+        const parts = this.normalizeSkillTestTimelineParts(event?.parts || []);
+        if (!parts.some((part) => part.kind === "text")) {
+          const text = typeof event?.payload_inline === "string" ? event.payload_inline : "";
+          if (text.trim()) {
+            parts.unshift({
+              part_id: "text_1",
+              kind: "text",
+              mime_type: "text/plain",
+              text
+            });
+          }
+        }
+        if (event?.asset_id && !parts.some((part) => part.asset_id === event.asset_id)) {
+          const asset = this.skillTestTimelineEventAsset(event);
+          const kind = this.normalizeSkillTestTimelinePartKind(asset?.mime_type || event.mime_type || "");
+          parts.push({
+            part_id: this.nextSkillTestTimelinePartId(parts, kind),
+            kind,
+            mime_type: asset?.mime_type || event.mime_type || `${kind}/*`,
+            asset_id: event.asset_id
+          });
+        }
+        return parts;
+      },
+
+
+      appendSkillTestTimelineEventAssetPart(asset) {
+        const draft = this.ensureSkillTestTimelineEventDraft();
+        if (!draft || !asset) {
+          return;
+        }
+        const parts = this.skillTestTimelineEventPartsFromDraft(draft);
+        const kind = this.normalizeSkillTestTimelinePartKind(asset.mime_type || "");
+        const nextPart = {
+          part_id: this.nextSkillTestTimelinePartId(parts, kind),
+          kind,
+          mime_type: asset.mime_type || `${kind}/*`,
+          asset_id: asset.id
+        };
+        this.skillTestTimelineEventDraft = {
+          ...draft,
+          asset_id: "",
+          event_kind: "terminal.multimodal.input.v1",
+          mime_type: "multipart/mixed",
+          parts: this.normalizeSkillTestTimelineParts([...parts, nextPart])
+        };
+      },
+
+
+      skillTestAssetContentUrl(asset) {
+        if (!asset) {
+          return "";
+        }
+        if (asset.preview_url) {
+          return asset.preview_url;
+        }
+        if (asset.is_local) {
+          return "";
+        }
+        const skillId = this.currentSkill?.id || this.skillTestCase?.skill_definition_id || asset.skill_definition_id || "";
+        const scenarioId = this.skillTestCase?.id || asset.scenario_id || "";
+        if (!skillId || !scenarioId || !asset.id) {
+          return "";
+        }
+        return `${this.apiBaseUrl}/skills/${encodeURIComponent(skillId)}/test-scenarios/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(asset.id)}/content`;
+      },
+
+
       skillTestTimelineAssetPreviewKind(event) {
         const laneId = event?.lane_id || "";
         const asset = this.skillTestTimelineEventAsset(event);
@@ -793,21 +1025,7 @@
 
       skillTestTimelineAssetPreviewUrl(event) {
         const asset = this.skillTestTimelineEventAsset(event);
-        if (!asset) {
-          return "";
-        }
-        if (asset.preview_url) {
-          return asset.preview_url;
-        }
-        if (asset.is_local) {
-          return "";
-        }
-        const skillId = this.currentSkill?.id || this.skillTestCase?.skill_definition_id || asset.skill_definition_id || "";
-        const scenarioId = this.skillTestCase?.id || asset.scenario_id || "";
-        if (!skillId || !scenarioId || !asset.id) {
-          return "";
-        }
-        return `${this.apiBaseUrl}/skills/${encodeURIComponent(skillId)}/test-scenarios/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(asset.id)}/content`;
+        return this.skillTestAssetContentUrl(asset);
       },
 
 
@@ -1163,6 +1381,15 @@
           return;
         } else if (fieldName === "required") {
           event[fieldName] = Boolean(value);
+        } else if (fieldName === "payload_inline" && Array.isArray(event.parts)) {
+          event[fieldName] = value;
+          event.parts = this.syncSkillTestTimelineTextPart(event.parts, value);
+          event.event_kind = "terminal.multimodal.input.v1";
+          event.mime_type = "multipart/mixed";
+        } else if (fieldName === "parts") {
+          event.parts = this.normalizeSkillTestTimelineParts(value);
+          event.event_kind = "terminal.multimodal.input.v1";
+          event.mime_type = "multipart/mixed";
         } else {
           event[fieldName] = value;
         }
@@ -1423,6 +1650,12 @@
         if (this.isSkillTestSensorLane(event?.lane_id)) {
           return this.skillTestSensorEventLabel(event);
         }
+        if (this.skillTestTimelineEventHasParts(event)) {
+          return this.skillTestTimelineEventParts(event)
+            .map((part) => this.skillTestTimelinePartLabel(part))
+            .filter(Boolean)
+            .join(" + ");
+        }
         if (event.asset_id) {
           const asset = this.skillTestAssetById(event.asset_id);
           if (asset) {
@@ -1446,12 +1679,18 @@
         if (this.isSkillTestSensorLane(event?.lane_id)) {
           return this.formatSkillTestReviewDebugJson(event?.payload_inline || {});
         }
+        if (this.skillTestTimelineEventHasParts(event)) {
+          const textPart = this.skillTestTimelineEventParts(event).find((part) => part.kind === "text");
+          if (textPart) {
+            return textPart.text || "";
+          }
+        }
         const payload = event?.payload_inline;
         if (typeof payload === "string") {
           return payload;
         }
         if (payload && typeof payload === "object") {
-          return payload.caption || payload.description || "";
+          return payload.description || "";
         }
         return "";
       },
@@ -1481,6 +1720,17 @@
             next.asset_id = assetIdMap[next.asset_id];
           } else if (options.removeLocalAssetIds && typeof next.asset_id === "string" && next.asset_id.startsWith("local_")) {
             delete next.asset_id;
+          }
+          if (Array.isArray(next.parts)) {
+            next.parts = next.parts.map((part) => {
+              const nextPart = { ...part };
+              if (nextPart.asset_id && assetIdMap[nextPart.asset_id]) {
+                nextPart.asset_id = assetIdMap[nextPart.asset_id];
+              } else if (options.removeLocalAssetIds && typeof nextPart.asset_id === "string" && nextPart.asset_id.startsWith("local_")) {
+                delete nextPart.asset_id;
+              }
+              return nextPart;
+            });
           }
           return next;
         });
@@ -1665,19 +1915,21 @@
         }
         const selected = this.skillTestTimelineSelectedEvent();
         const editorEvent = selected ? this.skillTestTimelineEditorEvent(selected.event) : null;
-        if (!selected || !this.skillTestTimelineEventUsesAsset(editorEvent)) {
-          this.showNotice("error", "请先选择图片、音频或视频事件。");
+        if (!selected || !this.skillTestTimelineEventCanAttachParts(editorEvent)) {
+          this.showNotice("error", "请先选择输入事件。");
           event.target.value = "";
           return;
         }
         const laneId = editorEvent.lane_id;
-        if (!this.skillTestMimeMatchesLane(file.type || "", laneId)) {
+        const inferredLaneId = this.inferSkillTestLaneForMime(file.type || "");
+        const acceptsAnyMedia = laneId === "input.text" || this.skillTestTimelineEventHasParts(editorEvent);
+        if (!acceptsAnyMedia && !this.skillTestMimeMatchesLane(file.type || "", laneId)) {
           this.showNotice("error", "文件类型与当前信道不匹配。");
           event.target.value = "";
           return;
         }
         const assetDraft = this.createSkillTestAssetDraftFromFile(file, {
-          lane_id: laneId,
+          lane_id: acceptsAnyMedia ? inferredLaneId : laneId,
           description: this.skillTestTimelineEventTextValue(editorEvent)
         });
         this.busy.skillTestData = true;
@@ -1685,10 +1937,10 @@
           if (this.skillTestCase) {
             const uploaded = await this.uploadSkillTestAssetFile(this.skillTestCase.id, assetDraft);
             this.skillTestDataObjects = [uploaded, ...(this.skillTestDataObjects || []).filter((asset) => asset.id !== uploaded.id)];
-            this.updateSkillTestTimelineEventDraft("asset_id", uploaded.id);
+            this.appendSkillTestTimelineEventAssetPart(uploaded);
           } else {
             this.skillTestDataObjects = [assetDraft, ...(this.skillTestDataObjects || [])];
-            this.updateSkillTestTimelineEventDraft("asset_id", assetDraft.id);
+            this.appendSkillTestTimelineEventAssetPart(assetDraft);
           }
         } catch (error) {
           this.showNotice("error", error.message || "上传测试文件失败。");
@@ -2675,6 +2927,24 @@
         return this.skillTestReviewEventContentSections(event)
           .map((section) => `${section.title}\n${section.content}`)
           .join("\n\n");
+      },
+
+
+      skillTestReviewTerminalEventParts(event) {
+        return Array.isArray(event?.parts) ? event.parts : [];
+      },
+
+
+      skillTestReviewTerminalEventHasParts(event) {
+        return this.skillTestReviewTerminalEventParts(event).length > 0;
+      },
+
+
+      skillTestReviewTerminalPartMediaUrl(event, part) {
+        if (!event?.run_id || !event?.id || !part?.part_id || !part?.artifact_object_id) {
+          return "";
+        }
+        return `${this.apiBaseUrl}/terminal/sessions/${encodeURIComponent(event.run_id)}/events/${encodeURIComponent(event.id)}/parts/${encodeURIComponent(part.part_id)}/content`;
       },
 
 

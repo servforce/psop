@@ -23,8 +23,6 @@ test("data-dependent page fragments are not instantiated before their data exist
 test("run live page is read-only and uses interaction data tabs", () => {
   const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
 
-  expect(html).not.toContain("sendTerminalInput");
-  expect(html).not.toContain("terminalInputForm");
   expect(html).not.toContain("event.event_kind");
   expect(html).not.toContain("event.mime_type");
   expect(html).not.toContain("event.artifact_object_id");
@@ -32,6 +30,21 @@ test("run live page is read-only and uses interaction data tabs", () => {
   expect(html).not.toContain("terminalEventAvatarClass");
   expect(html).toContain("liveRunInteractionTab === 'transcript'");
   expect(html).toContain("liveRunInteractionTab === 'trace'");
+  expect(html).not.toContain("terminalInputForm");
+  expect(html).not.toContain("terminalInputAttachments()");
+  expect(html).not.toContain("handleTerminalInputFile($event)");
+  expect(html).not.toContain("sendTerminalInput()");
+  expect(html).toContain("terminalEventParts(event)");
+  expect(html).toContain("terminalEventPartMediaUrl(event, part)");
+});
+
+test("skill detail page does not expose the debug tab", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/skill-detail.html"), "utf8");
+
+  expect(html).not.toContain("selectDetailTab('debug')");
+  expect(html).not.toContain("activeDetailTab === 'debug'");
+  expect(html).not.toContain("启动调试");
+  expect(html).not.toContain("调试历史");
 });
 
 test("skill compiler artifact opens as an independent detail page", () => {

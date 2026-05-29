@@ -165,11 +165,13 @@ flowchart TB
 它包含三个子层：
 
 - `Terminal Gateway`
-  - 当前阶段承接文本、图像、语音、视频等输入输出模拟，供 `Web IDE` 驱动 skill 运行
+  - 当前阶段承接文本、图片、音频、视频等输入输出模拟，供 `Web IDE` 驱动 skill 运行
   - 不是普通命令行终端，而是 Web、模拟器、IoT、AR 与真实设备输入输出的统一运行时交互入口
-  - `Invocation` 只负责创建受控运行会话并提交 `terminal_context`、环境与能力信息；真实用户输入、多模态文件和设备读数必须作为后续 `terminal_event` 进入
+  - `Invocation` 只负责创建受控运行会话并提交 `terminal_context`、环境与能力信息；真实用户输入、多模态现场证据和设备读数必须作为后续 `terminal_event` 进入
   - Runtime 建立连接后可以先输出任务摘要、安全边界、准备事项和第一步可执行指令，再进入等待证据状态
   - 用户反馈、现场证据、设备数据、系统中间指导和最终结果都必须归一为 append-only `terminal_event`
+  - 单个输入 `terminal_event` 是一次现场提交的 envelope；终端提交文本与图片、视频、音频文件，服务端规范化为多个 `parts[]`
+  - 二进制 part 由服务端在事件提交事务内写入对象存储并建立 `artifact_object` 索引，客户端不把 MinIO/object key 作为正式输入
   - 所有终端输入输出最终归一为 append-only `terminal_event`，由 RuntimeKernel 在 `Sync -> Merge` 中决定是否进入正式 `Session Token`
 - `MCP Gateway`
   - discovery、policy、allowlist、budget、结果归一化、调用审计
@@ -243,13 +245,13 @@ flowchart TB
 - `Terminal Gateway`
   - 统一 Web 模拟 I/O 与未来真实设备输入协议
 - `Terminal Event`
-  - run 内 append-only 的终端输入输出事件，是用户反馈、现场证据、系统指导、terminal transcript、Replay 与 Runtime `Sync` 的事实源
+  - run 内 append-only 的终端输入输出事件，是用户反馈、现场证据、系统指导、terminal transcript、Replay 与 Runtime `Sync` 的事实源；输入事件由服务端生成 `parts[]`，part 承载 `text | image | video | audio` 及其对象引用
 - `Run Capability Binding`
   - 本次 run 的能力解析结果，把 `terminal`、设备、MCP、LLM、sandbox 等抽象需求绑定到具体受控目标
 - `Skill Test Scenario`
-  - skill 级黑盒时序测试场景，包含 `duration_ms`、多信道 `timeline`、语义输出期望、场景资源引用、Judge 策略与可选 fork seed
+  - skill 级黑盒时序测试场景，包含 `duration_ms`、多信道 `timeline`、语义输出期望、场景资源引用、Judge 策略与可选 fork seed；同一 input event 可通过 `parts[]` 绑定文本和多个资源
 - `Skill Test Asset`
-  - 场景级图片、音频、视频等测试资源引用，底层二进制内容进入对象存储，并由 `artifact_object` 统一索引
+  - 场景级图片、音频、视频等测试资源引用，底层二进制内容进入对象存储，并由 `artifact_object` 统一索引，供 timeline event part 引用
 - `Skill Test Scenario Run`
   - 某个 scenario 的一次真实执行，关联真实 invocation/run/terminal transcript/replay，记录时间轴 driver 状态、输入发送事实与结果摘要
 - `Skill Test Expectation Evaluation`
@@ -268,8 +270,8 @@ flowchart TB
 3. 用户在终端选择某个 `Skill`，通过 `Gateway` 创建 `Skill Invocation`
 4. `Runtime Kernel` 加载该 artifact 并创建 `Run + Session Token + Terminal Session`
 5. `Runtime Kernel` 主动输出任务摘要、安全边界、准备事项和第一步可执行指令
-6. `Run` 进入合法等待状态，等待用户文本、图片、视频、文件、传感器或设备反馈等现场证据
-7. `Terminal Gateway` 将现场证据追加为 `terminal_event`
+6. `Run` 进入合法等待状态，等待用户文本、图片、视频、音频、传感器或设备反馈等现场证据
+7. `Terminal Gateway` 将一次现场提交追加为 `terminal_event`，多模态输入以同一事件 bundle 保持现场证据整体语义
 8. `Runtime Kernel` 在 `Sync` 阶段消费新事件，将证据绑定到当前等待 checkpoint
 9. Runtime actor 根据当前 `EG` 和 `Session Token` 判断证据是否满足步骤完成标准，并进入下一步、要求补充证据、重试、终止或最终验证
 10. 完成标准被验证后才进入 `terminal success`

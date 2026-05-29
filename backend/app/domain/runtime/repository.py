@@ -10,6 +10,7 @@ from app.domain.runtime.models import (
     SessionTokenSnapshot,
     SkillInvocation,
     TerminalEvent,
+    TerminalEventPart,
     TerminalSession,
     TraceEvent,
 )
@@ -89,6 +90,32 @@ class RuntimeRepository:
 
     def get_terminal_event(self, session: Session, event_id: str) -> TerminalEvent | None:
         return session.get(TerminalEvent, event_id)
+
+    def list_terminal_event_parts(self, session: Session, event_id: str) -> list[TerminalEventPart]:
+        return list(
+            session.scalars(
+                select(TerminalEventPart)
+                .where(TerminalEventPart.terminal_event_id == event_id)
+                .order_by(TerminalEventPart.order_index.asc())
+            ).all()
+        )
+
+    def get_terminal_event_part(self, session: Session, part_id: str) -> TerminalEventPart | None:
+        return session.get(TerminalEventPart, part_id)
+
+    def get_terminal_event_part_by_public_id(
+        self,
+        session: Session,
+        *,
+        terminal_event_id: str,
+        part_id: str,
+    ) -> TerminalEventPart | None:
+        return session.scalar(
+            select(TerminalEventPart).where(
+                TerminalEventPart.terminal_event_id == terminal_event_id,
+                TerminalEventPart.part_id == part_id,
+            )
+        )
 
     def get_terminal_event_by_external_id(
         self,

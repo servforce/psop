@@ -49,7 +49,7 @@ function createRuntimeHarness() {
   };
 }
 
-test("terminal image events expose media URL and caption", () => {
+test("terminal image events expose media URL and description", () => {
   const app = createRuntimeHarness();
   const event = {
     id: "event-1",
@@ -60,7 +60,7 @@ test("terminal image events expose media URL and caption", () => {
     mime_type: "application/octet-stream",
     payload_inline: {
       filename: "现场照片.jpg",
-      caption: "已拍摄接线端子。"
+      description: "已拍摄接线端子。"
     }
   };
 
@@ -68,6 +68,44 @@ test("terminal image events expose media URL and caption", () => {
   expect(app.terminalEventMediaUrl(event)).toBe("/api/v1/terminal/sessions/run-1/events/event-1/content");
   expect(app.terminalEventDisplayText(event)).toBe("已拍摄接线端子。");
   expect(app.terminalEventShouldShowPlainText(event)).toBe(false);
+});
+
+test("terminal multipart events expose server-generated part media URLs", () => {
+  const app = createRuntimeHarness();
+  const event = {
+    id: "event-4",
+    run_id: "run-1",
+    direction: "input",
+    event_kind: "terminal.multimodal.input.v1",
+    mime_type: "multipart/mixed",
+    parts: [
+      {
+        part_id: "text_1",
+        order_index: 1,
+        kind: "text",
+        mime_type: "text/plain",
+        text: "现场说明"
+      },
+      {
+        part_id: "image_1",
+        order_index: 2,
+        kind: "image",
+        mime_type: "image/png",
+        artifact_object_id: "object-4",
+        metadata: { filename: "panel.png" }
+      }
+    ]
+  };
+
+  expect(app.terminalEventHasParts(event)).toBe(true);
+  expect(app.terminalEventParts(event).map((part) => part.part_id)).toEqual(["text_1", "image_1"]);
+  expect(app.terminalEventPartIsText(event.parts[0])).toBe(true);
+  expect(app.terminalEventPartIsImage(event.parts[1])).toBe(true);
+  expect(app.terminalEventPartDisplayText(event.parts[1])).toBe("");
+  expect(app.terminalEventPartFileName(event.parts[1])).toBe("panel.png");
+  expect(app.terminalEventPartMediaUrl(event, event.parts[1])).toBe(
+    "/api/v1/terminal/sessions/run-1/events/event-4/parts/image_1/content"
+  );
 });
 
 test("terminal JSON events render as structured payload", () => {
@@ -87,6 +125,21 @@ test("terminal JSON events render as structured payload", () => {
   expect(app.terminalEventShouldShowJson(event)).toBe(true);
   expect(app.terminalEventJsonText(event)).toContain("\"lat\": 31.2");
   expect(app.terminalEventActorLabel(event)).toBe("Runtime");
+});
+
+test("terminal transcript message widths separate metadata from bubble sizing", () => {
+  const app = createRuntimeHarness();
+  const runtimeEvent = { direction: "output" };
+  const userEvent = { direction: "input" };
+
+  expect(app.terminalEventMessageShellClass(runtimeEvent)).toBe("w-fit");
+  expect(app.terminalEventMessageShellStyle(runtimeEvent)).toBe("max-width: 70%;");
+  expect(app.terminalEventContentClass(runtimeEvent)).toBe("items-start");
+  expect(app.terminalEventBubbleClass(runtimeEvent)).toContain("w-fit");
+  expect(app.terminalEventMessageShellClass(userEvent)).toBe("w-fit");
+  expect(app.terminalEventMessageShellStyle(userEvent)).toBe("max-width: 70%;");
+  expect(app.terminalEventContentClass(userEvent)).toBe("items-end");
+  expect(app.terminalEventBubbleClass(userEvent)).toContain("w-fit");
 });
 
 test("terminal PDF events render inline instead of as generic downloads", () => {

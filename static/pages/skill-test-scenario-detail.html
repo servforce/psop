@@ -179,6 +179,35 @@
                     </div>
                   </template>
 
+                  <template x-if="skillTestTimelineEventCanAttachParts(skillTestTimelineSelectedEditorEvent())">
+                    <div class="space-y-2 px-3 py-2" data-skill-test-event-parts>
+                      <div class="flex items-center justify-between gap-2">
+                        <p class="field-label">多模态素材</p>
+                        <label class="inline-flex h-7 cursor-pointer items-center gap-1.5 border border-slate-700 px-2 text-xs text-slate-200 transition hover:border-orange-500/40 hover:text-orange-100">
+                          <span class="material-symbols-outlined text-[15px]">attach_file</span>
+                          <span>添加</span>
+                          <input type="file" class="sr-only" :accept="skillTestTimelinePartsAccept()" :disabled="busy.skillTestData" @change="handleSkillTestTimelineEventFile($event)" />
+                        </label>
+                      </div>
+                      <template x-if="skillTestTimelineEventHasParts(skillTestTimelineSelectedEditorEvent())">
+                        <div class="space-y-1.5">
+                          <template x-for="part in skillTestTimelineEventParts(skillTestTimelineSelectedEditorEvent())" :key="part.part_id">
+                            <div class="flex min-w-0 items-center gap-2 border border-slate-800 bg-slate-950 px-2 py-1.5">
+                              <span class="material-symbols-outlined shrink-0 text-[16px] text-slate-400" x-text="skillTestTimelinePartIcon(part)"></span>
+                              <div class="min-w-0 flex-1">
+                                <p class="truncate text-xs text-slate-100" x-text="skillTestTimelinePartLabel(part)"></p>
+                                <p class="mono-field mt-0.5" x-text="skillTestTimelinePartMeta(part)"></p>
+                              </div>
+                              <button type="button" class="icon-button-danger h-7 w-7" title="移除素材" aria-label="移除素材" data-tooltip="移除素材" @click.stop="removeSkillTestTimelineEventPart(part.part_id)">
+                                <span class="material-symbols-outlined text-[15px]">close</span>
+                              </button>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+
                   <template x-if="isSkillTestSensorLane(skillTestTimelineSelectedEditorEvent().lane_id)">
                     <div class="grid grid-cols-2 gap-2 px-3 py-2" data-skill-test-sensor-fields>
                       <template x-for="field in skillTestSensorFields(skillTestTimelineSelectedEditorEvent().lane_id)" :key="field.key">
@@ -453,6 +482,34 @@
                                 </template>
                                 <template x-if="skillTestTimelineAssetPreviewKind(skillTestTimelineEditorEvent(item.event)) === 'video'">
                                   <video class="max-h-44 w-full border border-slate-800 bg-black object-contain" controls preload="metadata" :src="skillTestTimelineAssetPreviewUrl(skillTestTimelineEditorEvent(item.event))"></video>
+                                </template>
+                              </div>
+                            </template>
+                            <template x-if="skillTestTimelineEventCanAttachParts(skillTestTimelineEditorEvent(item.event))">
+                              <div class="space-y-2" data-skill-test-event-parts>
+                                <div class="flex items-center justify-between gap-2">
+                                  <p class="field-label">多模态素材</p>
+                                  <label class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-slate-700 bg-slate-950 px-2 text-xs text-slate-200 transition hover:border-orange-500/40 hover:bg-slate-900 hover:text-orange-100">
+                                    <span class="material-symbols-outlined text-[15px]">attach_file</span>
+                                    <span>添加</span>
+                                    <input type="file" class="sr-only" :accept="skillTestTimelinePartsAccept()" :disabled="busy.skillTestData" @change="handleSkillTestTimelineEventFile($event)" />
+                                  </label>
+                                </div>
+                                <template x-if="skillTestTimelineEventHasParts(skillTestTimelineEditorEvent(item.event))">
+                                  <div class="space-y-1.5">
+                                    <template x-for="part in skillTestTimelineEventParts(skillTestTimelineEditorEvent(item.event))" :key="part.part_id">
+                                      <div class="flex min-w-0 items-center gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-1.5">
+                                        <span class="material-symbols-outlined shrink-0 text-[16px] text-slate-400" x-text="skillTestTimelinePartIcon(part)"></span>
+                                        <div class="min-w-0 flex-1">
+                                          <p class="truncate text-xs text-slate-100" x-text="skillTestTimelinePartLabel(part)"></p>
+                                          <p class="mono-field mt-0.5" x-text="skillTestTimelinePartMeta(part)"></p>
+                                        </div>
+                                        <button type="button" class="icon-button-danger h-7 w-7" title="移除素材" aria-label="移除素材" data-tooltip="移除素材" @click.stop="removeSkillTestTimelineEventPart(part.part_id)">
+                                          <span class="material-symbols-outlined text-[15px]">close</span>
+                                        </button>
+                                      </div>
+                                    </template>
+                                  </div>
                                 </template>
                               </div>
                             </template>

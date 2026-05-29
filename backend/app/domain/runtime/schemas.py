@@ -111,14 +111,43 @@ class TerminalEventSource(BaseModel):
 
 class AppendTerminalEventRequest(BaseModel):
     direction: str = Field(max_length=32)
-    event_kind: str = Field(default="terminal.text.input.v1", max_length=120)
-    mime_type: str = Field(default="text/plain", max_length=255)
+    event_kind: str = Field(default="terminal.multimodal.input.v1", max_length=120)
+    mime_type: str = Field(default="multipart/mixed", max_length=255)
+    text: str | None = None
     payload_inline: Any | None = None
     artifact_object_id: str | None = None
+    parts: list["TerminalEventPartInput"] = Field(default_factory=list)
     binding_id: str | None = None
     source: TerminalEventSource = Field(default_factory=TerminalEventSource)
     external_event_id: str | None = Field(default=None, max_length=255)
     occurred_at: datetime | None = None
+
+
+class TerminalEventPartInput(BaseModel):
+    part_id: str | None = Field(default=None, max_length=120)
+    kind: str = Field(default="text", max_length=32)
+    mime_type: str = Field(default="text/plain", max_length=255)
+    text: str | None = None
+    artifact_object_id: str | None = None
+    size_bytes: int | None = None
+    checksum: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TerminalEventPartResponse(BaseModel):
+    id: str
+    terminal_event_id: str
+    run_id: str
+    artifact_object_id: str | None = None
+    part_id: str
+    order_index: int
+    kind: str
+    mime_type: str
+    text: str = ""
+    size_bytes: int = 0
+    checksum: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
 
 
 class TerminalEventResponse(BaseModel):
@@ -135,6 +164,7 @@ class TerminalEventResponse(BaseModel):
     seq_no: int
     external_event_id: str | None = None
     source_ref: dict[str, Any]
+    parts: list[TerminalEventPartResponse] = Field(default_factory=list)
     occurred_at: datetime
     created_at: datetime
 

@@ -282,6 +282,15 @@ class OpenAICompatibleInferenceGateway:
                         },
                     }
                 )
+            elif attachment.media_type.startswith("video/"):
+                content_parts.append(
+                    {
+                        "type": "video_url",
+                        "video_url": {
+                            "url": f"data:{attachment.media_type};base64,{attachment.content_base64}",
+                        },
+                    }
+                )
             else:
                 content_parts.append(
                     {

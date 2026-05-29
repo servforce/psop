@@ -1,6 +1,6 @@
 # PSOP 终端接入说明
 
-本文档面向终端开发者，说明外部终端或 Web 终端如何接入 PSOP，完成 Skill 发起、状态展示、文本输入、文件上传、事件同步、断线恢复和幂等重试。
+本文档面向终端开发者，说明外部终端或 Web 终端如何接入 PSOP，完成 Skill 发起、状态展示、多模态输入、事件同步、断线恢复和幂等重试。
 
 本文只描述终端接入边界，不包含平台内部实现细节。
 
@@ -11,12 +11,12 @@
 - 通过 `skill_key` 发起一次运行。
 - 展示当前运行状态、当前等待原因、期望输入和最终输出。
 - 展示终端输入/输出事件流。
-- 发送文本输入。
-- 上传图片、音频、视频、PDF、JSON 或普通文件作为输入附件。
+- 发送文本、图片、音频、视频输入。
+- 在同一次输入事件中同时提交文本和多个多媒体文件。
 - 通过 WebSocket 接收增量提示，并通过 REST 补齐权威状态。
 - 在断线、刷新或网络超时时恢复会话，并避免重复提交输入。
 
-当前版本以文本输入输出为核心，同时支持文件附件输入。复杂设备绑定、多终端协作和端侧权限体系不属于本文范围。
+当前版本的正式输入模型是“一个终端输入事件由服务端规范化为多个 part”。终端请求只提交自然语言 `text` 与图片、音频、视频文件；`part_id`、part 类型和内部展示顺序均由服务端生成。支持的 part 类型为 `text`、`image`、`audio`、`video`。PDF、JSON 文件和普通文件暂不作为正式大模型推理输入；如需使用，应先由终端或上游系统转换为文本、图片、音频或视频。复杂设备绑定、多终端协作和端侧权限体系不属于本文范围。
 
 ## 基础地址
 
@@ -86,12 +86,19 @@ ws(s)://<psop-host>/ws/runs/{run_id}
 
 | event_kind | 方向 | 展示建议 |
 | --- | --- | --- |
-| `terminal.text.input.v1` | input | 用户输入气泡或命令行输入。 |
+| `terminal.multimodal.input.v1` | input | 同一条用户输入气泡内展示文本、图片、音频、视频 part。 |
 | `terminal.text.output.v1` | output | 系统输出文本。 |
-| `terminal.image.input.v1` | input | 图片缩略图或附件卡片。 |
-| `terminal.audio.input.v1` | input | 音频附件卡片。 |
-| `terminal.video.input.v1` | input | 视频附件卡片。 |
-| `terminal.file.input.v1` | input | 通用附件卡片。 |
+
+输入事件的正式内容优先读取 `parts[]`。`payload_inline` 只作为事件级摘要或小文本摘要，不应承载二进制内容、对象存储地址或 MinIO object key。
+
+输入 part 常见类型：
+
+| part.kind | 内容来源 | 展示建议 |
+| --- | --- | --- |
+| `text` | `parts[].text` | 文本段落。 |
+| `image` | part content endpoint | 图片缩略图，可点击预览。 |
+| `audio` | part content endpoint | 音频播放器。 |
+| `video` | part content endpoint | 视频播放器。 |
 
 ## 接入流程
 
@@ -114,12 +121,12 @@ sequenceDiagram
     WS-->>T: ws.connected
 
     loop Run 未结束且 TerminalSession 为 open
-        alt 发送文本输入
+        alt 发送纯文本输入
             T->>API: POST /terminal/sessions/{run_id}/events
             API-->>T: accepted, seq_no, event
             WS-->>T: terminal.event.appended
-        else 上传文件输入
-            T->>API: POST /terminal/sessions/{run_id}/files
+        else 发送文本 + 图片/音频/视频
+            T->>API: POST /terminal/sessions/{run_id}/events multipart/form-data
             API-->>T: accepted, seq_no, event
             WS-->>T: terminal.event.appended
         end
@@ -142,8 +149,8 @@ sequenceDiagram
 1. 创建 Invocation，保存 `run_id` 与 `terminal_session_id`。
 2. 读取 Run、TerminalSession 和历史 TerminalEvent。
 3. 连接 WebSocket。
-4. 用户发送文本时，调用终端事件追加接口。
-5. 用户上传文件时，调用文件上传接口。
+4. 用户发送纯文本时，调用终端事件追加接口并提交 JSON。
+5. 用户同时发送文本、图片、音频或视频时，仍调用同一个终端事件追加接口，提交 `multipart/form-data`。
 6. 每次提交输入后，通过 REST 刷新 Run，并拉取缺失事件。
 7. 断线或刷新后，通过 REST 读取状态和缺失事件，再重连 WebSocket。
 8. Run 进入 `succeeded`、`failed`、`cancelled` 或 `aborted` 后停止发送输入。
@@ -170,9 +177,6 @@ Content-Type: application/json
     "terminal_kind": "external",
     "device_id": "terminal-001",
     "operator": "field-engineer"
-  },
-  "input_envelope": {
-    "user_input": "开始执行这次安装任务"
   }
 }
 ```
@@ -185,7 +189,7 @@ Content-Type: application/json
 | `version_selector` | 否 | 当前默认使用 `latest`。 |
 | `gateway_type` | 否 | 终端接入传 `terminal`。 |
 | `terminal_context` | 否 | 终端类型、设备、连接来源等上下文。 |
-| `input_envelope` | 否 | 初始输入。`user_input` 或 `text` 会被记录为初始终端输入。 |
+| `input_envelope` | 否 | 不推荐新终端使用。Invocation 只负责建立运行会话，真实用户输入应在创建成功后通过 terminal event 提交。 |
 
 `terminal_context` 建议字段：
 
@@ -195,12 +199,8 @@ Content-Type: application/json
 | `device_id` | 否 | 终端设备或客户端实例 ID。 |
 | `operator` | 否 | 当前操作员、坐席或外部系统标识。 |
 
-`input_envelope` 建议字段：
+新终端接入建议不传 `input_envelope`。如果首屏就有用户文本或媒体，应先创建 Invocation，拿到 `run_id` 后调用 `/terminal/sessions/{run_id}/events` 追加输入。
 
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `user_input` | 否 | 初始用户文本。 |
-| `text` | 否 | 初始用户文本的兼容字段；如果同时传 `user_input`，优先使用 `user_input`。 |
 
 终端侧可用响应示例：
 
@@ -208,9 +208,7 @@ Content-Type: application/json
 {
   "id": "invocation-id",
   "gateway_type": "terminal",
-  "input_envelope": {
-    "user_input": "开始执行这次安装任务"
-  },
+  "input_envelope": {},
   "terminal_context": {
     "terminal_kind": "external",
     "device_id": "terminal-001"
@@ -232,7 +230,7 @@ Content-Type: application/json
 | `run_id` | 后续读取状态、发送事件、连接 WebSocket 使用的 Run ID。 |
 | `terminal_session_id` | 终端会话 ID。 |
 | `gateway_type` | 网关类型，终端接入通常为 `terminal`。 |
-| `input_envelope` | 服务端记录的初始输入。 |
+| `input_envelope` | 新终端接入通常为空。 |
 | `terminal_context` | 服务端记录的终端上下文。 |
 | `created_at` / `updated_at` | 创建和更新时间。 |
 
@@ -249,9 +247,6 @@ curl -sS -X POST "$PSOP_API_BASE/gateway/invocations" \
     "terminal_context": {
       "terminal_kind": "external",
       "device_id": "terminal-001"
-    },
-    "input_envelope": {
-      "user_input": "开始执行这次安装任务"
     }
   }'
 ```
@@ -285,11 +280,11 @@ GET /api/v1/runs/{run_id}
   "expected_inputs": [
     {
       "kind": "text",
-      "event_kind": "terminal.text.input.v1"
+      "event_kind": "terminal.multimodal.input.v1"
     },
     {
       "kind": "image",
-      "event_kind": "terminal.image.input.v1"
+      "event_kind": "terminal.multimodal.input.v1"
     }
   ],
   "checkpoint_id": "collect_context_evidence",
@@ -396,6 +391,7 @@ GET /api/v1/terminal/sessions/{run_id}/events?from_seq=4&to_seq=12
     "event_kind": "terminal.text.output.v1",
     "mime_type": "text/markdown",
     "payload_inline": "请先确认电源线已断开，并上传当前机箱内部照片。",
+    "parts": [],
     "seq_no": 1,
     "external_event_id": null,
     "source_ref": {
@@ -410,9 +406,47 @@ GET /api/v1/terminal/sessions/{run_id}/events?from_seq=4&to_seq=12
     "terminal_session_id": "terminal-session-id",
     "run_id": "run-id",
     "direction": "input",
-    "event_kind": "terminal.text.input.v1",
-    "mime_type": "text/plain",
-    "payload_inline": "我已断开电源，准备上传照片。",
+    "event_kind": "terminal.multimodal.input.v1",
+    "mime_type": "multipart/mixed",
+    "payload_inline": {
+      "summary": "我已断开电源，请结合照片确认。",
+      "part_count": 2
+    },
+    "parts": [
+      {
+        "id": "terminal-event-part-text-1",
+        "terminal_event_id": "terminal-event-input-2",
+        "run_id": "run-id",
+        "artifact_object_id": null,
+        "part_id": "text_1",
+        "order_index": 1,
+        "kind": "text",
+        "mime_type": "text/plain",
+        "text": "我已断开电源，请结合照片确认。",
+        "size_bytes": 0,
+        "checksum": "",
+        "metadata": {},
+        "created_at": "2026-05-25T00:01:00Z"
+      },
+      {
+        "id": "terminal-event-part-image-1",
+        "terminal_event_id": "terminal-event-input-2",
+        "run_id": "run-id",
+        "artifact_object_id": "artifact-object-id",
+        "part_id": "image_1",
+        "order_index": 2,
+        "kind": "image",
+        "mime_type": "image/jpeg",
+        "text": "",
+        "size_bytes": 123456,
+        "checksum": "sha256:...",
+        "metadata": {
+          "filename": "photo.jpg",
+          "name": "photo.jpg"
+        },
+        "created_at": "2026-05-25T00:01:00Z"
+      }
+    ],
     "seq_no": 2,
     "external_event_id": "terminal-001-20260525-000001",
     "source_ref": {
@@ -435,7 +469,14 @@ GET /api/v1/terminal/sessions/{run_id}/events?from_seq=4&to_seq=12
 | `direction` | `input` 或 `output`。 |
 | `event_kind` | 事件类型。 |
 | `mime_type` | 内容 MIME。 |
-| `payload_inline` | 文本内容或附件元数据。 |
+| `payload_inline` | 事件级摘要、小文本或结构化小 JSON；多模态输入不要依赖这里获取完整内容。 |
+| `parts` | 服务端生成的输入事件内容单元。纯文本输入通常包含一个 text part；多模态输入可同时包含 text、image、audio、video part。 |
+| `parts[].part_id` | 服务端生成的同一事件内稳定 part ID，用于构造内容读取 URL。 |
+| `parts[].kind` | 服务端根据文本字段或 MIME 推导出的 `text`、`image`、`audio` 或 `video`。 |
+| `parts[].mime_type` | 服务端保存的内容 MIME。 |
+| `parts[].text` | text part 的文本内容。 |
+| `parts[].metadata.filename` | 媒体 part 原始文件名，用于展示。 |
+| `parts[].size_bytes` / `parts[].checksum` | 媒体 part 大小和校验和。 |
 | `seq_no` | 服务端事件顺序号。 |
 | `external_event_id` | 终端侧提交的幂等 ID。 |
 | `source_ref` | 终端侧提交的来源信息。 |
@@ -448,6 +489,22 @@ GET /api/v1/terminal/sessions/{run_id}/events?from_seq=4&to_seq=12
 - 同一个 `id` 只展示一次。
 - 如果本地存在乐观消息，收到相同 `external_event_id` 的服务端事件后，用服务端事件替换。
 - 发现 `seq_no` 不连续时，通过 `from_seq` 拉取缺失事件。
+- 渲染输入事件时优先遍历 `parts[]`，在同一条用户消息内展示。服务端返回顺序只作为默认展示顺序，不承载业务语义。
+- 读取媒体内容时使用 part 内容接口，不要拼接对象存储地址。
+
+读取 part 二进制内容：
+
+```http
+GET /api/v1/terminal/sessions/{run_id}/events/{event_id}/parts/{part_id}/content
+Range: bytes=0-1048575
+```
+
+说明：
+
+- `run_id`、`event_id`、`part_id` 均来自终端事件响应。
+- `Range` 可选；图片缩略图、音频和视频播放器可以按浏览器默认行为请求范围内容。
+- 响应的 `Content-Type` 使用 part 的 `mime_type`。
+- 终端侧不需要也不应该读取或保存 MinIO bucket/object key。
 
 ## 发送文本输入
 
@@ -464,9 +521,7 @@ Idempotency-Key: <client-event-id>
 ```json
 {
   "direction": "input",
-  "event_kind": "terminal.text.input.v1",
-  "mime_type": "text/plain",
-  "payload_inline": "我已经完成上一步，请继续。",
+  "text": "我已经完成上一步，请继续。",
   "source": {
     "kind": "external_terminal",
     "device_id": "terminal-001",
@@ -481,9 +536,10 @@ Idempotency-Key: <client-event-id>
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `direction` | 是 | 终端主动提交时固定为 `input`。 |
-| `event_kind` | 是 | 文本输入使用 `terminal.text.input.v1`。 |
-| `mime_type` | 是 | 文本输入使用 `text/plain`。 |
-| `payload_inline` | 是 | 文本内容；可以是字符串，也可以是包含 `user_input`、`text`、`value` 或 `content` 的对象。 |
+| `text` | 是 | 本次输入中的自然语言文本。服务端会把它规范化为 text part。 |
+| `event_kind` | 否 | 可省略；服务端默认使用 `terminal.multimodal.input.v1`。 |
+| `mime_type` | 否 | 可省略；服务端默认使用 `multipart/mixed`。 |
+| `payload_inline` | 否 | 事件级摘要；不传时服务端使用 `text`。 |
 | `source.kind` | 否 | 来源类型，例如 `external_terminal`、`web`、`cli`。 |
 | `source.device_id` | 否 | 设备或客户端实例 ID。 |
 | `source.connection_id` | 否 | 当前连接 ID。 |
@@ -502,9 +558,26 @@ Idempotency-Key: <client-event-id>
     "terminal_session_id": "terminal-session-id",
     "run_id": "run-id",
     "direction": "input",
-    "event_kind": "terminal.text.input.v1",
-    "mime_type": "text/plain",
+    "event_kind": "terminal.multimodal.input.v1",
+    "mime_type": "multipart/mixed",
     "payload_inline": "我已经完成上一步，请继续。",
+    "parts": [
+      {
+        "id": "terminal-event-part-text-1",
+        "terminal_event_id": "terminal-event-id",
+        "run_id": "run-id",
+        "artifact_object_id": null,
+        "part_id": "text_1",
+        "order_index": 1,
+        "kind": "text",
+        "mime_type": "text/plain",
+        "text": "我已经完成上一步，请继续。",
+        "size_bytes": 0,
+        "checksum": "",
+        "metadata": {},
+        "created_at": "2026-05-25T00:00:00Z"
+      }
+    ],
     "seq_no": 4,
     "external_event_id": "terminal-001-20260525-000001",
     "source_ref": {
@@ -530,8 +603,8 @@ Idempotency-Key: <client-event-id>
 规则：
 
 - 终端客户端只应主动发送 `direction=input`。
-- 文本输入推荐直接把字符串放入 `payload_inline`。
-- 如果 `payload_inline` 是对象，服务端会依次读取 `user_input`、`text`、`value`、`content` 作为文本内容。
+- 终端客户端不要构造 `parts[]`；服务端会根据 `text` 和文件字段生成 part。
+- `payload_inline` 只作为摘要或旧展示兼容字段；正式文本内容以 `event.text` 和服务端生成的 text part 为准。
 - 必须传 `external_event_id` 或 `Idempotency-Key`，用于重试去重。
 - Run 已结束或 TerminalSession 已关闭时，服务端会拒绝继续追加输入。
 
@@ -542,11 +615,9 @@ curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/events" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: terminal-001-20260525-000001" \
   -d '{
-    "direction": "input",
-    "event_kind": "terminal.text.input.v1",
-    "mime_type": "text/plain",
-    "payload_inline": "我已经完成上一步，请继续。",
-    "source": {
+	    "direction": "input",
+	    "text": "我已经完成上一步，请继续。",
+	    "source": {
       "kind": "external_terminal",
       "device_id": "terminal-001",
       "connection_id": "cli-001"
@@ -555,51 +626,71 @@ curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/events" \
   }'
 ```
 
-## 上传文件输入
+## 发送多模态输入
 
 接口：
 
 ```http
-POST /api/v1/terminal/sessions/{run_id}/files
+POST /api/v1/terminal/sessions/{run_id}/events
 Content-Type: multipart/form-data
 Idempotency-Key: <client-event-id>
 ```
+
+同一个请求内必须包含：
+
+- 一个名为 `event` 的 JSON 表单字段。
+- 一个或多个名为 `files` 的二进制文件字段。服务端按请求中的文件列表生成媒体 part。
 
 表单字段：
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `file` | 是 | 要上传的文件。 |
-| `caption` | 否 | 文件说明，会写入终端事件 payload。 |
+| `event` | 是 | JSON 字符串，包含 `text?`、`source?`、`external_event_id?` 等事件级字段。 |
+| `files` | 是 | 可重复的文件字段，支持图片、音频、视频。 |
 
-支持的 MIME 类型：
+`event` JSON 字段示例：
 
-- `text/*`
+```json
+{
+  "direction": "input",
+  "text": "我已断开电源，请结合照片和视频确认。",
+  "source": {
+    "kind": "external_terminal",
+    "device_id": "terminal-001",
+    "connection_id": "cli-001"
+  },
+  "external_event_id": "terminal-001-20260525-000002"
+}
+```
+
+正式多模态 part 支持的 MIME 类型：
+
 - `image/*`
 - `audio/*`
 - `video/*`
-- `application/json`
-- `application/pdf`
-- `application/octet-stream`
 
-文件大小限制由服务端配置控制，默认值为 25 MiB。
+说明：
 
-文件上传成功后，服务端会自动追加一个终端输入事件。事件类型按 MIME 自动判断：
-
-| MIME | event_kind |
-| --- | --- |
-| `image/*` | `terminal.image.input.v1` |
-| `audio/*` | `terminal.audio.input.v1` |
-| `video/*` | `terminal.video.input.v1` |
-| 其他支持类型 | `terminal.file.input.v1` |
+- 文本直接写在 `event.text` 中。没有文本时可以省略。
+- 图片、音频、视频通过重复的 `files` 字段提交。服务端根据每个文件的 MIME 推导 part kind。
+- 文件大小限制由服务端配置控制，默认值为 25 MiB。
+- 终端侧不要上传对象存储 key；服务端会在同一次请求内保存文件并创建 part 级对象引用。
 
 命令示例：
 
 ```bash
-curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/files" \
-  -H "Idempotency-Key: terminal-001-file-000001" \
-  -F "file=@/path/to/photo.jpg;type=image/jpeg" \
-  -F "caption=现场安装照片"
+curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/events" \
+  -H "Idempotency-Key: terminal-001-20260525-000002" \
+  -F 'event={
+    "direction": "input",
+    "text": "我已断开电源，请结合照片确认。",
+    "source": {
+      "kind": "external_terminal",
+      "device_id": "terminal-001"
+    },
+    "external_event_id": "terminal-001-20260525-000002"
+  };type=application/json' \
+  -F "files=@/path/to/photo.jpg;type=image/jpeg"
 ```
 
 终端侧可用响应示例：
@@ -607,28 +698,59 @@ curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/files" \
 ```json
 {
   "accepted": true,
-  "event_id": "terminal-event-file-1",
+  "event_id": "terminal-event-input-5",
   "seq_no": 5,
   "event": {
-    "id": "terminal-event-file-1",
+    "id": "terminal-event-input-5",
     "terminal_session_id": "terminal-session-id",
     "run_id": "run-id",
     "direction": "input",
-    "event_kind": "terminal.image.input.v1",
-    "mime_type": "image/jpeg",
+    "event_kind": "terminal.multimodal.input.v1",
+    "mime_type": "multipart/mixed",
     "payload_inline": {
-      "filename": "photo.jpg",
-      "name": "photo.jpg",
-      "description": "现场安装照片",
-      "caption": "现场安装照片",
-      "size_bytes": 123456,
-      "checksum": "sha256:...",
-      "object_key": "terminal-uploads/run-id/uuid-photo.jpg"
+      "summary": "我已断开电源，请结合照片确认。",
+      "part_count": 2
     },
+    "parts": [
+      {
+        "id": "terminal-event-part-text-1",
+        "terminal_event_id": "terminal-event-input-5",
+        "run_id": "run-id",
+        "artifact_object_id": null,
+        "part_id": "text_1",
+        "order_index": 1,
+        "kind": "text",
+        "mime_type": "text/plain",
+        "text": "我已断开电源，请结合照片确认。",
+        "size_bytes": 0,
+        "checksum": "",
+        "metadata": {},
+        "created_at": "2026-05-25T00:02:00Z"
+      },
+      {
+        "id": "terminal-event-part-image-1",
+        "terminal_event_id": "terminal-event-input-5",
+        "run_id": "run-id",
+        "artifact_object_id": "artifact-object-id",
+        "part_id": "image_1",
+        "order_index": 2,
+        "kind": "image",
+        "mime_type": "image/jpeg",
+        "text": "",
+        "size_bytes": 123456,
+        "checksum": "sha256:...",
+        "metadata": {
+          "filename": "photo.jpg",
+          "name": "photo.jpg"
+        },
+        "created_at": "2026-05-25T00:02:00Z"
+      }
+    ],
     "seq_no": 5,
-    "external_event_id": "terminal-001-file-000001",
+    "external_event_id": "terminal-001-20260525-000002",
     "source_ref": {
-      "kind": "web"
+      "kind": "external_terminal",
+      "device_id": "terminal-001"
     },
     "occurred_at": "2026-05-25T00:02:00Z",
     "created_at": "2026-05-25T00:02:00Z"
@@ -636,40 +758,24 @@ curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/files" \
 }
 ```
 
-上传事件的 `payload_inline` 示例：
-
-```json
-{
-  "filename": "photo.jpg",
-  "name": "photo.jpg",
-  "description": "现场安装照片",
-  "caption": "现场安装照片",
-  "size_bytes": 123456,
-  "checksum": "sha256:...",
-  "object_key": "terminal-uploads/run-id/uuid-photo.jpg"
-}
-```
-
-上传响应字段：
+响应字段：
 
 | 字段 | 说明 |
 | --- | --- |
-| `accepted` | 是否接受上传事件。 |
+| `accepted` | 是否接受事件。 |
 | `event_id` | 服务端终端事件 ID。 |
 | `seq_no` | 服务端终端事件序号。 |
-| `event.event_kind` | 根据 MIME 自动推导出的事件类型。 |
-| `event.payload_inline.filename` | 原始文件名。 |
-| `event.payload_inline.caption` | 上传时提交的说明。 |
-| `event.payload_inline.size_bytes` | 文件大小。 |
-| `event.payload_inline.checksum` | 服务端保存后的校验和。 |
-| `event.payload_inline.object_key` | 服务端文件引用。终端侧只用于展示或后续下载入口，不要自行拼接对象存储地址。 |
+| `event.parts[]` | 服务端保存后的 part 列表。 |
+| `event.parts[].metadata.filename` | 原始文件名。 |
+| `event.parts[].size_bytes` | 文件大小。 |
+| `event.parts[].checksum` | 服务端保存后的校验和。 |
 
 接入建议：
 
-- 原始文件不要通过 `/events` 的 `payload_inline` 传输。
-- 文件类输入统一走 `/files`。
-- 上传失败后可以使用同一个 `Idempotency-Key` 重试，服务端会避免重复创建终端事件。
-- 当前上传接口会先保存文件再追加终端事件；如果首次请求已经成功但响应丢失，重复请求可能产生未引用的重复文件，但不会产生重复终端消息。
+- 同一批现场证据应作为同一个 `terminal_event` 提交，不要拆成多条独立输入事件。
+- 原始二进制不要通过 `payload_inline` 传输。
+- 上传失败或响应丢失后可以使用同一个 `Idempotency-Key` 和 `external_event_id` 重试，服务端会避免重复创建终端消息。
+- 终端展示媒体时调用 `/terminal/sessions/{run_id}/events/{event_id}/parts/{part_id}/content`，不要使用 `artifact_object_id` 拼接下载地址。
 
 ## 订阅 WebSocket
 
@@ -705,7 +811,7 @@ ws.onclose = () => {
 
 客户端输入规则：
 
-- 当前 WebSocket 不接收业务输入。文本和文件输入必须走 REST。
+- 当前 WebSocket 不接收业务输入。文本和多模态输入必须走 REST `/terminal/sessions/{run_id}/events`。
 - 连接建立后客户端无需发送消息。
 - 如果客户端框架需要心跳，优先使用 WebSocket 协议层 ping/pong；不要通过业务消息承载用户输入。
 
@@ -756,9 +862,18 @@ WebSocket 服务端消息统一外层结构：
   "payload": {
     "id": "terminal-event-id",
     "direction": "input",
-    "event_kind": "terminal.text.input.v1",
-    "mime_type": "text/plain",
+    "event_kind": "terminal.multimodal.input.v1",
+    "mime_type": "multipart/mixed",
     "payload_inline": "我已经完成上一步，请继续。",
+    "parts": [
+      {
+        "part_id": "text_1",
+        "order_index": 1,
+        "kind": "text",
+        "mime_type": "text/plain",
+        "text": "我已经完成上一步，请继续。"
+      }
+    ],
     "seq_no": 4
   }
 }
@@ -774,14 +889,15 @@ WebSocket 服务端消息统一外层结构：
 | `payload.direction` | `input` 或 `output`。 |
 | `payload.event_kind` | 终端事件类型。 |
 | `payload.mime_type` | 内容 MIME。 |
-| `payload.payload_inline` | 文本内容或附件元数据。 |
+| `payload.payload_inline` | 事件级摘要、小文本或结构化小 JSON。 |
+| `payload.parts` | 服务端生成的输入事件 part 列表。 |
 | `payload.seq_no` | 服务端终端事件序号。 |
 | `payload.external_event_id` | 终端侧提交的幂等 ID。 |
 | `payload.source_ref` | 终端侧提交的来源信息。 |
 | `payload.occurred_at` | 事件发生时间。 |
 | `payload.created_at` | 服务端创建时间。 |
 
-文件事件推送示例：
+多模态事件推送示例：
 
 ```json
 {
@@ -791,23 +907,41 @@ WebSocket 服务端消息统一外层结构：
   "seq_no": 5,
   "occurred_at": "2026-05-25T00:02:00Z",
   "payload": {
-    "id": "terminal-event-file-1",
+    "id": "terminal-event-input-5",
     "terminal_session_id": "terminal-session-id",
     "run_id": "run-id",
     "direction": "input",
-    "event_kind": "terminal.image.input.v1",
-    "mime_type": "image/jpeg",
+    "event_kind": "terminal.multimodal.input.v1",
+    "mime_type": "multipart/mixed",
     "payload_inline": {
-      "filename": "photo.jpg",
-      "caption": "现场安装照片",
-      "size_bytes": 123456,
-      "checksum": "sha256:...",
-      "object_key": "terminal-uploads/run-id/uuid-photo.jpg"
+      "summary": "我已断开电源，请结合照片确认。",
+      "part_count": 2
     },
+    "parts": [
+      {
+        "part_id": "text_1",
+        "order_index": 1,
+        "kind": "text",
+        "mime_type": "text/plain",
+        "text": "我已断开电源，请结合照片确认。"
+      },
+      {
+        "part_id": "image_1",
+        "order_index": 2,
+        "kind": "image",
+        "mime_type": "image/jpeg",
+        "size_bytes": 123456,
+        "checksum": "sha256:...",
+        "metadata": {
+          "filename": "photo.jpg"
+        }
+      }
+    ],
     "seq_no": 5,
-    "external_event_id": "terminal-001-file-000001",
+    "external_event_id": "terminal-001-20260525-000002",
     "source_ref": {
-      "kind": "web"
+      "kind": "external_terminal",
+      "device_id": "terminal-001"
     },
     "occurred_at": "2026-05-25T00:02:00Z",
     "created_at": "2026-05-25T00:02:00Z"
@@ -887,9 +1021,9 @@ PSOP 业务错误通常返回：
 | Run 已结束 | 停止输入，引导用户新建运行。 |
 | TerminalSession 已关闭 | 停止输入，刷新 Run 状态。 |
 | `direction` 非法 | 客户端修正为 `input`。 |
-| 缺少 `event_kind` 或 `mime_type` | 客户端按事件类型补齐。 |
-| 文件过大 | 提示压缩或拆分文件，必要时联系服务端调整上传限制。 |
-| MIME 不支持 | 转换文件格式或使用支持类型。 |
+| 缺少 `event_kind` 或 `mime_type` | 无需处理；服务端会使用 `terminal.multimodal.input.v1` 和 `multipart/mixed` 默认值。 |
+| 媒体文件过大 | 提示压缩或拆分媒体，必要时联系服务端调整上传限制。 |
+| MIME 不支持 | 转换为 `image/*`、`audio/*`、`video/*` 或文本输入。 |
 | WebSocket 断开 | 自动重连，并通过 REST 补齐事件。 |
 
 ## 展示建议
@@ -900,7 +1034,7 @@ PSOP 业务错误通常返回：
 - 当前等待原因和期望输入。
 - 用户文本输入。
 - 系统文本输出。
-- 图片、音频、视频、PDF 和普通文件附件。
+- 同一条输入事件内的图片、音频、视频 part。
 - 运行成功、失败、取消或中止后的最终状态。
 
 展示原则：
@@ -908,7 +1042,8 @@ PSOP 业务错误通常返回：
 - 以服务端返回事件为准，乐观消息需要在确认后替换为真实事件。
 - 按 `seq_no` 排序。
 - 同一个事件 `id` 只展示一次。
-- 输出、输入、附件、错误信息应有清晰区分。
+- 输出、输入、媒体 part、错误信息应有清晰区分。
+- 同一个输入事件的 `parts[]` 应在同一条用户消息内整体展示。
 - Run 失败时展示 `exit_reason`。
 - Run 被中止时优先展示 `final_output`，没有最终输出时展示 `exit_reason`。
 
@@ -920,8 +1055,9 @@ PSOP 业务错误通常返回：
 | --- | --- |
 | 创建运行 | 能通过 `skill_key` 创建 Invocation，并得到 `run_id`。 |
 | 状态加载 | 能读取 Run、TerminalSession 和 TerminalEvent。 |
-| 文本输入 | 能发送 `terminal.text.input.v1`，并通过 `external_event_id` 确认服务端接收。 |
-| 文件输入 | 能通过 `/files` 上传至少一种附件，并在事件流中展示。 |
+| 文本输入 | 能发送带 text part 的 `terminal.multimodal.input.v1`，并通过 `external_event_id` 确认服务端接收。 |
+| 多模态输入 | 能通过 `/events` multipart 在同一事件内发送文本和至少一种图片、音频或视频 part，并在事件流中同气泡展示。 |
+| 媒体读取 | 能通过 `/events/{event_id}/parts/{part_id}/content` 展示媒体内容。 |
 | 实时提示 | 能连接 `/ws/runs/{run_id}` 并处理 `terminal.event.appended`。 |
 | 断线恢复 | WebSocket 断开后能通过 REST 补齐缺失事件。 |
 | 结束保护 | Run 结束或 TerminalSession 关闭后禁止继续输入。 |

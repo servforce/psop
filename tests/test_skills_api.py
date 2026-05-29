@@ -351,8 +351,28 @@ class FakeInferenceGateway:
                 "attachments": ",".join(attachment.filename for attachment in attachments),
             }
         )
-        return LlmCompletion(
-            content=json.dumps(
+        if "final_verify" in system_prompt or "final_verify" in user_prompt:
+            content = json.dumps(
+                {
+                    "decision": "complete",
+                    "reason": "最终完成标准已验证。",
+                    "next_phase": "terminal",
+                    "terminal_message": "测试任务已完成，现场步骤已验证。",
+                },
+                ensure_ascii=False,
+            )
+        elif "只输出 JSON decision" in system_prompt or "JSON decision" in user_prompt:
+            content = json.dumps(
+                {
+                    "decision": "proceed",
+                    "reason": "多模态现场证据满足当前步骤完成标准。",
+                    "next_phase": "final_verify",
+                    "terminal_message": "已确认多模态证据，继续最终核验。",
+                },
+                ensure_ascii=False,
+            )
+        else:
+            content = json.dumps(
                 {
                     "summary": "视觉或音视频素材已由 LLM Gateway 解析。",
                     "content": {"text": "素材包含可用于创建 Skill 的多模态线索。", "language": ""},
@@ -366,7 +386,9 @@ class FakeInferenceGateway:
                     "signals": [{"kind": "multimodal", "confidence": 0.9}],
                 },
                 ensure_ascii=False,
-            ),
+            )
+        return LlmCompletion(
+            content=content,
             provider="fake-openai-compatible",
             model="fake-model",
             raw_response={"id": "fake-multimodal-response"},
@@ -1664,16 +1686,26 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         persisted_invocation_response = client.get(f"/api/v1/gateway/invocations/{invocation['id']}")
         initial_run_response = client.get(f"/api/v1/runs/{run_id}")
         upload_response = client.post(
-            f"/api/v1/terminal/sessions/{run_id}/files",
-            data={"caption": "现场证据已确认"},
-            files={"file": ("debug-photo.png", b"debug-image", "image/png")},
+            f"/api/v1/terminal/sessions/{run_id}/events",
+            data={
+                "event": json.dumps(
+                    {
+                        "direction": "input",
+                        "text": "现场证据已确认",
+                        "external_event_id": "terminal-debug-upload-000001",
+                    },
+                    ensure_ascii=False,
+                )
+            },
+            files=[("files", ("debug-photo.png", b"debug-image", "image/png"))],
         )
         uploaded_event = upload_response.json()["event"]
+        uploaded_image_part = next(part for part in uploaded_event["parts"] if part["kind"] == "image")
         uploaded_content_response = client.get(
-            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/content"
+            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content"
         )
         uploaded_content_range_response = client.get(
-            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/content",
+            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content",
             headers={"Range": "bytes=0-4"},
         )
         final_run_response = client.get(f"/api/v1/runs/{run_id}")
@@ -1694,24 +1726,114 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert persisted_context["debug_context"]["kind"] == "skill_debug"
     assert initial_run_response.json()["status"] == "waiting_input"
     assert upload_response.status_code == 202
-    assert upload_response.json()["event"]["event_kind"] == "terminal.image.input.v1"
-    assert upload_response.json()["event"]["mime_type"] == "image/png"
-    assert len(upload_response.json()["event"]["artifact_object_id"]) == 36
-    assert upload_response.json()["event"]["payload_inline"]["object_key"].startswith(f"terminal-uploads/{run_id}/")
-    assert upload_response.json()["event"]["payload_inline"]["caption"] == "现场证据已确认"
+    assert uploaded_event["event_kind"] == "terminal.multimodal.input.v1"
+    assert uploaded_event["mime_type"] == "multipart/mixed"
+    assert [part["kind"] for part in uploaded_event["parts"]] == ["text", "image"]
+    assert uploaded_event["parts"][0]["text"] == "现场证据已确认"
+    assert uploaded_image_part["metadata"]["filename"] == "debug-photo.png"
+    assert "object_key" not in uploaded_image_part["metadata"]
     assert uploaded_content_response.status_code == 200
     assert uploaded_content_response.headers["content-type"] == "image/png"
     assert uploaded_content_response.content == b"debug-image"
     assert uploaded_content_range_response.status_code == 206
     assert uploaded_content_range_response.content == b"debug"
     assert final_run_response.json()["status"] == "succeeded"
-    assert any(event["event_kind"] == "terminal.image.input.v1" for event in terminal_events_response.json())
+    assert any(event["event_kind"] == "terminal.multimodal.input.v1" for event in terminal_events_response.json())
     assert replay_response.status_code == 200
     assert replay_response.json()["run"]["id"] == run_id
     assert len(replay_response.json()["terminal_events"]) >= 3
     assert old_cases_response.status_code == 404
     assert test_jobs_response.status_code == 200
     assert test_jobs_response.json() == []
+
+
+def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> None:
+    client, _, fake_inference = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "terminal-multipart-event",
+                "name": "Terminal Multipart Event",
+                "description": "Validate one terminal event can carry ordered multimodal parts.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Multipart terminal publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/gateway/invocations",
+            json={
+                "skill_key": "terminal-multipart-event",
+                "gateway_type": "terminal",
+                "terminal_context": {"terminal_kind": "web", "operator_mode": "debug"},
+                "input_envelope": {"user_input": "启动多模态验证"},
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+        event_payload = {
+            "direction": "input",
+            "text": "请结合现场图像、视频和音频判断故障。",
+        }
+        append_response = client.post(
+            f"/api/v1/terminal/sessions/{run_id}/events",
+            data={"event": json.dumps(event_payload, ensure_ascii=False)},
+            files=[
+                ("files", ("fault.png", b"image-bytes", "image/png")),
+                ("files", ("clip.mp4", b"video-bytes", "video/mp4")),
+                ("files", ("note.wav", b"audio-bytes", "audio/wav")),
+            ],
+        )
+        appended_event = append_response.json()["event"]
+        image_part = next(part for part in appended_event["parts"] if part["kind"] == "image")
+        image_part_content_response = client.get(
+            f"/api/v1/terminal/sessions/{run_id}/events/{appended_event['id']}/parts/{image_part['part_id']}/content"
+        )
+        final_run_response = client.get(f"/api/v1/runs/{run_id}")
+        snapshots_response = client.get(f"/api/v1/runs/{run_id}/snapshots")
+        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+
+    assert append_response.status_code == 202
+    assert appended_event["event_kind"] == "terminal.multimodal.input.v1"
+    assert appended_event["mime_type"] == "multipart/mixed"
+    assert [part["part_id"] for part in appended_event["parts"]] == ["text_1", "image_1", "video_1", "audio_1"]
+    assert [part["order_index"] for part in appended_event["parts"]] == [1, 2, 3, 4]
+    assert appended_event["parts"][0]["text"] == "请结合现场图像、视频和音频判断故障。"
+    assert all(not part.get("caption") for part in appended_event["parts"])
+    media_parts = [part for part in appended_event["parts"] if part["kind"] != "text"]
+    assert [part["kind"] for part in media_parts] == ["image", "video", "audio"]
+    assert all(part["artifact_object_id"] for part in media_parts)
+    assert all("object_key" not in part["metadata"] for part in media_parts)
+
+    assert image_part_content_response.status_code == 200
+    assert image_part_content_response.headers["content-type"] == "image/png"
+    assert image_part_content_response.content == b"image-bytes"
+    assert final_run_response.json()["status"] == "succeeded"
+
+    final_token = snapshots_response.json()[-1]["token_payload"]
+    latest_evidence = final_token["control"]["latest_evidence"]
+    assert latest_evidence["id"] == appended_event["id"]
+    assert [part["part_id"] for part in latest_evidence["parts"]] == ["text_1", "image_1", "video_1", "audio_1"]
+    assert "请结合现场图像" in latest_evidence["input_bundle"]["text"]
+    assert "fault.png" in latest_evidence["input_bundle"]["text"]
+    assert "object_key" not in latest_evidence["input_bundle"]["text"]
+    assert "terminal-event-parts" not in latest_evidence["input_bundle"]["text"]
+    assert "请结合现场图像" in final_token["input_envelope"]["user_input"]
+
+    multimodal_calls = [call for call in fake_inference.calls if call.get("attachments")]
+    assert multimodal_calls
+    assert any(call["attachments"] == "fault.png,clip.mp4,note.wav" for call in multimodal_calls)
+
+    terminal_events = terminal_events_response.json()
+    persisted_event = next(event for event in terminal_events if event["id"] == appended_event["id"])
+    assert [part["kind"] for part in persisted_event["parts"]] == ["text", "image", "video", "audio"]
+    replay_event = next(event for event in replay_response.json()["terminal_events"] if event["id"] == appended_event["id"])
+    assert [part["part_id"] for part in replay_event["parts"]] == ["text_1", "image_1", "video_1", "audio_1"]
 
 
 def test_terminal_file_upload_returns_json_error_when_object_store_unavailable() -> None:
@@ -1752,9 +1874,9 @@ def test_terminal_file_upload_returns_json_error_when_object_store_unavailable()
         )
         run_id = invocation_response.json()["run_id"]
         upload_response = client.post(
-            f"/api/v1/terminal/sessions/{run_id}/files",
-            data={"caption": "图片证据"},
-            files={"file": ("fault.jpg", b"image-bytes", "image/jpeg")},
+            f"/api/v1/terminal/sessions/{run_id}/events",
+            data={"event": json.dumps({"direction": "input", "text": "图片证据"}, ensure_ascii=False)},
+            files=[("files", ("fault.jpg", b"image-bytes", "image/jpeg"))],
         )
 
     assert upload_response.status_code == 502
@@ -1970,7 +2092,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     )
     assert image_inputs[0]["payload_inline"]["asset_id"] == upload_response.json()["id"]
     assert image_inputs[0]["payload_inline"]["name"] == "伞骨图片"
-    assert image_inputs[0]["payload_inline"]["caption"] == "伞骨近照"
+    assert image_inputs[0]["payload_inline"]["description"] == "伞骨近照"
     assert any(event["direction"] == "output" and "测试任务已完成" in str(event["payload_inline"]) for event in terminal_events)
     assert any(job["job_type"] == "skill_test_timeline_driver" and job["status"] == "succeeded" for job in jobs_response.json())
     assert any(
@@ -2019,6 +2141,124 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert fork_debug_response.status_code == 201
     assert fork_debug_response.json()["terminal_context"]["operator_mode"] == "debug"
     assert fork_debug_response.json()["terminal_context"]["debug_context"]["kind"] == "skill_debug"
+
+
+def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> None:
+    client, _, fake_inference = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "skill-test-multimodal-parts",
+                "name": "Skill Test Multimodal Parts",
+                "description": "Validate timeline parts are sent as one terminal event.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Scenario multimodal publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        scenario_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios",
+            json={"name": "多模态现场包", "duration_ms": 5000, "timeline": {"events": []}},
+        )
+        scenario = scenario_response.json()
+        image_upload = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets",
+            data={"name": "现场照片", "description": "电控柜照片", "lane_id": "input.image"},
+            files={"file": ("panel.png", b"panel-image", "image/png")},
+        ).json()
+        video_upload = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets",
+            data={"name": "启动视频", "description": "设备启动过程", "lane_id": "input.video"},
+            files={"file": ("startup.mp4", b"startup-video", "video/mp4")},
+        ).json()
+        patched_timeline = copy.deepcopy(scenario["timeline"])
+        patched_timeline["events"] = [
+            {
+                "id": "site_bundle",
+                "lane_id": "input.text",
+                "at_ms": 0,
+                "parts": [
+                    {
+                        "part_id": "text_1",
+                        "kind": "text",
+                        "mime_type": "text/plain",
+                        "text": "现场电控柜启动后抖动，请结合素材判断。",
+                    },
+                    {
+                        "part_id": "image_1",
+                        "kind": "image",
+                        "asset_id": image_upload["id"],
+                    },
+                    {
+                        "part_id": "video_1",
+                        "kind": "video",
+                        "asset_id": video_upload["id"],
+                    },
+                ],
+            },
+            {
+                "id": "expect_completion",
+                "lane_id": "expected.semantic",
+                "at_ms": 5000,
+                "expectation": "系统应完成多模态现场包评估。",
+            },
+        ]
+        patch_response = client.patch(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}",
+            json={"timeline": patched_timeline},
+        )
+        scenario = patch_response.json()
+        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        scenario_run = start_response.json()
+        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}/events")
+        review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
+        cursor = review_response.json()["cursor_anchors"][-1]
+        fork_response = client.post(
+            f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-scenario",
+            json={"cursor": cursor, "name": "从多模态包继续"},
+        )
+
+    assert patch_response.status_code == 200
+    patched_event = next(event for event in scenario["timeline"]["events"] if event["id"] == "site_bundle")
+    assert patched_event["event_kind"] == "terminal.multimodal.input.v1"
+    assert patched_event["mime_type"] == "multipart/mixed"
+    assert [part["part_id"] for part in patched_event["parts"]] == ["text_1", "image_1", "video_1"]
+
+    assert start_response.status_code == 202
+    assert scenario_run["driver_status"] == "completed"
+    assert scenario_run["driver_events"] == [
+        {
+            **scenario_run["driver_events"][0],
+            "event_id": "site_bundle",
+            "lane_id": "input.text",
+            "at_ms": 0,
+        }
+    ]
+    terminal_inputs = [event for event in terminal_events_response.json() if event["direction"] == "input"]
+    bundled_inputs = [event for event in terminal_inputs if event["external_event_id"].endswith(":site_bundle")]
+    assert len(bundled_inputs) == 1
+    bundled_event = bundled_inputs[0]
+    assert bundled_event["event_kind"] == "terminal.multimodal.input.v1"
+    assert bundled_event["mime_type"] == "multipart/mixed"
+    assert [part["kind"] for part in bundled_event["parts"]] == ["text", "image", "video"]
+    assert [part["metadata"].get("filename") for part in bundled_event["parts"][1:]] == ["panel.png", "startup.mp4"]
+    assert any(call.get("attachments") == "panel.png,startup.mp4" for call in fake_inference.calls)
+
+    assert review_response.status_code == 200
+    review_terminal_event = next(
+        event for event in review_response.json()["replay"]["terminal_events"] if event["id"] == bundled_event["id"]
+    )
+    assert [part["part_id"] for part in review_terminal_event["parts"]] == ["text_1", "image_1", "video_1"]
+
+    assert fork_response.status_code == 201
+    forked_parts = next(event for event in fork_response.json()["timeline"]["events"] if event["id"] == "fork_site_bundle")["parts"]
+    assert forked_parts[1]["asset_id"] != image_upload["id"]
+    assert forked_parts[2]["asset_id"] != video_upload["id"]
 
 
 def test_skill_test_scenario_fork_uses_selected_timeline_time() -> None:
