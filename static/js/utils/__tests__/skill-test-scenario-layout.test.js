@@ -163,6 +163,10 @@ test("scenario detail page provides lanes, assets, and runs", () => {
   expect(html).toContain("skillTestScenarioInfoTab === 'basic'");
   expect(html).toContain("skillTestScenarioInfoTab === 'runs'");
   expect(html).toContain("skillTestScenarioInfoTab === 'json'");
+  expect(html).toContain('x-model="skillTestCaseForm.timeline_json" class="input-field auto-grow-field min-h-60 resize-none font-mono text-xs leading-5"');
+  expect(html).toContain('x-model="skillTestCaseForm.judge_policy_json" class="input-field auto-grow-field min-h-28 resize-none font-mono text-xs leading-5"');
+  expect(html).not.toContain('x-model="skillTestCaseForm.timeline_json" class="input-field h-60 resize-none');
+  expect(html).not.toContain('x-model="skillTestCaseForm.judge_policy_json" class="input-field h-28 resize-none');
   expect(html).toContain("skillTestTimelineSelectedLaneEvents()");
   expect(html).toContain("skillTestTimelineLaneRangeLabel");
   expect(html).toContain("skillTestTimelineLaneAssetCount");

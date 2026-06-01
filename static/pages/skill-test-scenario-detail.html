@@ -222,7 +222,7 @@
                   <template x-if="!isSkillTestSensorLane(skillTestTimelineSelectedEditorEvent().lane_id)">
                     <label class="field-block px-3 py-2">
                       <span class="field-label" x-text="isSkillTestTimelineExpectationEvent(skillTestTimelineSelectedEditorEvent()) ? '阶段期望' : skillTestTimelineEventUsesAsset(skillTestTimelineSelectedEditorEvent()) ? '说明' : '输入内容'"></span>
-                      <textarea class="input-field mt-1.5 h-16 resize-none border-0 bg-slate-900/35 px-3 py-2 text-xs" :value="skillTestTimelineEventTextValue(skillTestTimelineSelectedEditorEvent())" :placeholder="skillTestTimelineEventUsesAsset(skillTestTimelineSelectedEditorEvent()) ? '可选：描述该文件输入的上下文' : ''" @input="updateSkillTestTimelineEventDraft(isSkillTestTimelineExpectationEvent(skillTestTimelineSelectedEditorEvent()) ? 'expectation' : 'payload_inline', $event.target.value)"></textarea>
+                      <textarea class="input-field auto-grow-field mt-1.5 min-h-16 resize-none border-0 bg-slate-900/35 px-3 py-2 text-xs" :value="skillTestTimelineEventTextValue(skillTestTimelineSelectedEditorEvent())" :placeholder="skillTestTimelineEventUsesAsset(skillTestTimelineSelectedEditorEvent()) ? '可选：描述该文件输入的上下文' : ''" @input="updateSkillTestTimelineEventDraft(isSkillTestTimelineExpectationEvent(skillTestTimelineSelectedEditorEvent()) ? 'expectation' : 'payload_inline', $event.target.value)"></textarea>
                     </label>
                   </template>
 
@@ -342,7 +342,7 @@
                     </label>
                     <label class="field-block">
                       <span class="field-label">描述</span>
-                      <textarea x-model="skillTestCaseForm.description" class="input-field h-24 resize-none"></textarea>
+                      <textarea x-model="skillTestCaseForm.description" class="input-field auto-grow-field min-h-24 resize-none"></textarea>
                     </label>
                   </section>
 
@@ -367,11 +367,11 @@
                   <section class="space-y-3 p-3" x-show="skillTestScenarioInfoTab === 'json'">
                     <label class="field-block">
                       <span class="field-label">时间轴 JSON</span>
-                      <textarea x-model="skillTestCaseForm.timeline_json" class="input-field h-60 resize-none font-mono text-xs leading-5"></textarea>
+                      <textarea x-model="skillTestCaseForm.timeline_json" class="input-field auto-grow-field min-h-60 resize-none font-mono text-xs leading-5"></textarea>
                     </label>
                     <label class="field-block">
                       <span class="field-label">Judge 策略 JSON</span>
-                      <textarea x-model="skillTestCaseForm.judge_policy_json" class="input-field h-28 resize-none font-mono text-xs leading-5"></textarea>
+                      <textarea x-model="skillTestCaseForm.judge_policy_json" class="input-field auto-grow-field min-h-28 resize-none font-mono text-xs leading-5"></textarea>
                     </label>
                   </section>
                 </div>
@@ -580,7 +580,7 @@
               </label>
               <label class="field-block">
                 <span class="field-label">描述</span>
-                <textarea x-model="skillTestCaseForm.description" class="input-field h-24 resize-none" placeholder="描述这个黑盒时序场景覆盖的输入条件与预期输出"></textarea>
+                <textarea x-model="skillTestCaseForm.description" class="input-field auto-grow-field min-h-24 resize-none" placeholder="描述这个黑盒时序场景覆盖的输入条件与预期输出"></textarea>
               </label>
             </section>
 
@@ -589,11 +589,11 @@
               <div class="mt-3 space-y-3">
                 <label class="field-block">
                   <span class="field-label">时间轴 JSON</span>
-                  <textarea x-model="skillTestCaseForm.timeline_json" class="input-field h-60 resize-none font-mono text-xs leading-5"></textarea>
+                  <textarea x-model="skillTestCaseForm.timeline_json" class="input-field auto-grow-field min-h-60 resize-none font-mono text-xs leading-5"></textarea>
                 </label>
                 <label class="field-block">
                   <span class="field-label">Judge 策略 JSON</span>
-                  <textarea x-model="skillTestCaseForm.judge_policy_json" class="input-field h-28 resize-none font-mono text-xs leading-5"></textarea>
+                  <textarea x-model="skillTestCaseForm.judge_policy_json" class="input-field auto-grow-field min-h-28 resize-none font-mono text-xs leading-5"></textarea>
                 </label>
               </div>
             </details>
