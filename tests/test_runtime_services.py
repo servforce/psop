@@ -128,6 +128,10 @@ def test_compiler_emits_mvp_formal_v5_artifact(runtime_stack) -> None:
     assert artifact.formal_revision == "psop-eg-formal/v5"
     assert artifact.artifact is not None
     assert inference_gateway.calls[0]["system_prompt"] == PromptRegistry().load_default_compile_agent().system_prompt
+    prompt_payload = json.loads(inference_gateway.calls[0]["user_prompt"])
+    assert "runtime_language_rule" in prompt_payload["workflow_compilation_contract"]
+    assert "reason、terminal_message" in prompt_payload["workflow_compilation_contract"]["runtime_language_rule"]
+    assert "用户可见自然语言必须使用简体中文" in inference_gateway.calls[0]["system_prompt"]
     assert artifact.artifact["graph_summary"]["template"] == "formal-v5 skill workflow graph"
     assert artifact.artifact["graph_summary"]["workflow_nodes"] == [
         "instruct_collect_context",
@@ -553,6 +557,11 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert snapshots[-1].token_payload["budgets"]["llm_output_tokens"] == 15
     assert "input" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
     assert snapshots[-1].token_payload["observations"]["instruct_collect_context"]["input_summary"]["user_chars"] > 0
+    runtime_llm_calls = inference_gateway.calls[1:]
+    assert runtime_llm_calls
+    assert all("平台级输出语言要求" in call["system_prompt"] for call in runtime_llm_calls)
+    assert all("JSON 字段名和 decision/next_phase 等协议枚举值保持英文协议值" in call["system_prompt"] for call in runtime_llm_calls)
+    assert all("reason、terminal_message、final_response、summary" in call["system_prompt"] for call in runtime_llm_calls)
     assert all("legacy-user-prompt" not in call["user_prompt"] for call in inference_gateway.calls[1:])
     llm_trace_payloads = [
         event.payload for event in trace_events if event.event_type == "gateway.inference.completed"

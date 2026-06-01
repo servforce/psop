@@ -203,6 +203,12 @@ class SkillCompileAgent:
                     "指令型 llm 节点输出 terminal_message；评估型 llm 节点必须只输出 JSON object，"
                     "包含 decision/proceed|retry|need_more_evidence|abort|complete、reason、next_phase、terminal_message。"
                 ),
+                "runtime_language_rule": (
+                    "所有 Runtime LLM 节点的用户可见自然语言必须使用简体中文。"
+                    "instruct 节点的终端输出必须是简体中文。"
+                    "evaluate/final_verify 节点输出 JSON 时，字段名与 decision/next_phase 枚举保持英文协议值，"
+                    "但 reason、terminal_message 等自然语言字段值必须是简体中文。"
+                ),
                 "policy_budget_rule": (
                     "不要生成固定模板值 max_llm_calls=8。LLM 调用预算必须按 workflow_steps 动态推导："
                     "happy path 至少为 2 * workflow_steps.length + 1；当前阶段优先不设置 hard limit，"

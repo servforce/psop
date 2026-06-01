@@ -54,6 +54,13 @@ from app.infra.object_store import ObjectStoreService
 
 LOGGER = logging.getLogger(__name__)
 
+RUNTIME_LLM_LANGUAGE_POLICY = """平台级输出语言要求：
+- 所有面向终端用户展示的自然语言必须使用简体中文。
+- 如果当前节点要求输出 JSON，JSON 字段名和 decision/next_phase 等协议枚举值保持英文协议值。
+- reason、terminal_message、final_response、summary 等自然语言字段值必须使用简体中文。
+- 不要因为附件内容、文件名、模型默认行为或上游 prompt 语言而改用英文。
+- 如果当前节点要求只输出 JSON，不要在 JSON 外追加任何说明。"""
+
 
 class RuntimeService:
     """Invocation, RuntimeKernel and Replay service for the issue #1 MVP slice."""
@@ -2154,7 +2161,9 @@ class RuntimeService:
                 "instruction": skill_instruction,
             },
         }
-        return _render_template(system_template, context), _render_template(user_template, context), prompt_metadata
+        system_prompt = _append_runtime_llm_language_policy(_render_template(system_template, context))
+        user_prompt = _render_template(user_template, context)
+        return system_prompt, user_prompt, prompt_metadata
 
     def _resolve_llm_attachments(self, session: Session, token: dict[str, Any]) -> list[LlmAttachment]:
         parts = self._latest_input_parts(token)
@@ -2622,6 +2631,15 @@ def _render_template(template: str, context: dict[str, Any]) -> str:
     import re
 
     return re.sub(r"\{\{\s*([^}]+?)\s*\}\}", replace, template)
+
+
+def _append_runtime_llm_language_policy(system_prompt: str) -> str:
+    prompt = system_prompt.strip()
+    if "平台级输出语言要求" in prompt:
+        return prompt
+    if not prompt:
+        return RUNTIME_LLM_LANGUAGE_POLICY
+    return f"{prompt}\n\n{RUNTIME_LLM_LANGUAGE_POLICY}"
 
 
 def _last_observation_content(token: dict[str, Any]) -> str:
