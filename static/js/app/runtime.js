@@ -119,6 +119,7 @@
           const isSameRun = this.liveRunLoadedRunId === runId;
           if (!isSameRun) {
             this.selectedLiveRunReplayItemKey = "";
+            this.selectedLiveRunProcessEventKey = "";
           }
           const [run, bindings, terminalSession, terminalEvents, traceEvents, replayDetail] = await Promise.all([
             this.apiRequest(`/runs/${runId}`),
@@ -134,6 +135,7 @@
           this.liveRunTerminalSession = terminalSession.terminal_session;
           this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq([], terminalEvents);
           this.updateLiveRunLatestTerminalSeq();
+          this.ensureLiveRunProcessSelection();
           this.scrollTerminalTranscriptToBottom();
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], traceEvents);
           this.replayDetail = replayDetail;
@@ -146,7 +148,7 @@
 
 
       syncLiveRunInteractionTabFromRoute(isSameRun = false) {
-        const allowedTabs = new Set(["terminal", "replay"]);
+        const allowedTabs = new Set(["terminal", "io", "replay"]);
         if (this.route?.params?.view === "replay") {
           this.liveRunInteractionTab = "replay";
           return;
@@ -341,6 +343,7 @@
           : this.liveRunTerminalEvents;
         this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq(baseEvents, incoming);
         this.updateLiveRunLatestTerminalSeq();
+        this.ensureLiveRunProcessSelection();
         this.scrollTerminalTranscriptToBottom();
       },
 
@@ -1124,6 +1127,477 @@
         const enabled = Array.isArray(snapshot?.enabled_set) ? snapshot.enabled_set.length : 0;
         const keys = Object.keys(summary);
         return [`${keys.length} summary keys`, `${enabled} enabled items`].join(" · ");
+      },
+
+
+      liveRunProcessTerminalEvents() {
+        return (this.liveRunTerminalEvents || [])
+          .filter((event) => ["input", "output"].includes(String(event?.direction || "").toLowerCase()))
+          .slice()
+          .sort((left, right) => this.compareLiveRunProcessEvents(left, right));
+      },
+
+
+      compareLiveRunProcessEvents(left, right) {
+        const leftTime = this.liveRunProcessEventTimestamp(left);
+        const rightTime = this.liveRunProcessEventTimestamp(right);
+        if (leftTime !== rightTime) {
+          return leftTime - rightTime;
+        }
+        const leftSeq = Number(left?.seq_no || 0);
+        const rightSeq = Number(right?.seq_no || 0);
+        if (leftSeq !== rightSeq) {
+          return leftSeq - rightSeq;
+        }
+        return this.liveRunProcessEventKey(left).localeCompare(this.liveRunProcessEventKey(right));
+      },
+
+
+      liveRunProcessEventTimestamp(event) {
+        const value = new Date(event?.occurred_at || "").getTime();
+        return Number.isFinite(value) ? value : 0;
+      },
+
+
+      liveRunProcessOriginTime() {
+        const eventTimes = this.liveRunProcessTerminalEvents()
+          .map((event) => this.liveRunProcessEventTimestamp(event))
+          .filter((value) => Number.isFinite(value) && value > 0);
+        if (eventTimes.length) {
+          return Math.min(...eventTimes);
+        }
+        const fallback = new Date(this.liveRun?.started_at || this.liveRun?.created_at || "").getTime();
+        return Number.isFinite(fallback) ? fallback : 0;
+      },
+
+
+      liveRunProcessEventAtMs(event) {
+        const occurredAt = this.liveRunProcessEventTimestamp(event);
+        const origin = this.liveRunProcessOriginTime();
+        if (!Number.isFinite(occurredAt) || occurredAt <= 0 || !Number.isFinite(origin) || origin <= 0) {
+          return 0;
+        }
+        return Math.max(0, occurredAt - origin);
+      },
+
+
+      liveRunProcessDurationMs() {
+        const eventOffsets = this.liveRunProcessTerminalEvents().map((event) => this.liveRunProcessEventAtMs(event));
+        return Math.max(1000, ...eventOffsets);
+      },
+
+
+      liveRunProcessEventPercent(event) {
+        return Math.min(100, Math.max(0, (this.liveRunProcessEventAtMs(event) / this.liveRunProcessDurationMs()) * 100));
+      },
+
+
+      liveRunProcessTimelineEventLeftStyle(event) {
+        return `left: clamp(4rem, ${this.liveRunProcessEventPercent(event)}%, calc(100% - 4rem))`;
+      },
+
+
+      liveRunProcessTicks() {
+        const duration = this.liveRunProcessDurationMs();
+        const tickCount = 5;
+        return Array.from({ length: tickCount + 1 }, (_, index) => ({
+          ms: Math.round((duration * index) / tickCount),
+          percent: (index / tickCount) * 100
+        }));
+      },
+
+
+      formatLiveRunProcessMs(value) {
+        const milliseconds = Math.max(0, Number(value || 0));
+        if (milliseconds < 1000) {
+          return `${Math.round(milliseconds)} ms`;
+        }
+        const totalSeconds = Math.round(milliseconds / 1000);
+        if (totalSeconds < 60) {
+          return `${totalSeconds} s`;
+        }
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return seconds ? `${minutes} m ${seconds} s` : `${minutes} m`;
+      },
+
+
+      liveRunProcessEventKey(event) {
+        if (!event) {
+          return "";
+        }
+        return [
+          event.id || "",
+          event.seq_no ?? "",
+          event.occurred_at || "",
+          event.direction || ""
+        ].join(":");
+      },
+
+
+      liveRunProcessPartKind(part) {
+        const kind = String(part?.kind || "").toLowerCase();
+        const mimeType = this.terminalEventPartMimeType(part);
+        if (kind === "image" || mimeType.startsWith("image/")) {
+          return "image";
+        }
+        if (kind === "audio" || mimeType.startsWith("audio/")) {
+          return "audio";
+        }
+        if (kind === "video" || mimeType.startsWith("video/")) {
+          return "video";
+        }
+        if (kind === "text" || mimeType.startsWith("text/")) {
+          return "text";
+        }
+        if (mimeType === "application/json" || mimeType.endsWith("+json")) {
+          return "data";
+        }
+        return "file";
+      },
+
+
+      liveRunProcessEventKind(event) {
+        const parts = this.terminalEventParts(event);
+        if (parts.length) {
+          const kinds = Array.from(new Set(parts.map((part) => this.liveRunProcessPartKind(part))));
+          return kinds.length === 1 ? kinds[0] : "mixed";
+        }
+        if (this.terminalEventMimeType(event).startsWith("multipart/")) {
+          return "mixed";
+        }
+        if (this.terminalEventIsImage(event)) {
+          return "image";
+        }
+        if (this.terminalEventIsAudio(event)) {
+          return "audio";
+        }
+        if (this.terminalEventIsVideo(event)) {
+          return "video";
+        }
+        if (this.terminalEventIsPdf(event) || this.terminalEventIsGenericFile(event)) {
+          return "file";
+        }
+        if (this.terminalEventShouldShowJson(event)) {
+          return "data";
+        }
+        if (this.terminalEventDisplayText(event)) {
+          return "text";
+        }
+        if (event?.artifact_object_id) {
+          return "file";
+        }
+        return "data";
+      },
+
+
+      liveRunProcessLaneIdForEvent(event) {
+        const direction = String(event?.direction || "").toLowerCase() === "output" ? "output" : "input";
+        return `${direction}.${this.liveRunProcessEventKind(event)}`;
+      },
+
+
+      liveRunProcessLaneSortValue(lane) {
+        const directionOrder = lane?.direction === "output" ? 1 : 0;
+        const kindOrder = {
+          text: 0,
+          mixed: 1,
+          image: 2,
+          audio: 3,
+          video: 4,
+          file: 5,
+          data: 6
+        };
+        return directionOrder * 100 + (kindOrder[lane?.kind] ?? 99);
+      },
+
+
+      liveRunProcessLanes() {
+        const lanes = new Map();
+        this.liveRunProcessTerminalEvents().forEach((event) => {
+          const id = this.liveRunProcessLaneIdForEvent(event);
+          if (lanes.has(id)) {
+            return;
+          }
+          const [direction, kind] = id.split(".");
+          lanes.set(id, { id, direction, kind });
+        });
+        return Array.from(lanes.values()).sort((left, right) => this.liveRunProcessLaneSortValue(left) - this.liveRunProcessLaneSortValue(right));
+      },
+
+
+      liveRunProcessLaneGroup(laneId) {
+        return String(laneId || "").startsWith("output.") ? "output" : "input";
+      },
+
+
+      liveRunProcessLaneGroupLabel(laneId) {
+        return this.liveRunProcessLaneGroup(laneId) === "output" ? "输出" : "输入";
+      },
+
+
+      shouldShowLiveRunProcessLaneGroup(lane, laneIndex) {
+        if (!lane) {
+          return false;
+        }
+        const lanes = this.liveRunProcessLanes();
+        const group = this.liveRunProcessLaneGroup(lane.id);
+        return lanes.findIndex((item) => this.liveRunProcessLaneGroup(item.id) === group) === laneIndex;
+      },
+
+
+      liveRunProcessLaneLabel(lane) {
+        const labels = {
+          text: "文本",
+          mixed: "多模态",
+          image: "图片",
+          audio: "音频",
+          video: "视频",
+          file: "文件",
+          data: "数据"
+        };
+        return labels[lane?.kind] || lane?.id || "";
+      },
+
+
+      liveRunProcessLaneIcon(laneOrKind) {
+        const kind = typeof laneOrKind === "string" ? laneOrKind : laneOrKind?.kind;
+        const icons = {
+          text: "text_fields",
+          mixed: "dynamic_feed",
+          image: "image",
+          audio: "graphic_eq",
+          video: "movie",
+          file: "draft",
+          data: "data_object"
+        };
+        return icons[kind] || "timeline";
+      },
+
+
+      liveRunProcessSkillTestToneKey(laneIdOrEvent) {
+        const laneId = typeof laneIdOrEvent === "string"
+          ? laneIdOrEvent
+          : this.liveRunProcessLaneIdForEvent(laneIdOrEvent);
+        const group = this.liveRunProcessLaneGroup(laneId);
+        if (group === "output") {
+          return "actual.output";
+        }
+        const kind = String(laneId || "").split(".")[1] || "text";
+        return ["image", "audio", "video"].includes(kind) ? `input.${kind}` : "input.text";
+      },
+
+
+      liveRunProcessLaneTone(laneId) {
+        const toneKey = this.liveRunProcessSkillTestToneKey(laneId);
+        if (toneKey === "actual.output") {
+          return "border-cyan-500/30 bg-cyan-500/10 text-cyan-200";
+        }
+        if (toneKey === "input.image") {
+          return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
+        }
+        if (toneKey === "input.audio") {
+          return "border-amber-500/25 bg-amber-500/10 text-amber-200";
+        }
+        if (toneKey === "input.video") {
+          return "border-violet-500/25 bg-violet-500/10 text-violet-200";
+        }
+        return "border-orange-500/30 bg-orange-500/10 text-orange-200";
+      },
+
+
+      liveRunProcessEventsForLane(laneId) {
+        return this.liveRunProcessTerminalEvents()
+          .map((event, index) => ({ event, index }))
+          .filter((item) => this.liveRunProcessLaneIdForEvent(item.event) === laneId)
+          .map((item) => ({
+            ...item,
+            render_key: `run-process:${this.liveRunProcessEventKey(item.event)}:${item.index}`
+          }));
+      },
+
+
+      liveRunProcessLaneEventCount(laneId) {
+        return this.liveRunProcessEventsForLane(laneId).length;
+      },
+
+
+      liveRunProcessEventIcon(event) {
+        return this.liveRunProcessLaneIcon(this.liveRunProcessEventKind(event));
+      },
+
+
+      liveRunProcessEventFrameTone(event) {
+        const toneKey = this.liveRunProcessSkillTestToneKey(event);
+        if (toneKey === "actual.output") {
+          return "border-cyan-500/45 bg-cyan-500/10 text-cyan-100 ring-1 ring-cyan-500/20";
+        }
+        if (toneKey === "input.image") {
+          return "border-emerald-500/40 bg-emerald-500/10 text-emerald-100 ring-1 ring-emerald-500/20";
+        }
+        if (toneKey === "input.audio") {
+          return "border-amber-500/45 bg-amber-500/10 text-amber-100 ring-1 ring-amber-500/20";
+        }
+        if (toneKey === "input.video") {
+          return "border-violet-500/45 bg-violet-500/10 text-violet-100 ring-1 ring-violet-500/20";
+        }
+        return "border-orange-500/50 bg-orange-500/10 text-orange-100 ring-1 ring-orange-500/20";
+      },
+
+
+      liveRunProcessEventBadgeTone(event) {
+        return this.liveRunProcessLaneTone(this.liveRunProcessLaneIdForEvent(event));
+      },
+
+
+      liveRunProcessEventTitle(event) {
+        const direction = this.terminalDirectionLabel?.(event?.direction) || (event?.direction === "output" ? "输出" : "输入");
+        const seq = event?.seq_no === undefined || event?.seq_no === null ? "" : ` #${event.seq_no}`;
+        return `${direction}${seq}`;
+      },
+
+
+      liveRunProcessEventSummary(event) {
+        if (!event) {
+          return "";
+        }
+        const parts = this.terminalEventParts(event);
+        if (parts.length) {
+          const labels = parts.map((part) => {
+            if (this.terminalEventPartIsText(part)) {
+              return this.terminalEventPartDisplayText(part);
+            }
+            return this.terminalEventPartFileName(part);
+          }).filter(Boolean);
+          return labels.join(" + ") || event.event_kind || "multipart";
+        }
+        if (this.terminalEventDisplayText(event)) {
+          return this.terminalEventDisplayText(event);
+        }
+        if (this.terminalEventIsImage(event) || this.terminalEventIsAudio(event) || this.terminalEventIsVideo(event) || this.terminalEventIsPdf(event) || this.terminalEventIsGenericFile(event)) {
+          return this.terminalEventFileName(event);
+        }
+        if (this.terminalEventShouldShowJson(event)) {
+          return this.terminalEventJsonText(event);
+        }
+        return event.event_kind || "terminal event";
+      },
+
+
+      liveRunProcessEventDetailText(event) {
+        if (!event) {
+          return "";
+        }
+        const parts = this.terminalEventParts(event);
+        if (parts.length) {
+          return parts
+            .map((part, index) => {
+              const label = this.terminalEventPartIsText(part)
+                ? this.terminalEventPartDisplayText(part)
+                : this.terminalEventPartFileName(part);
+              return `part ${index + 1}: ${part.kind || "file"} ${part.mime_type || ""}\n${label || part.part_id || ""}`.trim();
+            })
+            .join("\n\n");
+        }
+        if (this.terminalEventDisplayText(event)) {
+          return this.terminalEventDisplayText(event);
+        }
+        if (this.terminalEventShouldShowJson(event)) {
+          return this.terminalEventJsonText(event);
+        }
+        if (this.terminalEventIsImage(event) || this.terminalEventIsAudio(event) || this.terminalEventIsVideo(event) || this.terminalEventIsPdf(event) || this.terminalEventIsGenericFile(event)) {
+          return [this.terminalEventFileName(event), this.terminalEventFileMeta(event)].filter(Boolean).join("\n");
+        }
+        return event.event_kind || "";
+      },
+
+
+      liveRunProcessEventTooltip(event) {
+        return [
+          this.liveRunProcessEventTitle(event),
+          this.formatLiveRunProcessMs(this.liveRunProcessEventAtMs(event)),
+          this.liveRunProcessLaneLabel({ kind: this.liveRunProcessEventKind(event) }),
+          this.liveRunProcessEventSummary(event)
+        ].filter(Boolean).join(" | ");
+      },
+
+
+      liveRunProcessEventMetadata(event) {
+        if (!event) {
+          return [];
+        }
+        const pairs = [
+          ["方向", this.terminalDirectionLabel?.(event.direction) || event.direction],
+          ["内容", this.liveRunProcessLaneLabel({ kind: this.liveRunProcessEventKind(event) })],
+          ["终端序号", event.seq_no === undefined || event.seq_no === null ? "" : `#${event.seq_no}`],
+          ["相对时间", this.formatLiveRunProcessMs(this.liveRunProcessEventAtMs(event))],
+          ["发生时间", this.formatDateTime?.(event.occurred_at) || event.occurred_at],
+          ["事件类型", event.event_kind],
+          ["MIME 类型", event.mime_type],
+          ["事件 ID", event.id],
+          ["Artifact 对象", event.artifact_object_id]
+        ];
+        return pairs
+          .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "")
+          .map(([label, value]) => ({ label, value: String(value) }));
+      },
+
+
+      selectLiveRunProcessEvent(event) {
+        this.selectedLiveRunProcessEventKey = this.liveRunProcessEventKey(event);
+      },
+
+
+      openLiveRunProcessEventDrawer(event) {
+        this.selectLiveRunProcessEvent(event);
+      },
+
+
+      closeLiveRunProcessEventDrawer() {
+        this.selectedLiveRunProcessEventKey = "";
+      },
+
+
+      selectedLiveRunProcessEvent() {
+        if (!this.selectedLiveRunProcessEventKey) {
+          return null;
+        }
+        return this.liveRunProcessTerminalEvents().find((event) => this.liveRunProcessEventKey(event) === this.selectedLiveRunProcessEventKey) || null;
+      },
+
+
+      isLiveRunProcessEventSelected(event) {
+        return Boolean(this.selectedLiveRunProcessEventKey && this.liveRunProcessEventKey(event) === this.selectedLiveRunProcessEventKey);
+      },
+
+
+      ensureLiveRunProcessSelection() {
+        if (this.selectedLiveRunProcessEventKey && !this.selectedLiveRunProcessEvent()) {
+          this.selectedLiveRunProcessEventKey = "";
+        }
+      },
+
+
+      liveRunProcessNeighborItems() {
+        const selected = this.selectedLiveRunProcessEvent();
+        if (!selected) {
+          return [];
+        }
+        const events = this.liveRunProcessTerminalEvents();
+        const selectedKey = this.liveRunProcessEventKey(selected);
+        const index = events.findIndex((event) => this.liveRunProcessEventKey(event) === selectedKey);
+        return [
+          { key: "previous", label: "上一个", event: index > 0 ? events[index - 1] : null, current: false },
+          { key: "current", label: "当前", event: selected, current: true },
+          { key: "next", label: "下一个", event: index >= 0 && index < events.length - 1 ? events[index + 1] : null, current: false }
+        ];
+      },
+
+
+      liveRunProcessNeighborItemClass(item) {
+        return item?.current
+          ? "border-orange-500/35 bg-orange-500/10 ring-1 ring-orange-500/25"
+          : "border-slate-800 bg-slate-950/45";
       },
 
 

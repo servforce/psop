@@ -601,6 +601,7 @@
       liveRunInteractionTab: "terminal",
       liveRunLoadedRunId: "",
       selectedLiveRunReplayItemKey: "",
+      selectedLiveRunProcessEventKey: "",
       terminalMediaPreview: {
         open: false,
         kind: "",

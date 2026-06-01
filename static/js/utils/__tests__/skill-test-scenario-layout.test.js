@@ -3,6 +3,7 @@ const path = require("path");
 
 const scenarioPath = path.join(__dirname, "../../../pages/skill-test-scenario-detail.html");
 const reviewPath = path.join(__dirname, "../../../pages/skill-test-scenario-review.html");
+const runLivePath = path.join(__dirname, "../../../pages/run-live.html");
 const skillDetailPath = path.join(__dirname, "../../../pages/skill-detail.html");
 const agentPromptsListPath = path.join(__dirname, "../../../pages/agent-prompts-list.html");
 const agentPromptDetailPath = path.join(__dirname, "../../../pages/agent-prompt-detail.html");
@@ -12,6 +13,7 @@ const corePath = path.join(__dirname, "../../app/core.js");
 const skillDetailAppPath = path.join(__dirname, "../../app/skill-detail.js");
 const agentPromptsAppPath = path.join(__dirname, "../../app/agent-prompts.js");
 const skillTestAppPath = path.join(__dirname, "../../app/skill-test.js");
+const runtimeAppPath = path.join(__dirname, "../../app/runtime.js");
 const compiledCssPath = path.join(__dirname, "../../../css/style.compiled.css");
 
 test("skill test scenario editor exposes timeline management", () => {
@@ -372,6 +374,57 @@ test("scenario review provides scrub and fork actions", () => {
   expect(indexHtml).not.toContain("['skill-detail', 'skill-test-scenario-new'].includes(route.name)");
   expect(indexHtml).toContain("skill-test-scenario-review-page");
   expect(indexHtml).not.toContain("skill-test-live-page");
+});
+
+test("run live page exposes input and output process swimlanes", () => {
+  const html = fs.readFileSync(runLivePath, "utf8");
+  const appJs = fs.readFileSync(runtimeAppPath, "utf8");
+  const shellJs = fs.readFileSync(appPath, "utf8");
+
+  expect(html).toContain("输入输出");
+  expect(html).toContain("liveRunInteractionTab === 'io'");
+  expect(html).toContain("data-live-run-process-panel");
+  expect(html).toContain("liveRunProcessTerminalEvents().length");
+  expect(html).toContain("liveRunProcessLanes()");
+  expect(html).toContain("liveRunProcessEventsForLane(lane.id)");
+  expect(html).toContain("shouldShowLiveRunProcessLaneGroup(lane, laneIndex)");
+  expect(html).toContain("liveRunProcessLaneGroupLabel(lane.id)");
+  expect(html).toContain("liveRunProcessTimelineEventLeftStyle(item.event)");
+  expect(html).toContain("openLiveRunProcessEventDrawer(item.event)");
+  expect(html).toContain("isLiveRunProcessEventSelected(item.event)");
+  expect(html).toContain("liveRunProcessEventTooltip(item.event)");
+  expect(html).toContain("data-live-run-process-drawer");
+  expect(html).toContain("closeLiveRunProcessEventDrawer()");
+  expect(html).toContain("grid-cols-[3.5rem_5.5rem_minmax(0,1fr)]");
+  expect(html).toContain("h-14 w-20");
+  expect(html).toContain("hover:bg-slate-900/45");
+  expect(html).not.toContain("grid-cols-[3.5rem_7rem_minmax(0,1fr)]");
+  expect(html).not.toContain("h-14 w-24");
+  expect(html).not.toContain("xl:grid-cols-[minmax(0,1fr)_28rem]");
+  expect(html).toContain("selectedLiveRunProcessEvent()");
+  expect(html).toContain("liveRunProcessNeighborItems()");
+  expect(html).toContain("全局时间相邻");
+  expect(html).toContain("输入输出事件详情");
+  expect(html).toContain("liveRunProcessEventMetadata(item.event)");
+  expect(html).toContain("liveRunProcessEventDetailText(item.event)");
+  expect(html).toContain("terminalEventPartMediaUrl(item.event, part)");
+  expect(html).toContain("terminalEventMediaUrl(item.event)");
+  expect(appJs).toContain("selectedLiveRunProcessEventKey");
+  expect(shellJs).toContain("selectedLiveRunProcessEventKey");
+  expect(appJs).toContain('new Set(["terminal", "io", "replay"])');
+  expect(appJs).toContain("liveRunProcessTerminalEvents()");
+  expect(appJs).toContain("liveRunProcessEventKind(event)");
+  expect(appJs).toContain("liveRunProcessLanes()");
+  expect(appJs).toContain("liveRunProcessNeighborItems()");
+  expect(appJs).toContain("liveRunProcessSkillTestToneKey");
+  expect(appJs).toContain("border-cyan-500/45 bg-cyan-500/10");
+  expect(appJs).toContain("border-orange-500/50 bg-orange-500/10");
+  expect(appJs).toContain("openLiveRunProcessEventDrawer");
+  expect(appJs).toContain("closeLiveRunProcessEventDrawer");
+  expect(appJs).toContain('label: "上一个"');
+  expect(appJs).toContain('label: "当前"');
+  expect(appJs).toContain('label: "下一个"');
+  expect(appJs).toContain("ensureLiveRunProcessSelection()");
 });
 
 test("frontend scripts are split and no longer reference the assets layer", () => {

@@ -38,6 +38,7 @@
     --color-sky-700: oklch(50% 0.134 242.749);
     --color-sky-800: oklch(44.3% 0.11 240.79);
     --color-sky-900: oklch(39.1% 0.09 240.876);
+    --color-violet-100: oklch(94.3% 0.029 294.588);
     --color-violet-200: oklch(89.4% 0.057 293.283);
     --color-violet-300: oklch(81.1% 0.111 293.571);
     --color-violet-500: oklch(60.6% 0.25 292.717);
@@ -527,6 +528,9 @@
   .h-40 {
     height: calc(var(--spacing) * 40);
   }
+  .h-52 {
+    height: calc(var(--spacing) * 52);
+  }
   .h-60 {
     height: calc(var(--spacing) * 60);
   }
@@ -566,9 +570,6 @@
   .max-h-\[32rem\] {
     max-height: 32rem;
   }
-  .max-h-\[52vh\] {
-    max-height: 52vh;
-  }
   .max-h-\[92vh\] {
     max-height: 92vh;
   }
@@ -580,6 +581,9 @@
   }
   .min-h-0 {
     min-height: calc(var(--spacing) * 0);
+  }
+  .min-h-12 {
+    min-height: calc(var(--spacing) * 12);
   }
   .min-h-14 {
     min-height: calc(var(--spacing) * 14);
@@ -650,6 +654,9 @@
   .w-20 {
     width: calc(var(--spacing) * 20);
   }
+  .w-24 {
+    width: calc(var(--spacing) * 24);
+  }
   .w-32 {
     width: calc(var(--spacing) * 32);
   }
@@ -695,6 +702,9 @@
   }
   .max-w-\[30rem\] {
     max-width: 30rem;
+  }
+  .max-w-\[32rem\] {
+    max-width: 32rem;
   }
   .max-w-\[96vw\] {
     max-width: 96vw;
@@ -813,6 +823,9 @@
   }
   .grid-cols-\[3\.5rem_5\.5rem_minmax\(0\,1fr\)\] {
     grid-template-columns: 3.5rem 5.5rem minmax(0,1fr);
+  }
+  .grid-cols-\[3\.5rem_7rem_minmax\(0\,1fr\)\] {
+    grid-template-columns: 3.5rem 7rem minmax(0,1fr);
   }
   .grid-cols-\[4\.75rem_minmax\(0\,1fr\)\] {
     grid-template-columns: 4.75rem minmax(0,1fr);
@@ -1233,6 +1246,12 @@
       border-color: color-mix(in oklab, var(--color-orange-500) 30%, transparent);
     }
   }
+  .border-orange-500\/35 {
+    border-color: color-mix(in srgb, oklch(70.5% 0.213 47.604) 35%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--color-orange-500) 35%, transparent);
+    }
+  }
   .border-orange-500\/50 {
     border-color: color-mix(in srgb, oklch(70.5% 0.213 47.604) 50%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
@@ -1354,6 +1373,12 @@
     border-color: color-mix(in srgb, oklch(60.6% 0.25 292.717) 30%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
       border-color: color-mix(in oklab, var(--color-violet-500) 30%, transparent);
+    }
+  }
+  .border-violet-500\/45 {
+    border-color: color-mix(in srgb, oklch(60.6% 0.25 292.717) 45%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--color-violet-500) 45%, transparent);
     }
   }
   .border-violet-500\/60 {
@@ -2038,6 +2063,9 @@
   .text-slate-950 {
     color: var(--color-slate-950);
   }
+  .text-violet-100 {
+    color: var(--color-violet-100);
+  }
   .text-violet-200 {
     color: var(--color-violet-200);
   }
@@ -2224,6 +2252,12 @@
     --tw-ring-color: color-mix(in srgb, oklch(37.2% 0.044 257.287) 60%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
       --tw-ring-color: color-mix(in oklab, var(--color-slate-700) 60%, transparent);
+    }
+  }
+  .ring-violet-500\/20 {
+    --tw-ring-color: color-mix(in srgb, oklch(60.6% 0.25 292.717) 20%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      --tw-ring-color: color-mix(in oklab, var(--color-violet-500) 20%, transparent);
     }
   }
   .ring-violet-500\/25 {
@@ -2676,6 +2710,11 @@
   .xl\:grid-cols-\[minmax\(0\,1fr\)_26rem\] {
     @media (width >= 80rem) {
       grid-template-columns: minmax(0,1fr) 26rem;
+    }
+  }
+  .xl\:grid-cols-\[minmax\(0\,1fr\)_28rem\] {
+    @media (width >= 80rem) {
+      grid-template-columns: minmax(0,1fr) 28rem;
     }
   }
   .xl\:flex-row {
