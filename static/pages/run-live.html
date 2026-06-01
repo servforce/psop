@@ -227,14 +227,6 @@
 
             <section x-show="liveRunInteractionTab === 'io'" class="min-h-0 flex-1 overflow-hidden" data-live-run-process-panel>
               <section class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-slate-950/40">
-                  <header class="flex min-h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/95 px-3">
-                    <div class="min-w-0">
-                      <p class="text-sm font-semibold text-slate-100">输入输出过程</p>
-                      <p class="mono-field mt-0.5" x-text="`${liveRunProcessLanes().length} lanes · ${liveRunProcessTerminalEvents().length} nodes`"></p>
-                    </div>
-                    <span class="mono-field shrink-0" x-text="formatLiveRunProcessMs(liveRunProcessDurationMs())"></span>
-                  </header>
-
                   <template x-if="liveRunProcessTerminalEvents().length === 0">
                     <div class="empty-state min-h-80">
                       <span class="material-symbols-outlined text-[30px] text-slate-500">swap_horiz</span>
@@ -284,8 +276,10 @@
                     <div class="flex items-center justify-center border-r border-slate-800/60">
                       <span class="whitespace-nowrap text-sm font-semibold text-slate-300">时间</span>
                     </div>
-                    <div class="border-r border-slate-800/60 px-2">
-                      <p class="mono-field" x-text="formatLiveRunProcessMs(liveRunProcessDurationMs())"></p>
+                    <div class="border-r border-slate-800/60">
+                      <div class="flex h-8 w-full overflow-hidden rounded-md border border-slate-700 bg-slate-950">
+                        <span class="min-w-0 flex-1 truncate px-2 font-mono text-sm leading-8 text-slate-100" x-text="formatLiveRunProcessMs(liveRunProcessDurationMs())"></span>
+                      </div>
                     </div>
                     <div class="relative h-12 px-3">
                       <template x-for="tick in liveRunProcessTicks()" :key="tick.ms">
@@ -293,6 +287,7 @@
                           <span class="absolute top-0 whitespace-nowrap font-mono text-[10px] text-slate-500" :style="tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'" x-text="formatLiveRunProcessMs(tick.ms)"></span>
                         </div>
                       </template>
+                      <input type="range" min="0" :max="liveRunProcessDurationMs()" step="1000" class="absolute inset-x-3 bottom-1 accent-orange-500" value="0" disabled aria-label="输入输出时间轴" data-live-run-process-time-axis />
                     </div>
                   </div>
               </section>

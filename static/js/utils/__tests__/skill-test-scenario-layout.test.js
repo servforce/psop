@@ -389,6 +389,8 @@ test("run live page exposes input and output process swimlanes", () => {
   expect(html).toContain("liveRunInteractionTab === 'io'");
   expect(html).toContain("data-live-run-process-panel");
   expect(html).toContain("liveRunProcessTerminalEvents().length");
+  expect(html).not.toContain("输入输出过程");
+  expect(html).not.toContain("liveRunProcessLanes().length} lanes");
   expect(html).toContain("liveRunProcessLanes()");
   expect(html).toContain("liveRunProcessEventsForLane(lane.id)");
   expect(html).toContain("shouldShowLiveRunProcessLaneGroup(lane, laneIndex)");
@@ -402,6 +404,10 @@ test("run live page exposes input and output process swimlanes", () => {
   expect(html).toContain("grid-cols-[3.5rem_5.5rem_minmax(0,1fr)]");
   expect(html).toContain("h-14 w-20");
   expect(html).toContain("hover:bg-slate-900/45");
+  expect(html).toContain("data-live-run-process-time-axis");
+  expect(html).toContain('type="range" min="0" :max="liveRunProcessDurationMs()" step="1000"');
+  expect(html).toContain("absolute inset-x-3 bottom-1 accent-orange-500");
+  expect(html).not.toContain(':key="`axis-${tick.ms}`"');
   expect(html).not.toContain("grid-cols-[3.5rem_7rem_minmax(0,1fr)]");
   expect(html).not.toContain("h-14 w-24");
   expect(html).not.toContain("xl:grid-cols-[minmax(0,1fr)_28rem]");
