@@ -1096,7 +1096,6 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
         generate_response = client.post(
             f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
             json={
-                "material_ids": [video_material_id, material_id],
                 "user_description": "请基于素材生成一个现场支持 Skill。",
                 "base_commit_sha": created["latest_draft_head_sha"],
             },
@@ -1187,7 +1186,6 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch)
         response = client.post(
             f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
             json={
-                "material_ids": [video_response.json()["id"]],
                 "user_description": "生成草稿。",
                 "base_commit_sha": source_payload["head_commit_sha"],
             },
@@ -1195,6 +1193,22 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch)
 
     assert response.status_code == 409
     assert response.json()["code"] == "skill_source_conflict"
+
+
+def test_generate_skill_draft_from_raw_materials_rejects_material_subset_field() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        response = client.post(
+            "/api/v1/skills/skill-id/raw-materials/generate-skill-draft",
+            json={
+                "material_ids": ["material-id"],
+                "user_description": "生成草稿。",
+            },
+        )
+
+    assert response.status_code == 422
+    assert any(error["loc"][-1] == "material_ids" for error in response.json()["detail"])
 
 
 def test_generate_skill_draft_from_raw_materials_requires_ready_video() -> None:
@@ -1217,7 +1231,6 @@ def test_generate_skill_draft_from_raw_materials_requires_ready_video() -> None:
         response = client.post(
             f"/api/v1/skills/{created['id']}/raw-materials/generate-skill-draft",
             json={
-                "material_ids": [text_response.json()["id"]],
                 "user_description": "生成草稿。",
                 "base_commit_sha": created["latest_draft_head_sha"],
             },

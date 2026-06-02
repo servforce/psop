@@ -929,20 +929,10 @@ class SkillsService:
         payload: GenerateSkillDraftRequest,
     ) -> SkillRawMaterialGenerationResponse:
         definition = self._require_definition(session, skill_id)
-        material_ids = list(dict.fromkeys(payload.material_ids))
-        materials = self.repository.list_raw_materials_by_ids(
-            session,
-            skill_definition_id=definition.id,
-            material_ids=material_ids,
-        )
-        if len(materials) != len(material_ids):
-            found_ids = {material.id for material in materials}
-            raise SkillNotFoundError(
-                "部分原始素材不存在。",
-                details={"missing_material_ids": [item for item in material_ids if item not in found_ids]},
-            )
-        material_by_id = {material.id: material for material in materials}
-        materials = [material_by_id[material_id] for material_id in material_ids]
+        materials = self.repository.list_raw_materials(session, definition.id)
+        material_ids = [material.id for material in materials]
+        if not materials:
+            raise SkillValidationError("生成 Skill 至少需要一个已分析完成的视频素材。")
         failed_materials = [material.id for material in materials if material.status != "ready"]
         if failed_materials:
             raise SkillValidationError("存在未就绪素材，不能用于生成 Skill。", details={"material_ids": failed_materials})

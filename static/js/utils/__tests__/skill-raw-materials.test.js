@@ -52,8 +52,14 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(html).toContain('class="panel-body h-full min-h-0 overflow-hidden !p-0"');
   expect(html).toContain("grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-b border-slate-800 bg-slate-950");
   expect(html).toContain('class="min-h-0 overflow-y-auto overflow-x-hidden"');
-  expect(html).toContain("grid-cols-[2rem_minmax(0,1fr)_3.75rem] items-center gap-1.5 border-b border-slate-800 px-2.5 py-2");
-  expect(html).toContain("mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] leading-4");
+  expect(html).toContain("flex min-h-12 items-center gap-2 border-b border-slate-800 px-2.5 py-1.5");
+  expect(html).toContain("flex min-w-0 flex-1 flex-col justify-center text-left");
+  expect(html).toContain("status-badge shrink-0 px-2 py-0 text-[10px] tracking-wider");
+  expect(html).not.toContain("toggleRawMaterialSelection(material)");
+  expect(html).not.toContain("isRawMaterialSelected(material)");
+  expect(html).toContain("mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0 text-[11px] leading-3");
+  expect(html).toContain("flex shrink-0 items-center justify-end gap-0.5 self-center");
+  expect(html).toContain("topbar-icon-button h-6 w-6 opacity-70 transition group-hover:opacity-100");
   expect(html).toContain(
     'title="重新解析素材" aria-label="重新解析素材" :disabled="busy.rawMaterialAnalyze || material.status === \'processing\' || [\'pending\', \'running\'].includes(material.analysis_status || material.status)" @click="analyzeRawMaterial(material)"'
   );
@@ -94,7 +100,7 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
 
   expect(appJs).toContain("rawMaterialsLoadedSkillId");
   expect(appJs).toContain("rawMaterialAnalysis");
-  expect(appJs).toContain("selectedRawMaterialIds");
+  expect(appJs).not.toContain("selectedRawMaterialIds");
   expect(appJs).toContain("rawMaterialUploadFiles");
   expect(appJs).toContain("rawMaterialUploadItems");
   expect(appJs).toContain("rawMaterialUploadSelectedIndex");
@@ -132,10 +138,11 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(skillDetailJs).toContain("selectRawMaterialDetailTab(tabName)");
   expect(skillDetailJs).toContain('["analysis", "preview"].includes(tabName)');
   expect(skillDetailJs).toContain("rawMaterialDetail = await this.apiRequest");
-  expect(skillDetailJs).toContain("material_ids: this.selectedRawMaterialIds");
+  expect(skillDetailJs).not.toContain("material_ids:");
   expect(skillDetailJs).toContain("user_description: this.rawMaterialGenerateForm.user_description.trim()");
   expect(skillDetailJs).toContain("base_commit_sha: this.currentSkill.latest_draft_head_sha");
-  expect(skillDetailJs).toContain("hasSelectedReadyVideoRawMaterial");
+  expect(skillDetailJs).toContain("canGenerateSkillDraftFromRawMaterials");
+  expect(skillDetailJs).toContain("hasReadyVideoRawMaterial");
   expect(skillDetailJs).toContain('job_type: "skill_raw_material_generation"');
   expect(skillDetailJs).toContain('await this.navigate("/admin/tasks")');
   expect(skillDetailJs).toContain('this.showCenterToast("success", "Skill 生成任务已提交。")');

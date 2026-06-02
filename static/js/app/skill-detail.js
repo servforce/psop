@@ -143,7 +143,6 @@
         this.rawMaterialDetail = null;
         this.rawMaterialAnalysis = null;
         this.rawMaterialDetailTab = "analysis";
-        this.selectedRawMaterialIds = [];
         this.rawMaterialUploadFiles = [];
         this.rawMaterialUploadItems = [];
         this.rawMaterialUploadSelectedIndex = 0;
@@ -244,9 +243,6 @@
         try {
           this.rawMaterials = await this.apiRequest(`/skills/${skillId}/raw-materials`);
           this.rawMaterialsLoadedSkillId = skillId;
-          this.selectedRawMaterialIds = this.selectedRawMaterialIds.filter((materialId) =>
-            this.rawMaterials.some((material) => material.id === materialId)
-          );
           if (this.rawMaterialDetail && !this.rawMaterials.some((material) => material.id === this.rawMaterialDetail.id)) {
             this.rawMaterialDetail = null;
             this.rawMaterialAnalysis = null;
@@ -573,7 +569,6 @@
           await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`, {
             method: "DELETE"
           });
-          this.selectedRawMaterialIds = this.selectedRawMaterialIds.filter((materialId) => materialId !== material.id);
           if (this.rawMaterialDetail?.id === material.id) {
             this.rawMaterialDetail = null;
           }
@@ -587,45 +582,37 @@
       },
 
 
-      toggleRawMaterialSelection(material) {
-        if (!material || material.status !== "ready") {
-          return;
-        }
-        if (this.selectedRawMaterialIds.includes(material.id)) {
-          this.selectedRawMaterialIds = this.selectedRawMaterialIds.filter((materialId) => materialId !== material.id);
-          return;
-        }
-        this.selectedRawMaterialIds = [...this.selectedRawMaterialIds, material.id];
+      allRawMaterialsReady() {
+        return this.rawMaterials.length > 0 && this.rawMaterials.every((material) => material.status === "ready");
       },
 
 
-      isRawMaterialSelected(material) {
-        return Boolean(material?.id && this.selectedRawMaterialIds.includes(material.id));
+      readyVideoRawMaterials() {
+        return this.rawMaterials.filter((material) => this.isVideoRawMaterial(material) && material.status === "ready");
       },
 
 
-      selectedRawMaterials() {
-        return this.rawMaterials.filter((material) => this.selectedRawMaterialIds.includes(material.id));
+      hasReadyVideoRawMaterial() {
+        return this.readyVideoRawMaterials().length > 0;
       },
 
 
-      selectedReadyVideoRawMaterials() {
-        return this.selectedRawMaterials().filter((material) => this.isVideoRawMaterial(material) && material.status === "ready");
-      },
-
-
-      hasSelectedReadyVideoRawMaterial() {
-        return this.selectedReadyVideoRawMaterials().length > 0;
+      canGenerateSkillDraftFromRawMaterials() {
+        return this.allRawMaterialsReady() && this.hasReadyVideoRawMaterial();
       },
 
 
       openRawMaterialGenerateModal() {
-        if (this.selectedRawMaterialIds.length === 0) {
-          this.showCenterToast("error", "请选择至少一个已解析素材。");
+        if (this.rawMaterials.length === 0) {
+          this.showCenterToast("error", "请先上传素材。");
           return;
         }
-        if (!this.hasSelectedReadyVideoRawMaterial()) {
-          this.showCenterToast("error", "请至少选择一个已分析完成的视频素材。");
+        if (!this.allRawMaterialsReady()) {
+          this.showCenterToast("error", "请等待全部素材分析完成后再生成。");
+          return;
+        }
+        if (!this.hasReadyVideoRawMaterial()) {
+          this.showCenterToast("error", "请至少上传一个已分析完成的视频素材。");
           return;
         }
         this.rawMaterialGenerateForm = {
@@ -645,7 +632,7 @@
 
 
       async generateSkillDraftFromRawMaterials() {
-        if (!this.currentSkill || this.selectedRawMaterialIds.length === 0) {
+        if (!this.currentSkill || !this.canGenerateSkillDraftFromRawMaterials()) {
           return;
         }
         if (!this.rawMaterialGenerateForm.user_description.trim()) {
@@ -660,7 +647,6 @@
           const result = await this.apiRequest(`/skills/${skillId}/raw-materials/generate-skill-draft`, {
             method: "POST",
             body: JSON.stringify({
-              material_ids: this.selectedRawMaterialIds,
               user_description: this.rawMaterialGenerateForm.user_description.trim(),
               base_commit_sha: this.currentSkill.latest_draft_head_sha
             })

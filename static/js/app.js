@@ -437,7 +437,6 @@
       rawMaterialDetail: null,
       rawMaterialAnalysis: null,
       rawMaterialDetailTab: "analysis",
-      selectedRawMaterialIds: [],
       rawMaterialUploadFiles: [],
       rawMaterialUploadItems: [],
       rawMaterialUploadSelectedIndex: 0,

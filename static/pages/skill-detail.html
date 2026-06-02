@@ -356,16 +356,17 @@
                   <p class="mt-1 truncate text-sm text-slate-300">
                     <span x-text="rawMaterials.length"></span>
                     <span> 个素材</span>
-                    <span class="text-slate-600"> / </span>
-                    <span x-text="selectedRawMaterialIds.length"></span>
-                    <span> 个已选择</span>
+                    <span x-show="rawMaterials.length > 0">
+                      <span class="text-slate-600"> / </span>
+                      <span>全部参与生成</span>
+                    </span>
                   </p>
                 </div>
                 <div class="flex shrink-0 items-center gap-2">
                   <button type="button" class="topbar-icon-button h-9 w-9" title="上传文件" aria-label="上传文件" @click="openRawMaterialUploadModal()">
                     <span class="material-symbols-outlined text-[18px]">upload_file</span>
                   </button>
-                  <button type="button" class="topbar-icon-button h-9 w-9" title="生成 Skill" aria-label="生成 Skill" :disabled="selectedRawMaterialIds.length === 0 || !hasSelectedReadyVideoRawMaterial()" @click="openRawMaterialGenerateModal()">
+                  <button type="button" class="topbar-icon-button h-9 w-9" title="生成 Skill" aria-label="生成 Skill" :disabled="!canGenerateSkillDraftFromRawMaterials()" @click="openRawMaterialGenerateModal()">
                     <span class="material-symbols-outlined text-[18px]">auto_fix_high</span>
                   </button>
                   <button type="button" class="topbar-icon-button h-9 w-9" title="刷新素材" aria-label="刷新素材" :disabled="busy.rawMaterials" @click="loadRawMaterials(currentSkill.id, true)">
@@ -391,27 +392,24 @@
 
                 <div class="min-h-0">
                   <template x-for="material in rawMaterials" :key="material.id">
-                    <article class="group grid grid-cols-[2rem_minmax(0,1fr)_3.75rem] items-center gap-1.5 border-b border-slate-800 px-2.5 py-2 transition hover:bg-slate-900/70" :class="rawMaterialDetail?.id === material.id ? 'bg-slate-900 shadow-[inset_3px_0_0_rgba(249,115,22,0.85)]' : ''">
-                      <label class="flex items-center justify-center" title="选择素材">
-                        <input type="checkbox" class="size-3.5 rounded border-slate-700 bg-slate-950 text-orange-500 focus:ring-orange-500/40" :checked="isRawMaterialSelected(material)" :disabled="material.status !== 'ready'" @change="toggleRawMaterialSelection(material)" />
-                      </label>
-                      <button type="button" class="min-w-0 text-left" @click="openRawMaterialDetail(material)">
+                    <article class="group flex min-h-12 items-center gap-2 border-b border-slate-800 px-2.5 py-1.5 transition hover:bg-slate-900/70" :class="rawMaterialDetail?.id === material.id ? 'bg-slate-900 shadow-[inset_3px_0_0_rgba(249,115,22,0.85)]' : ''">
+                      <button type="button" class="flex min-w-0 flex-1 flex-col justify-center text-left" @click="openRawMaterialDetail(material)">
                         <div class="flex min-w-0 items-center gap-1.5">
-                          <span class="material-symbols-outlined text-[16px] text-slate-400" x-text="rawMaterialKindIcon(material.material_kind)"></span>
-                          <span class="truncate text-[13px] font-semibold leading-5 text-slate-100" x-text="material.name"></span>
-                          <span class="status-badge shrink-0" :class="statusBadgeTone(material.status)" x-text="formatStatus(material.status)"></span>
+                          <span class="material-symbols-outlined text-[15px] text-slate-400" x-text="rawMaterialKindIcon(material.material_kind)"></span>
+                          <span class="truncate text-[13px] font-semibold leading-4 text-slate-100" x-text="material.name"></span>
+                          <span class="status-badge shrink-0 px-2 py-0 text-[10px] tracking-wider" :class="statusBadgeTone(material.status)" x-text="formatStatus(material.status)"></span>
                         </div>
-                        <div class="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] leading-4 text-slate-500">
+                        <div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0 text-[11px] leading-3 text-slate-500">
                           <span x-text="rawMaterialKindLabel(material.material_kind)"></span>
                           <span class="mono-field" x-text="material.mime_type"></span>
                           <span class="mono-field" x-text="formatBytes(material.size_bytes)"></span>
                         </div>
                       </button>
-                      <div class="flex items-center justify-end gap-1">
-                        <button type="button" class="topbar-icon-button h-7 w-7 opacity-70 transition group-hover:opacity-100" title="重新解析素材" aria-label="重新解析素材" :disabled="busy.rawMaterialAnalyze || material.status === 'processing' || ['pending', 'running'].includes(material.analysis_status || material.status)" @click="analyzeRawMaterial(material)">
+                      <div class="flex shrink-0 items-center justify-end gap-0.5 self-center">
+                        <button type="button" class="topbar-icon-button h-6 w-6 opacity-70 transition group-hover:opacity-100" title="重新解析素材" aria-label="重新解析素材" :disabled="busy.rawMaterialAnalyze || material.status === 'processing' || ['pending', 'running'].includes(material.analysis_status || material.status)" @click="analyzeRawMaterial(material)">
                           <span class="material-symbols-outlined text-[16px]" :class="busy.rawMaterialAnalyze ? 'animate-spin' : ''" x-text="busy.rawMaterialAnalyze ? 'progress_activity' : 'restart_alt'"></span>
                         </button>
-                        <button type="button" class="topbar-icon-button h-7 w-7 opacity-70 transition group-hover:opacity-100" title="移除素材" aria-label="移除素材" :disabled="busy.rawMaterialDelete" @click="deleteRawMaterial(material)">
+                        <button type="button" class="topbar-icon-button h-6 w-6 opacity-70 transition group-hover:opacity-100" title="移除素材" aria-label="移除素材" :disabled="busy.rawMaterialDelete" @click="deleteRawMaterial(material)">
                           <span class="material-symbols-outlined text-[16px]">delete</span>
                         </button>
                       </div>
@@ -730,9 +728,9 @@
                 <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="generateSkillDraftFromRawMaterials()">
                   <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
                     <div class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-3">
-                      <p class="field-label">已选择素材</p>
+                      <p class="field-label">全部素材</p>
                       <div class="mt-2 flex flex-wrap gap-2">
-                        <template x-for="material in selectedRawMaterials()" :key="material.id">
+                        <template x-for="material in rawMaterials" :key="material.id">
                           <span class="inline-flex max-w-full items-center gap-2 rounded-md border border-slate-700 bg-slate-950/40 px-2.5 py-1 text-xs font-medium text-slate-300">
                             <span class="material-symbols-outlined text-[15px]" x-text="rawMaterialKindIcon(material.material_kind)"></span>
                             <span class="truncate" x-text="material.name"></span>
@@ -777,7 +775,7 @@
                       <span class="material-symbols-outlined text-[18px]">close</span>
                       <span>取消</span>
                     </button>
-                    <button type="submit" class="button-primary" title="生成源码草稿" aria-label="生成源码草稿" :disabled="busy.rawMaterialGenerate || !rawMaterialGenerateForm.user_description || !hasSelectedReadyVideoRawMaterial()">
+                    <button type="submit" class="button-primary" title="生成源码草稿" aria-label="生成源码草稿" :disabled="busy.rawMaterialGenerate || !rawMaterialGenerateForm.user_description || !canGenerateSkillDraftFromRawMaterials()">
                       <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterialGenerate ? 'animate-spin' : ''" x-text="busy.rawMaterialGenerate ? 'progress_activity' : 'auto_fix_high'"></span>
                       <span x-text="busy.rawMaterialGenerate ? '生成中...' : '生成源码草稿'"></span>
                     </button>
