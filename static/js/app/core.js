@@ -548,7 +548,7 @@
 
           if (this.route.name === "invocations-list") {
             this.currentSkill = null;
-            await Promise.all([this.loadSkills(), this.loadInvocations()]);
+            await Promise.all([this.loadSkills({ useFilters: false }), this.loadInvocations()]);
             if (!this.invocationForm.skill_key && this.skills.length > 0) {
               this.invocationForm.skill_key = this.skills[0].key;
             }

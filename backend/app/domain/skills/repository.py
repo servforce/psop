@@ -23,6 +23,7 @@ class SkillsRepository:
         *,
         search: str | None = None,
         status: str | None = None,
+        is_published: bool | None = None,
     ) -> list[SkillDefinition]:
         query = select(SkillDefinition).order_by(SkillDefinition.updated_at.desc())
 
@@ -30,6 +31,10 @@ class SkillsRepository:
             query = query.where(SkillDefinition.status == status)
         else:
             query = query.where(SkillDefinition.status != "archived")
+        if is_published is True:
+            query = query.where(SkillDefinition.latest_published_version_id.is_not(None))
+        elif is_published is False:
+            query = query.where(SkillDefinition.latest_published_version_id.is_(None))
         if search:
             pattern = f"%{search.strip()}%"
             query = query.where(

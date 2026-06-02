@@ -3592,8 +3592,8 @@
   }
   .skill-table-row {
     display: grid;
-    min-width: 58rem;
-    grid-template-columns: minmax(16rem,1.6fr) 7rem 13rem 13rem 4rem;
+    min-width: 66rem;
+    grid-template-columns: minmax(16rem,1.6fr) 7rem 9rem 13rem 13rem 4rem;
     align-items: center;
     gap: calc(var(--spacing) * 3);
     background-color: color-mix(in srgb, oklch(12.9% 0.042 264.695) 20%, transparent);
@@ -3616,8 +3616,8 @@
   }
   .skill-table-header {
     display: grid;
-    min-width: 58rem;
-    grid-template-columns: minmax(16rem,1.6fr) 7rem 13rem 13rem 4rem;
+    min-width: 66rem;
+    grid-template-columns: minmax(16rem,1.6fr) 7rem 9rem 13rem 13rem 4rem;
     gap: calc(var(--spacing) * 3);
     border-bottom-style: var(--tw-border-style);
     border-bottom-width: 1px;

@@ -773,9 +773,57 @@ def test_create_skill_initializes_gitlab_and_persists_metadata() -> None:
     payload = response.json()
     assert payload["key"] == "equipment-diagnosis"
     assert payload["gitlab_group_path"] == "skills"
+    assert payload["is_published"] is False
     assert payload["current_draft_version"]["status"] == "draft"
     assert payload["current_draft_version"]["source_commit_sha"].startswith("commit-")
     assert len(fake_gateway.projects) == 1
+
+
+def test_list_skills_filters_by_published_state() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        draft_skill = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "draft-only",
+                "name": "Draft Only",
+                "description": "Keep this skill unpublished.",
+            },
+        ).json()
+        published_skill = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "published-skill",
+                "name": "Published Skill",
+                "description": "Publish this skill.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{published_skill['id']}/publish",
+            json={"publish_reason": "Initial publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+
+        all_response = client.get("/api/v1/skills")
+        published_response = client.get("/api/v1/skills?is_published=true")
+        unpublished_response = client.get("/api/v1/skills?is_published=false")
+
+    assert all_response.status_code == 200
+    all_skills = {skill["id"]: skill for skill in all_response.json()}
+    assert all_skills[draft_skill["id"]]["is_published"] is False
+    assert all_skills[published_skill["id"]]["is_published"] is True
+
+    assert published_response.status_code == 200
+    published_ids = {skill["id"] for skill in published_response.json()}
+    assert published_skill["id"] in published_ids
+    assert draft_skill["id"] not in published_ids
+
+    assert unpublished_response.status_code == 200
+    unpublished_ids = {skill["id"] for skill in unpublished_response.json()}
+    assert draft_skill["id"] in unpublished_ids
+    assert published_skill["id"] not in unpublished_ids
 
 
 def test_get_and_save_skill_source() -> None:

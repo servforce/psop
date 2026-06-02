@@ -638,6 +638,7 @@
       },
       filters: {
         search: "",
+        published_state: "",
         created_from: "",
         created_to: ""
       },

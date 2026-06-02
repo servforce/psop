@@ -133,6 +133,7 @@
           ready: "已就绪",
           draft: "草稿",
           published: "已发布",
+          unpublished: "未发布",
           requested: "已请求",
           compiling: "编译中",
           processing: "处理中",
@@ -177,7 +178,7 @@
         if (["compiling", "running", "waiting_input", "waiting_checkpoint", "waiting_runtime", "in_progress", "processing", "matched", "triggered", "output"].includes(normalized)) {
           return "border-sky-500/25 bg-sky-500/10 text-sky-200";
         }
-        if (["requested", "pending", "queued", "draft", "retrying", "retryable_failed", "sent", "inconclusive"].includes(normalized)) {
+        if (["requested", "pending", "queued", "draft", "unpublished", "retrying", "retryable_failed", "sent", "inconclusive"].includes(normalized)) {
           return "border-amber-500/25 bg-amber-500/10 text-amber-200";
         }
         if (["failed", "error", "rejected", "cancelled", "canceled", "timeout", "timed_out", "deadletter", "dead_letter"].includes(normalized)) {

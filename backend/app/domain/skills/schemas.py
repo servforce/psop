@@ -42,6 +42,7 @@ class SkillSummaryResponse(BaseModel):
     repository_url: str
     default_branch: str
     manifest_path: str
+    is_published: bool
     latest_draft_head_sha: str | None = None
     latest_published_commit_sha: str | None = None
     latest_published_at: datetime | None = None

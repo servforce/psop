@@ -126,8 +126,14 @@ class SkillsService:
         *,
         search: str | None = None,
         status: str | None = None,
+        is_published: bool | None = None,
     ) -> list[SkillSummaryResponse]:
-        definitions = self.repository.list_skill_definitions(session, search=search, status=status)
+        definitions = self.repository.list_skill_definitions(
+            session,
+            search=search,
+            status=status,
+            is_published=is_published,
+        )
         return [self._build_skill_summary(session, definition) for definition in definitions]
 
     def create_skill(self, session: Session, payload: CreateSkillRequest) -> SkillDetailResponse:
@@ -1921,6 +1927,7 @@ class SkillsService:
             repository_url=definition.repository_url,
             default_branch=definition.default_branch,
             manifest_path=definition.manifest_path,
+            is_published=latest_published_version is not None,
             latest_draft_head_sha=draft_version.source_commit_sha if draft_version else None,
             latest_published_commit_sha=(
                 latest_published_version.source_commit_sha if latest_published_version else None

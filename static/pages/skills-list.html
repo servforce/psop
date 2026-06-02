@@ -19,6 +19,11 @@
             @input.debounce.300ms="loadSkills()"
           />
         </label>
+        <select x-model="filters.published_state" class="select-field h-10 w-36 shrink-0 py-0" aria-label="是否已发布筛选" @change="loadSkills()">
+          <option value="">全部发布状态</option>
+          <option value="published">已发布</option>
+          <option value="unpublished">未发布</option>
+        </select>
         <div class="flex shrink-0 items-center gap-2">
           <input x-model="filters.created_from" type="date" class="input-field h-10 w-40 py-0" aria-label="创建开始时间" @change="loadSkills()" />
           <span class="text-xs text-slate-400">至</span>
@@ -33,6 +38,7 @@
     <div class="skill-table-header shrink-0">
       <span>名称</span>
       <span>状态</span>
+      <span>是否已发布</span>
       <span>创建时间</span>
       <span>发布时间</span>
       <span class="text-right">操作</span>
@@ -62,6 +68,7 @@
                 <span class="block truncate text-left text-sm font-semibold leading-5 text-slate-100" x-text="skill.name"></span>
               </div>
               <div><span class="status-badge" :class="statusBadgeTone(skill.status)" x-text="formatStatus(skill.status)"></span></div>
+              <div><span class="status-badge" :class="statusBadgeTone(skillPublishStatus(skill))" x-text="formatStatus(skillPublishStatus(skill))"></span></div>
               <div class="mono-field whitespace-nowrap" x-text="formatDateTime(skill.created_at)"></div>
               <div class="mono-field whitespace-nowrap" x-text="formatDateTime(skill.latest_published_at)"></div>
               <div class="flex justify-end gap-2">

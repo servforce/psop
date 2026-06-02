@@ -40,10 +40,11 @@ router = APIRouter(prefix="/skills", tags=["skills"])
 def list_skills(
     search: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    is_published: bool | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
 ) -> list[SkillSummaryResponse]:
-    return service.list_skills(session, search=search, status=status)
+    return service.list_skills(session, search=search, status=status, is_published=is_published)
 
 
 @router.post("", response_model=SkillDetailResponse, status_code=201)

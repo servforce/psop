@@ -25,12 +25,16 @@
 
   window.PSOPConsoleSkillDetailMethods = {
 
-      async loadSkills() {
+      async loadSkills(options = {}) {
         this.busy.list = true;
         try {
           const params = new URLSearchParams();
-          if (this.filters.search.trim()) {
+          const useFilters = options.useFilters !== false;
+          if (useFilters && this.filters.search.trim()) {
             params.set("search", this.filters.search.trim());
+          }
+          if (useFilters && this.filters.published_state) {
+            params.set("is_published", String(this.filters.published_state === "published"));
           }
           const suffix = params.toString() ? `?${params}` : "";
           this.skills = await this.apiRequest(`/skills${suffix}`);
@@ -1402,18 +1406,39 @@
           const nameMatched =
             !nameQuery ||
             skill.name.toLowerCase().includes(nameQuery);
+          const publishedState = this.filters.published_state;
+          const publishedMatched =
+            !publishedState ||
+            (publishedState === "published" && this.isSkillPublished(skill)) ||
+            (publishedState === "unpublished" && !this.isSkillPublished(skill));
 
           return (
             nameMatched &&
+            publishedMatched &&
             this.inDateRange(skill.created_at, this.filters.created_from, this.filters.created_to)
           );
         });
       },
 
 
+      isSkillPublished(skill) {
+        if (typeof skill?.is_published === "boolean") {
+          return skill.is_published;
+        }
+
+        return Boolean(skill?.latest_published_commit_sha || skill?.latest_published_at);
+      },
+
+
+      skillPublishStatus(skill) {
+        return this.isSkillPublished(skill) ? "published" : "unpublished";
+      },
+
+
       clearFilters() {
         this.filters = {
           search: "",
+          published_state: "",
           created_from: "",
           created_to: ""
         };
