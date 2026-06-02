@@ -69,6 +69,20 @@ def test_multimodal_route_uses_configured_model(monkeypatch) -> None:
     assert user_content[1]["image_url"]["url"] == "data:image/jpeg;base64,aW1hZ2U="
     assert user_content[2]["video_url"]["url"] == "data:video/mp4;base64,dmlkZW8="
     assert user_content[3]["input_audio"] == {"data": "YXVkaW8=", "format": "wav"}
+    assert completion.request["headers"]["Authorization"] == "Bearer [redacted]"
+    request_body = completion.request["body"]
+    redacted_user_content = request_body["messages"][1]["content"]
+    assert redacted_user_content[1]["image_url"] == {"url": "data:image/jpeg;base64,[redacted]"}
+    assert redacted_user_content[2]["video_url"] == {"url": "data:video/mp4;base64,[redacted]"}
+    assert redacted_user_content[3]["input_audio"] == {"data": "[redacted]", "format": "wav"}
+    assert completion.request["attachments"] == [
+        {"filename": "frame.jpg", "media_type": "image/jpeg", "content_base64_chars": 8},
+        {"filename": "clip.mp4", "media_type": "video/mp4", "content_base64_chars": 8},
+        {"filename": "note.wav", "media_type": "audio/wav", "content_base64_chars": 8},
+    ]
+    assert "aW1hZ2U=" not in str(completion.request)
+    assert "dmlkZW8=" not in str(completion.request)
+    assert "YXVkaW8=" not in str(completion.request)
 
 
 def test_gateway_only_accepts_text_and_multimodal_routes() -> None:
@@ -140,7 +154,7 @@ def test_multimodal_route_can_attach_thinking_options(monkeypatch) -> None:
         multimodal_payload_options={"enable_thinking": True, "thinking_budget": 8192},
     )
 
-    gateway.complete_multimodal(
+    completion = gateway.complete_multimodal(
         system_prompt="system",
         user_prompt="user",
         attachments=[],
@@ -148,6 +162,8 @@ def test_multimodal_route_can_attach_thinking_options(monkeypatch) -> None:
 
     assert captured["enable_thinking"] is True
     assert captured["thinking_budget"] == 8192
+    assert completion.request["body"]["enable_thinking"] is True
+    assert completion.request["body"]["thinking_budget"] == 8192
 
 
 def test_multimodal_completion_rejects_text_route() -> None:

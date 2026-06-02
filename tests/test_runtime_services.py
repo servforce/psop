@@ -556,6 +556,8 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert snapshots[-1].token_payload["budgets"]["llm_input_tokens"] == 30
     assert snapshots[-1].token_payload["budgets"]["llm_output_tokens"] == 15
     assert "input" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
+    assert "request" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
+    assert "_trace_request" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
     assert snapshots[-1].token_payload["observations"]["instruct_collect_context"]["input_summary"]["user_chars"] > 0
     runtime_llm_calls = inference_gateway.calls[1:]
     assert runtime_llm_calls
@@ -567,10 +569,16 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         event.payload for event in trace_events if event.event_type == "gateway.inference.completed"
     ]
     assert "input" not in llm_trace_payloads[0]["observation"]
+    assert "_trace_request" not in llm_trace_payloads[0]["observation"]
     assert llm_trace_payloads[0]["observation"]["input_summary"]["system_prompt_hash"]
     assert llm_trace_payloads[0]["observation"]["input_summary"]["route_key"] == "text"
     assert llm_trace_payloads[0]["observation"]["output"]["content"]
     assert llm_trace_payloads[0]["observation"]["usage"]["total_tokens"] == 15
+    trace_request = llm_trace_payloads[0]["observation"]["request"]
+    assert trace_request["headers"]["Authorization"] == "Bearer [redacted]"
+    assert trace_request["body"]["messages"][0]["role"] == "system"
+    assert "平台级输出语言要求" in trace_request["body"]["messages"][0]["content"]
+    assert trace_request["body"]["messages"][1]["content"] == runtime_llm_calls[0]["user_prompt"]
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
     assert terminal_session.terminal_session.status == "closed"
     assert [event.direction for event in terminal_events] == ["output", "input", "output", "output", "output"]

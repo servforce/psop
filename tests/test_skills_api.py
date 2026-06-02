@@ -224,6 +224,34 @@ class FakeInferenceGateway:
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
 
+    @staticmethod
+    def _request_snapshot(
+        *,
+        route_key: str,
+        system_prompt: str,
+        user_prompt: str,
+        content_parts: list[dict[str, object]] | None = None,
+        attachments: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        return {
+            "redaction": {"mode": "redacted"},
+            "provider": "fake-openai-compatible",
+            "method": "POST",
+            "url": "https://fake-llm.test/v1/chat/completions",
+            "endpoint": "/chat/completions",
+            "route_key": route_key,
+            "headers": {"Authorization": "Bearer [redacted]", "Content-Type": "application/json"},
+            "body": {
+                "model": "fake-model",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content_parts if content_parts is not None else user_prompt},
+                ],
+                "temperature": 0.2,
+            },
+            "attachments": attachments or [],
+        }
+
     def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "text") -> LlmCompletion:
         self.calls.append(
             {
@@ -333,6 +361,11 @@ class FakeInferenceGateway:
                 "total_tokens": 15,
                 "raw": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
             },
+            request=self._request_snapshot(
+                route_key=route_key,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            ),
         )
 
     def complete_multimodal(
@@ -387,12 +420,47 @@ class FakeInferenceGateway:
                 },
                 ensure_ascii=False,
             )
+        content_parts: list[dict[str, object]] = [{"type": "text", "text": user_prompt}]
+        for attachment in attachments:
+            if attachment.media_type.startswith("image/"):
+                content_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{attachment.media_type};base64,[redacted]",
+                        },
+                    }
+                )
+            else:
+                content_parts.append(
+                    {
+                        "type": "input_attachment",
+                        "filename": attachment.filename,
+                        "media_type": attachment.media_type,
+                        "content_base64_chars": len(attachment.content_base64),
+                    }
+                )
+        attachments_metadata = [
+            {
+                "filename": attachment.filename,
+                "media_type": attachment.media_type,
+                "content_base64_chars": len(attachment.content_base64),
+            }
+            for attachment in attachments
+        ]
         return LlmCompletion(
             content=content,
             provider="fake-openai-compatible",
             model="fake-model",
             raw_response={"id": "fake-multimodal-response"},
             usage={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
+            request=self._request_snapshot(
+                route_key=route_key,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                content_parts=content_parts,
+                attachments=attachments_metadata,
+            ),
         )
 
 

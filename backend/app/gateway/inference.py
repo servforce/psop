@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 import logging
 import time
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 
@@ -25,6 +26,7 @@ class LlmCompletion:
     model: str
     raw_response: dict
     usage: dict[str, int | dict[str, object]] = field(default_factory=dict)
+    request: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -170,6 +172,7 @@ class OpenAICompatibleInferenceGateway:
             "temperature": 0.2,
         }
         self._apply_route_payload_options(payload, route_key)
+        request_snapshot = self._redacted_request_snapshot(payload=payload, route_key=route_key)
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         timeout = httpx.Timeout(self.timeout_seconds, connect=min(15.0, self.timeout_seconds))
@@ -303,6 +306,7 @@ class OpenAICompatibleInferenceGateway:
                 model=model,
                 raw_response=data,
                 usage=usage,
+                request=request_snapshot,
             )
 
     def complete_multimodal(
@@ -326,6 +330,7 @@ class OpenAICompatibleInferenceGateway:
 
         model = self._resolve_model(route_key)
         content_parts: list[dict[str, object]] = [{"type": "text", "text": user_prompt}]
+        content_part_attachments: list[LlmAttachment | None] = [None]
         for attachment in attachments:
             if attachment.media_type.startswith("image/"):
                 content_parts.append(
@@ -336,6 +341,7 @@ class OpenAICompatibleInferenceGateway:
                         },
                     }
                 )
+                content_part_attachments.append(attachment)
             elif attachment.media_type.startswith("audio/"):
                 content_parts.append(
                     {
@@ -346,6 +352,7 @@ class OpenAICompatibleInferenceGateway:
                         },
                     }
                 )
+                content_part_attachments.append(attachment)
             elif attachment.media_type.startswith("video/"):
                 content_parts.append(
                     {
@@ -355,6 +362,7 @@ class OpenAICompatibleInferenceGateway:
                         },
                     }
                 )
+                content_part_attachments.append(attachment)
             else:
                 content_parts.append(
                     {
@@ -365,6 +373,7 @@ class OpenAICompatibleInferenceGateway:
                         ),
                     }
                 )
+                content_part_attachments.append(attachment)
 
         payload = {
             "model": model,
@@ -375,18 +384,100 @@ class OpenAICompatibleInferenceGateway:
             "temperature": 0.2,
         }
         self._apply_route_payload_options(payload, route_key)
-        return self._post_chat_completion(
+        request_snapshot = self._redacted_request_snapshot(
+            payload=payload,
+            route_key=route_key,
+            content_part_attachments=content_part_attachments,
+        )
+        completion = self._post_chat_completion(
             payload=payload,
             model=model,
             route_key=route_key,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
+        completion.request = request_snapshot
+        return completion
 
     def _apply_route_payload_options(self, payload: dict[str, object], route_key: str) -> None:
         for key, value in self.route_payload_options.get(route_key, {}).items():
             if value is not None:
                 payload[key] = value
+
+    def _redacted_request_snapshot(
+        self,
+        *,
+        payload: dict[str, object],
+        route_key: str,
+        content_part_attachments: list[LlmAttachment | None] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "redaction": {
+                "mode": "redacted",
+                "redacted_fields": [
+                    "headers.Authorization",
+                    "body.messages[].content[].image_url.url",
+                    "body.messages[].content[].video_url.url",
+                    "body.messages[].content[].input_audio.data",
+                ],
+            },
+            "provider": self.provider,
+            "api_base_url": self.api_base_url,
+            "method": "POST",
+            "url": f"{self.api_base_url}/chat/completions",
+            "endpoint": "/chat/completions",
+            "route_key": route_key,
+            "timeout_seconds": self.timeout_seconds,
+            "headers": {
+                "Authorization": "Bearer [redacted]",
+                "Content-Type": "application/json",
+            },
+            "body": self._redacted_chat_payload(payload),
+            "attachments": _redacted_attachment_list(content_part_attachments),
+        }
+
+    @classmethod
+    def _redacted_chat_payload(cls, payload: dict[str, object]) -> dict[str, Any]:
+        body = copy.deepcopy(payload)
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            return body
+
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                cls._redact_content_part(part)
+        return body
+
+    @classmethod
+    def _redact_content_part(cls, part: dict[str, Any]) -> None:
+        part_type = part.get("type")
+        if part_type == "image_url" and isinstance(part.get("image_url"), dict):
+            image_url = part["image_url"]
+            url = image_url.get("url")
+            if isinstance(url, str):
+                image_url["url"] = _redacted_data_url(url)
+            return
+
+        if part_type == "video_url" and isinstance(part.get("video_url"), dict):
+            video_url = part["video_url"]
+            url = video_url.get("url")
+            if isinstance(url, str):
+                video_url["url"] = _redacted_data_url(url)
+            return
+
+        if part_type == "input_audio" and isinstance(part.get("input_audio"), dict):
+            input_audio = part["input_audio"]
+            data = input_audio.get("data")
+            if isinstance(data, str):
+                input_audio["data"] = "[redacted]"
+            return
 
     def _post_chat_completion(
         self,
@@ -525,6 +616,31 @@ def _first_present(payload: dict[str, object], *keys: str) -> object:
         if key in payload:
             return payload[key]
     return None
+
+
+def _redacted_data_url(url: str) -> str:
+    prefix, separator, _content_base64 = url.partition("base64,")
+    if not separator:
+        return "[redacted]"
+    return f"{prefix}{separator}[redacted]"
+
+
+def _redacted_attachment_list(content_part_attachments: list[LlmAttachment | None] | None) -> list[dict[str, object]]:
+    if not content_part_attachments:
+        return []
+    return [
+        _attachment_redaction_metadata(attachment)
+        for attachment in content_part_attachments
+        if attachment is not None
+    ]
+
+
+def _attachment_redaction_metadata(attachment: LlmAttachment) -> dict[str, object]:
+    return {
+        "filename": attachment.filename,
+        "media_type": attachment.media_type,
+        "content_base64_chars": len(attachment.content_base64),
+    }
 
 
 def _audio_format(filename: str, media_type: str) -> str:

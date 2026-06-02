@@ -951,6 +951,7 @@ class RuntimeService:
         next_seq = run.latest_snapshot_seq + 1
         run.latest_snapshot_seq = next_seq
         run.runtime_phase = str(token.get("phase") or node["id"])
+        trace_observation = self._observation_for_trace(observation)
         session.add(
             SessionTokenSnapshot(
                 run_id=run.id,
@@ -969,7 +970,7 @@ class RuntimeService:
             payload={
                 "node_id": node.get("id"),
                 "node_kind": node.get("kind"),
-                "observation": observation,
+                "observation": trace_observation,
                 "summary": observation.get("summary") or observation.get("content") or observation.get("final_response") or "",
             },
         )
@@ -2072,6 +2073,8 @@ class RuntimeService:
                 "usage": llm_completion.usage,
                 "summary": "LLM 节点执行完成。",
             }
+            if llm_completion.request:
+                observation["_trace_request"] = llm_completion.request
             if self._node_is_evaluation(node):
                 observation.update(self._parse_evaluation_observation(llm_completion.content, node=node))
             return observation
@@ -2102,6 +2105,7 @@ class RuntimeService:
 
     def _merge_observation(self, *, node: dict[str, Any], token: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
         next_token = json.loads(json.dumps(token, ensure_ascii=False))
+        token_observation = self._observation_for_token(observation)
         for operation in node.get("merge", []):
             if not isinstance(operation, dict) or operation.get("op") != "set":
                 continue
@@ -2111,11 +2115,25 @@ class RuntimeService:
             value = operation.get("value") if "value" in operation else self._resolve_merge_source(
                 str(operation.get("from")),
                 token=next_token,
-                observation=observation,
+                observation=token_observation,
             )
             _set_path(next_token, target_path, value)
-        next_token.setdefault("observations", {}).setdefault(str(node.get("id")), observation)
+        next_token.setdefault("observations", {}).setdefault(str(node.get("id")), token_observation)
         return next_token
+
+    @staticmethod
+    def _observation_for_trace(observation: dict[str, Any]) -> dict[str, Any]:
+        trace_observation = dict(observation)
+        request = trace_observation.pop("_trace_request", None)
+        if request:
+            trace_observation["request"] = request
+        return trace_observation
+
+    @staticmethod
+    def _observation_for_token(observation: dict[str, Any]) -> dict[str, Any]:
+        token_observation = dict(observation)
+        token_observation.pop("_trace_request", None)
+        return token_observation
 
     @staticmethod
     def _resolve_merge_source(source: str, *, token: dict[str, Any], observation: dict[str, Any]) -> Any:
