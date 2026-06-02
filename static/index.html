@@ -64,11 +64,11 @@
                 type="button"
                 class="sidebar-link"
                 :class="[['agent-prompts-list', 'agent-prompt-detail'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
-                title="基本原则"
+                title="智能体"
                 @click="navigate('/admin/agent-prompts')"
               >
                 <span class="material-symbols-outlined text-[20px]">smart_toy</span>
-                <span x-show="!sidebarCollapsed" x-transition.opacity>基本原则</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>智能体</span>
               </button>
               <button
                 type="button"

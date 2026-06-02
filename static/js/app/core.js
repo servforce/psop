@@ -276,7 +276,7 @@
           save: "保存",
           science: "测试",
           send: "发送",
-          smart_toy: "基本原则",
+          smart_toy: "智能体",
           terminal: "调试",
           upload_file: "上传文件"
         };
@@ -763,7 +763,7 @@
           return "EG Artifact";
         }
         if (this.route.name === "agent-prompts-list") {
-          return "基本原则";
+          return "智能体";
         }
         if (this.route.name === "agent-prompt-detail") {
           return this.agentPromptDetail?.name || "Agent Prompt Pack";

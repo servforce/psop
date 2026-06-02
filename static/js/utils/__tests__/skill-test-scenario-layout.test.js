@@ -468,7 +468,7 @@ test("agent prompt management routes and pages are exposed", () => {
   expect(indexHtml).toContain("agent-prompts-list-page");
   expect(indexHtml).toContain("agent-prompt-detail-page");
   expect(indexHtml).toContain("navigate('/admin/agent-prompts')");
-  expect(indexHtml).toContain(">基本原则</span>");
+  expect(indexHtml).toContain(">智能体</span>");
   expect(appJs).toContain('normalized === "/admin/agent-prompts"');
   expect(appJs).toContain("agent-prompt-detail");
   expect(appJs).toContain("buildAgentPromptPath");
