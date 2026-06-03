@@ -604,7 +604,7 @@ Idempotency-Key: <client-event-id>
 
 - 终端客户端只应主动发送 `direction=input`。
 - 终端客户端不要构造 `parts[]`；服务端会根据 `text` 和文件字段生成 part。
-- `payload_inline` 只作为摘要或旧展示兼容字段；正式文本内容以 `event.text` 和服务端生成的 text part 为准。
+- `payload_inline` 只作为摘要或旧展示兼容字段；正式文本内容以服务端生成的 text part 为准。
 - 必须传 `external_event_id` 或 `Idempotency-Key`，用于重试去重。
 - Run 已结束或 TerminalSession 已关闭时，服务端会拒绝继续追加输入。
 
@@ -671,7 +671,7 @@ Idempotency-Key: <client-event-id>
 
 说明：
 
-- 文本直接写在 `event.text` 中。没有文本时可以省略。
+- 文本直接写在 `event` JSON 的 `text` 字段中。没有文本时可以省略。
 - 图片、音频、视频通过重复的 `files` 字段提交。服务端根据每个文件的 MIME 推导 part kind。
 - 文件大小限制由服务端配置控制，默认值为 25 MiB。
 - 终端侧不要上传对象存储 key；服务端会在同一次请求内保存文件并创建 part 级对象引用。

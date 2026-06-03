@@ -21,8 +21,8 @@
 ## 3. 模块与目录规则
 
 - 后端应显式区分 `skills/`、`compiler/`、`runtime/` 三层，不要把“用户对象”和“运行时对象”混在一起。
-- 后端以 `backend/psop/` 作为目标包结构，按领域而不是按“杂项 util”扩张。
-- 前端以 `static/admin/` 作为主控制台入口，保持静态轻栈，不在 v1 默认引入重量级前端框架。
+- 当前后端包结构以 `backend/app/` 为准；新增代码按 `api / domain / gateway / infra / core` 分层扩张，按领域而不是按“杂项 util”扩张。
+- 当前前端以 `static/index.html` 作为主控制台入口，页面片段放在 `static/pages/`，保持静态轻栈，不在 v1 默认引入重量级前端框架。
 - 文档按 `vision / architecture / reference / ui / agent-rules` 分层，避免所有知识都堆进一个文件。
 
 ## 4. 数据与接口规则
@@ -34,13 +34,13 @@
 ## 5. 任务系统与进程规则
 
 - v1 默认采用数据库驱动的 job system，不引入 Redis/Celery 作为默认依赖。
-- `api` 不直接承载长耗时或高风险作业；应通过 `worker / scheduler / sandbox` 分流。
+- 当前实现由 FastAPI lifespan 可选启动内置 `RuntimeJobWorker`；长耗时能力应进入 `runtime_job`，不要在 router 中直接执行。独立 `scheduler / sandbox` 仍是后续演进项。
 - 任务领取必须具备原子 claim、lease、重试、幂等和恢复机制。
 - `Sandbox Manager` 只在需要更强隔离时介入，不作为默认常驻独立主进程。
 
 ## 6. 前端与交互规则
 
-- `Skill Studio`、`Publish & Diagnostics`、`Runtime Monitor`、`Replay`、`Observability`、`Gateway Console` 是控制台一级能力面。
+- `Skill Studio`、`Publish & Diagnostics`、`Runtime Monitor`、`Replay`、`Observability`、`Gateway Console` 是产品规划中的控制台能力面；当前静态控制台入口以 `Skills`、`智能体`、`任务` 和 deep link 页面为准。
 - UI 实现优先复用 `skills/static-ui/` 中的组织方式、构建方式与样式约束。
 - 关键页面必须能追溯到 `skill / skill_version / compile_artifact / invocation / run / trace`。
 
