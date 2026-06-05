@@ -102,13 +102,63 @@
       }
     },
 
-    requestPlatformAgentVersionAction(action, version = null) {
-      const versionLabel = version ? this.platformAgentVersionLabel(version) : "draft";
-      const actionLabel = this.platformAgentVersionActionLabel(action);
-      this.showNotice(
-        "error",
-        `${actionLabel} ${versionLabel} 需要通过 Governance Agent 与 Tool Authorization 执行。`
-      );
+    async requestPlatformAgentVersionAction(action, version = null) {
+      const agentKey = String(this.currentPlatformAgent?.key || "").trim();
+      if (!agentKey) {
+        this.showNotice("error", "请先选择 Agent。");
+        return;
+      }
+      this.busy.platformAgentAction = true;
+      try {
+        if (action === "create_draft") {
+          const nextVersionNo = Number(this.currentPlatformAgent?.version_count || 0) + 1;
+          const detail = await this.apiRequest(`/agents/${encodeURIComponent(agentKey)}/versions`, {
+            method: "POST",
+            body: JSON.stringify({
+              version_label: `draft-v${nextVersionNo}`,
+              spec_json: agentSpec(this.currentPlatformAgent)
+            })
+          });
+          this.currentPlatformAgent = detail;
+          this.replacePlatformAgent(detail);
+          this.platformAgentDetailTab = "versions";
+          this.showNotice("success", "AgentVersion draft 已创建。");
+          return;
+        }
+        if (!version?.id) {
+          this.showNotice("error", "请选择 AgentVersion。");
+          return;
+        }
+        if (action === "publish") {
+          await this.apiRequest(`/agents/${encodeURIComponent(agentKey)}/versions/${encodeURIComponent(version.id)}/publish`, {
+            method: "POST"
+          });
+          await this.loadPlatformAgentDetail(agentKey);
+          this.platformAgentDetailTab = "versions";
+          this.showNotice("success", "AgentVersion 已发布。");
+          return;
+        }
+        if (action === "activate" || action === "rollback") {
+          const detail = await this.apiRequest(
+            `/agents/${encodeURIComponent(agentKey)}/versions/${encodeURIComponent(version.id)}/activate`,
+            {
+              method: "POST",
+              body: JSON.stringify({ update_bindings: true })
+            }
+          );
+          this.currentPlatformAgent = detail;
+          this.replacePlatformAgent(detail);
+          await this.loadPlatformAgents();
+          this.platformAgentDetailTab = "versions";
+          this.showNotice("success", action === "rollback" ? "AgentVersion 已回滚。" : "AgentVersion 已激活。");
+          return;
+        }
+        this.showNotice("error", `未知 AgentVersion 操作：${action}`);
+      } catch (error) {
+        this.showNotice("error", error.message || "AgentVersion 操作失败。");
+      } finally {
+        this.busy.platformAgentAction = false;
+      }
     },
 
     platformAgentsPath() {

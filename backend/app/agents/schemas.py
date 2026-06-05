@@ -48,6 +48,16 @@ class AgentDefinitionDetailResponse(AgentDefinitionSummaryResponse):
     active_version: AgentVersionSummaryResponse | None = None
 
 
+class CreateAgentVersionRequest(BaseModel):
+    version_label: str | None = Field(default=None, max_length=80)
+    spec_json: dict[str, Any] | None = None
+    parent_version_id: str | None = None
+
+
+class ActivateAgentVersionRequest(BaseModel):
+    update_bindings: bool = True
+
+
 class AgentSessionResponse(BaseModel):
     id: str
     definition_id: str | None = None

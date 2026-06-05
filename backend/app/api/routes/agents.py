@@ -13,7 +13,9 @@ from app.agents.schemas import (
     AgentToolCallResponse,
     AgentToolAuthorizationResponse,
     AgentVersionSummaryResponse,
+    ActivateAgentVersionRequest,
     AppendAgentEventRequest,
+    CreateAgentVersionRequest,
     CreateAgentRunRequest,
     CreateToolAuthorizationRequest,
     ToolAuthorizationDecisionRequest,
@@ -53,6 +55,41 @@ def list_agent_versions(
     service: AgentService = Depends(get_agent_service),
 ) -> list[AgentVersionSummaryResponse]:
     return service.list_versions(session, agent_key)
+
+
+@agents_router.post(
+    "/agents/{agent_key}/versions",
+    response_model=AgentDefinitionDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_agent_version(
+    agent_key: str,
+    payload: CreateAgentVersionRequest,
+    session: Session = Depends(get_db_session),
+    service: AgentService = Depends(get_agent_service),
+) -> AgentDefinitionDetailResponse:
+    return service.create_version(session, agent_key, payload)
+
+
+@agents_router.post("/agents/{agent_key}/versions/{version_id}/publish", response_model=AgentVersionSummaryResponse)
+def publish_agent_version(
+    agent_key: str,
+    version_id: str,
+    session: Session = Depends(get_db_session),
+    service: AgentService = Depends(get_agent_service),
+) -> AgentVersionSummaryResponse:
+    return service.publish_version(session, agent_key, version_id)
+
+
+@agents_router.post("/agents/{agent_key}/versions/{version_id}/activate", response_model=AgentDefinitionDetailResponse)
+def activate_agent_version(
+    agent_key: str,
+    version_id: str,
+    payload: ActivateAgentVersionRequest | None = None,
+    session: Session = Depends(get_db_session),
+    service: AgentService = Depends(get_agent_service),
+) -> AgentDefinitionDetailResponse:
+    return service.activate_version(session, agent_key, version_id, payload or ActivateAgentVersionRequest())
 
 
 @agent_runs_router.post("", response_model=AgentRunResponse, status_code=status.HTTP_201_CREATED)

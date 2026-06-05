@@ -174,17 +174,62 @@ test("platform agent methods derive spec labels, bindings, paths, and diff previ
   expect(methods.platformAgentShortHash("abcdef1234567890")).toBe("abcdef123456");
 });
 
-test("platform agent write actions route through governance notice", () => {
+test("platform agent actions create drafts and activate published versions", async () => {
   const methods = loadPlatformAgentMethods();
+  const detail = agentDetail();
+  const createdDraftDetail = {
+    ...detail,
+    version_count: 3,
+    versions: [
+      {
+        id: "ver-3",
+        version_no: 3,
+        version_label: "draft-v3",
+        status: "draft",
+        spec_json: detail.active_version.spec_json
+      },
+      ...detail.versions
+    ]
+  };
+  const activatedDetail = {
+    ...detail,
+    active_version_id: "ver-2",
+    active_version_label: "draft-2",
+    active_version: detail.versions[0],
+    bindings: detail.bindings.map((binding) => ({ ...binding, active_version_id: "ver-2" }))
+  };
   const context = {
     ...methods,
+    busy: { platformAgentAction: false, platformAgentDetail: false, platformAgents: false },
+    currentPlatformAgent: detail,
+    platformAgents: [detail],
+    platformAgentRuns: [],
+    platformAgentToolAuthorizations: [],
+    apiRequest: jest.fn(async (url, options) => {
+      if (url === "/agents/pskill.runner/versions" && options?.method === "POST") {
+        return createdDraftDetail;
+      }
+      if (url === "/agents/pskill.runner/versions/ver-2/activate" && options?.method === "POST") {
+        return activatedDetail;
+      }
+      if (url === "/agents") {
+        return [activatedDetail];
+      }
+      return null;
+    }),
     showNotice: jest.fn()
   };
 
-  methods.requestPlatformAgentVersionAction.call(context, "activate", { version_label: "seed-1" });
+  await methods.requestPlatformAgentVersionAction.call(context, "create_draft");
+  await methods.requestPlatformAgentVersionAction.call(context, "activate", detail.versions[0]);
 
-  expect(context.showNotice).toHaveBeenCalledWith(
-    "error",
-    "激活 seed-1 需要通过 Governance Agent 与 Tool Authorization 执行。"
-  );
+  const createBody = JSON.parse(context.apiRequest.mock.calls[0][1].body);
+  const activateBody = JSON.parse(context.apiRequest.mock.calls[1][1].body);
+  expect(createBody.version_label).toBe("draft-v3");
+  expect(createBody.spec_json.allowed_tools).toEqual(["psop.runtime.read"]);
+  expect(activateBody).toEqual({ update_bindings: true });
+  expect(context.currentPlatformAgent.active_version_id).toBe("ver-2");
+  expect(context.platformAgentDetailTab).toBe("versions");
+  expect(context.showNotice).toHaveBeenCalledWith("success", "AgentVersion draft 已创建。");
+  expect(context.showNotice).toHaveBeenCalledWith("success", "AgentVersion 已激活。");
 });

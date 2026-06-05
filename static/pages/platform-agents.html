@@ -13,7 +13,7 @@
         <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.platformAgents || busy.platformAgentDetail" @click="loadPlatformAgentsPage()">
           <span class="material-symbols-outlined text-[18px]">refresh</span>
         </button>
-        <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.platformAgentDetail" @click="requestPlatformAgentVersionAction('create_draft')">
+        <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.platformAgentAction || busy.platformAgentDetail" @click="requestPlatformAgentVersionAction('create_draft')">
           <span class="material-symbols-outlined text-[18px]">add</span>
           <span>Draft</span>
         </button>
@@ -120,7 +120,7 @@
                   <span class="material-symbols-outlined text-[18px]" x-text="copyIcon(`platform-agent-${currentPlatformAgent.key}`)"></span>
                   <span>复制</span>
                 </button>
-                <button type="button" class="button-primary h-9 px-3" @click="requestPlatformAgentVersionAction('activate', currentPlatformAgent.active_version)">
+                <button type="button" class="button-primary h-9 px-3" :disabled="busy.platformAgentAction" @click="requestPlatformAgentVersionAction('activate', currentPlatformAgent.active_version)">
                   <span class="material-symbols-outlined text-[18px]">rocket_launch</span>
                   <span>激活</span>
                 </button>
@@ -223,15 +223,15 @@
                         </div>
                       </dl>
                       <div class="mt-4 flex flex-wrap gap-2">
-                        <button type="button" class="button-secondary h-8 px-3" @click="requestPlatformAgentVersionAction('publish', version)">
+                        <button type="button" class="button-secondary h-8 px-3" :disabled="busy.platformAgentAction || version.status !== 'draft'" @click="requestPlatformAgentVersionAction('publish', version)">
                           <span class="material-symbols-outlined text-[17px]">publish</span>
                           <span>发布</span>
                         </button>
-                        <button type="button" class="button-primary h-8 px-3" @click="requestPlatformAgentVersionAction('activate', version)">
+                        <button type="button" class="button-primary h-8 px-3" :disabled="busy.platformAgentAction || version.status !== 'published' || currentPlatformAgent.active_version_id === version.id" @click="requestPlatformAgentVersionAction('activate', version)">
                           <span class="material-symbols-outlined text-[17px]">rocket_launch</span>
                           <span>激活</span>
                         </button>
-                        <button type="button" class="button-secondary h-8 px-3" @click="requestPlatformAgentVersionAction('rollback', version)">
+                        <button type="button" class="button-secondary h-8 px-3" :disabled="busy.platformAgentAction || version.status !== 'published' || currentPlatformAgent.active_version_id === version.id" @click="requestPlatformAgentVersionAction('rollback', version)">
                           <span class="material-symbols-outlined text-[17px]">undo</span>
                           <span>回滚</span>
                         </button>

@@ -160,13 +160,42 @@ class AgentRunner:
             ),
             commit=False,
         )
+        try:
+            tool_result = self._execute_native_tool_call(session, tool_call=tool_call)
+        except (SkillNotFoundError, SkillValidationError) as error:
+            tool_call.status = "failed"
+            tool_call.result_summary = {"executed": False, "error": error.message, "details": error.details}
+            if authorization:
+                authorization.status = "failed"
+                authorization.executed_at = now_utc()
+            agent_run.status = "failed"
+            agent_run.error_message = error.message
+            agent_run.ended_at = now_utc()
+            self.agent_service.append_event(
+                session,
+                agent_run.id,
+                AppendAgentEventRequest(
+                    event_type="agent.tool_call.failed",
+                    phase="tool",
+                    payload={"tool_call_id": tool_call.id, "tool_name": tool_call.tool_name, "error": error.message},
+                ),
+                commit=False,
+            )
+            session.commit()
+            return self.agent_service._build_run_response(agent_run)
         tool_call.status = "succeeded"
-        tool_call.result_summary = {"executed": True, "authorization_id": authorization.id if authorization else ""}
+        tool_call.result_summary = {
+            "executed": True,
+            "authorization_id": authorization.id if authorization else "",
+            **tool_result,
+        }
         if authorization:
             authorization.status = "executed"
             authorization.executed_at = now_utc()
         agent_run.status = "succeeded"
-        agent_run.output_payload = {"tool_result": {"tool_name": tool_call.tool_name, "status": "succeeded"}}
+        agent_run.output_payload = {
+            "tool_result": {"tool_name": tool_call.tool_name, "status": "succeeded", **tool_result}
+        }
         agent_run.ended_at = now_utc()
         self.agent_service.append_event(
             session,
@@ -174,12 +203,31 @@ class AgentRunner:
             AppendAgentEventRequest(
                 event_type="agent.tool_call.succeeded",
                 phase="tool",
-                payload={"tool_call_id": tool_call.id, "tool_name": tool_call.tool_name},
+                payload={"tool_call_id": tool_call.id, "tool_name": tool_call.tool_name, "result": tool_result},
             ),
             commit=False,
         )
         session.commit()
         return self.agent_service._build_run_response(agent_run)
+
+    def _execute_native_tool_call(self, session: Session, *, tool_call: Any) -> dict[str, Any]:
+        if tool_call.tool_name != "psop.agent_version.activate":
+            return {"result": {"authorized_execution": True}}
+        arguments = tool_call.arguments_summary or {}
+        agent_key = str(arguments.get("agent_key") or "").strip()
+        version_id = str(arguments.get("version_id") or "").strip()
+        if not agent_key or not version_id:
+            raise SkillValidationError(
+                "psop.agent_version.activate 缺少 agent_key 或 version_id。",
+                details={"arguments_summary": arguments},
+            )
+        activation = self.agent_service.activate_version_from_tool(
+            session,
+            agent_key=agent_key,
+            version_id=version_id,
+            commit=False,
+        )
+        return {"result": activation}
 
     def _activate_skills(self, session: Session, *, agent_run: AgentRun, spec: dict[str, Any]) -> set[str]:
         self.skill_service.sync_packages(session)

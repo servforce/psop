@@ -108,10 +108,60 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert pending_authorizations_response.json() == []
 
 
+def test_agent_version_api_creates_publishes_and_activates_draft() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        before_response = client.get("/api/v1/agents/pskill.runner")
+        before = before_response.json()
+        spec = {
+            **before["active_version"]["spec_json"],
+            "goal": "在 RuntimeService 主权边界内为运行节点生成 observation，并携带 canary marker。",
+            "runtime_policy": {"rollout": "canary"},
+        }
+        draft_response = client.post(
+            "/api/v1/agents/pskill.runner/versions",
+            json={"version_label": "runner-canary", "spec_json": spec},
+        )
+        draft = next(item for item in draft_response.json()["versions"] if item["version_label"] == "runner-canary")
+        draft_activate_response = client.post(f"/api/v1/agents/pskill.runner/versions/{draft['id']}/activate")
+        publish_response = client.post(f"/api/v1/agents/pskill.runner/versions/{draft['id']}/publish")
+        activate_response = client.post(
+            f"/api/v1/agents/pskill.runner/versions/{draft['id']}/activate",
+            json={"update_bindings": True},
+        )
+
+    assert before_response.status_code == 200
+    assert draft_response.status_code == 201
+    assert draft["status"] == "draft"
+    assert draft["content_hash"] != before["active_version"]["content_hash"]
+    assert draft_activate_response.status_code == 422
+    assert publish_response.status_code == 200
+    assert publish_response.json()["status"] == "published"
+    assert activate_response.status_code == 200
+    assert activate_response.json()["active_version_id"] == draft["id"]
+    assert activate_response.json()["active_version"]["spec_json"]["runtime_policy"] == {"rollout": "canary"}
+    assert {item["active_version_id"] for item in activate_response.json()["bindings"]} == {draft["id"]}
+
+
 def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authorization() -> None:
     client, _, _ = create_test_client()
 
     with client:
+        compiler_before = client.get("/api/v1/agents/pskill.compiler").json()
+        compiler_spec = {
+            **compiler_before["active_version"]["spec_json"],
+            "goal": "将 PSkill 编译为 formal-v5 Execution Graph，并启用授权激活测试版本。",
+            "runtime_policy": {"activation_test": True},
+        }
+        draft_response = client.post(
+            "/api/v1/agents/pskill.compiler/versions",
+            json={"version_label": "compiler-activation-test", "spec_json": compiler_spec},
+        )
+        draft_version = next(
+            item for item in draft_response.json()["versions"] if item["version_label"] == "compiler-activation-test"
+        )
+        publish_response = client.post(f"/api/v1/agents/pskill.compiler/versions/{draft_version['id']}/publish")
         run_response = client.post(
             "/api/v1/agent-runs",
             json={
@@ -123,11 +173,11 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
                         "decision_type": "tool_call",
                         "tool_name": "psop.agent_version.activate",
                         "side_effect_level": "high_write",
-                        "arguments_summary": {"agent_key": "pskill.compiler", "version_id": "agent-version-1"},
+                        "arguments_summary": {"agent_key": "pskill.compiler", "version_id": draft_version["id"]},
                         "expected_effect_summary": "激活新的 compiler AgentVersion。",
                         "authorization_reason": "激活 AgentVersion 会改变生产智能体配置。",
                         "reversible": True,
-                        "idempotency_key": "activate-compiler-agent-version-1",
+                        "idempotency_key": "activate-compiler-agent-version-test",
                     }
                 },
             },
@@ -149,7 +199,10 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
         executed_authorization_response = client.get(f"/api/v1/tool-authorizations/{authorization['id']}")
         resumed_tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
         resumed_events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        compiler_after_response = client.get("/api/v1/agents/pskill.compiler")
 
+    assert draft_response.status_code == 201
+    assert publish_response.status_code == 200
     assert run_response.status_code == 201
     assert run_response.json()["agent_session_id"]
     assert first_run_response.status_code == 200
@@ -185,8 +238,13 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
     assert resumed_response.status_code == 200
     assert resumed_response.json()["status"] == "succeeded"
     assert resumed_response.json()["output_payload"]["tool_result"]["tool_name"] == "psop.agent_version.activate"
+    assert resumed_response.json()["output_payload"]["tool_result"]["result"]["version_id"] == draft_version["id"]
     assert executed_authorization_response.json()["status"] == "executed"
     assert resumed_tool_calls_response.json()[0]["status"] == "succeeded"
+    assert resumed_tool_calls_response.json()[0]["result_summary"]["result"]["version_id"] == draft_version["id"]
+    assert compiler_after_response.json()["active_version_id"] == draft_version["id"]
+    assert compiler_after_response.json()["active_version"]["spec_json"]["runtime_policy"] == {"activation_test": True}
+    assert {item["active_version_id"] for item in compiler_after_response.json()["bindings"]} == {draft_version["id"]}
     assert [item["status"] for item in resumed_tool_calls_response.json()] == ["succeeded"]
     resumed_event_types = [item["event_type"] for item in resumed_events_response.json()]
     assert "agent.runner.resumed_authorized_tool" in resumed_event_types

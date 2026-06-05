@@ -28,14 +28,16 @@ from app.agents.schemas import (
     AgentSessionResponse,
     AgentToolAuthorizationResponse,
     AgentVersionSummaryResponse,
+    ActivateAgentVersionRequest,
     AppendAgentEventRequest,
+    CreateAgentVersionRequest,
     CreateAgentRunRequest,
     CreateAgentToolCallRequest,
     CreateToolAuthorizationRequest,
     ToolAuthorizationDecisionRequest,
     AgentToolCallResponse,
 )
-from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
+from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
 
 
@@ -210,6 +212,90 @@ class AgentService:
         if not definition:
             raise SkillNotFoundError("未找到 Agent。", details={"agent_key": agent_key})
         return [self._build_version_response(item) for item in self.repository.list_versions(session, definition.id)]
+
+    def create_version(
+        self,
+        session: Session,
+        agent_key: str,
+        payload: CreateAgentVersionRequest,
+    ) -> AgentDefinitionDetailResponse:
+        if self.ensure_seed_data(session):
+            session.flush()
+        definition = self._get_definition_by_key(session, agent_key)
+        if payload.parent_version_id:
+            parent = self._get_version_for_definition(session, definition, payload.parent_version_id)
+        else:
+            parent = self.repository.get_version(session, definition.active_version_id)
+            if not parent:
+                versions = self.repository.list_versions(session, definition.id)
+                parent = versions[0] if versions else None
+        if payload.spec_json is not None:
+            spec = payload.spec_json
+        elif parent:
+            spec = json.loads(json.dumps(parent.spec_json))
+        else:
+            raise SkillValidationError("创建 AgentVersion draft 必须提供 spec_json。", details={"agent_key": agent_key})
+        self._validate_agent_spec(spec, agent_key=agent_key)
+        version_no = self.repository.next_version_no(session, definition.id)
+        version = AgentVersion(
+            definition_id=definition.id,
+            version_no=version_no,
+            version_label=payload.version_label or f"v{version_no}",
+            status="draft",
+            spec_json=spec,
+            content_hash=self._hash_spec(spec),
+        )
+        session.add(version)
+        session.commit()
+        return self.get_definition(session, agent_key)
+
+    def publish_version(
+        self,
+        session: Session,
+        agent_key: str,
+        version_id: str,
+    ) -> AgentVersionSummaryResponse:
+        definition = self._get_definition_by_key(session, agent_key)
+        version = self._get_version_for_definition(session, definition, version_id)
+        if version.status == "archived":
+            raise SkillConflictError("已归档 AgentVersion 不可发布。", details={"version_id": version.id})
+        self._validate_agent_spec(version.spec_json, agent_key=agent_key)
+        version.status = "published"
+        version.content_hash = self._hash_spec(version.spec_json)
+        version.published_at = version.published_at or now_utc()
+        session.commit()
+        return self._build_version_response(version)
+
+    def activate_version(
+        self,
+        session: Session,
+        agent_key: str,
+        version_id: str,
+        payload: ActivateAgentVersionRequest,
+        *,
+        commit: bool = True,
+    ) -> AgentDefinitionDetailResponse:
+        definition = self._get_definition_by_key(session, agent_key)
+        version = self._get_version_for_definition(session, definition, version_id)
+        self._activate_version_model(session, definition=definition, version=version, update_bindings=payload.update_bindings)
+        if commit:
+            session.commit()
+        return self.get_definition(session, agent_key)
+
+    def activate_version_from_tool(
+        self,
+        session: Session,
+        *,
+        agent_key: str,
+        version_id: str,
+        commit: bool = True,
+    ) -> dict[str, Any]:
+        definition = self._get_definition_by_key(session, agent_key)
+        version = self._get_version_for_definition(session, definition, version_id)
+        result = self._activate_version_model(session, definition=definition, version=version, update_bindings=True)
+        if commit:
+            session.commit()
+        return result
 
     def create_run(
         self,
@@ -508,6 +594,73 @@ class AgentService:
         )
         session.commit()
         return self._build_tool_authorization_response(authorization)
+
+    def _get_definition_by_key(self, session: Session, agent_key: str) -> AgentDefinition:
+        definition = self.repository.get_definition_by_key(session, agent_key)
+        if not definition:
+            raise SkillNotFoundError("未找到 Agent。", details={"agent_key": agent_key})
+        return definition
+
+    def _get_version_for_definition(
+        self,
+        session: Session,
+        definition: AgentDefinition,
+        version_id: str,
+    ) -> AgentVersion:
+        version = self.repository.get_version(session, version_id)
+        if not version or version.definition_id != definition.id:
+            raise SkillNotFoundError(
+                "未找到 AgentVersion。",
+                details={"agent_key": definition.key, "version_id": version_id},
+            )
+        return version
+
+    def _activate_version_model(
+        self,
+        session: Session,
+        *,
+        definition: AgentDefinition,
+        version: AgentVersion,
+        update_bindings: bool,
+    ) -> dict[str, Any]:
+        if version.status != "published":
+            raise SkillValidationError("只有 published AgentVersion 可以激活。", details={"version_id": version.id})
+        self._validate_agent_spec(version.spec_json, agent_key=definition.key)
+        previous_version_id = definition.active_version_id
+        definition.active_version_id = version.id
+        updated_binding_ids: list[str] = []
+        if update_bindings:
+            for binding in self.repository.list_bindings_for_definition(session, definition.id):
+                binding.active_version_id = version.id
+                updated_binding_ids.append(binding.id)
+        session.flush()
+        return {
+            "agent_key": definition.key,
+            "version_id": version.id,
+            "version_label": version.version_label,
+            "previous_version_id": previous_version_id,
+            "updated_binding_ids": updated_binding_ids,
+        }
+
+    @staticmethod
+    def _validate_agent_spec(spec: dict[str, Any], *, agent_key: str) -> None:
+        if not isinstance(spec, dict):
+            raise SkillValidationError("AgentSpec 必须是对象。", details={"agent_key": agent_key})
+        errors: list[dict[str, str]] = []
+        for field in ("key", "name", "role", "goal"):
+            if not str(spec.get(field) or "").strip():
+                errors.append({"field": field, "message": "required"})
+        if spec.get("key") and str(spec["key"]) != agent_key:
+            errors.append({"field": "key", "message": "must match agent_key"})
+        for field in ("allowed_tools", "allowed_skill_names"):
+            value = spec.get(field)
+            if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+                errors.append({"field": field, "message": "must be a list of strings"})
+        output_schema = spec.get("output_schema")
+        if not isinstance(output_schema, dict) or not str(output_schema.get("name") or "").strip():
+            errors.append({"field": "output_schema.name", "message": "required"})
+        if errors:
+            raise SkillValidationError("AgentSpec 校验失败。", details={"agent_key": agent_key, "errors": errors})
 
     def _get_run(self, session: Session, agent_run_id: str) -> AgentRun:
         agent_run = self.repository.get_run(session, agent_run_id)

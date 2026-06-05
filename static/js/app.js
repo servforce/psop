@@ -997,6 +997,7 @@
         agentRunDetail: false,
         platformAgents: false,
         platformAgentDetail: false,
+        platformAgentAction: false,
         skillPackages: false,
         skillPackageDetail: false,
         skillPackageAction: false,
