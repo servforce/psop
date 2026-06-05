@@ -50,6 +50,7 @@ class DatabaseManager:
         from app.pskills import models  # noqa: F401
         from app.compiler import models as compiler_models  # noqa: F401
         from app.evaluations import models as evaluation_models  # noqa: F401
+        from app.governance import models as governance_models  # noqa: F401
         from app.jobs import models as job_models  # noqa: F401
         from app.runtime import models as runtime_models  # noqa: F401
         from app.testing import models as skill_test_models  # noqa: F401

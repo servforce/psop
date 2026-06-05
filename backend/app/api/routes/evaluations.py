@@ -3,13 +3,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db_session, get_evaluation_service
+from app.api.dependencies import get_db_session, get_evaluation_service, get_governance_service
 from app.evaluations.schemas import (
     RunEvaluationFindingResponse,
     RunEvaluationResponse,
     UpdateRunEvaluationFindingRequest,
 )
 from app.evaluations.service import EvaluationService
+from app.governance.schemas import GovernanceProposalResponse
+from app.governance.service import GovernanceService
 
 
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
@@ -52,6 +54,19 @@ def update_finding_status(
     service: EvaluationService = Depends(get_evaluation_service),
 ) -> RunEvaluationFindingResponse:
     return service.update_finding_status(session, finding_id, payload)
+
+
+@router.post(
+    "/findings/{finding_id}/create-proposal",
+    response_model=GovernanceProposalResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_proposal_from_finding(
+    finding_id: str,
+    session: Session = Depends(get_db_session),
+    governance_service: GovernanceService = Depends(get_governance_service),
+) -> GovernanceProposalResponse:
+    return governance_service.create_proposal_from_finding(session, finding_id)
 
 
 @router.get("/{evaluation_id}", response_model=RunEvaluationResponse)
