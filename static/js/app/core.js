@@ -331,6 +331,7 @@
           ["governance-proposals-page", "/pages/governance-proposals.html"],
           ["governance-experiments-page", "/pages/governance-experiments.html"],
           ["tool-authorizations-page", "/pages/tool-authorizations.html"],
+          ["platform-agent-runs-page", "/pages/platform-agent-runs.html"],
           ["platform-tools-page", "/pages/platform-tools.html"],
           ["platform-memory-page", "/pages/platform-memory.html"],
           ["skill-detail-page", "/pages/skill-detail.html"],
@@ -467,6 +468,14 @@
         if (!["platform-tools", "platform-tool"].includes(this.route.name)) {
           this.currentPlatformTool = null;
         }
+        if (!["platform-agent-runs", "platform-agent-run"].includes(this.route.name)) {
+          this.currentAgentRun = null;
+          this.currentAgentRunEvents = [];
+          this.currentAgentRunModelCalls = [];
+          this.currentAgentRunToolCalls = [];
+          this.currentAgentRunSkillActivations = [];
+          this.currentAgentRunToolAuthorizations = [];
+        }
         if (!["platform-memory", "platform-memory-entry"].includes(this.route.name)) {
           this.currentMemoryEntry = null;
         }
@@ -533,6 +542,18 @@
           if (this.route.name === "tool-authorizations") {
             this.currentSkill = null;
             await this.loadToolAuthorizations();
+            return;
+          }
+
+          if (this.route.name === "platform-agent-runs") {
+            this.currentSkill = null;
+            await this.loadPlatformAgentRunsPage();
+            return;
+          }
+
+          if (this.route.name === "platform-agent-run") {
+            this.currentSkill = null;
+            await this.loadPlatformAgentRunPage(this.route.params.agentRunId);
             return;
           }
 
@@ -865,6 +886,9 @@
         }
         if (this.route.name === "tool-authorizations") {
           return "工具授权";
+        }
+        if (this.route.name === "platform-agent-runs" || this.route.name === "platform-agent-run") {
+          return "Agent Runs";
         }
         if (this.route.name === "platform-tools" || this.route.name === "platform-tool") {
           return "Tools";

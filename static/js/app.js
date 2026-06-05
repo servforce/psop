@@ -41,6 +41,18 @@
       return { name: "governance-experiments", params: {} };
     }
 
+    if (normalized === "/admin/platform/agent-runs") {
+      return { name: "platform-agent-runs", params: {} };
+    }
+
+    const platformAgentRunMatch = normalized.match(/^\/admin\/platform\/agent-runs\/([^/]+)$/);
+    if (platformAgentRunMatch) {
+      return {
+        name: "platform-agent-run",
+        params: { agentRunId: platformAgentRunMatch[1] }
+      };
+    }
+
     if (normalized === "/admin/platform/tools") {
       return { name: "platform-tools", params: {} };
     }
@@ -233,6 +245,14 @@
 
   function buildToolAuthorizationsPath() {
     return "/admin/platform/tool-authorizations";
+  }
+
+  function buildPlatformAgentRunsPath() {
+    return "/admin/platform/agent-runs";
+  }
+
+  function buildPlatformAgentRunPath(agentRunId) {
+    return `/admin/platform/agent-runs/${agentRunId}`;
   }
 
   function buildPlatformToolsPath() {
@@ -663,6 +683,20 @@
       toolAuthorizationFilters: {
         status: "pending"
       },
+      agentRuns: [],
+      currentAgentRun: null,
+      currentAgentRunEvents: [],
+      currentAgentRunModelCalls: [],
+      currentAgentRunToolCalls: [],
+      currentAgentRunSkillActivations: [],
+      currentAgentRunToolAuthorizations: [],
+      agentRunDetailTab: "events",
+      agentRunFilters: {
+        agent_key: "",
+        status: "",
+        owner_type: "",
+        owner_id: ""
+      },
       platformTools: [],
       currentPlatformTool: null,
       platformToolFilters: {
@@ -878,6 +912,8 @@
         governanceExperimentLookup: false,
         toolAuthorizations: false,
         toolAuthorizationAction: false,
+        agentRuns: false,
+        agentRunDetail: false,
         platformTools: false,
         platformToolAction: false,
         memoryEntries: false,
@@ -900,6 +936,8 @@
     buildGovernanceProposalPath,
     buildGovernanceExperimentsPath,
     buildToolAuthorizationsPath,
+    buildPlatformAgentRunsPath,
+    buildPlatformAgentRunPath,
     buildPlatformToolsPath,
     buildPlatformToolPath,
     buildPlatformMemoryPath,

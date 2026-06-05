@@ -583,6 +583,9 @@
   .max-h-\[32rem\] {
     max-height: 32rem;
   }
+  .max-h-\[34rem\] {
+    max-height: 34rem;
+  }
   .max-h-\[92vh\] {
     max-height: 92vh;
   }
@@ -693,6 +696,9 @@
   }
   .w-48 {
     width: calc(var(--spacing) * 48);
+  }
+  .w-52 {
+    width: calc(var(--spacing) * 52);
   }
   .w-56 {
     width: calc(var(--spacing) * 56);
@@ -1668,6 +1674,12 @@
     background-color: color-mix(in srgb, oklch(12.9% 0.042 264.695) 20%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
       background-color: color-mix(in oklab, var(--color-slate-950) 20%, transparent);
+    }
+  }
+  .bg-slate-950\/30 {
+    background-color: color-mix(in srgb, oklch(12.9% 0.042 264.695) 30%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-slate-950) 30%, transparent);
     }
   }
   .bg-slate-950\/35 {
@@ -2735,9 +2747,19 @@
       display: flex;
     }
   }
+  .lg\:grid-cols-2 {
+    @media (width >= 64rem) {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
   .lg\:grid-cols-4 {
     @media (width >= 64rem) {
       grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  .lg\:grid-cols-5 {
+    @media (width >= 64rem) {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
     }
   }
   .lg\:grid-cols-\[11rem_minmax\(0\,1fr\)_minmax\(16rem\,0\.7fr\)_2\.5rem\] {
@@ -2763,6 +2785,11 @@
   .lg\:grid-cols-\[minmax\(24rem\,0\.9fr\)_minmax\(0\,1\.25fr\)\] {
     @media (width >= 64rem) {
       grid-template-columns: minmax(24rem,0.9fr) minmax(0,1.25fr);
+    }
+  }
+  .lg\:grid-cols-\[minmax\(25rem\,0\.85fr\)_minmax\(0\,1\.25fr\)\] {
+    @media (width >= 64rem) {
+      grid-template-columns: minmax(25rem,0.85fr) minmax(0,1.25fr);
     }
   }
   .lg\:flex-row {
@@ -2833,6 +2860,11 @@
       grid-template-columns: 0.95fr 1.35fr;
     }
   }
+  .xl\:grid-cols-\[8rem_minmax\(12rem\,0\.45fr\)_minmax\(0\,1fr\)\] {
+    @media (width >= 80rem) {
+      grid-template-columns: 8rem minmax(12rem,0.45fr) minmax(0,1fr);
+    }
+  }
   .xl\:grid-cols-\[18rem_1fr_auto\] {
     @media (width >= 80rem) {
       grid-template-columns: 18rem 1fr auto;
@@ -2876,6 +2908,16 @@
   .xl\:grid-cols-\[minmax\(0\,1fr\)_28rem\] {
     @media (width >= 80rem) {
       grid-template-columns: minmax(0,1fr) 28rem;
+    }
+  }
+  .xl\:grid-cols-\[minmax\(16rem\,0\.45fr\)_minmax\(0\,1fr\)\] {
+    @media (width >= 80rem) {
+      grid-template-columns: minmax(16rem,0.45fr) minmax(0,1fr);
+    }
+  }
+  .xl\:grid-cols-\[minmax\(16rem\,0\.55fr\)_minmax\(0\,1fr\)\] {
+    @media (width >= 80rem) {
+      grid-template-columns: minmax(16rem,0.55fr) minmax(0,1fr);
     }
   }
   .xl\:flex-row {

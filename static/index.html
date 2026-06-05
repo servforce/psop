@@ -76,6 +76,16 @@
               <button
                 type="button"
                 class="sidebar-link"
+                :class="[['platform-agent-runs', 'platform-agent-run'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="Agent Runs"
+                @click="navigate('/admin/platform/agent-runs')"
+              >
+                <span class="material-symbols-outlined text-[20px]">manage_history</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>Agent Runs</span>
+              </button>
+              <button
+                type="button"
+                class="sidebar-link"
                 :class="[route.name === 'tasks-list' ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
                 title="任务"
                 @click="navigate('/admin/tasks')"
@@ -186,6 +196,7 @@
               <div id="governance-proposals-page" class="h-full" x-show="!loadingPage && ['governance-proposals', 'governance-proposal'].includes(route.name)"></div>
               <div id="governance-experiments-page" class="h-full" x-show="!loadingPage && route.name === 'governance-experiments'"></div>
               <div id="tool-authorizations-page" class="h-full" x-show="!loadingPage && route.name === 'tool-authorizations'"></div>
+              <div id="platform-agent-runs-page" class="h-full" x-show="!loadingPage && ['platform-agent-runs', 'platform-agent-run'].includes(route.name)"></div>
               <div id="platform-tools-page" class="h-full" x-show="!loadingPage && ['platform-tools', 'platform-tool'].includes(route.name)"></div>
               <div id="platform-memory-page" class="h-full" x-show="!loadingPage && ['platform-memory', 'platform-memory-entry'].includes(route.name)"></div>
               <div id="skill-detail-page" class="h-full" x-show="!loadingPage && route.name === 'skill-detail' && currentSkill"></div>

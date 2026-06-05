@@ -7,14 +7,18 @@ function loadPlatformMethods() {
   const sandbox = {
     window: {
       PSOPConsoleHelpers: {
+        buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
+        buildPlatformAgentRunPath: (agentRunId) => `/admin/platform/agent-runs/${agentRunId}`,
         buildPlatformToolsPath: () => "/admin/platform/tools",
         buildPlatformToolPath: (toolName) => `/admin/platform/tools/${toolName}`,
         buildPlatformMemoryPath: () => "/admin/platform/memory",
         buildPlatformMemoryEntryPath: (memoryId) => `/admin/platform/memory/${memoryId}`,
-        buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations"
+        buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations",
+        buildRunLivePath: (runId) => `/admin/runs/${runId}/live`
       }
     },
     URLSearchParams,
+    Date,
     JSON,
     String,
     Array,
@@ -35,6 +39,12 @@ test("platform methods build filters, labels, and paths", () => {
       side_effect_level: "high_write",
       requires_authorization: "true"
     },
+    agentRunFilters: {
+      agent_key: "pskill.runner",
+      status: "waiting_tool_authorization",
+      owner_type: "runtime",
+      owner_id: "run-1"
+    },
     memoryFilters: {
       namespace: "evaluation",
       memory_type: "episodic",
@@ -46,13 +56,88 @@ test("platform methods build filters, labels, and paths", () => {
   };
 
   expect(methods.platformToolQueryString.call(context)).toBe("side_effect_level=high_write&requires_authorization=true");
+  expect(methods.agentRunQueryString.call(context)).toBe(
+    "agent_key=pskill.runner&status=waiting_tool_authorization&owner_type=runtime&owner_id=run-1"
+  );
   expect(methods.memoryQueryString.call(context)).toBe(
     "namespace=evaluation&memory_type=episodic&status=pending_review&agent_key=psop.evaluator&q=regression&limit=100"
   );
+  expect(methods.agentRunStatusLabel.call(context, "waiting_tool_authorization")).toBe("等待授权");
   expect(methods.platformToolSideEffectLabel.call(context, "low_write")).toBe("Low Write");
   expect(methods.memoryStatusLabel.call(context, "pending_review")).toBe("待审核");
+  expect(methods.platformAgentRunPath("run-1")).toBe("/admin/platform/agent-runs/run-1");
+  expect(methods.platformRunLivePath("runtime-run-1")).toBe("/admin/runs/runtime-run-1/live");
   expect(methods.platformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
   expect(methods.platformMemoryEntryPath("mem-1")).toBe("/admin/platform/memory/mem-1");
+});
+
+test("platform methods load agent runs with detail observability streams", async () => {
+  const methods = loadPlatformMethods();
+  const run = {
+    id: "agent-run-1",
+    agent_key: "pskill.runner",
+    status: "succeeded",
+    owner_type: "runtime",
+    owner_id: "run-1",
+    run_id: "runtime-run-1",
+    input_payload: {},
+    output_payload: {},
+    started_at: "2026-01-01T00:00:00.000Z",
+    ended_at: "2026-01-01T00:00:03.000Z",
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:03.000Z"
+  };
+  const context = {
+    ...methods,
+    busy: { agentRuns: false, agentRunDetail: false },
+    agentRunFilters: { agent_key: "pskill.runner", status: "", owner_type: "", owner_id: "" },
+    agentRuns: [],
+    currentAgentRun: null,
+    currentAgentRunEvents: [],
+    currentAgentRunModelCalls: [],
+    currentAgentRunToolCalls: [],
+    currentAgentRunSkillActivations: [],
+    currentAgentRunToolAuthorizations: [],
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/agent-runs?agent_key=pskill.runner") {
+        return [run];
+      }
+      if (url === "/agent-runs/agent-run-1") {
+        return run;
+      }
+      if (url.endsWith("/events")) {
+        return [{ id: "event-1", event_type: "agent.run.created" }];
+      }
+      if (url.endsWith("/model-calls")) {
+        return [{ id: "model-1", usage_json: { total_tokens: 42 } }];
+      }
+      if (url.endsWith("/tool-calls")) {
+        return [{ id: "tool-1", status: "failed" }];
+      }
+      if (url.endsWith("/skill-activations")) {
+        return [{ id: "activation-1" }];
+      }
+      if (url.endsWith("/tool-authorizations")) {
+        return [{ id: "auth-1" }];
+      }
+      return null;
+    }),
+    showNotice: jest.fn(),
+    formatDuration: (value) => `${value} ms`
+  };
+
+  await methods.loadPlatformAgentRunsPage.call(context);
+
+  expect(context.apiRequest).toHaveBeenNthCalledWith(1, "/agent-runs?agent_key=pskill.runner");
+  expect(context.apiRequest).toHaveBeenNthCalledWith(2, "/agent-runs/agent-run-1");
+  expect(context.currentAgentRunEvents).toHaveLength(1);
+  expect(context.currentAgentRunModelCalls).toHaveLength(1);
+  expect(context.currentAgentRunToolCalls).toHaveLength(1);
+  expect(context.currentAgentRunSkillActivations).toHaveLength(1);
+  expect(context.currentAgentRunToolAuthorizations).toHaveLength(1);
+  expect(methods.agentRunDurationLabel.call(context, run)).toBe("3000 ms");
+  expect(methods.agentRunToolFailureCount.call(context)).toBe(1);
+  expect(methods.agentRunModelTokenUsage(context.currentAgentRunModelCalls[0])).toBe(42);
 });
 
 test("platform methods load tools and select the first row", async () => {

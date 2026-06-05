@@ -1,10 +1,13 @@
 (function () {
   const {
+    buildPlatformAgentRunsPath,
+    buildPlatformAgentRunPath,
     buildPlatformToolsPath,
     buildPlatformToolPath,
     buildPlatformMemoryPath,
     buildPlatformMemoryEntryPath,
-    buildToolAuthorizationsPath
+    buildToolAuthorizationsPath,
+    buildRunLivePath
   } = window.PSOPConsoleHelpers;
 
   const TOOL_SIDE_EFFECT_OPTIONS = [
@@ -36,7 +39,128 @@
     { value: "archived", label: "已归档" }
   ];
 
+  const AGENT_RUN_STATUS_OPTIONS = [
+    { value: "queued", label: "排队中" },
+    { value: "running", label: "运行中" },
+    { value: "waiting_tool_authorization", label: "等待授权" },
+    { value: "succeeded", label: "成功" },
+    { value: "failed", label: "失败" },
+    { value: "cancelled", label: "已取消" }
+  ];
+
+  const AGENT_KEYS = [
+    "pskill.builder",
+    "pskill.compiler",
+    "pskill.tester",
+    "pskill.runner",
+    "pskill.evaluator",
+    "psop.governance"
+  ];
+
   window.PSOPConsolePlatformMethods = {
+    async loadPlatformAgentRunsPage() {
+      await this.loadAgentRuns();
+      if (!this.currentAgentRun && this.agentRuns.length) {
+        await this.loadPlatformAgentRunDetail(this.agentRuns[0].id);
+      }
+    },
+
+    async loadPlatformAgentRunPage(agentRunId) {
+      await this.loadAgentRuns();
+      await this.loadPlatformAgentRunDetail(agentRunId);
+    },
+
+    async loadAgentRuns() {
+      this.busy.agentRuns = true;
+      try {
+        const query = this.agentRunQueryString();
+        const suffix = query ? `?${query}` : "";
+        const runs = await this.apiRequest(`/agent-runs${suffix}`);
+        this.agentRuns = Array.isArray(runs) ? runs : [];
+        if (this.currentAgentRun) {
+          const refreshed = this.agentRuns.find((item) => item.id === this.currentAgentRun.id);
+          this.currentAgentRun = refreshed || this.currentAgentRun;
+        }
+      } catch (error) {
+        this.showNotice("error", error.message || "AgentRun 加载失败。");
+      } finally {
+        this.busy.agentRuns = false;
+      }
+    },
+
+    async loadPlatformAgentRunDetail(agentRunId) {
+      const id = String(agentRunId || "").trim();
+      if (!id) {
+        return;
+      }
+      this.busy.agentRunDetail = true;
+      try {
+        const [run, events, modelCalls, toolCalls, skillActivations, toolAuthorizations] = await Promise.all([
+          this.apiRequest(`/agent-runs/${encodeURIComponent(id)}`),
+          this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/events`),
+          this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/model-calls`),
+          this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/tool-calls`),
+          this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/skill-activations`),
+          this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/tool-authorizations`)
+        ]);
+        this.currentAgentRun = run;
+        this.currentAgentRunEvents = Array.isArray(events) ? events : [];
+        this.currentAgentRunModelCalls = Array.isArray(modelCalls) ? modelCalls : [];
+        this.currentAgentRunToolCalls = Array.isArray(toolCalls) ? toolCalls : [];
+        this.currentAgentRunSkillActivations = Array.isArray(skillActivations) ? skillActivations : [];
+        this.currentAgentRunToolAuthorizations = Array.isArray(toolAuthorizations) ? toolAuthorizations : [];
+        this.replaceAgentRun(run);
+      } catch (error) {
+        this.showNotice("error", error.message || "AgentRun 详情加载失败。");
+      } finally {
+        this.busy.agentRunDetail = false;
+      }
+    },
+
+    replaceAgentRun(run) {
+      if (!run?.id) {
+        return;
+      }
+      const index = this.agentRuns.findIndex((item) => item.id === run.id);
+      if (index >= 0) {
+        this.agentRuns.splice(index, 1, run);
+      } else {
+        this.agentRuns.unshift(run);
+      }
+    },
+
+    agentRunQueryString() {
+      const params = new URLSearchParams();
+      const fields = ["agent_key", "status", "owner_type", "owner_id"];
+      for (const field of fields) {
+        const value = String(this.agentRunFilters[field] || "").trim();
+        if (value) {
+          params.set(field, value);
+        }
+      }
+      return params.toString();
+    },
+
+    applyAgentRunFilters() {
+      this.currentAgentRun = null;
+      this.currentAgentRunEvents = [];
+      this.currentAgentRunModelCalls = [];
+      this.currentAgentRunToolCalls = [];
+      this.currentAgentRunSkillActivations = [];
+      this.currentAgentRunToolAuthorizations = [];
+      return this.loadPlatformAgentRunsPage();
+    },
+
+    resetAgentRunFilters() {
+      this.agentRunFilters = {
+        agent_key: "",
+        status: "",
+        owner_type: "",
+        owner_id: ""
+      };
+      return this.applyAgentRunFilters();
+    },
+
     async loadPlatformToolsPage() {
       await this.loadPlatformTools();
       if (!this.currentPlatformTool && this.platformTools.length) {
@@ -313,6 +437,18 @@
       return Math.max(0, Math.min(100, Math.round(confidence)));
     },
 
+    platformAgentRunsPath() {
+      return buildPlatformAgentRunsPath();
+    },
+
+    platformAgentRunPath(agentRunId) {
+      return buildPlatformAgentRunPath(agentRunId);
+    },
+
+    platformRunLivePath(runId) {
+      return buildRunLivePath(runId);
+    },
+
     platformToolsPath() {
       return buildPlatformToolsPath();
     },
@@ -341,6 +477,14 @@
       return TOOL_AUTH_OPTIONS;
     },
 
+    agentRunStatusOptions() {
+      return AGENT_RUN_STATUS_OPTIONS;
+    },
+
+    agentKeyOptions() {
+      return AGENT_KEYS.map((key) => ({ value: key, label: key }));
+    },
+
     memoryTypeOptions() {
       return MEMORY_TYPE_OPTIONS;
     },
@@ -355,6 +499,10 @@
 
     platformToolAuthLabel(value) {
       return value ? "需要授权" : "无需授权";
+    },
+
+    agentRunStatusLabel(value) {
+      return this.optionLabel(AGENT_RUN_STATUS_OPTIONS, value);
     },
 
     memoryTypeLabel(value) {
@@ -383,6 +531,74 @@
       return value
         ? "border-amber-500/25 bg-amber-500/10 text-amber-200"
         : "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
+    },
+
+    agentRunStatusTone(value) {
+      const normalized = String(value || "").toLowerCase();
+      if (["succeeded", "success"].includes(normalized)) {
+        return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
+      }
+      if (["queued", "running"].includes(normalized)) {
+        return "border-sky-500/25 bg-sky-500/10 text-sky-200";
+      }
+      if (normalized === "waiting_tool_authorization") {
+        return "border-amber-500/25 bg-amber-500/10 text-amber-200";
+      }
+      if (["failed", "cancelled", "canceled"].includes(normalized)) {
+        return "border-rose-500/25 bg-rose-500/10 text-rose-200";
+      }
+      return "border-slate-600 bg-slate-900/70 text-slate-300";
+    },
+
+    agentRunDurationLabel(run) {
+      const milliseconds = this.agentRunDurationMs(run);
+      if (milliseconds === null) {
+        return "N/A";
+      }
+      if (typeof this.formatDuration === "function") {
+        return this.formatDuration(milliseconds);
+      }
+      if (milliseconds < 1000) {
+        return `${Math.round(milliseconds)} ms`;
+      }
+      const seconds = Math.round(milliseconds / 1000);
+      return `${seconds} s`;
+    },
+
+    agentRunDurationMs(run) {
+      if (!run?.started_at) {
+        return null;
+      }
+      const start = new Date(run.started_at).getTime();
+      const end = run.ended_at ? new Date(run.ended_at).getTime() : new Date(run.updated_at || run.created_at || run.started_at).getTime();
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+        return null;
+      }
+      return end - start;
+    },
+
+    agentRunCountByStatus(status) {
+      return (this.agentRuns || []).filter((run) => run.status === status).length;
+    },
+
+    agentRunToolFailureCount() {
+      return (this.currentAgentRunToolCalls || []).filter((call) => ![
+        "planned",
+        "running",
+        "waiting_authorization",
+        "authorized",
+        "succeeded"
+      ].includes(call.status)).length;
+    },
+
+    agentRunModelTokenUsage(call) {
+      const usage = call?.usage_json || {};
+      if (usage.total_tokens !== null && usage.total_tokens !== undefined) {
+        return usage.total_tokens;
+      }
+      const prompt = Number(usage.prompt_tokens || 0);
+      const completion = Number(usage.completion_tokens || 0);
+      return prompt + completion || "N/A";
     },
 
     memoryStatusTone(value) {

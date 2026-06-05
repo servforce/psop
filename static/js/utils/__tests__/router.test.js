@@ -20,6 +20,8 @@ const {
   buildGovernanceProposalPath,
   buildGovernanceExperimentsPath,
   buildToolAuthorizationsPath,
+  buildPlatformAgentRunsPath,
+  buildPlatformAgentRunPath,
   buildPlatformToolsPath,
   buildPlatformToolPath,
   buildPlatformMemoryPath,
@@ -63,6 +65,11 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
     params: { proposalId: "proposal-123" }
   });
   expect(resolveAdminRoute("/admin/governance/experiments")).toEqual({ name: "governance-experiments", params: {} });
+  expect(resolveAdminRoute("/admin/platform/agent-runs")).toEqual({ name: "platform-agent-runs", params: {} });
+  expect(resolveAdminRoute("/admin/platform/agent-runs/agent-run-123")).toEqual({
+    name: "platform-agent-run",
+    params: { agentRunId: "agent-run-123" }
+  });
   expect(resolveAdminRoute("/admin/platform/tools")).toEqual({ name: "platform-tools", params: {} });
   expect(resolveAdminRoute("/admin/platform/tools/psop.memory.search")).toEqual({
     name: "platform-tool",
@@ -78,6 +85,8 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
   expect(buildGovernanceProposalPath("proposal-123")).toBe("/admin/governance/proposals/proposal-123");
   expect(buildGovernanceExperimentsPath()).toBe("/admin/governance/experiments");
   expect(buildToolAuthorizationsPath()).toBe("/admin/platform/tool-authorizations");
+  expect(buildPlatformAgentRunsPath()).toBe("/admin/platform/agent-runs");
+  expect(buildPlatformAgentRunPath("agent-run-123")).toBe("/admin/platform/agent-runs/agent-run-123");
   expect(buildPlatformToolsPath()).toBe("/admin/platform/tools");
   expect(buildPlatformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
   expect(buildPlatformMemoryPath()).toBe("/admin/platform/memory");
