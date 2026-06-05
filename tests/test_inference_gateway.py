@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.skills.exceptions import SkillsConfigurationError
+from app.pskills.exceptions import SkillsConfigurationError
 from app.gateway.inference import (
     LlmAttachment,
     LlmCompletion,

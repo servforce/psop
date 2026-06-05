@@ -52,10 +52,10 @@ class Settings(BaseSettings):
     object_store_region: str = "us-east-1"
     object_store_secure: bool = False
     test_data_max_upload_bytes: int = 25 * 1024 * 1024
-    raw_material_max_upload_bytes: int = 50 * 1024 * 1024
-    raw_material_video_max_upload_bytes: int = 2 * 1024 * 1024 * 1024
-    raw_material_extract_text_max_chars: int = 80_000
-    raw_material_url_timeout_seconds: float = 20.0
+    material_max_upload_bytes: int = 50 * 1024 * 1024
+    material_video_max_upload_bytes: int = 2 * 1024 * 1024 * 1024
+    material_extract_text_max_chars: int = 80_000
+    material_url_timeout_seconds: float = 20.0
     video_max_analyzed_frames: int = 120
     otel_enabled: bool = True
     otel_traces_enabled: bool = True

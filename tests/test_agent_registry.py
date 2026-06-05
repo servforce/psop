@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.registry import DomainPackRegistry, PromptRegistry, content_hash
-from app.domain.skills.exceptions import SkillsConfigurationError
+from app.pskills.exceptions import SkillsConfigurationError
 
 
 def test_prompt_registry_loads_agent_prompt_packs() -> None:

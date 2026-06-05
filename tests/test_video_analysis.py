@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.domain.skills import video_analysis
+from app.pskills import video_analysis
 
 
 def test_extract_keyframes_falls_back_to_first_frame(monkeypatch, tmp_path) -> None:

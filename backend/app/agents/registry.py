@@ -9,7 +9,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.domain.skills.exceptions import SkillsConfigurationError
+from app.pskills.exceptions import SkillsConfigurationError
 
 
 AGENTS_ROOT = Path(__file__).resolve().parent
@@ -134,7 +134,7 @@ class PromptRegistry:
         )
 
     def _load_agent_for_usage_from_db(self, session: Session, usage_key: str) -> AgentPromptPack | None:
-        from app.domain.agent_prompts.models import AgentPromptBinding, AgentPromptDefinition, AgentPromptVersion
+        from app.agent_prompts.models import AgentPromptBinding, AgentPromptDefinition, AgentPromptVersion
 
         binding = session.scalar(select(AgentPromptBinding).where(AgentPromptBinding.usage_key == usage_key))
         if not binding or not binding.active_version_id:

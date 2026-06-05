@@ -6,7 +6,7 @@ from typing import Protocol
 import httpx
 
 from app.core.config import Settings
-from app.domain.skills.exceptions import SkillsConfigurationError, SkillsGatewayError
+from app.pskills.exceptions import SkillsConfigurationError, SkillsGatewayError
 
 
 @dataclass(slots=True)

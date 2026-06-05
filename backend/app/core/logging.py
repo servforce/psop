@@ -14,7 +14,7 @@ _RESERVED_RECORD_KEYS = set(logging.makeLogRecord({}).__dict__)
 _CONTEXT_KEYS = (
     "skill_id",
     "skill_key",
-    "skill_version_id",
+    "pskill_version_id",
     "compile_request_id",
     "publish_record_id",
     "run_id",

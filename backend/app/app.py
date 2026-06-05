@@ -16,8 +16,8 @@ from app.api.routes.system import root_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.observability import configure_observability
-from app.domain.skills.exceptions import SkillsError
-from app.domain.jobs.worker import RuntimeJobWorker
+from app.pskills.exceptions import SkillsError
+from app.jobs.worker import RuntimeJobWorker
 from app.gateway.asr import AsrGateway, HttpAsrGateway
 from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway, HttpGitLabSkillSourceGateway

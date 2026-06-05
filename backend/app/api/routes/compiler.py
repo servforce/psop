@@ -16,14 +16,14 @@ from app.api.dependencies import (
     get_inference_gateway,
 )
 from app.core.config import Settings
-from app.domain.compiler.schemas import (
+from app.compiler.schemas import (
     CompileArtifactResponse,
     CompileArtifactUpdateRequest,
     CompileDiagnosticResponse,
     CompileRequestResponse,
     PublishProgressResponse,
 )
-from app.domain.compiler.service import CompilerService
+from app.compiler.service import CompilerService
 from app.gateway.inference import LlmInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway
 from app.infra.database import DatabaseManager
@@ -43,6 +43,7 @@ def list_compile_requests(
 
 
 @router.post("/skills/{skill_id}/compile", response_model=CompileRequestResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post("/pskills/{skill_id}/compile", response_model=CompileRequestResponse, status_code=status.HTTP_202_ACCEPTED)
 def create_skill_compile_request(
     skill_id: str,
     session: Session = Depends(get_db_session),

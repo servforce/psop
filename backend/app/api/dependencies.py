@@ -6,12 +6,14 @@ from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.domain.agent_prompts.service import AgentPromptService
-from app.domain.compiler.service import CompilerService
-from app.domain.jobs.service import JobQueryService
-from app.domain.runtime.service import RuntimeService
-from app.domain.skill_tests.service import SkillTestService
-from app.domain.skills.service import SkillsService
+from app.agents.service import AgentService
+from app.agent_prompts.service import AgentPromptService
+from app.compiler.service import CompilerService
+from app.jobs.service import JobQueryService
+from app.runtime.service import RuntimeService
+from app.testing.service import SkillTestService
+from app.pskills.service import SkillsService
+from app.skills.service import SkillPackageService
 from app.gateway.asr import AsrGateway
 from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway
@@ -53,6 +55,10 @@ def get_agent_prompt_service(_: Request) -> AgentPromptService:
     return AgentPromptService()
 
 
+def get_agent_service(_: Request) -> AgentService:
+    return AgentService()
+
+
 def get_skills_service(request: Request) -> SkillsService:
     compiler_service = get_compiler_service(request)
     return SkillsService(
@@ -64,6 +70,10 @@ def get_skills_service(request: Request) -> SkillsService:
         object_store=get_object_store(request),
         agent_prompt_service=get_agent_prompt_service(request),
     )
+
+
+def get_skill_package_service(_: Request) -> SkillPackageService:
+    return SkillPackageService()
 
 
 def get_compiler_service(request: Request) -> CompilerService:

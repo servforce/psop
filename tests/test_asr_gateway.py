@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from app.gateway.asr import HttpAsrGateway
-from app.domain.skills.exceptions import SkillsGatewayError
+from app.pskills.exceptions import SkillsGatewayError
 
 
 class FakeResponse:

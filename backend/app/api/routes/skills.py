@@ -6,34 +6,34 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, Up
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_skills_service
-from app.domain.skills.exceptions import SkillValidationError
-from app.domain.skills.schemas import (
+from app.pskills.exceptions import SkillValidationError
+from app.pskills.schemas import (
     CreateSkillRepositoryFileRequest,
     CreateSkillRepositoryFolderRequest,
     CreateSkillRequest,
     DeleteSkillRequest,
-    DeleteSkillRawMaterialResponse,
+    DeletePSkillMaterialResponse,
     GenerateSkillDraftRequest,
     PublishSkillRequest,
     PublishSkillResponse,
     SaveSkillRepositoryFileRequest,
     SaveSkillSourceRequest,
     SkillDetailResponse,
-    SkillRawMaterialAnalysisResponse,
-    SkillPublishRecordResponse,
-    SkillRawMaterialDetailResponse,
-    SkillRawMaterialGenerationResponse,
-    SkillRawMaterialResponse,
+    PSkillMaterialAnalysisResponse,
+    PSkillPublishRecordResponse,
+    PSkillMaterialDetailResponse,
+    PSkillMaterialGenerationResponse,
+    PSkillMaterialResponse,
     SkillRepositoryFileResponse,
     SkillRepositoryTreeResponse,
     SkillSourceResponse,
     SkillSummaryResponse,
     UpdateSkillRequest,
 )
-from app.domain.skills.service import SkillsService
+from app.pskills.service import SkillsService
 
 
-router = APIRouter(prefix="/skills", tags=["skills"])
+router = APIRouter(tags=["pskills"])
 
 
 @router.get("", response_model=list[SkillSummaryResponse])
@@ -164,17 +164,18 @@ def publish_skill(
     return service.publish_skill(session, skill_id=skill_id, payload=payload)
 
 
-@router.get("/{skill_id}/publishes", response_model=list[SkillPublishRecordResponse])
+@router.get("/{skill_id}/publishes", response_model=list[PSkillPublishRecordResponse])
 def list_publish_records(
     skill_id: str,
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
-) -> list[SkillPublishRecordResponse]:
+) -> list[PSkillPublishRecordResponse]:
     return service.list_publish_records(session, skill_id=skill_id)
 
 
-@router.post("/{skill_id}/raw-materials", response_model=SkillRawMaterialDetailResponse, status_code=201)
-async def create_raw_material(
+@router.post("/{skill_id}/raw-materials", response_model=PSkillMaterialDetailResponse, status_code=201)
+@router.post("/{skill_id}/materials", response_model=PSkillMaterialDetailResponse, status_code=201)
+async def create_material(
     skill_id: str,
     file: UploadFile | None = File(default=None),
     name: str | None = Form(default=None),
@@ -183,15 +184,15 @@ async def create_raw_material(
     source_note: str | None = Form(default=None),
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
-) -> SkillRawMaterialDetailResponse:
+) -> PSkillMaterialDetailResponse:
     if file is None:
         raise SkillValidationError("请上传素材文件。")
 
     content = await file.read()
-    return service.upload_raw_material(
+    return service.upload_material(
         session,
         skill_id=skill_id,
-        filename=file.filename or "raw-material",
+        filename=file.filename or "material",
         content=content,
         mime_type=file.content_type or "application/octet-stream",
         name=name,
@@ -201,73 +202,88 @@ async def create_raw_material(
     )
 
 
-@router.get("/{skill_id}/raw-materials", response_model=list[SkillRawMaterialResponse])
-def list_raw_materials(
+@router.get("/{skill_id}/raw-materials", response_model=list[PSkillMaterialResponse])
+@router.get("/{skill_id}/materials", response_model=list[PSkillMaterialResponse])
+def list_materials(
     skill_id: str,
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
-) -> list[SkillRawMaterialResponse]:
-    return service.list_raw_materials(session, skill_id=skill_id)
+) -> list[PSkillMaterialResponse]:
+    return service.list_materials(session, skill_id=skill_id)
 
 
 @router.post(
     "/{skill_id}/raw-materials/generate-skill-draft",
-    response_model=SkillRawMaterialGenerationResponse,
+    response_model=PSkillMaterialGenerationResponse,
 )
-def generate_skill_draft_from_raw_materials(
+@router.post(
+    "/{skill_id}/materials/generate-skill-draft",
+    response_model=PSkillMaterialGenerationResponse,
+)
+def generate_skill_draft_from_materials(
     skill_id: str,
     payload: GenerateSkillDraftRequest,
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
-) -> SkillRawMaterialGenerationResponse:
-    return service.generate_skill_draft_from_raw_materials(session, skill_id=skill_id, payload=payload)
+) -> PSkillMaterialGenerationResponse:
+    return service.generate_skill_draft_from_materials(session, skill_id=skill_id, payload=payload)
 
 
 @router.post(
     "/{skill_id}/raw-materials/{material_id}/analyze",
-    response_model=SkillRawMaterialAnalysisResponse,
+    response_model=PSkillMaterialAnalysisResponse,
 )
-def analyze_raw_material(
+@router.post(
+    "/{skill_id}/materials/{material_id}/analyze",
+    response_model=PSkillMaterialAnalysisResponse,
+)
+def analyze_material(
     skill_id: str,
     material_id: str,
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
-) -> SkillRawMaterialAnalysisResponse:
-    return service.analyze_raw_material(session, skill_id=skill_id, material_id=material_id)
+) -> PSkillMaterialAnalysisResponse:
+    return service.analyze_material(session, skill_id=skill_id, material_id=material_id)
 
 
 @router.get(
     "/{skill_id}/raw-materials/{material_id}/analysis",
-    response_model=SkillRawMaterialAnalysisResponse,
+    response_model=PSkillMaterialAnalysisResponse,
 )
-def get_raw_material_analysis(
+@router.get(
+    "/{skill_id}/materials/{material_id}/analysis",
+    response_model=PSkillMaterialAnalysisResponse,
+)
+def get_material_analysis(
     skill_id: str,
     material_id: str,
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
-) -> SkillRawMaterialAnalysisResponse:
-    return service.get_raw_material_analysis(session, skill_id=skill_id, material_id=material_id)
+) -> PSkillMaterialAnalysisResponse:
+    return service.get_material_analysis(session, skill_id=skill_id, material_id=material_id)
 
 
-@router.get("/{skill_id}/raw-materials/{material_id}", response_model=SkillRawMaterialDetailResponse)
-def get_raw_material(
+@router.get("/{skill_id}/raw-materials/{material_id}", response_model=PSkillMaterialDetailResponse)
+@router.get("/{skill_id}/materials/{material_id}", response_model=PSkillMaterialDetailResponse)
+def get_material(
     skill_id: str,
     material_id: str,
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
-) -> SkillRawMaterialDetailResponse:
-    return service.get_raw_material(session, skill_id=skill_id, material_id=material_id)
+) -> PSkillMaterialDetailResponse:
+    return service.get_material(session, skill_id=skill_id, material_id=material_id)
 
 
 @router.get("/{skill_id}/raw-materials/{material_id}/content")
-def get_raw_material_content(
+@router.get("/{skill_id}/materials/{material_id}/content")
+def get_material_content(
     skill_id: str,
     material_id: str,
     request: Request,
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
 ) -> Response:
-    material_content = service.get_raw_material_content(session, skill_id=skill_id, material_id=material_id)
+    material_content = service.get_material_content(session, skill_id=skill_id, material_id=material_id)
     return _inline_content_response(
         content=material_content.content,
         mime_type=material_content.mime_type,
@@ -277,14 +293,15 @@ def get_raw_material_content(
 
 
 @router.get("/{skill_id}/raw-materials/{material_id}/derived-assets/{asset_id}/content")
-def get_raw_material_derived_asset_content(
+@router.get("/{skill_id}/materials/{material_id}/derived-assets/{asset_id}/content")
+def get_material_derived_asset_content(
     skill_id: str,
     material_id: str,
     asset_id: str,
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
 ) -> Response:
-    asset_content = service.get_raw_material_derived_asset_content(
+    asset_content = service.get_material_derived_asset_content(
         session,
         skill_id=skill_id,
         material_id=material_id,
@@ -364,11 +381,12 @@ def _parse_single_byte_range(range_header: str, size: int) -> tuple[int, int] | 
     return start, min(end, size - 1)
 
 
-@router.delete("/{skill_id}/raw-materials/{material_id}", response_model=DeleteSkillRawMaterialResponse)
-def delete_raw_material(
+@router.delete("/{skill_id}/raw-materials/{material_id}", response_model=DeletePSkillMaterialResponse)
+@router.delete("/{skill_id}/materials/{material_id}", response_model=DeletePSkillMaterialResponse)
+def delete_material(
     skill_id: str,
     material_id: str,
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
-) -> DeleteSkillRawMaterialResponse:
-    return service.delete_raw_material(session, skill_id=skill_id, material_id=material_id)
+) -> DeletePSkillMaterialResponse:
+    return service.delete_material(session, skill_id=skill_id, material_id=material_id)

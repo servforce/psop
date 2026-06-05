@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from app.domain.jobs.models import RuntimeJob
-from app.domain.skills.models import now_utc
+from app.jobs.models import RuntimeJob
+from app.pskills.models import now_utc
 from tests.test_skills_api import create_test_client
 
 

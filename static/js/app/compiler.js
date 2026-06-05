@@ -30,7 +30,7 @@
         try {
           const [compilerRequests, skills] = await Promise.all([
             this.apiRequest(`/compiler/requests${skillId ? `?skill_id=${encodeURIComponent(skillId)}` : ""}`),
-            this.apiRequest("/skills")
+            this.apiRequest("/pskills")
           ]);
           this.compilerRequests = compilerRequests;
           this.skills = skills;
@@ -48,7 +48,7 @@
         this.busy.manualCompile = true;
         this.clearNotice();
         try {
-          const compileRequest = await this.apiRequest(`/compiler/skills/${this.currentSkill.id}/compile`, {
+          const compileRequest = await this.apiRequest(`/compiler/pskills/${this.currentSkill.id}/compile`, {
             method: "POST"
           });
           await this.loadCompilerRequests(this.currentSkill.id);
@@ -662,12 +662,12 @@
 
 
       skillForCompileRequest(compileRequest) {
-        return this.skills.find((skill) => skill.id === compileRequest.skill_definition_id) || null;
+        return this.skills.find((skill) => skill.id === compileRequest.pskill_definition_id) || null;
       },
 
 
       skillNameForCompileRequest(compileRequest) {
-        if (this.currentSkill?.id === compileRequest.skill_definition_id) {
+        if (this.currentSkill?.id === compileRequest.pskill_definition_id) {
           return this.currentSkill.name;
         }
         return this.skillForCompileRequest(compileRequest)?.name || "未知 Skill";
@@ -678,7 +678,7 @@
         if (!this.currentSkill) {
           return [];
         }
-        return this.compilerRequests.filter((compileRequest) => compileRequest.skill_definition_id === this.currentSkill.id);
+        return this.compilerRequests.filter((compileRequest) => compileRequest.pskill_definition_id === this.currentSkill.id);
       },
 
 

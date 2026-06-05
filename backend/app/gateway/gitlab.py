@@ -11,7 +11,7 @@ import httpx
 
 from app.core.config import Settings
 from app.core.observability import record_span_exception, set_span_attributes, start_span
-from app.domain.skills.exceptions import SkillsConfigurationError, SkillsGatewayError
+from app.pskills.exceptions import SkillsConfigurationError, SkillsGatewayError
 
 LOGGER = logging.getLogger(__name__)
 

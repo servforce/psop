@@ -73,7 +73,7 @@ test("terminal image events expose media URL and description", () => {
   };
 
   expect(app.terminalEventIsImage(event)).toBe(true);
-  expect(app.terminalEventMediaUrl(event)).toBe("/api/v1/terminal/sessions/run-1/events/event-1/content");
+  expect(app.terminalEventMediaUrl(event)).toBe("/api/v1/runs/run-1/events/event-1/content");
   expect(app.terminalEventDisplayText(event)).toBe("已拍摄接线端子。");
   expect(app.terminalEventShouldShowPlainText(event)).toBe(false);
 });
@@ -112,7 +112,7 @@ test("terminal multipart events expose server-generated part media URLs", () => 
   expect(app.terminalEventPartDisplayText(event.parts[1])).toBe("");
   expect(app.terminalEventPartFileName(event.parts[1])).toBe("panel.png");
   expect(app.terminalEventPartMediaUrl(event, event.parts[1])).toBe(
-    "/api/v1/terminal/sessions/run-1/events/event-4/parts/image_1/content"
+    "/api/v1/runs/run-1/events/event-4/parts/image_1/content"
   );
 });
 

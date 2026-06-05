@@ -20,11 +20,11 @@ from app.api.dependencies import (
     get_runtime_service,
 )
 from app.core.config import Settings
-from app.domain.compiler.models import ArtifactObject
-from app.domain.jobs.schemas import RuntimeJobResponse, RuntimeJobStatsResponse
-from app.domain.jobs.service import JobQueryService
-from app.domain.runtime.schemas import (
-    AppendTerminalEventRequest,
+from app.compiler.models import ArtifactObject
+from app.jobs.schemas import RuntimeJobResponse, RuntimeJobStatsResponse
+from app.jobs.service import JobQueryService
+from app.runtime.schemas import (
+    AppendRunEventRequest,
     BindingRequirementResponse,
     CreateInvocationRequest,
     InvocationResponse,
@@ -33,14 +33,14 @@ from app.domain.runtime.schemas import (
     RunCapabilityBindingResponse,
     RunResponse,
     SessionTokenSnapshotResponse,
-    TerminalEventAppendResponse,
-    TerminalEventPartInput,
-    TerminalEventResponse,
+    RunEventAppendResponse,
+    RunEventPartInput,
+    RunEventResponse,
     TerminalSessionDetailResponse,
-    TraceEventResponse,
+    RunTraceResponse,
 )
-from app.domain.runtime.service import RuntimeService
-from app.domain.skills.exceptions import SkillValidationError, SkillsGatewayError
+from app.runtime.service import RuntimeService
+from app.pskills.exceptions import SkillValidationError, SkillsGatewayError
 from app.infra.object_store import ObjectStoreService
 
 
@@ -136,14 +136,15 @@ def list_snapshots(
     return service.list_snapshots(session, run_id)
 
 
-@runs_router.get("/{run_id}/trace-events", response_model=list[TraceEventResponse])
-def list_trace_events(
+@runs_router.get("/{run_id}/traces", response_model=list[RunTraceResponse])
+@runs_router.get("/{run_id}/trace-events", response_model=list[RunTraceResponse])
+def list_run_traces(
     run_id: str,
     event_type: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
-) -> list[TraceEventResponse]:
-    return service.list_trace_events(session, run_id, event_type=event_type)
+) -> list[RunTraceResponse]:
+    return service.list_run_traces(session, run_id, event_type=event_type)
 
 
 @runs_router.get("/{run_id}/binding-requirements", response_model=list[BindingRequirementResponse])
@@ -193,19 +194,21 @@ def get_terminal_session(
     return service.get_terminal_session(session, run_id)
 
 
-@terminal_router.get("/sessions/{run_id}/events", response_model=list[TerminalEventResponse])
-def list_terminal_events(
+@runs_router.get("/{run_id}/events", response_model=list[RunEventResponse])
+@terminal_router.get("/sessions/{run_id}/events", response_model=list[RunEventResponse])
+def list_run_events(
     run_id: str,
     from_seq: int | None = Query(default=None),
     to_seq: int | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
-) -> list[TerminalEventResponse]:
-    return service.list_terminal_events(session, run_id, from_seq=from_seq, to_seq=to_seq)
+) -> list[RunEventResponse]:
+    return service.list_run_events(session, run_id, from_seq=from_seq, to_seq=to_seq)
 
 
+@runs_router.get("/{run_id}/events/{event_id}/content")
 @terminal_router.get("/sessions/{run_id}/events/{event_id}/content")
-def get_terminal_event_content(
+def get_run_event_content(
     run_id: str,
     event_id: str,
     request: Request,
@@ -213,7 +216,7 @@ def get_terminal_event_content(
     object_store: ObjectStoreService = Depends(get_object_store),
     service: RuntimeService = Depends(get_runtime_service),
 ) -> Response:
-    event = service.get_terminal_event(session, run_id, event_id)
+    event = service.get_run_event(session, run_id, event_id)
     if not event.artifact_object_id:
         raise SkillValidationError("当前 Terminal Event 没有可展示的对象内容。", details={"run_id": run_id, "event_id": event_id})
     artifact_object = session.get(ArtifactObject, event.artifact_object_id)
@@ -231,14 +234,15 @@ def get_terminal_event_content(
         ) from exc
     return _inline_content_response(
         content=content,
-        mime_type=_terminal_event_content_mime_type(event, artifact_object),
-        filename=_terminal_event_content_filename(event),
+        mime_type=_run_event_content_mime_type(event, artifact_object),
+        filename=_run_event_content_filename(event),
         range_header=request.headers.get("range"),
     )
 
 
+@runs_router.get("/{run_id}/events/{event_id}/parts/{part_id}/content")
 @terminal_router.get("/sessions/{run_id}/events/{event_id}/parts/{part_id}/content")
-def get_terminal_event_part_content(
+def get_run_event_part_content(
     run_id: str,
     event_id: str,
     part_id: str,
@@ -247,7 +251,7 @@ def get_terminal_event_part_content(
     object_store: ObjectStoreService = Depends(get_object_store),
     service: RuntimeService = Depends(get_runtime_service),
 ) -> Response:
-    part = service.get_terminal_event_part(session, run_id, event_id, part_id)
+    part = service.get_run_event_part(session, run_id, event_id, part_id)
     if not part.artifact_object_id:
         raise SkillValidationError(
             "当前 Terminal Event Part 没有可展示的对象内容。",
@@ -274,8 +278,9 @@ def get_terminal_event_part_content(
     )
 
 
-@terminal_router.post("/sessions/{run_id}/events", response_model=TerminalEventAppendResponse, status_code=202)
-async def append_terminal_event(
+@runs_router.post("/{run_id}/events", response_model=RunEventAppendResponse, status_code=202)
+@terminal_router.post("/sessions/{run_id}/events", response_model=RunEventAppendResponse, status_code=202)
+async def append_run_event(
     run_id: str,
     request: Request,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -283,17 +288,17 @@ async def append_terminal_event(
     settings: Settings = Depends(get_app_settings),
     object_store: ObjectStoreService = Depends(get_object_store),
     service: RuntimeService = Depends(get_runtime_service),
-) -> TerminalEventAppendResponse:
-    payload = await _parse_terminal_event_request(
+) -> RunEventAppendResponse:
+    payload = await _parse_run_event_request(
         run_id=run_id,
         request=request,
         session=session,
         settings=settings,
         object_store=object_store,
     )
-    previous_terminal_seq = service.get_run(session, run_id).latest_terminal_seq
-    result = service.append_terminal_event(session, run_id, payload, idempotency_key=idempotency_key)
-    await _broadcast_terminal_events_after(
+    previous_terminal_seq = service.get_run(session, run_id).latest_run_event_seq
+    result = service.append_run_event(session, run_id, payload, idempotency_key=idempotency_key)
+    await _broadcast_run_events_after(
         run_id,
         previous_terminal_seq,
         session=session,
@@ -302,17 +307,17 @@ async def append_terminal_event(
     return result
 
 
-async def _parse_terminal_event_request(
+async def _parse_run_event_request(
     *,
     run_id: str,
     request: Request,
     session: Session,
     settings: Settings,
     object_store: ObjectStoreService,
-) -> AppendTerminalEventRequest:
+) -> AppendRunEventRequest:
     content_type = request.headers.get("content-type", "").lower()
     if content_type.startswith("multipart/form-data"):
-        return await _parse_multipart_terminal_event_request(
+        return await _parse_multipart_run_event_request(
             run_id=run_id,
             request=request,
             session=session,
@@ -327,21 +332,21 @@ async def _parse_terminal_event_request(
         raise SkillValidationError("terminal event 请求体必须是对象。")
     if "parts" in body:
         raise SkillValidationError("terminal event 请求不接收客户端 parts；请使用 text 字段和 multipart 文件字段提交。")
-    body = _normalize_json_terminal_event_body(body)
-    payload = AppendTerminalEventRequest.model_validate(body)
+    body = _normalize_json_run_event_body(body)
+    payload = AppendRunEventRequest.model_validate(body)
     if any(str(part.kind or "").lower() != "text" for part in payload.parts):
         raise SkillValidationError("包含二进制 part 的 terminal event 必须使用 multipart/form-data 提交。")
     return payload
 
 
-async def _parse_multipart_terminal_event_request(
+async def _parse_multipart_run_event_request(
     *,
     run_id: str,
     request: Request,
     session: Session,
     settings: Settings,
     object_store: ObjectStoreService,
-) -> AppendTerminalEventRequest:
+) -> AppendRunEventRequest:
     form = await request.form()
     raw_event = form.get("event")
     if not isinstance(raw_event, str) or not raw_event.strip():
@@ -360,12 +365,12 @@ async def _parse_multipart_terminal_event_request(
         if hasattr(value, "filename") and hasattr(value, "read"):
             uploads.append((str(key), value))  # type: ignore[arg-type]
 
-    parsed_parts: list[TerminalEventPartInput] = []
+    parsed_parts: list[RunEventPartInput] = []
     part_counts: dict[str, int] = {}
-    event_text = _terminal_event_text_from_body(event_body)
+    event_text = _run_event_text_from_body(event_body)
     if event_text:
         parsed_parts.append(
-            TerminalEventPartInput(
+            RunEventPartInput(
                 part_id=_next_terminal_part_id("text", part_counts),
                 kind="text",
                 mime_type="text/plain",
@@ -395,12 +400,12 @@ async def _parse_multipart_terminal_event_request(
     event_body.setdefault("event_kind", "terminal.multimodal.input.v1")
     event_body.setdefault("mime_type", "multipart/mixed")
     event_body.setdefault("payload_inline", _multipart_event_payload(parsed_parts))
-    return AppendTerminalEventRequest.model_validate(event_body)
+    return AppendRunEventRequest.model_validate(event_body)
 
 
-def _normalize_json_terminal_event_body(body: dict[str, Any]) -> dict[str, Any]:
+def _normalize_json_run_event_body(body: dict[str, Any]) -> dict[str, Any]:
     event_body = dict(body)
-    event_text = _terminal_event_text_from_body(event_body)
+    event_text = _run_event_text_from_body(event_body)
     if event_text:
         event_body["text"] = event_text
         event_body.setdefault("payload_inline", event_text)
@@ -418,7 +423,7 @@ def _normalize_json_terminal_event_body(body: dict[str, Any]) -> dict[str, Any]:
     return event_body
 
 
-def _terminal_event_text_from_body(event_body: dict[str, Any]) -> str:
+def _run_event_text_from_body(event_body: dict[str, Any]) -> str:
     text = event_body.get("text")
     if isinstance(text, str) and text.strip():
         return text.strip()
@@ -448,7 +453,7 @@ async def _store_terminal_upload_part(
     settings: Settings,
     object_store: ObjectStoreService,
     part_counts: dict[str, int],
-) -> TerminalEventPartInput:
+) -> RunEventPartInput:
     filename = _safe_terminal_upload_filename(upload.filename or "upload.bin")
     upload_mime_type = upload.content_type or "application/octet-stream"
     kind = _terminal_part_kind_for_mime_type(upload_mime_type)
@@ -463,7 +468,7 @@ async def _store_terminal_upload_part(
             object_key=object_key,
             content=content,
             media_type=upload_mime_type,
-            metadata={"filename": filename, "run_id": run_id, "source": "terminal_event", "part_id": part_id},
+            metadata={"filename": filename, "run_id": run_id, "source": "run_event", "part_id": part_id},
         )
     except Exception as exc:
         raise SkillsGatewayError(
@@ -477,7 +482,7 @@ async def _store_terminal_upload_part(
         size_bytes=stored.size_bytes,
         checksum=stored.checksum,
         content_json={
-            "kind": "terminal_event_part",
+            "kind": "run_event_part",
             "run_id": run_id,
             "part_id": part_id,
             "filename": filename,
@@ -491,7 +496,7 @@ async def _store_terminal_upload_part(
         "name": filename,
         "field_name": field_name,
     }
-    return TerminalEventPartInput(
+    return RunEventPartInput(
         part_id=part_id,
         kind=kind,
         mime_type=stored.media_type,
@@ -501,7 +506,7 @@ async def _store_terminal_upload_part(
         metadata=part_metadata,
     )
 
-def _multipart_event_payload(parts: list[TerminalEventPartInput]) -> dict[str, Any]:
+def _multipart_event_payload(parts: list[RunEventPartInput]) -> dict[str, Any]:
     return {
         "summary": "\n".join(
             filter(
@@ -516,19 +521,19 @@ def _multipart_event_payload(parts: list[TerminalEventPartInput]) -> dict[str, A
     }
 
 
-async def _broadcast_terminal_events_after(
+async def _broadcast_run_events_after(
     run_id: str,
     previous_terminal_seq: int,
     *,
     session: Session,
     service: RuntimeService,
 ) -> None:
-    events = service.list_terminal_events(session, run_id, from_seq=previous_terminal_seq + 1)
+    events = service.list_run_events(session, run_id, from_seq=previous_terminal_seq + 1)
     for event in events:
-        await run_ws_hub.broadcast(run_id, _terminal_event_ws_message(run_id, event))
+        await run_ws_hub.broadcast(run_id, _run_event_ws_message(run_id, event))
 
 
-def _terminal_event_ws_message(run_id: str, event: TerminalEventResponse) -> dict:
+def _run_event_ws_message(run_id: str, event: RunEventResponse) -> dict:
     return {
         "event_type": "terminal.event.appended",
         "run_id": run_id,
@@ -571,7 +576,7 @@ def _terminal_part_kind_for_mime_type(mime_type: str) -> str:
     return "text"
 
 
-def _terminal_event_content_filename(event: TerminalEventResponse) -> str:
+def _run_event_content_filename(event: RunEventResponse) -> str:
     payload = event.payload_inline
     if isinstance(payload, dict):
         for key in ("filename", "name", "title", "object_key"):
@@ -591,11 +596,11 @@ def _terminal_part_content_filename(part: dict[str, Any]) -> str:
     return "terminal-event-part"
 
 
-def _terminal_event_content_mime_type(event: TerminalEventResponse, artifact_object: ArtifactObject) -> str:
+def _run_event_content_mime_type(event: RunEventResponse, artifact_object: ArtifactObject) -> str:
     mime_type = artifact_object.media_type or event.mime_type or "application/octet-stream"
     if mime_type != "application/octet-stream":
         return mime_type
-    guessed, _ = mimetypes.guess_type(_terminal_event_content_filename(event))
+    guessed, _ = mimetypes.guess_type(_run_event_content_filename(event))
     return guessed or mime_type
 
 

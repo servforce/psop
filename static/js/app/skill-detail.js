@@ -37,7 +37,7 @@
             params.set("is_published", String(this.filters.published_state === "published"));
           }
           const suffix = params.toString() ? `?${params}` : "";
-          this.skills = await this.apiRequest(`/skills${suffix}`);
+          this.skills = await this.apiRequest(`/pskills${suffix}`);
         } finally {
           this.busy.list = false;
         }
@@ -53,7 +53,7 @@
             ...this.createForm,
             key: generateSkillKey(this.createForm.name)
           };
-          const created = await this.apiRequest("/skills", {
+          const created = await this.apiRequest("/pskills", {
             method: "POST",
             body: JSON.stringify(payload)
           });
@@ -79,7 +79,7 @@
         this.clearNotice();
 
         try {
-          await this.apiRequest(`/skills/${deletedSkill.id}`, {
+          await this.apiRequest(`/pskills/${deletedSkill.id}`, {
             method: "DELETE",
             body: JSON.stringify(this.deleteForm)
           });
@@ -105,7 +105,7 @@
       async loadSkillDetail(skillId, options = {}) {
         this.busy.detail = true;
         try {
-          const detail = await this.apiRequest(`/skills/${skillId}`);
+          const detail = await this.apiRequest(`/pskills/${skillId}`);
 
           this.currentSkill = detail;
           this.metadataForm = {
@@ -209,7 +209,7 @@
 
         this.busy.source = true;
         try {
-          const source = await this.apiRequest(`/skills/${skillId}/source`);
+          const source = await this.apiRequest(`/pskills/${skillId}/source`);
           this.sourceForm = {
             readme_content: source.readme_content,
             skill_md_content: source.skill_md_content,
@@ -230,7 +230,7 @@
 
         this.busy.publishRecords = true;
         try {
-          this.publishRecords = await this.apiRequest(`/skills/${skillId}/publishes`);
+          this.publishRecords = await this.apiRequest(`/pskills/${skillId}/publishes`);
           this.publishRecordsLoadedSkillId = skillId;
         } finally {
           this.busy.publishRecords = false;
@@ -245,7 +245,7 @@
 
         this.busy.rawMaterials = true;
         try {
-          this.rawMaterials = await this.apiRequest(`/skills/${skillId}/raw-materials`);
+          this.rawMaterials = await this.apiRequest(`/pskills/${skillId}/materials`);
           this.rawMaterialsLoadedSkillId = skillId;
           if (this.rawMaterialDetail && !this.rawMaterials.some((material) => material.id === this.rawMaterialDetail.id)) {
             this.rawMaterialDetail = null;
@@ -268,7 +268,7 @@
         this.busy.rawMaterialDetail = true;
         try {
           this.rawMaterialDetailTab = "analysis";
-          this.rawMaterialDetail = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`);
+          this.rawMaterialDetail = await this.apiRequest(`/pskills/${this.currentSkill.id}/materials/${material.id}`);
           await this.loadRawMaterialAnalysis(this.rawMaterialDetail.id);
         } finally {
           this.busy.rawMaterialDetail = false;
@@ -281,7 +281,7 @@
           return;
         }
         try {
-          this.rawMaterialAnalysis = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${materialId}/analysis`);
+          this.rawMaterialAnalysis = await this.apiRequest(`/pskills/${this.currentSkill.id}/materials/${materialId}/analysis`);
         } catch (error) {
           this.rawMaterialAnalysis = null;
         }
@@ -301,13 +301,13 @@
         this.busy.rawMaterialAnalyze = true;
         this.clearNotice();
         try {
-          const analysis = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${materialId}/analyze`, {
+          const analysis = await this.apiRequest(`/pskills/${this.currentSkill.id}/materials/${materialId}/analyze`, {
             method: "POST"
           });
           await this.loadRawMaterials(this.currentSkill.id, true);
           if (this.rawMaterialDetail?.id === materialId) {
             this.rawMaterialAnalysis = analysis;
-            this.rawMaterialDetail = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${materialId}`);
+            this.rawMaterialDetail = await this.apiRequest(`/pskills/${this.currentSkill.id}/materials/${materialId}`);
           }
           this.showNotice("success", "素材分析任务已提交。");
         } catch (error) {
@@ -462,7 +462,7 @@
               }
             });
             try {
-              const created = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials`, {
+              const created = await this.apiRequest(`/pskills/${this.currentSkill.id}/materials`, {
                 method: "POST",
                 body: formData
               });
@@ -570,7 +570,7 @@
         this.busy.rawMaterialDelete = true;
         this.clearNotice();
         try {
-          await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`, {
+          await this.apiRequest(`/pskills/${this.currentSkill.id}/materials/${material.id}`, {
             method: "DELETE"
           });
           if (this.rawMaterialDetail?.id === material.id) {
@@ -648,7 +648,7 @@
         this.clearNotice();
         try {
           const skillId = this.currentSkill.id;
-          const result = await this.apiRequest(`/skills/${skillId}/raw-materials/generate-skill-draft`, {
+          const result = await this.apiRequest(`/pskills/${skillId}/materials/generate-skill-draft`, {
             method: "POST",
             body: JSON.stringify({
               user_description: this.rawMaterialGenerateForm.user_description.trim(),
@@ -659,7 +659,7 @@
           if (result.status === "succeeded") {
             this.sourceLoadedSkillId = null;
             this.repositoryLoadedSkillId = null;
-            this.currentSkill = await this.apiRequest(`/skills/${skillId}`);
+            this.currentSkill = await this.apiRequest(`/pskills/${skillId}`);
             await this.loadRawMaterials(skillId, true);
             this.rawMaterialGenerateModalOpen = false;
             this.showCenterToast("success", "Skill 草稿已生成。");
@@ -670,7 +670,7 @@
             const jobId = result.job_id || result.prompt_metadata?.job_id || result.id;
             this.rawMaterialGenerateModalOpen = false;
             this.taskFilters = {
-              job_type: "skill_raw_material_generation",
+              job_type: "pskill_build",
               status: "",
               q: jobId || "",
               created_from: "",
@@ -723,7 +723,7 @@
         if (!this.currentSkill || !material?.id) {
           return "";
         }
-        return `${this.apiBaseUrl}/skills/${encodeURIComponent(this.currentSkill.id)}/raw-materials/${encodeURIComponent(material.id)}/content`;
+        return `${this.apiBaseUrl}/pskills/${encodeURIComponent(this.currentSkill.id)}/materials/${encodeURIComponent(material.id)}/content`;
       },
 
 
@@ -731,7 +731,7 @@
         if (!this.currentSkill || !this.rawMaterialDetail?.id || !asset?.id) {
           return "";
         }
-        return `${this.apiBaseUrl}/skills/${encodeURIComponent(this.currentSkill.id)}/raw-materials/${encodeURIComponent(this.rawMaterialDetail.id)}/derived-assets/${encodeURIComponent(asset.id)}/content`;
+        return `${this.apiBaseUrl}/pskills/${encodeURIComponent(this.currentSkill.id)}/materials/${encodeURIComponent(this.rawMaterialDetail.id)}/derived-assets/${encodeURIComponent(asset.id)}/content`;
       },
 
 
@@ -844,7 +844,7 @@
             params.set("path", normalizedPath);
           }
           const suffix = params.toString() ? `?${params}` : "";
-          const tree = await this.apiRequest(`/skills/${skillId}/repository/tree${suffix}`);
+          const tree = await this.apiRequest(`/pskills/${skillId}/repository/tree${suffix}`);
           this.repositoryPath = tree.path || "";
           this.repositoryEntries = tree.entries || [];
           this.repositoryLoadedSkillId = skillId;
@@ -918,7 +918,7 @@
         this.busy.repositoryFile = true;
         try {
           const params = new URLSearchParams({ path });
-          const file = await this.apiRequest(`/skills/${this.currentSkill.id}/repository/files?${params}`);
+          const file = await this.apiRequest(`/pskills/${this.currentSkill.id}/repository/files?${params}`);
           this.selectedRepositoryFile = file;
           this.repositoryEditing = false;
           this.repositoryFileForm = {
@@ -976,7 +976,7 @@
         this.clearNotice();
 
         try {
-          const saved = await this.apiRequest(`/skills/${skillId}/repository/files`, {
+          const saved = await this.apiRequest(`/pskills/${skillId}/repository/files`, {
             method: "PUT",
             body: JSON.stringify(this.repositoryFileForm)
           });
@@ -1047,8 +1047,8 @@
         try {
           const endpoint =
             mode === "folder"
-              ? `/skills/${skillId}/repository/folders`
-              : `/skills/${skillId}/repository/files`;
+              ? `/pskills/${skillId}/repository/folders`
+              : `/pskills/${skillId}/repository/files`;
           const body =
             mode === "folder"
               ? { path }
@@ -1081,7 +1081,7 @@
         this.clearNotice();
 
         try {
-          await this.apiRequest(`/skills/${this.currentSkill.id}`, {
+          await this.apiRequest(`/pskills/${this.currentSkill.id}`, {
             method: "PATCH",
             body: JSON.stringify(this.metadataForm)
           });
@@ -1107,7 +1107,7 @@
         this.clearNotice();
 
         try {
-          const saved = await this.apiRequest(`/skills/${this.currentSkill.id}/source`, {
+          const saved = await this.apiRequest(`/pskills/${this.currentSkill.id}/source`, {
             method: "PUT",
             body: JSON.stringify(this.sourceForm)
           });
@@ -1258,7 +1258,7 @@
         };
 
         try {
-          const result = await this.apiRequest(`/skills/${this.currentSkill.id}/publish`, {
+          const result = await this.apiRequest(`/pskills/${this.currentSkill.id}/publish`, {
             method: "POST",
             body: JSON.stringify(this.publishForm)
           });

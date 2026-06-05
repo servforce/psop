@@ -10,12 +10,12 @@ from fastapi.testclient import TestClient
 
 from app.app import create_app
 from app.core.config import Settings
-from app.domain.skills import raw_materials
-from app.domain.skills import video_analysis
-from app.domain.skills import service as skills_service_module
-from app.domain.skills.models import SkillRawMaterial, SkillRawMaterialAnalysis
-from app.domain.skill_tests.service import SkillTestService
-from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
+from app.pskills import materials
+from app.pskills import video_analysis
+from app.pskills import service as skills_service_module
+from app.pskills.models import PSkillMaterial, PSkillMaterialAnalysis
+from app.testing.service import SkillTestService
+from app.pskills.exceptions import SkillsGatewayError, SkillValidationError
 from app.gateway.asr import AsrTranscription
 from app.gateway.inference import LlmAttachment, LlmCompletion
 from app.infra.object_store import StoredObject
@@ -262,7 +262,7 @@ class FakeInferenceGateway:
         )
         if "SKILL 编译智能体" in system_prompt:
             content = json.dumps(build_test_formal_v5_artifact(), ensure_ascii=False)
-        elif "generate_psop_skill_source_from_raw_materials" in user_prompt:
+        elif "generate_psop_skill_source_from_materials" in user_prompt:
             try:
                 parsed_prompt = json.loads(user_prompt)
                 material_id = str(parsed_prompt["material_analysis_results"][0]["source"]["material_id"])
@@ -748,7 +748,7 @@ def test_parse_generated_skill_draft_handles_outer_fence_and_inner_markdown_fenc
         ensure_ascii=False,
     )
 
-    parsed = raw_materials.parse_generated_skill_draft(f"```json\n{content}\n```")
+    parsed = materials.parse_generated_skill_draft(f"```json\n{content}\n```")
 
     assert parsed.files["examples/input.md"].startswith("```text")
     assert parsed.selected_reference_assets == [
@@ -761,7 +761,7 @@ def test_create_skill_initializes_gitlab_and_persists_metadata() -> None:
 
     with client:
         response = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "equipment-diagnosis",
                 "name": "Equipment Diagnosis",
@@ -779,12 +779,57 @@ def test_create_skill_initializes_gitlab_and_persists_metadata() -> None:
     assert len(fake_gateway.projects) == 1
 
 
+def test_pskills_and_materials_routes_are_available() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        create_response = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "pskill-materials",
+                "name": "PSkill Materials",
+                "description": "Create a PSkill through the renamed API.",
+            },
+        )
+        skill_id = create_response.json()["id"]
+        list_response = client.get("/api/v1/pskills")
+
+        upload_response = client.post(
+            f"/api/v1/pskills/{skill_id}/materials",
+            data={
+                "name": "作业指南",
+                "description": "阶段 1 materials alias",
+                "material_kind": "markdown",
+                "source_note": "pskills route",
+            },
+            files={"file": ("guide.md", b"# Guide\n\nUse lockout before repair.\n", "text/markdown")},
+        )
+        material_id = upload_response.json()["id"]
+        materials_response = client.get(f"/api/v1/pskills/{skill_id}/materials")
+        detail_response = client.get(f"/api/v1/pskills/{skill_id}/materials/{material_id}")
+        content_response = client.get(f"/api/v1/pskills/{skill_id}/materials/{material_id}/content")
+        delete_response = client.delete(f"/api/v1/pskills/{skill_id}/materials/{material_id}")
+
+    assert create_response.status_code == 201
+    assert any(item["id"] == skill_id for item in list_response.json())
+    assert upload_response.status_code == 201
+    assert upload_response.json()["source_note"] == "pskills route"
+    assert materials_response.status_code == 200
+    assert [item["id"] for item in materials_response.json()] == [material_id]
+    assert detail_response.status_code == 200
+    assert detail_response.json()["analysis_result"]["content"]["text"].startswith("# Guide")
+    assert content_response.status_code == 200
+    assert content_response.content.startswith(b"# Guide")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["deleted"] is True
+
+
 def test_list_skills_filters_by_published_state() -> None:
     client, _, _ = create_test_client()
 
     with client:
         draft_skill = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "draft-only",
                 "name": "Draft Only",
@@ -792,7 +837,7 @@ def test_list_skills_filters_by_published_state() -> None:
             },
         ).json()
         published_skill = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "published-skill",
                 "name": "Published Skill",
@@ -800,15 +845,15 @@ def test_list_skills_filters_by_published_state() -> None:
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{published_skill['id']}/publish",
+            f"/api/v1/pskills/{published_skill['id']}/publish",
             json={"publish_reason": "Initial publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
 
-        all_response = client.get("/api/v1/skills")
-        published_response = client.get("/api/v1/skills?is_published=true")
-        unpublished_response = client.get("/api/v1/skills?is_published=false")
+        all_response = client.get("/api/v1/pskills")
+        published_response = client.get("/api/v1/pskills?is_published=true")
+        unpublished_response = client.get("/api/v1/pskills?is_published=false")
 
     assert all_response.status_code == 200
     all_skills = {skill["id"]: skill for skill in all_response.json()}
@@ -831,7 +876,7 @@ def test_get_and_save_skill_source() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "diagnosis-assistant",
                 "name": "Diagnosis Assistant",
@@ -840,15 +885,15 @@ def test_get_and_save_skill_source() -> None:
         ).json()
 
         skill_id = created["id"]
-        source_response = client.get(f"/api/v1/skills/{skill_id}/source")
+        source_response = client.get(f"/api/v1/pskills/{skill_id}/source")
         assert source_response.status_code == 200
         source_payload = source_response.json()
         assert "skill:" in source_payload["skill_yaml_content"]
-        before_detail = client.get(f"/api/v1/skills/{skill_id}").json()
+        before_detail = client.get(f"/api/v1/pskills/{skill_id}").json()
         before_skill_md = before_detail["current_draft_version"]["manifest_snapshot"]["prompt_material"]["skill_md"]
 
         save_response = client.put(
-            f"/api/v1/skills/{skill_id}/source",
+            f"/api/v1/pskills/{skill_id}/source",
             json={
                 "base_commit_sha": source_payload["head_commit_sha"],
                 "readme_content": source_payload["readme_content"] + "\nUpdated from test.\n",
@@ -856,7 +901,7 @@ def test_get_and_save_skill_source() -> None:
                 "skill_yaml_content": "skill:\n  identity:\n    key: tampered-by-user\n",
             },
         )
-        after_detail = client.get(f"/api/v1/skills/{skill_id}").json()
+        after_detail = client.get(f"/api/v1/pskills/{skill_id}").json()
 
     assert save_response.status_code == 200
     saved_payload = save_response.json()
@@ -871,12 +916,12 @@ def test_get_and_save_skill_source() -> None:
     assert after_detail["updated_at"] != before_detail["updated_at"]
 
 
-def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
+def test_pskill_material_upload_list_detail_content_and_delete() -> None:
     client, _, fake_inference = create_test_client()
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "raw-material-skill",
                 "name": "Raw Material Skill",
@@ -886,7 +931,7 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
         skill_id = created["id"]
 
         upload_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials",
+            f"/api/v1/pskills/{skill_id}/materials",
             data={
                 "name": "作业指南",
                 "description": "现场作业流程素材",
@@ -896,22 +941,22 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
             files={"file": ("guide.md", b"# Guide\n\nUse lockout before repair.\n", "text/markdown")},
         )
         image_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials",
+            f"/api/v1/pskills/{skill_id}/materials",
             data={"name": "设备照片", "material_kind": "image"},
             files={"file": ("panel.png", b"not-really-a-png", "image/png")},
         )
-        jobs_response = client.get("/api/v1/runtime/jobs", params={"job_type": "raw_material_analysis"})
-        list_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
+        jobs_response = client.get("/api/v1/runtime/jobs", params={"job_type": "material_analysis"})
+        list_response = client.get(f"/api/v1/pskills/{skill_id}/materials")
         material_id = upload_response.json()["id"]
-        detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
-        content_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/content")
+        detail_response = client.get(f"/api/v1/pskills/{skill_id}/materials/{material_id}")
+        content_response = client.get(f"/api/v1/pskills/{skill_id}/materials/{material_id}/content")
         range_response = client.get(
-            f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/content",
+            f"/api/v1/pskills/{skill_id}/materials/{material_id}/content",
             headers={"Range": "bytes=0-6"},
         )
-        delete_response = client.delete(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
-        after_delete_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
-        deleted_detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
+        delete_response = client.delete(f"/api/v1/pskills/{skill_id}/materials/{material_id}")
+        after_delete_response = client.get(f"/api/v1/pskills/{skill_id}/materials")
+        deleted_detail_response = client.get(f"/api/v1/pskills/{skill_id}/materials/{material_id}")
 
     assert upload_response.status_code == 201
     upload_payload = upload_response.json()
@@ -947,12 +992,12 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
     assert deleted_detail_response.status_code == 404
 
 
-def test_skill_raw_material_upload_rejects_url_only_payload() -> None:
+def test_pskill_material_upload_rejects_url_only_payload() -> None:
     client, _, _ = create_test_client()
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "url-only-material-skill",
                 "name": "URL Only Material Skill",
@@ -960,7 +1005,7 @@ def test_skill_raw_material_upload_rejects_url_only_payload() -> None:
             },
         ).json()
         response = client.post(
-            f"/api/v1/skills/{created['id']}/raw-materials",
+            f"/api/v1/pskills/{created['id']}/materials",
             data={
                 "source_url": "https://example.test/reference",
                 "name": "参考页面",
@@ -971,11 +1016,11 @@ def test_skill_raw_material_upload_rejects_url_only_payload() -> None:
     assert response.json()["message"] == "请上传素材文件。"
 
 
-def test_skill_raw_material_video_uses_dedicated_upload_limit() -> None:
+def test_pskill_material_video_uses_dedicated_upload_limit() -> None:
     settings = create_test_settings()
-    settings.raw_material_max_upload_bytes = 8
-    settings.raw_material_video_max_upload_bytes = 32
-    processor = raw_materials.RawMaterialProcessor(
+    settings.material_max_upload_bytes = 8
+    settings.material_video_max_upload_bytes = 32
+    processor = materials.MaterialProcessor(
         settings=settings,
         inference_gateway=FakeInferenceGateway(),
         object_store=FakeObjectStore(),
@@ -1019,8 +1064,8 @@ def _fake_video_analysis_result() -> video_analysis.VideoAnalysisResult:
     )
 
 
-def test_skill_raw_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
-    monkeypatch.setattr(raw_materials, "_extract_pdf_text", lambda content: "PDF extracted procedure text.")
+def test_pskill_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
+    monkeypatch.setattr(materials, "_extract_pdf_text", lambda content: "PDF extracted procedure text.")
     monkeypatch.setattr(
         skills_service_module,
         "analyze_video_material",
@@ -1030,7 +1075,7 @@ def test_skill_raw_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "multimodal-material-skill",
                 "name": "Multimodal Material Skill",
@@ -1039,24 +1084,24 @@ def test_skill_raw_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
         ).json()
         skill_id = created["id"]
         pdf_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials",
+            f"/api/v1/pskills/{skill_id}/materials",
             data={"name": "PDF SOP", "material_kind": "pdf"},
             files={"file": ("sop.pdf", b"%PDF-1.4 fake", "application/pdf")},
         )
         audio_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials",
+            f"/api/v1/pskills/{skill_id}/materials",
             data={"name": "Audio Notes", "material_kind": "audio"},
             files={"file": ("notes.wav", b"RIFF fake wav", "audio/wav")},
         )
         video_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials",
+            f"/api/v1/pskills/{skill_id}/materials",
             data={"name": "Video Walkthrough", "material_kind": "video"},
             files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
         )
         video_analysis_response = client.get(
-            f"/api/v1/skills/{skill_id}/raw-materials/{video_response.json()['id']}/analysis"
+            f"/api/v1/pskills/{skill_id}/materials/{video_response.json()['id']}/analysis"
         )
-        list_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
+        list_response = client.get(f"/api/v1/pskills/{skill_id}/materials")
 
     assert pdf_response.status_code == 201
     assert pdf_response.json()["status"] == "ready"
@@ -1098,7 +1143,7 @@ def test_failed_video_raw_material_can_be_reanalyzed(monkeypatch) -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "retry-material-analysis-skill",
                 "name": "Retry Video Analysis Skill",
@@ -1107,16 +1152,16 @@ def test_failed_video_raw_material_can_be_reanalyzed(monkeypatch) -> None:
         ).json()
         skill_id = created["id"]
         upload_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials",
+            f"/api/v1/pskills/{skill_id}/materials",
             data={"name": "视频教程", "material_kind": "video"},
             files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
         )
         material_id = upload_response.json()["id"]
         failed_analysis_response = client.get(
-            f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/analysis"
+            f"/api/v1/pskills/{skill_id}/materials/{material_id}/analysis"
         )
-        retry_response = client.post(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/analyze")
-        detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
+        retry_response = client.post(f"/api/v1/pskills/{skill_id}/materials/{material_id}/analyze")
+        detail_response = client.get(f"/api/v1/pskills/{skill_id}/materials/{material_id}")
 
     assert upload_response.status_code == 201
     assert upload_response.json()["status"] == "failed"
@@ -1142,7 +1187,7 @@ def test_processing_video_raw_material_cannot_be_reanalyzed(monkeypatch) -> None
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "processing-material-analysis-skill",
                 "name": "Processing Video Analysis Skill",
@@ -1151,22 +1196,22 @@ def test_processing_video_raw_material_cannot_be_reanalyzed(monkeypatch) -> None
         ).json()
         skill_id = created["id"]
         upload_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials",
+            f"/api/v1/pskills/{skill_id}/materials",
             data={"name": "视频教程", "material_kind": "video"},
             files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
         )
         material_id = upload_response.json()["id"]
         with client.app.state.db_manager.session() as session:
-            material = session.get(SkillRawMaterial, material_id)
+            material = session.get(PSkillMaterial, material_id)
             analysis = (
-                session.query(SkillRawMaterialAnalysis)
-                .filter(SkillRawMaterialAnalysis.raw_material_id == material_id)
+                session.query(PSkillMaterialAnalysis)
+                .filter(PSkillMaterialAnalysis.material_id == material_id)
                 .one()
             )
             material.status = "processing"
             analysis.status = "running"
             session.commit()
-        retry_response = client.post(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/analyze")
+        retry_response = client.post(f"/api/v1/pskills/{skill_id}/materials/{material_id}/analyze")
 
     assert upload_response.status_code == 201
     assert retry_response.status_code == 422
@@ -1178,7 +1223,7 @@ def test_processing_video_raw_material_cannot_be_reanalyzed(monkeypatch) -> None
     }
 
 
-def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_publish_or_compile(monkeypatch) -> None:
+def test_generate_skill_draft_from_materials_commits_standard_files_without_publish_or_compile(monkeypatch) -> None:
     monkeypatch.setattr(
         skills_service_module,
         "analyze_video_material",
@@ -1188,7 +1233,7 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "generated-skill",
                 "name": "Generated Skill",
@@ -1197,28 +1242,28 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
         ).json()
         skill_id = created["id"]
         material_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials",
+            f"/api/v1/pskills/{skill_id}/materials",
             data={"name": "流程说明"},
             files={"file": ("workflow.md", b"# Workflow\n\nAsk, inspect, then advise.\n", "text/markdown")},
         )
         material_id = material_response.json()["id"]
         video_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials",
+            f"/api/v1/pskills/{skill_id}/materials",
             data={"name": "视频教程", "material_kind": "video"},
             files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
         )
         video_material_id = video_response.json()["id"]
 
         generate_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
+            f"/api/v1/pskills/{skill_id}/materials/generate-skill-draft",
             json={
                 "user_description": "请基于素材生成一个现场支持 Skill。",
                 "base_commit_sha": created["latest_draft_head_sha"],
             },
         )
-        detail_response = client.get(f"/api/v1/skills/{skill_id}")
-        source_response = client.get(f"/api/v1/skills/{skill_id}/source")
-        publishes_response = client.get(f"/api/v1/skills/{skill_id}/publishes")
+        detail_response = client.get(f"/api/v1/pskills/{skill_id}")
+        source_response = client.get(f"/api/v1/pskills/{skill_id}/source")
+        publishes_response = client.get(f"/api/v1/pskills/{skill_id}/publishes")
 
     assert generate_response.status_code == 200
     payload = generate_response.json()
@@ -1257,7 +1302,7 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert source_response.json()["head_commit_sha"] == payload["committed_commit_sha"]
     assert publishes_response.json() == []
     generation_call = next(
-        call for call in fake_inference.calls if "generate_psop_skill_source_from_raw_materials" in call["user_prompt"]
+        call for call in fake_inference.calls if "generate_psop_skill_source_from_materials" in call["user_prompt"]
     )
     generation_prompt = json.loads(generation_call["user_prompt"])
     assert generation_call["route_key"] == "text"
@@ -1267,7 +1312,7 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert len(generation_prompt["material_analysis_results"]) == 2
 
 
-def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch) -> None:
+def test_generate_skill_draft_from_materials_rejects_stale_head(monkeypatch) -> None:
     monkeypatch.setattr(
         skills_service_module,
         "analyze_video_material",
@@ -1277,7 +1322,7 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch)
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "stale-generation",
                 "name": "Stale Generation",
@@ -1285,9 +1330,9 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch)
             },
         ).json()
         skill_id = created["id"]
-        source_payload = client.get(f"/api/v1/skills/{skill_id}/source").json()
+        source_payload = client.get(f"/api/v1/pskills/{skill_id}/source").json()
         video_response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials",
+            f"/api/v1/pskills/{skill_id}/materials",
             data={"name": "素材"},
             files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
         )
@@ -1300,7 +1345,7 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch)
             commit_message="External edit",
         )
         response = client.post(
-            f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
+            f"/api/v1/pskills/{skill_id}/materials/generate-skill-draft",
             json={
                 "user_description": "生成草稿。",
                 "base_commit_sha": source_payload["head_commit_sha"],
@@ -1311,12 +1356,12 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch)
     assert response.json()["code"] == "skill_source_conflict"
 
 
-def test_generate_skill_draft_from_raw_materials_rejects_material_subset_field() -> None:
+def test_generate_skill_draft_from_materials_rejects_material_subset_field() -> None:
     client, _, _ = create_test_client()
 
     with client:
         response = client.post(
-            "/api/v1/skills/skill-id/raw-materials/generate-skill-draft",
+            "/api/v1/pskills/skill-id/materials/generate-skill-draft",
             json={
                 "material_ids": ["material-id"],
                 "user_description": "生成草稿。",
@@ -1327,12 +1372,12 @@ def test_generate_skill_draft_from_raw_materials_rejects_material_subset_field()
     assert any(error["loc"][-1] == "material_ids" for error in response.json()["detail"])
 
 
-def test_generate_skill_draft_from_raw_materials_requires_ready_video() -> None:
+def test_generate_skill_draft_from_materials_requires_ready_video() -> None:
     client, _, _ = create_test_client()
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "video-required",
                 "name": "Video Required",
@@ -1340,12 +1385,12 @@ def test_generate_skill_draft_from_raw_materials_requires_ready_video() -> None:
             },
         ).json()
         text_response = client.post(
-            f"/api/v1/skills/{created['id']}/raw-materials",
+            f"/api/v1/pskills/{created['id']}/materials",
             data={"name": "文本素材"},
             files={"file": ("notes.txt", b"Build a safe checklist.\n", "text/plain")},
         )
         response = client.post(
-            f"/api/v1/skills/{created['id']}/raw-materials/generate-skill-draft",
+            f"/api/v1/pskills/{created['id']}/materials/generate-skill-draft",
             json={
                 "user_description": "生成草稿。",
                 "base_commit_sha": created["latest_draft_head_sha"],
@@ -1361,7 +1406,7 @@ def test_repository_tree_file_and_folder_operations() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "repo-browser",
                 "name": "Repo Browser",
@@ -1370,51 +1415,51 @@ def test_repository_tree_file_and_folder_operations() -> None:
         ).json()
         skill_id = created["id"]
 
-        tree_response = client.get(f"/api/v1/skills/{skill_id}/repository/tree")
+        tree_response = client.get(f"/api/v1/pskills/{skill_id}/repository/tree")
         create_folder_response = client.post(
-            f"/api/v1/skills/{skill_id}/repository/folders",
+            f"/api/v1/pskills/{skill_id}/repository/folders",
             json={"path": "examples"},
         )
         create_file_response = client.post(
-            f"/api/v1/skills/{skill_id}/repository/files",
+            f"/api/v1/pskills/{skill_id}/repository/files",
             json={"path": "examples/demo.md", "content": "# Demo\n"},
         )
         nested_tree_response = client.get(
-            f"/api/v1/skills/{skill_id}/repository/tree",
+            f"/api/v1/pskills/{skill_id}/repository/tree",
             params={"path": "examples"},
         )
         file_response = client.get(
-            f"/api/v1/skills/{skill_id}/repository/files",
+            f"/api/v1/pskills/{skill_id}/repository/files",
             params={"path": "examples/demo.md"},
         )
         save_response = client.put(
-            f"/api/v1/skills/{skill_id}/repository/files",
+            f"/api/v1/pskills/{skill_id}/repository/files",
             json={
                 "path": "examples/demo.md",
                 "content": "# Demo\n\nUpdated.\n",
                 "base_commit_sha": file_response.json()["head_commit_sha"],
             },
         )
-        before_repo_detail = client.get(f"/api/v1/skills/{skill_id}").json()
+        before_repo_detail = client.get(f"/api/v1/pskills/{skill_id}").json()
         skill_md_response = client.get(
-            f"/api/v1/skills/{skill_id}/repository/files",
+            f"/api/v1/pskills/{skill_id}/repository/files",
             params={"path": "SKILL.md"},
         )
         skill_md_save_response = client.put(
-            f"/api/v1/skills/{skill_id}/repository/files",
+            f"/api/v1/pskills/{skill_id}/repository/files",
             json={
                 "path": "SKILL.md",
                 "content": skill_md_response.json()["content"] + "\n## Repo Edit\n\n- update core instruction\n",
                 "base_commit_sha": skill_md_response.json()["head_commit_sha"],
             },
         )
-        after_repo_detail = client.get(f"/api/v1/skills/{skill_id}").json()
+        after_repo_detail = client.get(f"/api/v1/pskills/{skill_id}").json()
         manifest_response = client.get(
-            f"/api/v1/skills/{skill_id}/repository/files",
+            f"/api/v1/pskills/{skill_id}/repository/files",
             params={"path": "skill.yaml"},
         )
         manifest_save_response = client.put(
-            f"/api/v1/skills/{skill_id}/repository/files",
+            f"/api/v1/pskills/{skill_id}/repository/files",
             json={
                 "path": "skill.yaml",
                 "content": "skill:\n  identity:\n    key: user-edit\n",
@@ -1460,7 +1505,7 @@ def test_save_skill_source_rejects_stale_commit_sha() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "repair-planner",
                 "name": "Repair Planner",
@@ -1468,7 +1513,7 @@ def test_save_skill_source_rejects_stale_commit_sha() -> None:
             },
         ).json()
         skill_id = created["id"]
-        source_payload = client.get(f"/api/v1/skills/{skill_id}/source").json()
+        source_payload = client.get(f"/api/v1/pskills/{skill_id}/source").json()
         fake_gateway.commit_skill_source(
             project_id=created["gitlab_project_id"],
             branch=created["default_branch"],
@@ -1479,7 +1524,7 @@ def test_save_skill_source_rejects_stale_commit_sha() -> None:
         )
 
         save_response = client.put(
-            f"/api/v1/skills/{skill_id}/source",
+            f"/api/v1/pskills/{skill_id}/source",
             json={
                 "base_commit_sha": source_payload["head_commit_sha"],
                 "readme_content": source_payload["readme_content"],
@@ -1498,7 +1543,7 @@ def test_publish_skill_creates_published_version_and_record() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "field-support",
                 "name": "Field Support",
@@ -1508,7 +1553,7 @@ def test_publish_skill_creates_published_version_and_record() -> None:
         skill_id = created["id"]
 
         publish_response = client.post(
-            f"/api/v1/skills/{skill_id}/publish",
+            f"/api/v1/pskills/{skill_id}/publish",
             json={"publish_reason": "Initial MVP publish"},
         )
         publish_payload = publish_response.json()
@@ -1516,8 +1561,8 @@ def test_publish_skill_creates_published_version_and_record() -> None:
         progress_response = client.get(f"/api/v1/compiler/requests/{compile_request_id}/progress")
         compile_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         events_response = client.get(f"/api/v1/compiler/requests/{compile_request_id}/events")
-        detail_response = client.get(f"/api/v1/skills/{skill_id}")
-        publishes_response = client.get(f"/api/v1/skills/{skill_id}/publishes")
+        detail_response = client.get(f"/api/v1/pskills/{skill_id}")
+        publishes_response = client.get(f"/api/v1/pskills/{skill_id}/publishes")
 
     assert publish_response.status_code == 202
     assert publish_payload["published_version"]["status"] == "published"
@@ -1548,7 +1593,7 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "manual-compile",
                 "name": "Manual Compile",
@@ -1557,12 +1602,12 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
         ).json()
         skill_id = created["id"]
 
-        compile_response = client.post(f"/api/v1/compiler/skills/{skill_id}/compile")
+        compile_response = client.post(f"/api/v1/compiler/pskills/{skill_id}/compile")
         compile_payload = compile_response.json()
         compile_request_id = compile_payload["id"]
         progress_response = client.get(f"/api/v1/compiler/requests/{compile_request_id}/progress")
         retry_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
-        detail_response = client.get(f"/api/v1/skills/{skill_id}")
+        detail_response = client.get(f"/api/v1/pskills/{skill_id}")
 
     assert compile_response.status_code == 202
     assert compile_payload["trigger_type"] == "manual"
@@ -1580,7 +1625,7 @@ def test_publish_skill_records_failed_startup_when_gitlab_fails() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "gitlab-freeze-failure",
                 "name": "GitLab Freeze Failure",
@@ -1591,10 +1636,10 @@ def test_publish_skill_records_failed_startup_when_gitlab_fails() -> None:
         fake_gateway.fail_get_skill_source = True
 
         publish_response = client.post(
-            f"/api/v1/skills/{skill_id}/publish",
+            f"/api/v1/pskills/{skill_id}/publish",
             json={"publish_reason": "Expect GitLab failure"},
         )
-        publishes_response = client.get(f"/api/v1/skills/{skill_id}/publishes")
+        publishes_response = client.get(f"/api/v1/pskills/{skill_id}/publishes")
 
     assert publish_response.status_code == 502
     assert publish_response.json()["message"] == "GitLab 返回错误响应。"
@@ -1611,7 +1656,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "issue-one-demo",
                 "name": "Issue One Demo",
@@ -1620,7 +1665,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         ).json()
 
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "Issue #1 acceptance publish"},
         )
         publish_payload = publish_response.json()
@@ -1657,9 +1702,9 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         binding_requirements_response = client.get(f"/api/v1/runs/{run_id}/binding-requirements")
         bindings_response = client.get(f"/api/v1/runs/{run_id}/bindings")
         terminal_session_response = client.get(f"/api/v1/terminal/sessions/{run_id}")
-        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+        terminal_events_response = client.get(f"/api/v1/runs/{run_id}/events")
         terminal_append_response = client.post(
-            f"/api/v1/terminal/sessions/{run_id}/events",
+            f"/api/v1/runs/{run_id}/events",
             json={
                 "direction": "input",
                 "event_kind": "terminal.text.input.v1",
@@ -1669,8 +1714,8 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
             },
         )
         run_response = client.get(f"/api/v1/runs/{run_id}")
-        trace_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
-        terminal_events_after_append_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+        trace_response = client.get(f"/api/v1/runs/{run_id}/traces")
+        terminal_events_after_append_response = client.get(f"/api/v1/runs/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
         jobs_response = client.get("/api/v1/runtime/jobs")
         job_stats_response = client.get("/api/v1/runtime/jobs/stats")
@@ -1711,6 +1756,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     run_payload = run_response.json()
     assert run_payload["status"] == "succeeded"
     assert run_payload["terminal_session_id"] == invocation_payload["terminal_session_id"]
+    assert run_payload["latest_run_event_seq"] == 6
     assert run_payload["latest_terminal_seq"] == 6
     assert run_payload["latest_trace_seq"] == 7
     assert len(run_payload["binding_summary"]) == 2
@@ -1752,6 +1798,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         "等待现场证据",
         "LLM 输出",
     ]
+    assert len(replay_payload["run_events"]) == 6
     assert len(replay_payload["terminal_events"]) == 6
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
@@ -1779,7 +1826,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "skill-debug-terminal",
                 "name": "Skill Debug Terminal",
@@ -1787,7 +1834,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "Debug terminal publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
@@ -1840,7 +1887,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         final_run_response = client.get(f"/api/v1/runs/{run_id}")
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
-        old_cases_response = client.get(f"/api/v1/skills/{created['id']}/test-cases", params={"mode": "debug"})
+        old_cases_response = client.get(f"/api/v1/pskills/{created['id']}/test-cases", params={"mode": "debug"})
         test_jobs_response = client.get("/api/v1/runtime/jobs", params={"job_type": "skill_test_timeline_driver"})
 
     assert invocation_response.status_code == 201
@@ -1881,7 +1928,7 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "terminal-multipart-event",
                 "name": "Terminal Multipart Event",
@@ -1889,7 +1936,7 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "Multipart terminal publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
@@ -1979,7 +2026,7 @@ def test_terminal_file_upload_returns_json_error_when_object_store_unavailable()
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "terminal-upload-object-store-failure",
                 "name": "Terminal Upload Object Store Failure",
@@ -1987,7 +2034,7 @@ def test_terminal_file_upload_returns_json_error_when_object_store_unavailable()
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "Upload failure publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
@@ -2020,7 +2067,7 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "ws-terminal-demo",
                 "name": "WS Terminal Demo",
@@ -2028,7 +2075,7 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "WS smoke publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
@@ -2107,7 +2154,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "skill-test-scenario",
                 "name": "Skill Test Scenario",
@@ -2115,14 +2162,14 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "Scenario test publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
 
         scenario_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-scenarios",
+            f"/api/v1/pskills/{created['id']}/test-scenarios",
             json={
                 "name": "雨伞维修时序场景",
                 "description": "时间轴驱动输入，时间点以前判断输出。",
@@ -2133,7 +2180,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
         )
         scenario = scenario_response.json()
         upload_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets",
+            f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/assets",
             data={"name": "伞骨图片", "description": "测试图片", "lane_id": "input.image"},
             files={"file": ("umbrella.png", b"fake-image", "image/png")},
         )
@@ -2151,25 +2198,25 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
             }
         )
         patch_response = client.patch(
-            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}",
+            f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}",
             json={"timeline": patched_timeline},
         )
         scenario = patch_response.json()
-        assets_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets")
+        assets_response = client.get(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/assets")
         asset_content_response = client.get(
-            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets/{uploaded_asset['id']}/content"
+            f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/assets/{uploaded_asset['id']}/content"
         )
-        old_case_response = client.get(f"/api/v1/skills/{created['id']}/test-cases")
+        old_case_response = client.get(f"/api/v1/pskills/{created['id']}/test-cases")
         old_runs_response = client.get("/api/v1/skill-test-runs/not-found")
 
-        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        start_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
         scenario_run = start_response.json()
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}/events")
         jobs_response = client.get("/api/v1/runtime/jobs")
         evaluate_response = client.post(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/evaluate")
         review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
-        list_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios")
-        runs_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs")
+        list_response = client.get(f"/api/v1/pskills/{created['id']}/test-scenarios")
+        runs_response = client.get(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs")
 
         review = review_response.json()
         cursor = review["cursor_anchors"][-1]
@@ -2178,9 +2225,9 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
             json={"cursor": cursor, "name": "从切面继续的场景"},
         )
         forked = fork_response.json()
-        fork_assets_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios/{forked['id']}/assets")
+        fork_assets_response = client.get(f"/api/v1/pskills/{created['id']}/test-scenarios/{forked['id']}/assets")
         fork_asset_content_response = client.get(
-            f"/api/v1/skills/{created['id']}/test-scenarios/{forked['id']}/assets/{fork_assets_response.json()[0]['id']}/content"
+            f"/api/v1/pskills/{created['id']}/test-scenarios/{forked['id']}/assets/{fork_assets_response.json()[0]['id']}/content"
         )
         fork_debug_response = client.post(
             f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-debug",
@@ -2277,7 +2324,7 @@ def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> No
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "skill-test-multimodal-parts",
                 "name": "Skill Test Multimodal Parts",
@@ -2285,23 +2332,23 @@ def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> No
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "Scenario multimodal publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         scenario_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-scenarios",
+            f"/api/v1/pskills/{created['id']}/test-scenarios",
             json={"name": "多模态现场包", "duration_ms": 5000, "timeline": {"events": []}},
         )
         scenario = scenario_response.json()
         image_upload = client.post(
-            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets",
+            f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/assets",
             data={"name": "现场照片", "description": "电控柜照片", "lane_id": "input.image"},
             files={"file": ("panel.png", b"panel-image", "image/png")},
         ).json()
         video_upload = client.post(
-            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets",
+            f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/assets",
             data={"name": "启动视频", "description": "设备启动过程", "lane_id": "input.video"},
             files={"file": ("startup.mp4", b"startup-video", "video/mp4")},
         ).json()
@@ -2338,11 +2385,11 @@ def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> No
             },
         ]
         patch_response = client.patch(
-            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}",
+            f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}",
             json={"timeline": patched_timeline},
         )
         scenario = patch_response.json()
-        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        start_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
         scenario_run = start_response.json()
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}/events")
         review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
@@ -2430,7 +2477,7 @@ def test_skill_test_scenario_fork_uses_selected_timeline_time() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "skill-test-scenario-fork-selected-time",
                 "name": "Skill Test Scenario Fork Selected Time",
@@ -2438,13 +2485,13 @@ def test_skill_test_scenario_fork_uses_selected_timeline_time() -> None:
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "Scenario fork selected time publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         scenario_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-scenarios",
+            f"/api/v1/pskills/{created['id']}/test-scenarios",
             json={
                 "name": "按选中时间 Fork 的场景",
                 "duration_ms": 10000,
@@ -2452,7 +2499,7 @@ def test_skill_test_scenario_fork_uses_selected_timeline_time() -> None:
             },
         )
         scenario = scenario_response.json()
-        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        start_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
         scenario_run = start_response.json()
         fork_response = client.post(
             f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-scenario",
@@ -2506,7 +2553,7 @@ def test_skill_test_scenario_run_can_be_cancelled() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "skill-test-scenario-cancel",
                 "name": "Skill Test Scenario Cancel",
@@ -2514,17 +2561,17 @@ def test_skill_test_scenario_run_can_be_cancelled() -> None:
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "Scenario cancel publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         scenario_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-scenarios",
+            f"/api/v1/pskills/{created['id']}/test-scenarios",
             json={"name": "可终止运行场景", "duration_ms": 60000, "timeline": timeline},
         )
         scenario = scenario_response.json()
-        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        start_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
         scenario_run = start_response.json()
         cancel_response = client.post(
             f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/cancel",
@@ -2592,7 +2639,7 @@ def test_skill_test_scenario_sensor_timeline_review_stage_outputs_and_fork() -> 
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "skill-test-sensors",
                 "name": "Skill Test Sensors",
@@ -2600,26 +2647,26 @@ def test_skill_test_scenario_sensor_timeline_review_stage_outputs_and_fork() -> 
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "Sensor scenario publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
 
         scenario_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-scenarios",
+            f"/api/v1/pskills/{created['id']}/test-scenarios",
             json={"name": "传感器输入阶段场景", "duration_ms": 5000, "timeline": timeline},
         )
         scenario = scenario_response.json()
         patched_timeline = copy.deepcopy(scenario["timeline"])
         next(event for event in patched_timeline["events"] if event["lane_id"] == "sensor.gps")["payload_inline"]["accuracy_m"] = 2.5
         patch_response = client.patch(
-            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}",
+            f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}",
             json={"timeline": patched_timeline},
         )
-        reloaded_response = client.get(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}")
+        reloaded_response = client.get(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}")
 
-        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        start_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
         scenario_run = start_response.json()
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}/events")
         review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
@@ -2714,7 +2761,7 @@ def test_skill_test_scenario_rejects_duplicate_open_run() -> None:
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "skill-test-scenario-duplicate",
                 "name": "Skill Test Scenario Duplicate",
@@ -2722,13 +2769,13 @@ def test_skill_test_scenario_rejects_duplicate_open_run() -> None:
             },
         ).json()
         publish_response = client.post(
-            f"/api/v1/skills/{created['id']}/publish",
+            f"/api/v1/pskills/{created['id']}/publish",
             json={"publish_reason": "Scenario duplicate publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         scenario_response = client.post(
-            f"/api/v1/skills/{created['id']}/test-scenarios",
+            f"/api/v1/pskills/{created['id']}/test-scenarios",
             json={
                 "name": "等待后再输入",
                 "duration_ms": 2000,
@@ -2750,8 +2797,8 @@ def test_skill_test_scenario_rejects_duplicate_open_run() -> None:
             },
         )
         scenario_id = scenario_response.json()["id"]
-        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario_id}/runs", json={})
-        duplicate_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario_id}/runs", json={})
+        start_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario_id}/runs", json={})
+        duplicate_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario_id}/runs", json={})
 
     assert start_response.status_code == 202
     assert start_response.json()["driver_status"] == "waiting_time"
@@ -2764,7 +2811,7 @@ def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -
 
     with client:
         created = client.post(
-            "/api/v1/skills",
+            "/api/v1/pskills",
             json={
                 "key": "delete-me",
                 "name": "Delete Me",
@@ -2775,16 +2822,16 @@ def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -
 
         mismatch_response = client.request(
             "DELETE",
-            f"/api/v1/skills/{skill_id}",
+            f"/api/v1/pskills/{skill_id}",
             json={"confirmation_name": "Wrong Name"},
         )
         delete_response = client.request(
             "DELETE",
-            f"/api/v1/skills/{skill_id}",
+            f"/api/v1/pskills/{skill_id}",
             json={"confirmation_name": "Delete Me"},
         )
-        list_response = client.get("/api/v1/skills")
-        archived_response = client.get("/api/v1/skills?status=archived")
+        list_response = client.get("/api/v1/pskills")
+        archived_response = client.get("/api/v1/pskills?status=archived")
 
     assert mismatch_response.status_code == 422
     assert mismatch_response.json()["code"] == "skill_validation_error"

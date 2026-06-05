@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_skill_test_service
-from app.domain.runtime.schemas import InvocationResponse
-from app.domain.skill_tests.schemas import (
+from app.runtime.schemas import InvocationResponse
+from app.testing.schemas import (
     CancelSkillTestScenarioRunRequest,
     DeleteSkillTestAssetResponse,
     ForkSkillDebugRequest,
@@ -20,13 +20,13 @@ from app.domain.skill_tests.schemas import (
     SkillTestScenarioUpdateRequest,
     StartSkillTestScenarioRunRequest,
 )
-from app.domain.skill_tests.service import SkillTestService
+from app.testing.service import SkillTestService
 
 
 router = APIRouter(tags=["skill-tests"])
 
 
-@router.get("/skills/{skill_id}/test-scenarios", response_model=list[SkillTestScenarioResponse])
+@router.get("/pskills/{skill_id}/test-scenarios", response_model=list[SkillTestScenarioResponse])
 def list_test_scenarios(
     skill_id: str,
     session: Session = Depends(get_db_session),
@@ -35,7 +35,7 @@ def list_test_scenarios(
     return service.list_scenarios(session, skill_id)
 
 
-@router.post("/skills/{skill_id}/test-scenarios", response_model=SkillTestScenarioResponse, status_code=201)
+@router.post("/pskills/{skill_id}/test-scenarios", response_model=SkillTestScenarioResponse, status_code=201)
 def create_test_scenario(
     skill_id: str,
     payload: SkillTestScenarioCreateRequest,
@@ -45,7 +45,7 @@ def create_test_scenario(
     return service.create_scenario(session, skill_id, payload)
 
 
-@router.get("/skills/{skill_id}/test-scenarios/{scenario_id}", response_model=SkillTestScenarioResponse)
+@router.get("/pskills/{skill_id}/test-scenarios/{scenario_id}", response_model=SkillTestScenarioResponse)
 def get_test_scenario(
     skill_id: str,
     scenario_id: str,
@@ -55,7 +55,7 @@ def get_test_scenario(
     return service.get_scenario(session, skill_id, scenario_id)
 
 
-@router.patch("/skills/{skill_id}/test-scenarios/{scenario_id}", response_model=SkillTestScenarioResponse)
+@router.patch("/pskills/{skill_id}/test-scenarios/{scenario_id}", response_model=SkillTestScenarioResponse)
 def update_test_scenario(
     skill_id: str,
     scenario_id: str,
@@ -66,7 +66,7 @@ def update_test_scenario(
     return service.update_scenario(session, skill_id, scenario_id, payload)
 
 
-@router.delete("/skills/{skill_id}/test-scenarios/{scenario_id}", response_model=SkillTestScenarioResponse)
+@router.delete("/pskills/{skill_id}/test-scenarios/{scenario_id}", response_model=SkillTestScenarioResponse)
 def delete_test_scenario(
     skill_id: str,
     scenario_id: str,
@@ -76,7 +76,7 @@ def delete_test_scenario(
     return service.delete_scenario(session, skill_id, scenario_id)
 
 
-@router.post("/skills/{skill_id}/test-scenarios/{scenario_id}/assets", response_model=SkillTestAssetResponse, status_code=201)
+@router.post("/pskills/{skill_id}/test-scenarios/{scenario_id}/assets", response_model=SkillTestAssetResponse, status_code=201)
 async def upload_test_scenario_asset(
     skill_id: str,
     scenario_id: str,
@@ -101,7 +101,7 @@ async def upload_test_scenario_asset(
     )
 
 
-@router.get("/skills/{skill_id}/test-scenarios/{scenario_id}/assets", response_model=list[SkillTestAssetResponse])
+@router.get("/pskills/{skill_id}/test-scenarios/{scenario_id}/assets", response_model=list[SkillTestAssetResponse])
 def list_test_scenario_assets(
     skill_id: str,
     scenario_id: str,
@@ -111,7 +111,7 @@ def list_test_scenario_assets(
     return service.list_assets(session, skill_id, scenario_id)
 
 
-@router.get("/skills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}/content")
+@router.get("/pskills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}/content")
 def get_test_scenario_asset_content(
     skill_id: str,
     scenario_id: str,
@@ -129,7 +129,7 @@ def get_test_scenario_asset_content(
 
 
 @router.delete(
-    "/skills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}",
+    "/pskills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}",
     response_model=DeleteSkillTestAssetResponse,
 )
 def delete_test_scenario_asset(
@@ -142,7 +142,7 @@ def delete_test_scenario_asset(
     return service.delete_asset(session, skill_id, scenario_id, asset_id)
 
 
-@router.post("/skills/{skill_id}/test-scenarios/{scenario_id}/runs", response_model=SkillTestScenarioRunResponse, status_code=202)
+@router.post("/pskills/{skill_id}/test-scenarios/{scenario_id}/runs", response_model=SkillTestScenarioRunResponse, status_code=202)
 def start_test_scenario_run(
     skill_id: str,
     scenario_id: str,
@@ -153,7 +153,7 @@ def start_test_scenario_run(
     return service.start_run(session, skill_id, scenario_id, payload)
 
 
-@router.get("/skills/{skill_id}/test-scenarios/{scenario_id}/runs", response_model=list[SkillTestScenarioRunResponse])
+@router.get("/pskills/{skill_id}/test-scenarios/{scenario_id}/runs", response_model=list[SkillTestScenarioRunResponse])
 def list_test_scenario_runs(
     skill_id: str,
     scenario_id: str,

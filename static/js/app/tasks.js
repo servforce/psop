@@ -3,12 +3,12 @@
     { value: "compile", label: "Skill 编译" },
     { value: "runtime", label: "Skill 运行" },
     { value: "skill_test_timeline_driver", label: "Skill 测试时间轴执行" },
-    { value: "raw_material_analysis", label: "Skill 素材解析" },
-    { value: "skill_raw_material_generation", label: "Skill 智能体构建" }
+    { value: "material_analysis", label: "Skill 素材解析" },
+    { value: "pskill_build", label: "Skill 智能体构建" }
   ];
 
   const JOB_TYPE_ALIASES = {
-    raw_material_video_analysis: "raw_material_analysis"
+    material_analysis: "material_analysis"
   };
 
   const STATUS_OPTIONS = [
@@ -187,8 +187,8 @@
       if (payload.scenario_run_id) {
         return `Scenario ${this.formatShortId(payload.scenario_run_id)}`;
       }
-      if (payload.skill_definition_id) {
-        return `Skill ${this.formatShortId(payload.skill_definition_id)}`;
+      if (payload.pskill_definition_id) {
+        return `Skill ${this.formatShortId(payload.pskill_definition_id)}`;
       }
       return "N/A";
     },

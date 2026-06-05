@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_agent_prompt_service, get_db_session
-from app.domain.agent_prompts.schemas import (
+from app.agent_prompts.schemas import (
     AgentPromptActivateRequest,
     AgentPromptBindingResponse,
     AgentPromptBindingUpdateRequest,
@@ -16,7 +16,7 @@ from app.domain.agent_prompts.schemas import (
     AgentPromptVersionDetailResponse,
     AgentPromptVersionFilesUpdateRequest,
 )
-from app.domain.agent_prompts.service import AgentPromptService
+from app.agent_prompts.service import AgentPromptService
 
 
 router = APIRouter(tags=["agent-prompts"])

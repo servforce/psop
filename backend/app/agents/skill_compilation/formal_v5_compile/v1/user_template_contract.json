@@ -1,6 +1,6 @@
 {
   "format": "json",
-  "producer": "backend.app.domain.compiler.agent.SkillCompileAgent",
+  "producer": "backend.app.compiler.agent.SkillCompileAgent",
   "required_sections": [
     "task",
     "skill",

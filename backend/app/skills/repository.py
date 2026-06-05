@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.skills.models import SkillPackage, SkillResource, SkillVersion
+
+
+class SkillPackageRepository:
+    def list_packages(
+        self,
+        session: Session,
+        *,
+        scope: str | None = None,
+        status: str | None = None,
+    ) -> list[SkillPackage]:
+        query = select(SkillPackage).order_by(SkillPackage.scope.asc(), SkillPackage.name.asc())
+        if scope:
+            query = query.where(SkillPackage.scope == scope)
+        if status:
+            query = query.where(SkillPackage.status == status)
+        else:
+            query = query.where(SkillPackage.status != "archived")
+        return list(session.scalars(query).all())
+
+    def get_package_by_name(self, session: Session, name: str) -> SkillPackage | None:
+        return session.scalar(select(SkillPackage).where(SkillPackage.name == name))
+
+    def get_package(self, session: Session, package_id: str) -> SkillPackage | None:
+        return session.get(SkillPackage, package_id)
+
+    def get_version_by_hash(
+        self,
+        session: Session,
+        *,
+        package_id: str,
+        content_hash: str,
+    ) -> SkillVersion | None:
+        return session.scalar(
+            select(SkillVersion).where(
+                SkillVersion.package_id == package_id,
+                SkillVersion.content_hash == content_hash,
+            )
+        )
+
+    def get_version(self, session: Session, version_id: str | None) -> SkillVersion | None:
+        if not version_id:
+            return None
+        return session.get(SkillVersion, version_id)
+
+    def list_versions(self, session: Session, package_id: str) -> list[SkillVersion]:
+        return list(
+            session.scalars(
+                select(SkillVersion)
+                .where(SkillVersion.package_id == package_id)
+                .order_by(SkillVersion.created_at.desc())
+            ).all()
+        )
+
+    def list_resources(self, session: Session, version_id: str) -> list[SkillResource]:
+        return list(
+            session.scalars(
+                select(SkillResource)
+                .where(SkillResource.version_id == version_id)
+                .order_by(SkillResource.resource_path.asc())
+            ).all()
+        )

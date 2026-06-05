@@ -434,11 +434,11 @@ test("multimodal timeline events resolve preview urls from bound assets", () => 
   const app = createTimelineHarness();
   app.apiBaseUrl = "/api/v1";
   app.currentSkill = { id: "skill-1" };
-  app.skillTestCase = { id: "scenario-1", skill_definition_id: "skill-1" };
+  app.skillTestCase = { id: "scenario-1", pskill_definition_id: "skill-1" };
   app.skillTestDataObjects = [
     {
       id: "asset-1",
-      skill_definition_id: "skill-1",
+      pskill_definition_id: "skill-1",
       scenario_id: "scenario-1",
       name: "现场图片",
       filename: "site.png",
@@ -453,7 +453,7 @@ test("multimodal timeline events resolve preview urls from bound assets", () => 
   expect(app.skillTestTimelineEventAsset(event).filename).toBe("site.png");
   expect(app.skillTestTimelineAssetPreviewKind(event)).toBe("image");
   expect(app.skillTestTimelineAssetPreviewUrl(event)).toBe(
-    "/api/v1/skills/skill-1/test-scenarios/scenario-1/assets/asset-1/content"
+    "/api/v1/pskills/skill-1/test-scenarios/scenario-1/assets/asset-1/content"
   );
   expect(app.skillTestTimelineAssetPreviewMeta(event)).toBe("image/png · 9 B");
 });
@@ -462,11 +462,11 @@ test("timeline input events can hold ordered text and asset parts", () => {
   const app = createTimelineHarness();
   app.apiBaseUrl = "/api/v1";
   app.currentSkill = { id: "skill-1" };
-  app.skillTestCase = { id: "scenario-1", skill_definition_id: "skill-1" };
+  app.skillTestCase = { id: "scenario-1", pskill_definition_id: "skill-1" };
   app.skillTestDataObjects = [
     {
       id: "asset-image",
-      skill_definition_id: "skill-1",
+      pskill_definition_id: "skill-1",
       scenario_id: "scenario-1",
       name: "面板照片",
       filename: "panel.png",
@@ -475,7 +475,7 @@ test("timeline input events can hold ordered text and asset parts", () => {
     },
     {
       id: "asset-video",
-      skill_definition_id: "skill-1",
+      pskill_definition_id: "skill-1",
       scenario_id: "scenario-1",
       name: "启动视频",
       filename: "startup.mp4",
@@ -508,7 +508,7 @@ test("timeline input events can hold ordered text and asset parts", () => {
   expect(app.skillTestTimelineEventLabel(event)).toBe("现场说明 + 面板照片 + 启动视频");
   expect(app.skillTestTimelineEventTextValue(event)).toBe("现场说明");
   expect(app.skillTestTimelinePartPreviewUrl(event.parts[1])).toBe(
-    "/api/v1/skills/skill-1/test-scenarios/scenario-1/assets/asset-image/content"
+    "/api/v1/pskills/skill-1/test-scenarios/scenario-1/assets/asset-image/content"
   );
 
   const remapped = app.skillTestTimelineWithAssetIdMap(timeline, {

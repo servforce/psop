@@ -6,15 +6,15 @@ from collections.abc import Iterator
 import pytest
 
 from app.agents.registry import PromptRegistry
-from app.domain.compiler.service import CompilerService
-from app.domain.compiler.formal_v5 import validate_and_normalize_artifact
-from app.domain.jobs.repository import JobRepository
-from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest
-from app.domain.runtime.service import RuntimeService
-from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
-from app.domain.skills.schemas import CreateSkillRequest, PublishSkillRequest
-from app.domain.skills.service import SkillsService
-from app.domain.skills.models import SkillVersion
+from app.compiler.service import CompilerService
+from app.compiler.formal_v5 import validate_and_normalize_artifact
+from app.jobs.repository import JobRepository
+from app.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest
+from app.runtime.service import RuntimeService
+from app.pskills.exceptions import SkillsGatewayError, SkillValidationError
+from app.pskills.schemas import CreateSkillRequest, PublishSkillRequest
+from app.pskills.service import SkillsService
+from app.pskills.models import PSkillVersion
 from app.gateway.inference import LlmCompletion
 from app.infra.database import DatabaseManager
 from tests.test_skills_api import (
@@ -158,7 +158,7 @@ def test_compiler_records_diagnostics_for_unsupported_formal_revision(runtime_st
                 description="Validate compiler diagnostics.",
             ),
         )
-        draft_version = session.get(SkillVersion, skill.current_draft_version.id)
+        draft_version = session.get(PSkillVersion, skill.current_draft_version.id)
         assert draft_version is not None
         manifest = dict(draft_version.manifest_snapshot or {})
         manifest["compile_config"] = {
@@ -262,7 +262,7 @@ def test_compiler_injects_selected_domain_pack() -> None:
                     description="Validate equipment maintenance domain pack.",
                 ),
             )
-            draft_version = session.get(SkillVersion, skill.current_draft_version.id)
+            draft_version = session.get(PSkillVersion, skill.current_draft_version.id)
             assert draft_version is not None
             manifest = dict(draft_version.manifest_snapshot or {})
             manifest["compile_config"] = {
@@ -317,7 +317,7 @@ def test_compiler_falls_back_for_unknown_domain_pack() -> None:
                     description="Validate domain pack fallback.",
                 ),
             )
-            draft_version = session.get(SkillVersion, skill.current_draft_version.id)
+            draft_version = session.get(PSkillVersion, skill.current_draft_version.id)
             assert draft_version is not None
             manifest = dict(draft_version.manifest_snapshot or {})
             manifest["compile_config"] = {

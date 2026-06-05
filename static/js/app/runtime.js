@@ -125,8 +125,8 @@
             this.apiRequest(`/runs/${runId}`),
             this.apiRequest(`/runs/${runId}/bindings`),
             this.apiRequest(`/terminal/sessions/${runId}`),
-            this.apiRequest(`/terminal/sessions/${runId}/events`),
-            this.apiRequest(`/runs/${runId}/trace-events`),
+            this.apiRequest(`/runs/${runId}/events`),
+            this.apiRequest(`/runs/${runId}/traces`),
             this.apiRequest(`/replay/runs/${runId}`)
           ]);
           this.liveRun = run;
@@ -178,7 +178,7 @@
             acceptedByServer = true;
             this.mergeTerminalEvents([result.event]);
           } else {
-            const response = await this.apiRequest(`/terminal/sessions/${runId}/events`, {
+            const response = await this.apiRequest(`/runs/${runId}/events`, {
               method: "POST",
               body: JSON.stringify({
                 direction: "input",
@@ -265,7 +265,7 @@
             external_event_id: externalEventId
           })
         );
-        return this.apiRequest(`/terminal/sessions/${runId}/events`, {
+        return this.apiRequest(`/runs/${runId}/events`, {
           method: "POST",
           headers: externalEventId ? { "Idempotency-Key": externalEventId } : {},
           body: formData
@@ -353,7 +353,10 @@
           return;
         }
         const eventSeqs = this.liveRunTerminalEvents.map((event) => Number(event.seq_no) || 0);
-        const latestSeq = eventSeqs.length ? Math.max(...eventSeqs) : Number(this.liveRun.latest_terminal_seq || 0);
+        const latestSeq = eventSeqs.length
+          ? Math.max(...eventSeqs)
+          : Number(this.liveRun.latest_run_event_seq || this.liveRun.latest_terminal_seq || 0);
+        this.liveRun.latest_run_event_seq = latestSeq || 0;
         this.liveRun.latest_terminal_seq = latestSeq || 0;
       },
 
@@ -361,7 +364,7 @@
       nextOptimisticTerminalSeq() {
         return (
           Math.max(
-            Number(this.liveRun?.latest_terminal_seq || 0),
+            Number(this.liveRun?.latest_run_event_seq || this.liveRun?.latest_terminal_seq || 0),
             ...this.liveRunTerminalEvents.map((event) => Number(event.seq_no) || 0)
           ) + 1
         );
@@ -492,7 +495,7 @@
           return false;
         }
         try {
-          const events = await this.apiRequest(`/terminal/sessions/${runId}/events`);
+          const events = await this.apiRequest(`/runs/${runId}/events`);
           const acceptedEvent = events.find((event) => event.external_event_id === externalEventId);
           if (!acceptedEvent) {
             return false;
@@ -637,7 +640,7 @@
         if (!runId) {
           return "";
         }
-        return `${this.apiBaseUrl}/terminal/sessions/${encodeURIComponent(runId)}/events/${encodeURIComponent(event.id)}/parts/${encodeURIComponent(part.part_id)}/content`;
+        return `${this.apiBaseUrl}/runs/${encodeURIComponent(runId)}/events/${encodeURIComponent(event.id)}/parts/${encodeURIComponent(part.part_id)}/content`;
       },
 
 
@@ -778,7 +781,7 @@
         if (!runId) {
           return "";
         }
-        return `${this.apiBaseUrl}/terminal/sessions/${encodeURIComponent(runId)}/events/${encodeURIComponent(event.id)}/content`;
+        return `${this.apiBaseUrl}/runs/${encodeURIComponent(runId)}/events/${encodeURIComponent(event.id)}/content`;
       },
 
 
@@ -1110,12 +1113,16 @@
 
 
       liveRunReplayTerminalCount() {
-        return this.replayDetail?.run?.id === this.liveRun?.id ? this.replayDetail.terminal_events?.length || 0 : 0;
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.run_events || this.replayDetail.terminal_events || []).length
+          : 0;
       },
 
 
       liveRunReplayTraceCount() {
-        return this.replayDetail?.run?.id === this.liveRun?.id ? this.replayDetail.trace_events?.length || 0 : 0;
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.run_traces || this.replayDetail.trace_events || []).length
+          : 0;
       },
 
 
@@ -1605,7 +1612,7 @@
         if (!this.currentSkill) {
           return [];
         }
-        return this.invocations.filter((invocation) => invocation.skill_definition_id === this.currentSkill.id);
+        return this.invocations.filter((invocation) => invocation.pskill_definition_id === this.currentSkill.id);
       },
 
 

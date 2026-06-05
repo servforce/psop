@@ -997,12 +997,12 @@
         if (asset.is_local) {
           return "";
         }
-        const skillId = this.currentSkill?.id || this.skillTestCase?.skill_definition_id || asset.skill_definition_id || "";
+        const skillId = this.currentSkill?.id || this.skillTestCase?.pskill_definition_id || asset.pskill_definition_id || "";
         const scenarioId = this.skillTestCase?.id || asset.scenario_id || "";
         if (!skillId || !scenarioId || !asset.id) {
           return "";
         }
-        return `${this.apiBaseUrl}/skills/${encodeURIComponent(skillId)}/test-scenarios/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(asset.id)}/content`;
+        return `${this.apiBaseUrl}/pskills/${encodeURIComponent(skillId)}/test-scenarios/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(asset.id)}/content`;
       },
 
 
@@ -1741,7 +1741,7 @@
       async loadSkillTestCases(skillId) {
         this.busy.skillTestCases = true;
         try {
-          this.skillTestCases = await this.apiRequest(`/skills/${skillId}/test-scenarios`);
+          this.skillTestCases = await this.apiRequest(`/pskills/${skillId}/test-scenarios`);
         } finally {
           this.busy.skillTestCases = false;
         }
@@ -1758,7 +1758,7 @@
           const timeline = this.parseSkillTestTimeline();
           const pendingAssets = this.skillTestPendingAssets();
           const createTimeline = this.skillTestTimelineWithAssetIdMap(timeline, {}, { removeLocalAssetIds: true });
-          const created = await this.apiRequest(`/skills/${this.currentSkill.id}/test-scenarios`, {
+          const created = await this.apiRequest(`/pskills/${this.currentSkill.id}/test-scenarios`, {
             method: "POST",
             body: JSON.stringify({
               name: this.skillTestCaseForm.name.trim(),
@@ -1773,7 +1773,7 @@
           if (pendingAssets.length) {
             const assetIdMap = await this.persistSkillTestPendingAssets(created.id, pendingAssets);
             const patchedTimeline = this.skillTestTimelineWithAssetIdMap(timeline, assetIdMap);
-            await this.apiRequest(`/skills/${this.currentSkill.id}/test-scenarios/${created.id}`, {
+            await this.apiRequest(`/pskills/${this.currentSkill.id}/test-scenarios/${created.id}`, {
               method: "PATCH",
               body: JSON.stringify({
                 duration_ms: patchedTimeline.duration_ms,
@@ -1797,9 +1797,9 @@
         this.busy.skillTestCase = true;
         try {
           const [caseDetail, dataObjects, runs] = await Promise.all([
-            this.apiRequest(`/skills/${skillId}/test-scenarios/${scenarioId}`),
-            this.apiRequest(`/skills/${skillId}/test-scenarios/${scenarioId}/assets`),
-            this.apiRequest(`/skills/${skillId}/test-scenarios/${scenarioId}/runs`)
+            this.apiRequest(`/pskills/${skillId}/test-scenarios/${scenarioId}`),
+            this.apiRequest(`/pskills/${skillId}/test-scenarios/${scenarioId}/assets`),
+            this.apiRequest(`/pskills/${skillId}/test-scenarios/${scenarioId}/runs`)
           ]);
           this.skillTestCase = caseDetail;
           this.skillTestDataObjects = dataObjects;
@@ -1818,7 +1818,7 @@
         this.busy.skillTestSave = true;
         try {
           const timeline = this.parseSkillTestTimeline();
-          const saved = await this.apiRequest(`/skills/${this.currentSkill.id}/test-scenarios/${this.skillTestCase.id}`, {
+          const saved = await this.apiRequest(`/pskills/${this.currentSkill.id}/test-scenarios/${this.skillTestCase.id}`, {
             method: "PATCH",
             body: JSON.stringify({
               name: this.skillTestCaseForm.name.trim(),
@@ -1847,7 +1847,7 @@
         }
         this.busy.skillTestSave = true;
         try {
-          await this.apiRequest(`/skills/${this.currentSkill.id}/test-scenarios/${caseId}`, { method: "DELETE" });
+          await this.apiRequest(`/pskills/${this.currentSkill.id}/test-scenarios/${caseId}`, { method: "DELETE" });
           await this.loadSkillTestCases(this.currentSkill.id);
           if (this.route.name === "skill-test-scenario") {
             await this.navigate(buildSkillDetailPath(this.currentSkill.id));
@@ -1879,7 +1879,7 @@
           : "";
         return {
           id: `local_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-          skill_definition_id: this.currentSkill?.id || "",
+          pskill_definition_id: this.currentSkill?.id || "",
           scenario_id: this.skillTestCase?.id || "",
           artifact_object_id: "",
           name: options.name || file.name,
@@ -1957,7 +1957,7 @@
         formData.append("name", assetDraft.name || assetDraft.file.name);
         formData.append("description", assetDraft.description || "");
         formData.append("lane_id", assetDraft.lane_id || this.inferSkillTestLaneForMime(assetDraft.mime_type || ""));
-        return this.apiRequest(`/skills/${this.currentSkill.id}/test-scenarios/${scenarioId}/assets`, {
+        return this.apiRequest(`/pskills/${this.currentSkill.id}/test-scenarios/${scenarioId}/assets`, {
           method: "POST",
           body: formData
         });
@@ -2022,7 +2022,7 @@
         }
         this.busy.skillTestData = true;
         try {
-          await this.apiRequest(`/skills/${this.currentSkill.id}/test-scenarios/${this.skillTestCase.id}/assets/${dataId}`, {
+          await this.apiRequest(`/pskills/${this.currentSkill.id}/test-scenarios/${this.skillTestCase.id}/assets/${dataId}`, {
             method: "DELETE"
           });
           await this.loadSkillTestCaseDetail(this.currentSkill.id, this.skillTestCase.id);
@@ -2054,7 +2054,7 @@
         }
         this.busy.skillTestRun = true;
         try {
-          const testRun = await this.apiRequest(`/skills/${this.currentSkill.id}/test-scenarios/${caseId}/runs`, {
+          const testRun = await this.apiRequest(`/pskills/${this.currentSkill.id}/test-scenarios/${caseId}/runs`, {
             method: "POST",
             body: JSON.stringify({})
           });
@@ -2109,8 +2109,8 @@
         this.skillTestRuns = window.PSOPRuntimeEvents.mergeById(this.skillTestRuns || [], [review.scenario_run]);
         if (review.replay?.run) {
           this.liveRun = review.replay.run;
-          this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.terminal_events || []);
-          this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.trace_events || []);
+          this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_events || review.replay.terminal_events || []);
+          this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_traces || review.replay.trace_events || []);
           this.liveRunBindings = window.PSOPRuntimeEvents.mergeById([], review.replay.bindings || []);
         }
         if (
@@ -2498,7 +2498,8 @@
 
 
       skillTestReviewRuntimeOutputEvents() {
-        return (this.skillTestReview?.replay?.terminal_events || [])
+        const replay = this.skillTestReview?.replay || {};
+        return (replay.run_events || replay.terminal_events || [])
           .filter((event) => event?.direction === "output")
           .map((event, index) => this.skillTestReviewRuntimeOutputEvent(event, index))
           .sort((left, right) => Number(left.at_ms || 0) - Number(right.at_ms || 0));
@@ -2631,7 +2632,8 @@
             values.push(value);
           }
         });
-        (review?.replay?.terminal_events || []).forEach((event) => {
+        const replayRunEvents = review?.replay?.run_events || review?.replay?.terminal_events || [];
+        replayRunEvents.forEach((event) => {
           const occurredAt = new Date(event?.occurred_at).getTime();
           if (Number.isFinite(origin) && origin > 0 && Number.isFinite(occurredAt)) {
             values.push(occurredAt - origin);
@@ -2944,7 +2946,7 @@
         if (!event?.run_id || !event?.id || !part?.part_id || !part?.artifact_object_id) {
           return "";
         }
-        return `${this.apiBaseUrl}/terminal/sessions/${encodeURIComponent(event.run_id)}/events/${encodeURIComponent(event.id)}/parts/${encodeURIComponent(part.part_id)}/content`;
+        return `${this.apiBaseUrl}/runs/${encodeURIComponent(event.run_id)}/events/${encodeURIComponent(event.id)}/parts/${encodeURIComponent(part.part_id)}/content`;
       },
 
 
@@ -3049,7 +3051,8 @@
           return null;
         }
         const cutoff = this.skillTestReviewOriginTime() + Number(event.at_ms || 0);
-        const outputs = (this.skillTestReview?.replay?.terminal_events || []).filter((item) => {
+        const replay = this.skillTestReview?.replay || {};
+        const outputs = (replay.run_events || replay.terminal_events || []).filter((item) => {
           const occurredAt = new Date(item.occurred_at).getTime();
           return item.direction === "output" && (!Number.isFinite(occurredAt) || occurredAt <= cutoff);
         });
@@ -3258,7 +3261,8 @@
 
 
       filteredSkillTestReviewTerminalEvents() {
-        const events = this.skillTestReview?.replay?.terminal_events || [];
+        const replay = this.skillTestReview?.replay || {};
+        const events = replay.run_events || replay.terminal_events || [];
         if (this.skillTestReviewPlayheadMsValue() >= this.skillTestReviewDurationMs()) {
           return events;
         }

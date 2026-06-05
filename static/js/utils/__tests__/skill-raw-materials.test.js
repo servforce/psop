@@ -124,8 +124,8 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(skillDetailJs).toContain("analyzeRawMaterial");
   expect(skillDetailJs).toContain("async analyzeRawMaterial(material = this.rawMaterialDetail)");
   expect(skillDetailJs).toContain("素材正在分析中，不能重复解析。");
-  expect(skillDetailJs).toContain("/raw-materials");
-  expect(skillDetailJs).toContain("/raw-materials/generate-skill-draft");
+  expect(skillDetailJs).toContain("/materials");
+  expect(skillDetailJs).toContain("/materials/generate-skill-draft");
   expect(skillDetailJs).toContain("/analysis");
   expect(skillDetailJs).toContain("/analyze");
   expect(skillDetailJs).toContain("/derived-assets/");
@@ -143,7 +143,7 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(skillDetailJs).toContain("base_commit_sha: this.currentSkill.latest_draft_head_sha");
   expect(skillDetailJs).toContain("canGenerateSkillDraftFromRawMaterials");
   expect(skillDetailJs).toContain("hasReadyVideoRawMaterial");
-  expect(skillDetailJs).toContain('job_type: "skill_raw_material_generation"');
+  expect(skillDetailJs).toContain('job_type: "pskill_build"');
   expect(skillDetailJs).toContain('await this.navigate("/admin/tasks")');
   expect(skillDetailJs).toContain('this.showCenterToast("success", "Skill 生成任务已提交。")');
   expect(skillDetailJs).toContain('jobId ? `Skill 生成任务已提交：${this.formatShortId(jobId)}`');

@@ -79,7 +79,7 @@ test("tasks methods build filters and preserve unknown job types", () => {
   const { methods } = loadTaskMethods();
   const context = {
     ...methods,
-    tasks: [{ job_type: "compile" }, { job_type: "raw_material_video_analysis" }, { job_type: "custom_future_job" }],
+    tasks: [{ job_type: "compile" }, { job_type: "material_analysis" }, { job_type: "custom_future_job" }],
     taskFilters: {
       job_type: "custom_future_job",
       status: "running",
@@ -97,21 +97,16 @@ test("tasks methods build filters and preserve unknown job types", () => {
   expect(query).toContain("created_from=");
   expect(query).toContain("created_to=");
   expect(methods.jobTypeLabel("compile")).toBe("Skill 编译");
-  expect(methods.jobTypeLabel("raw_material_analysis")).toBe("Skill 素材解析");
-  expect(methods.jobTypeLabel("raw_material_video_analysis")).toBe("Skill 素材解析");
-  expect(methods.jobTypeLabel("skill_raw_material_generation")).toBe("Skill 智能体构建");
+  expect(methods.jobTypeLabel("material_analysis")).toBe("Skill 素材解析");
+  expect(methods.jobTypeLabel("pskill_build")).toBe("Skill 智能体构建");
   expect(methods.jobTypeLabel("custom_future_job")).toBe("custom_future_job");
-  expect(methods.normalizeTaskJobType("raw_material_video_analysis")).toBe("raw_material_analysis");
+  expect(methods.normalizeTaskJobType("material_analysis")).toBe("material_analysis");
   expect(methods.taskTypeOptions.call(context)).toContainEqual({
-    value: "skill_raw_material_generation",
+    value: "pskill_build",
     label: "Skill 智能体构建"
   });
   expect(methods.taskTypeOptions.call(context)).toContainEqual({
-    value: "raw_material_analysis",
-    label: "Skill 素材解析"
-  });
-  expect(methods.taskTypeOptions.call(context)).not.toContainEqual({
-    value: "raw_material_video_analysis",
+    value: "material_analysis",
     label: "Skill 素材解析"
   });
   expect(methods.taskTypeOptions.call(context)).toContainEqual({
@@ -120,12 +115,12 @@ test("tasks methods build filters and preserve unknown job types", () => {
   });
 });
 
-test("task query normalizes legacy raw material analysis job type", () => {
+test("task query uses material analysis job type", () => {
   const { methods } = loadTaskMethods();
   const context = {
     ...methods,
     taskFilters: {
-      job_type: "raw_material_video_analysis",
+      job_type: "material_analysis",
       status: "",
       q: "",
       created_from: "",
@@ -135,8 +130,7 @@ test("task query normalizes legacy raw material analysis job type", () => {
 
   const query = methods.taskQueryString.call(context);
 
-  expect(query).toContain("job_type=raw_material_analysis");
-  expect(query).not.toContain("raw_material_video_analysis");
+  expect(query).toContain("job_type=material_analysis");
 });
 
 test("task polling starts and stops with the route", () => {

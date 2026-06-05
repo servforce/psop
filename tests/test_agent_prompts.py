@@ -4,9 +4,9 @@ from fastapi.testclient import TestClient
 
 from app.agents.registry import PromptRegistry, content_hash
 from app.app import create_app
-from app.domain.agent_prompts.models import AgentPromptVersion
-from app.domain.agent_prompts.repository import AgentPromptRepository
-from app.domain.agent_prompts.service import AgentPromptService
+from app.agent_prompts.models import AgentPromptVersion
+from app.agent_prompts.repository import AgentPromptRepository
+from app.agent_prompts.service import AgentPromptService
 from app.infra.database import DatabaseManager
 from tests.test_skills_api import FakeGitLabGateway, FakeInferenceGateway, FakeObjectStore, create_test_settings
 

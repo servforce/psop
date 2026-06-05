@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from app.domain.skills.exceptions import SkillsGatewayError
+from app.pskills.exceptions import SkillsGatewayError
 from app.gateway.gitlab import HttpGitLabSkillSourceGateway
 
 
