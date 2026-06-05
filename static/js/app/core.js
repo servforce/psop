@@ -332,6 +332,7 @@
           ["governance-proposals-page", "/pages/governance-proposals.html"],
           ["governance-experiments-page", "/pages/governance-experiments.html"],
           ["tool-authorizations-page", "/pages/tool-authorizations.html"],
+          ["platform-agents-page", "/pages/platform-agents.html"],
           ["platform-agent-runs-page", "/pages/platform-agent-runs.html"],
           ["platform-skills-page", "/pages/platform-skills.html"],
           ["platform-tools-page", "/pages/platform-tools.html"],
@@ -471,6 +472,11 @@
         if (!["platform-tools", "platform-tool"].includes(this.route.name)) {
           this.currentPlatformTool = null;
         }
+        if (!["platform-agents", "platform-agent"].includes(this.route.name)) {
+          this.currentPlatformAgent = null;
+          this.platformAgentRuns = [];
+          this.platformAgentToolAuthorizations = [];
+        }
         if (!["platform-agent-runs", "platform-agent-run"].includes(this.route.name)) {
           this.currentAgentRun = null;
           this.currentAgentRunEvents = [];
@@ -558,6 +564,18 @@
           if (this.route.name === "tool-authorizations") {
             this.currentSkill = null;
             await this.loadToolAuthorizations();
+            return;
+          }
+
+          if (this.route.name === "platform-agents") {
+            this.currentSkill = null;
+            await this.loadPlatformAgentsPage();
+            return;
+          }
+
+          if (this.route.name === "platform-agent") {
+            this.currentSkill = null;
+            await this.loadPlatformAgentPage(this.route.params.agentKey);
             return;
           }
 
@@ -923,6 +941,9 @@
         }
         if (this.route.name === "tool-authorizations") {
           return "工具授权";
+        }
+        if (this.route.name === "platform-agents" || this.route.name === "platform-agent") {
+          return "Agents";
         }
         if (this.route.name === "platform-agent-runs" || this.route.name === "platform-agent-run") {
           return "Agent Runs";

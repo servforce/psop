@@ -7,11 +7,13 @@ const runLivePath = path.join(__dirname, "../../../pages/run-live.html");
 const skillDetailPath = path.join(__dirname, "../../../pages/skill-detail.html");
 const agentPromptsListPath = path.join(__dirname, "../../../pages/agent-prompts-list.html");
 const agentPromptDetailPath = path.join(__dirname, "../../../pages/agent-prompt-detail.html");
+const platformAgentsPath = path.join(__dirname, "../../../pages/platform-agents.html");
 const indexPath = path.join(__dirname, "../../../index.html");
 const appPath = path.join(__dirname, "../../app.js");
 const corePath = path.join(__dirname, "../../app/core.js");
 const skillDetailAppPath = path.join(__dirname, "../../app/skill-detail.js");
 const agentPromptsAppPath = path.join(__dirname, "../../app/agent-prompts.js");
+const platformAgentsAppPath = path.join(__dirname, "../../app/platform-agents.js");
 const skillTestAppPath = path.join(__dirname, "../../app/skill-test.js");
 const runtimeAppPath = path.join(__dirname, "../../app/runtime.js");
 const compiledCssPath = path.join(__dirname, "../../../css/style.compiled.css");
@@ -445,6 +447,7 @@ test("frontend scripts are split and no longer reference the assets layer", () =
   expect(indexHtml).toContain('/js/app/skill-detail.js');
   expect(indexHtml).toContain('/js/app/compiler.js');
   expect(indexHtml).toContain('/js/app/agent-prompts.js');
+  expect(indexHtml).toContain('/js/app/platform-agents.js');
   expect(indexHtml).toContain('/js/app/skill-test.js');
   expect(indexHtml).toContain('/js/app/runtime.js');
   expect(indexHtml).toContain('/js/app/formatters.js');
@@ -468,7 +471,7 @@ test("agent prompt management routes and pages are exposed", () => {
   expect(indexHtml).toContain("agent-prompts-list-page");
   expect(indexHtml).toContain("agent-prompt-detail-page");
   expect(indexHtml).toContain("navigate('/admin/agent-prompts')");
-  expect(indexHtml).toContain(">智能体</span>");
+  expect(indexHtml).toContain(">Prompt Packs</span>");
   expect(appJs).toContain('normalized === "/admin/agent-prompts"');
   expect(appJs).toContain("agent-prompt-detail");
   expect(appJs).toContain("buildAgentPromptPath");
@@ -486,4 +489,29 @@ test("agent prompt management routes and pages are exposed", () => {
   expect(detailHtml).toContain("grid-cols-[12rem_minmax(0,1fr)_22rem]");
   expect(detailHtml).toContain('main class="flex min-h-0 min-w-0 flex-col overflow-hidden"');
   expect(detailHtml).toContain("scrollbar-none flex min-w-0 flex-1 items-center gap-2 overflow-x-auto overflow-y-hidden");
+});
+
+test("platform agent definitions routes and pages are exposed", () => {
+  const indexHtml = fs.readFileSync(indexPath, "utf8");
+  const appJs = fs.readFileSync(appPath, "utf8");
+  const coreJs = fs.readFileSync(corePath, "utf8");
+  const platformAgentsJs = fs.readFileSync(platformAgentsAppPath, "utf8");
+  const platformAgentsHtml = fs.readFileSync(platformAgentsPath, "utf8");
+
+  expect(indexHtml).toContain('/js/app/platform-agents.js');
+  expect(indexHtml).toContain("platform-agents-page");
+  expect(indexHtml).toContain("navigate('/admin/platform/agents')");
+  expect(indexHtml).toContain(">Agents</span>");
+  expect(appJs).toContain('normalized === "/admin/platform/agents"');
+  expect(appJs).toContain("buildPlatformAgentPath");
+  expect(coreJs).toContain('["platform-agents-page", "/pages/platform-agents.html"]');
+  expect(coreJs).toContain("loadPlatformAgentsPage()");
+  expect(coreJs).toContain("loadPlatformAgentPage(this.route.params.agentKey)");
+  expect(platformAgentsJs).toContain("/agents");
+  expect(platformAgentsJs).toContain("/tool-authorizations");
+  expect(platformAgentsJs).toContain("platformAgentSpecDiffPreview");
+  expect(platformAgentsHtml).toContain("AgentDefinition");
+  expect(platformAgentsHtml).toContain("AgentSpec Diff");
+  expect(platformAgentsHtml).toContain("platformAgentBindingRows(currentPlatformAgent)");
+  expect(platformAgentsHtml).toContain("platformAgentRunCountByStatus('waiting_tool_authorization')");
 });

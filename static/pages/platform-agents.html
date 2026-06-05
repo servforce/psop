@@ -1,0 +1,320 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <nav class="breadcrumb-bar border-0 pb-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-100" @click="navigate(platformAgentsPath())">Agents</button>
+      </nav>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div class="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.platformAgents || busy.platformAgentDetail" @click="loadPlatformAgentsPage()">
+          <span class="material-symbols-outlined text-[18px]">refresh</span>
+        </button>
+        <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.platformAgentDetail" @click="requestPlatformAgentVersionAction('create_draft')">
+          <span class="material-symbols-outlined text-[18px]">add</span>
+          <span>Draft</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformAgentsRunListPath())">
+          <span class="material-symbols-outlined text-[18px]">manage_history</span>
+          <span>Agent Runs</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformAgentsToolAuthorizationsPath())">
+          <span class="material-symbols-outlined text-[18px]">admin_panel_settings</span>
+          <span>授权</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformAgentsSkillsPath())">
+          <span class="material-symbols-outlined text-[18px]">extension</span>
+          <span>Skills</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/20">
+      <div class="grid grid-cols-2 divide-x divide-slate-800 text-xs lg:grid-cols-5">
+        <div class="p-3">
+          <p class="text-slate-500">Agents</p>
+          <p class="mt-1 font-mono text-lg text-slate-100" x-text="platformAgents.length"></p>
+        </div>
+        <div class="p-3">
+          <p class="text-slate-500">Active</p>
+          <p class="mt-1 font-mono text-lg text-emerald-200" x-text="platformAgentCountByStatus('active')"></p>
+        </div>
+        <div class="p-3">
+          <p class="text-slate-500">Versions</p>
+          <p class="mt-1 font-mono text-lg text-sky-200" x-text="platformAgentVersionTotal()"></p>
+        </div>
+        <div class="p-3">
+          <p class="text-slate-500">Bindings</p>
+          <p class="mt-1 font-mono text-lg text-orange-200" x-text="platformAgentBindingTotal()"></p>
+        </div>
+        <div class="p-3">
+          <p class="text-slate-500">Waiting Auth</p>
+          <p class="mt-1 font-mono text-lg text-amber-200" x-text="platformAgentRunCountByStatus('waiting_tool_authorization')"></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid min-h-0 flex-1 grid-cols-1 divide-y divide-slate-800 lg:grid-cols-[minmax(24rem,0.8fr)_minmax(0,1.35fr)] lg:divide-x lg:divide-y-0">
+      <section class="min-h-0 overflow-auto">
+        <template x-if="platformAgents.length === 0">
+          <div class="empty-state h-full min-h-80">
+            <span class="material-symbols-outlined text-[32px] text-slate-400">support_agent</span>
+            <p class="mt-3 text-base font-medium text-slate-100">暂无 AgentDefinition</p>
+          </div>
+        </template>
+        <template x-if="platformAgents.length > 0">
+          <div class="divide-y divide-slate-800">
+            <template x-for="agent in platformAgents" :key="agent.key">
+              <article class="bg-slate-950/20 p-4 transition hover:bg-slate-900/50" :class="currentPlatformAgent?.key === agent.key ? 'bg-orange-500/10' : ''">
+                <button type="button" class="block w-full min-w-0 text-left" @click="navigate(platformAgentPath(agent.key))">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="truncate font-mono text-sm font-semibold text-slate-100" x-text="agent.key"></p>
+                      <p class="mt-1 truncate text-xs text-slate-400" x-text="agent.name"></p>
+                    </div>
+                    <span class="status-badge shrink-0" :class="platformAgentStatusTone(agent.status)" x-text="formatStatus(agent.status)"></span>
+                  </div>
+                  <p class="mt-3 line-clamp-2 text-sm leading-5 text-slate-300" x-text="agent.description || 'N/A'"></p>
+                  <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300" x-text="agent.role"></span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300" x-text="agent.version_count + ' versions'"></span>
+                    <span class="truncate rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-[11px] text-slate-300" x-text="agent.active_version_label || 'no active version'"></span>
+                  </div>
+                </button>
+              </article>
+            </template>
+          </div>
+        </template>
+      </section>
+
+      <section class="min-h-0 overflow-auto">
+        <template x-if="!currentPlatformAgent">
+          <div class="empty-state h-full min-h-80">
+            <span class="material-symbols-outlined text-[32px] text-slate-400">support_agent</span>
+            <p class="mt-3 text-base font-medium text-slate-100">选择一个 Agent</p>
+          </div>
+        </template>
+
+        <template x-if="currentPlatformAgent">
+          <div class="divide-y divide-slate-800">
+            <header class="p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">AgentDefinition</p>
+                  <p class="mt-1 break-words font-mono text-base font-semibold text-slate-100" x-text="currentPlatformAgent.key"></p>
+                  <p class="mt-2 text-sm leading-6 text-slate-300" x-text="currentPlatformAgent.name"></p>
+                </div>
+                <div class="flex flex-wrap justify-end gap-2">
+                  <span class="status-badge" :class="platformAgentStatusTone(currentPlatformAgent.status)" x-text="formatStatus(currentPlatformAgent.status)"></span>
+                  <span class="status-badge border-slate-700 bg-slate-950/40 text-slate-300" x-text="currentPlatformAgent.role"></span>
+                </div>
+              </div>
+              <div class="mt-4 flex flex-wrap gap-2">
+                <button type="button" class="button-secondary h-9 px-3" :disabled="busy.platformAgentDetail" @click="loadPlatformAgentDetail(currentPlatformAgent.key)">
+                  <span class="material-symbols-outlined text-[18px]">refresh</span>
+                </button>
+                <button type="button" class="button-secondary h-9 px-3" @click="copyText(currentPlatformAgent.key, `platform-agent-${currentPlatformAgent.key}`)">
+                  <span class="material-symbols-outlined text-[18px]" x-text="copyIcon(`platform-agent-${currentPlatformAgent.key}`)"></span>
+                  <span>复制</span>
+                </button>
+                <button type="button" class="button-primary h-9 px-3" @click="requestPlatformAgentVersionAction('activate', currentPlatformAgent.active_version)">
+                  <span class="material-symbols-outlined text-[18px]">rocket_launch</span>
+                  <span>激活</span>
+                </button>
+              </div>
+            </header>
+
+            <div class="grid grid-cols-2 divide-x divide-slate-800 text-xs lg:grid-cols-5">
+              <div class="p-4">
+                <p class="text-slate-500">Active</p>
+                <p class="mt-1 truncate font-mono text-slate-300" x-text="platformAgentActiveVersionLabel(currentPlatformAgent)"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Output</p>
+                <p class="mt-1 truncate font-mono text-slate-300" x-text="platformAgentOutputSchemaName(currentPlatformAgent)"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Tools</p>
+                <p class="mt-1 font-mono text-slate-300" x-text="platformAgentAllowedTools(currentPlatformAgent).length"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Skills</p>
+                <p class="mt-1 font-mono text-slate-300" x-text="platformAgentAllowedSkills(currentPlatformAgent).length"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Pending Auth</p>
+                <p class="mt-1 font-mono text-amber-200" x-text="platformAgentAuthorizationCountByStatus('pending')"></p>
+              </div>
+            </div>
+
+            <div class="shrink-0 overflow-x-auto border-b border-slate-800 bg-slate-950/30 px-3 py-2">
+              <div class="flex gap-2 whitespace-nowrap">
+                <template x-for="tab in platformAgentDetailTabs()" :key="tab.value">
+                  <button type="button" class="rounded-md border px-3 py-1.5 text-xs transition" :class="platformAgentDetailTab === tab.value ? 'border-orange-500/30 bg-orange-500/10 text-orange-200' : 'border-slate-700 bg-slate-950/30 text-slate-400 hover:bg-slate-900/70'" @click="platformAgentDetailTab = tab.value" x-text="tab.label"></button>
+                </template>
+              </div>
+            </div>
+
+            <section class="min-h-0">
+              <div x-show="platformAgentDetailTab === 'spec'" class="grid grid-cols-1 divide-y divide-slate-800 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] xl:divide-x xl:divide-y-0">
+                <section class="min-w-0 divide-y divide-slate-800">
+                  <div class="p-4">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Goal</p>
+                    <p class="mt-3 text-sm leading-6 text-slate-300" x-text="platformAgentGoal(currentPlatformAgent)"></p>
+                  </div>
+                  <div class="p-4">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Allowed Tools</p>
+                    <template x-if="platformAgentAllowedTools(currentPlatformAgent).length === 0">
+                      <p class="mt-3 text-sm text-slate-400">N/A</p>
+                    </template>
+                    <template x-if="platformAgentAllowedTools(currentPlatformAgent).length > 0">
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <template x-for="toolName in platformAgentAllowedTools(currentPlatformAgent)" :key="toolName">
+                          <button type="button" class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-[11px] text-slate-300 transition hover:bg-slate-900/70" @click="navigate(platformToolPath(toolName))" x-text="toolName"></button>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="p-4">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Allowed Skills</p>
+                    <template x-if="platformAgentAllowedSkills(currentPlatformAgent).length === 0">
+                      <p class="mt-3 text-sm text-slate-400">N/A</p>
+                    </template>
+                    <template x-if="platformAgentAllowedSkills(currentPlatformAgent).length > 0">
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <template x-for="packageName in platformAgentAllowedSkills(currentPlatformAgent)" :key="packageName">
+                          <button type="button" class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-[11px] text-slate-300 transition hover:bg-slate-900/70" @click="navigate(platformAgentsSkillPath(packageName))" x-text="packageName"></button>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                </section>
+                <section class="min-w-0 p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Active AgentSpec</p>
+                  <pre class="mt-3 max-h-[32rem] overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="platformAgentSpecPreview(currentPlatformAgent)"></pre>
+                </section>
+              </div>
+
+              <div x-show="platformAgentDetailTab === 'versions'" class="divide-y divide-slate-800">
+                <template x-if="(currentPlatformAgent.versions || []).length === 0">
+                  <p class="p-4 text-sm text-slate-400">暂无 AgentVersion</p>
+                </template>
+                <template x-for="version in currentPlatformAgent.versions || []" :key="version.id">
+                  <article class="grid gap-0 divide-y divide-slate-800 xl:grid-cols-[minmax(17rem,0.55fr)_minmax(0,1fr)] xl:divide-x xl:divide-y-0">
+                    <div class="p-4 text-xs">
+                      <div class="flex flex-wrap gap-2">
+                        <span class="status-badge" :class="platformAgentVersionStatusTone(version.status)" x-text="formatStatus(version.status)"></span>
+                        <span class="status-badge border-orange-500/30 bg-orange-500/10 text-orange-200" x-show="currentPlatformAgent.active_version_id === version.id">active</span>
+                        <span class="status-badge" :class="platformAgentVersionChanged(version) ? 'border-sky-500/25 bg-sky-500/10 text-sky-200' : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'" x-text="platformAgentVersionChanged(version) ? 'changed' : 'same'"></span>
+                      </div>
+                      <p class="mt-3 truncate font-semibold text-slate-100" x-text="platformAgentVersionLabel(version)"></p>
+                      <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="platformAgentShortHash(version.content_hash)"></p>
+                      <dl class="mt-4 space-y-2">
+                        <div class="flex justify-between gap-3">
+                          <dt class="text-slate-500">Version No</dt>
+                          <dd class="font-mono text-slate-300" x-text="version.version_no"></dd>
+                        </div>
+                        <div class="flex justify-between gap-3">
+                          <dt class="text-slate-500">Published</dt>
+                          <dd class="font-mono text-slate-300" x-text="formatDateTime(version.published_at)"></dd>
+                        </div>
+                      </dl>
+                      <div class="mt-4 flex flex-wrap gap-2">
+                        <button type="button" class="button-secondary h-8 px-3" @click="requestPlatformAgentVersionAction('publish', version)">
+                          <span class="material-symbols-outlined text-[17px]">publish</span>
+                          <span>发布</span>
+                        </button>
+                        <button type="button" class="button-primary h-8 px-3" @click="requestPlatformAgentVersionAction('activate', version)">
+                          <span class="material-symbols-outlined text-[17px]">rocket_launch</span>
+                          <span>激活</span>
+                        </button>
+                        <button type="button" class="button-secondary h-8 px-3" @click="requestPlatformAgentVersionAction('rollback', version)">
+                          <span class="material-symbols-outlined text-[17px]">undo</span>
+                          <span>回滚</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="min-w-0 p-4">
+                      <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">AgentSpec Diff</p>
+                      <pre class="mt-3 max-h-96 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="platformAgentSpecDiffPreview(version)"></pre>
+                    </div>
+                  </article>
+                </template>
+              </div>
+
+              <div x-show="platformAgentDetailTab === 'bindings'" class="divide-y divide-slate-800">
+                <template x-if="platformAgentBindingRows(currentPlatformAgent).length === 0">
+                  <p class="p-4 text-sm text-slate-400">暂无 AgentBinding</p>
+                </template>
+                <template x-for="binding in platformAgentBindingRows(currentPlatformAgent)" :key="binding.id">
+                  <article class="grid gap-3 p-4 text-xs md:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_10rem]">
+                    <div class="min-w-0">
+                      <p class="truncate font-mono text-slate-200" x-text="binding.usage_key"></p>
+                      <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="binding.id"></p>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="truncate font-mono text-slate-300" x-text="binding.active_version_label"></p>
+                      <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="binding.active_version_id || 'N/A'"></p>
+                    </div>
+                    <p class="font-mono text-slate-500" x-text="formatDateTime(binding.updated_at)"></p>
+                  </article>
+                </template>
+              </div>
+
+              <div x-show="platformAgentDetailTab === 'runs'" class="divide-y divide-slate-800">
+                <template x-if="platformAgentRuns.length === 0">
+                  <p class="p-4 text-sm text-slate-400">暂无 AgentRun</p>
+                </template>
+                <template x-for="run in platformAgentRuns" :key="run.id">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[minmax(13rem,0.45fr)_minmax(0,1fr)_9rem]">
+                    <div class="min-w-0">
+                      <div class="flex flex-wrap gap-2">
+                        <span class="status-badge" :class="agentRunStatusTone(run.status)" x-text="agentRunStatusLabel(run.status)"></span>
+                        <span class="status-badge border-slate-700 bg-slate-950/40 text-slate-300" x-text="agentRunDurationLabel(run)"></span>
+                      </div>
+                      <p class="mt-3 truncate font-mono text-slate-200" x-text="run.id"></p>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="truncate text-slate-300" x-text="run.owner_type || 'N/A'"></p>
+                      <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="run.owner_id || 'N/A'"></p>
+                    </div>
+                    <button type="button" class="button-secondary h-8 px-3" @click="navigate(platformAgentsRunPath(run.id))">
+                      <span class="material-symbols-outlined text-[17px]">open_in_new</span>
+                      <span>打开</span>
+                    </button>
+                  </article>
+                </template>
+              </div>
+
+              <div x-show="platformAgentDetailTab === 'authorizations'" class="divide-y divide-slate-800">
+                <template x-if="platformAgentToolAuthorizations.length === 0">
+                  <p class="p-4 text-sm text-slate-400">暂无工具授权请求</p>
+                </template>
+                <template x-for="authorization in platformAgentToolAuthorizations" :key="authorization.id">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[minmax(13rem,0.45fr)_minmax(0,1fr)_9rem]">
+                    <div class="min-w-0">
+                      <div class="flex flex-wrap gap-2">
+                        <span class="status-badge" :class="statusBadgeTone(authorization.status)" x-text="toolAuthorizationStatusLabel(authorization.status)"></span>
+                        <span class="status-badge" :class="platformToolSideEffectTone(authorization.side_effect_level)" x-text="platformToolSideEffectLabel(authorization.side_effect_level)"></span>
+                      </div>
+                      <p class="mt-3 truncate font-semibold text-slate-100" x-text="authorization.tool_name"></p>
+                      <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="authorization.id"></p>
+                    </div>
+                    <p class="min-w-0 text-sm leading-6 text-slate-300" x-text="authorization.authorization_reason || authorization.expected_effect_summary || 'N/A'"></p>
+                    <button type="button" class="button-secondary h-8 px-3" @click="navigate(platformAgentsToolAuthorizationsPath())">
+                      <span class="material-symbols-outlined text-[17px]">open_in_new</span>
+                      <span>授权</span>
+                    </button>
+                  </article>
+                </template>
+              </div>
+            </section>
+          </div>
+        </template>
+      </section>
+    </div>
+  </section>
+</div>

@@ -2756,6 +2756,11 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
+  .md\:grid-cols-\[minmax\(0\,0\.8fr\)_minmax\(0\,1fr\)_10rem\] {
+    @media (width >= 48rem) {
+      grid-template-columns: minmax(0,0.8fr) minmax(0,1fr) 10rem;
+    }
+  }
   .md\:flex-row {
     @media (width >= 48rem) {
       flex-direction: row;
@@ -2814,6 +2819,11 @@
   .lg\:grid-cols-\[minmax\(22rem\,0\.85fr\)_minmax\(0\,1\.35fr\)\] {
     @media (width >= 64rem) {
       grid-template-columns: minmax(22rem,0.85fr) minmax(0,1.35fr);
+    }
+  }
+  .lg\:grid-cols-\[minmax\(24rem\,0\.8fr\)_minmax\(0\,1\.35fr\)\] {
+    @media (width >= 64rem) {
+      grid-template-columns: minmax(24rem,0.8fr) minmax(0,1.35fr);
     }
   }
   .lg\:grid-cols-\[minmax\(24rem\,0\.9fr\)_minmax\(0\,1\.25fr\)\] {
@@ -2929,6 +2939,11 @@
       grid-template-columns: minmax(0,0.9fr) minmax(0,1.2fr) minmax(20rem,0.85fr);
     }
   }
+  .xl\:grid-cols-\[minmax\(0\,0\.85fr\)_minmax\(0\,1\.15fr\)\] {
+    @media (width >= 80rem) {
+      grid-template-columns: minmax(0,0.85fr) minmax(0,1.15fr);
+    }
+  }
   .xl\:grid-cols-\[minmax\(0\,0\.95fr\)_minmax\(0\,1\.05fr\)\] {
     @media (width >= 80rem) {
       grid-template-columns: minmax(0,0.95fr) minmax(0,1.05fr);
@@ -2954,6 +2969,11 @@
       grid-template-columns: minmax(0,1fr) 28rem;
     }
   }
+  .xl\:grid-cols-\[minmax\(13rem\,0\.45fr\)_minmax\(0\,1fr\)_9rem\] {
+    @media (width >= 80rem) {
+      grid-template-columns: minmax(13rem,0.45fr) minmax(0,1fr) 9rem;
+    }
+  }
   .xl\:grid-cols-\[minmax\(16rem\,0\.5fr\)_minmax\(0\,1fr\)\] {
     @media (width >= 80rem) {
       grid-template-columns: minmax(16rem,0.5fr) minmax(0,1fr);
@@ -2967,6 +2987,11 @@
   .xl\:grid-cols-\[minmax\(16rem\,0\.55fr\)_minmax\(0\,1fr\)\] {
     @media (width >= 80rem) {
       grid-template-columns: minmax(16rem,0.55fr) minmax(0,1fr);
+    }
+  }
+  .xl\:grid-cols-\[minmax\(17rem\,0\.55fr\)_minmax\(0\,1fr\)\] {
+    @media (width >= 80rem) {
+      grid-template-columns: minmax(17rem,0.55fr) minmax(0,1fr);
     }
   }
   .xl\:flex-row {

@@ -48,6 +48,18 @@ function resolveAdminRoute(pathname) {
     return { name: "governance-experiments", params: {} };
   }
 
+  if (normalized === "/admin/platform/agents") {
+    return { name: "platform-agents", params: {} };
+  }
+
+  const platformAgentMatch = normalized.match(/^\/admin\/platform\/agents\/([^/]+)$/);
+  if (platformAgentMatch) {
+    return {
+      name: "platform-agent",
+      params: { agentKey: platformAgentMatch[1] }
+    };
+  }
+
   if (normalized === "/admin/platform/agent-runs") {
     return { name: "platform-agent-runs", params: {} };
   }
@@ -262,6 +274,14 @@ function buildToolAuthorizationsPath() {
   return "/admin/platform/tool-authorizations";
 }
 
+function buildPlatformAgentsPath() {
+  return "/admin/platform/agents";
+}
+
+function buildPlatformAgentPath(agentKey) {
+  return `/admin/platform/agents/${agentKey}`;
+}
+
 function buildPlatformAgentRunsPath() {
   return "/admin/platform/agent-runs";
 }
@@ -351,6 +371,8 @@ module.exports = {
   buildGovernanceProposalPath,
   buildGovernanceExperimentsPath,
   buildToolAuthorizationsPath,
+  buildPlatformAgentsPath,
+  buildPlatformAgentPath,
   buildPlatformAgentRunsPath,
   buildPlatformAgentRunPath,
   buildPlatformSkillsPath,

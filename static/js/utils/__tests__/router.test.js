@@ -21,6 +21,8 @@ const {
   buildGovernanceProposalPath,
   buildGovernanceExperimentsPath,
   buildToolAuthorizationsPath,
+  buildPlatformAgentsPath,
+  buildPlatformAgentPath,
   buildPlatformAgentRunsPath,
   buildPlatformAgentRunPath,
   buildPlatformSkillsPath,
@@ -76,6 +78,11 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
     params: { proposalId: "proposal-123" }
   });
   expect(resolveAdminRoute("/admin/governance/experiments")).toEqual({ name: "governance-experiments", params: {} });
+  expect(resolveAdminRoute("/admin/platform/agents")).toEqual({ name: "platform-agents", params: {} });
+  expect(resolveAdminRoute("/admin/platform/agents/pskill.runner")).toEqual({
+    name: "platform-agent",
+    params: { agentKey: "pskill.runner" }
+  });
   expect(resolveAdminRoute("/admin/platform/agent-runs")).toEqual({ name: "platform-agent-runs", params: {} });
   expect(resolveAdminRoute("/admin/platform/agent-runs/agent-run-123")).toEqual({
     name: "platform-agent-run",
@@ -102,6 +109,8 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
   expect(buildGovernanceProposalPath("proposal-123")).toBe("/admin/governance/proposals/proposal-123");
   expect(buildGovernanceExperimentsPath()).toBe("/admin/governance/experiments");
   expect(buildToolAuthorizationsPath()).toBe("/admin/platform/tool-authorizations");
+  expect(buildPlatformAgentsPath()).toBe("/admin/platform/agents");
+  expect(buildPlatformAgentPath("pskill.runner")).toBe("/admin/platform/agents/pskill.runner");
   expect(buildPlatformAgentRunsPath()).toBe("/admin/platform/agent-runs");
   expect(buildPlatformAgentRunPath("agent-run-123")).toBe("/admin/platform/agent-runs/agent-run-123");
   expect(buildPlatformSkillsPath()).toBe("/admin/platform/skills");

@@ -18,6 +18,7 @@
     <script defer src="/js/app/core.js"></script>
     <script defer src="/js/app/dashboard.js"></script>
     <script defer src="/js/app/observability.js"></script>
+    <script defer src="/js/app/platform-agents.js"></script>
     <script defer src="/js/app/skill-detail.js"></script>
     <script defer src="/js/app/compiler.js"></script>
     <script defer src="/js/app/agent-prompts.js"></script>
@@ -79,11 +80,21 @@
                 type="button"
                 class="sidebar-link"
                 :class="[['agent-prompts-list', 'agent-prompt-detail'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
-                title="智能体"
+                title="Prompt Packs"
                 @click="navigate('/admin/agent-prompts')"
               >
                 <span class="material-symbols-outlined text-[20px]">smart_toy</span>
-                <span x-show="!sidebarCollapsed" x-transition.opacity>智能体</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>Prompt Packs</span>
+              </button>
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="[['platform-agents', 'platform-agent'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="Agents"
+                @click="navigate('/admin/platform/agents')"
+              >
+                <span class="material-symbols-outlined text-[20px]">support_agent</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>Agents</span>
               </button>
               <button
                 type="button"
@@ -229,6 +240,7 @@
               <div id="governance-proposals-page" class="h-full" x-show="!loadingPage && ['governance-proposals', 'governance-proposal'].includes(route.name)"></div>
               <div id="governance-experiments-page" class="h-full" x-show="!loadingPage && route.name === 'governance-experiments'"></div>
               <div id="tool-authorizations-page" class="h-full" x-show="!loadingPage && route.name === 'tool-authorizations'"></div>
+              <div id="platform-agents-page" class="h-full" x-show="!loadingPage && ['platform-agents', 'platform-agent'].includes(route.name)"></div>
               <div id="platform-agent-runs-page" class="h-full" x-show="!loadingPage && ['platform-agent-runs', 'platform-agent-run'].includes(route.name)"></div>
               <div id="platform-skills-page" class="h-full" x-show="!loadingPage && ['platform-skills', 'platform-skill'].includes(route.name)"></div>
               <div id="platform-tools-page" class="h-full" x-show="!loadingPage && ['platform-tools', 'platform-tool'].includes(route.name)"></div>

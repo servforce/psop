@@ -45,6 +45,18 @@
       return { name: "governance-experiments", params: {} };
     }
 
+    if (normalized === "/admin/platform/agents") {
+      return { name: "platform-agents", params: {} };
+    }
+
+    const platformAgentMatch = normalized.match(/^\/admin\/platform\/agents\/([^/]+)$/);
+    if (platformAgentMatch) {
+      return {
+        name: "platform-agent",
+        params: { agentKey: platformAgentMatch[1] }
+      };
+    }
+
     if (normalized === "/admin/platform/agent-runs") {
       return { name: "platform-agent-runs", params: {} };
     }
@@ -269,6 +281,14 @@
 
   function buildToolAuthorizationsPath() {
     return "/admin/platform/tool-authorizations";
+  }
+
+  function buildPlatformAgentsPath() {
+    return "/admin/platform/agents";
+  }
+
+  function buildPlatformAgentPath(agentKey) {
+    return `/admin/platform/agents/${agentKey}`;
   }
 
   function buildPlatformAgentRunsPath() {
@@ -745,6 +765,11 @@
         owner_type: "",
         owner_id: ""
       },
+      platformAgents: [],
+      currentPlatformAgent: null,
+      platformAgentRuns: [],
+      platformAgentToolAuthorizations: [],
+      platformAgentDetailTab: "spec",
       skillPackages: [],
       currentSkillPackage: null,
       skillPackageSyncResult: null,
@@ -970,6 +995,8 @@
         toolAuthorizationAction: false,
         agentRuns: false,
         agentRunDetail: false,
+        platformAgents: false,
+        platformAgentDetail: false,
         skillPackages: false,
         skillPackageDetail: false,
         skillPackageAction: false,
@@ -1000,6 +1027,8 @@
     buildGovernanceProposalPath,
     buildGovernanceExperimentsPath,
     buildToolAuthorizationsPath,
+    buildPlatformAgentsPath,
+    buildPlatformAgentPath,
     buildPlatformAgentRunsPath,
     buildPlatformAgentRunPath,
     buildPlatformSkillsPath,
@@ -1044,6 +1073,7 @@
       ...window.PSOPConsoleGovernanceMethods,
       ...window.PSOPConsoleDashboardMethods,
       ...window.PSOPConsoleObservabilityMethods,
+      ...window.PSOPConsolePlatformAgentMethods,
       ...window.PSOPConsolePlatformMethods,
       ...window.PSOPConsoleRuntimeMethods,
       ...window.PSOPConsoleFormatMethods
