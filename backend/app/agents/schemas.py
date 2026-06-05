@@ -48,6 +48,18 @@ class AgentDefinitionDetailResponse(AgentDefinitionSummaryResponse):
     active_version: AgentVersionSummaryResponse | None = None
 
 
+class AgentSessionResponse(BaseModel):
+    id: str
+    definition_id: str | None = None
+    agent_key: str
+    owner_type: str
+    owner_id: str
+    status: str
+    summary_json: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
 class CreateAgentRunRequest(BaseModel):
     agent_key: str = Field(min_length=2, max_length=160)
     owner_type: str = Field(default="", max_length=80)
@@ -60,6 +72,7 @@ class AgentRunResponse(BaseModel):
     id: str
     definition_id: str | None = None
     agent_version_id: str | None = None
+    agent_session_id: str | None = None
     agent_key: str
     status: str
     owner_type: str
@@ -88,6 +101,30 @@ class AppendAgentEventRequest(BaseModel):
     event_type: str = Field(min_length=2, max_length=160)
     phase: str = Field(default="", max_length=120)
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentModelCallResponse(BaseModel):
+    id: str
+    agent_run_id: str
+    provider: str
+    route_key: str
+    model_name: str
+    status: str
+    request_payload: dict[str, Any]
+    response_payload: dict[str, Any]
+    usage_json: dict[str, Any]
+    error_message: str
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    created_at: datetime
+
+
+class CreateAgentToolCallRequest(BaseModel):
+    tool_name: str = Field(min_length=2, max_length=160)
+    tool_provider: str = Field(default="native", max_length=60)
+    arguments_summary: dict[str, Any] = Field(default_factory=dict)
+    side_effect_level: str = Field(default="read", max_length=60)
+    idempotency_key: str = Field(default="", max_length=255)
 
 
 class AgentToolCallResponse(BaseModel):

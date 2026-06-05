@@ -3,11 +3,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
+from app.agent_harness.runner import AgentRunner
 from app.agents.schemas import (
     AgentDefinitionDetailResponse,
     AgentDefinitionSummaryResponse,
     AgentEventResponse,
+    AgentModelCallResponse,
     AgentRunResponse,
+    AgentToolCallResponse,
     AgentToolAuthorizationResponse,
     AgentVersionSummaryResponse,
     AppendAgentEventRequest,
@@ -16,7 +19,9 @@ from app.agents.schemas import (
     ToolAuthorizationDecisionRequest,
 )
 from app.agents.service import AgentService
-from app.api.dependencies import get_agent_service, get_db_session
+from app.api.dependencies import get_agent_runner, get_agent_service, get_db_session, get_skill_package_service
+from app.skills.schemas import SkillActivationResponse
+from app.skills.service import SkillPackageService
 
 
 agents_router = APIRouter(tags=["agents"])
@@ -86,6 +91,15 @@ def get_agent_run(
     return service.get_run(session, agent_run_id)
 
 
+@agent_runs_router.post("/{agent_run_id}/run-once", response_model=AgentRunResponse)
+def run_agent_once(
+    agent_run_id: str,
+    session: Session = Depends(get_db_session),
+    runner: AgentRunner = Depends(get_agent_runner),
+) -> AgentRunResponse:
+    return runner.run_once(session, agent_run_id)
+
+
 @agent_runs_router.get("/{agent_run_id}/events", response_model=list[AgentEventResponse])
 def list_agent_run_events(
     agent_run_id: str,
@@ -93,6 +107,35 @@ def list_agent_run_events(
     service: AgentService = Depends(get_agent_service),
 ) -> list[AgentEventResponse]:
     return service.list_events(session, agent_run_id)
+
+
+@agent_runs_router.get("/{agent_run_id}/model-calls", response_model=list[AgentModelCallResponse])
+def list_agent_run_model_calls(
+    agent_run_id: str,
+    session: Session = Depends(get_db_session),
+    service: AgentService = Depends(get_agent_service),
+) -> list[AgentModelCallResponse]:
+    return service.list_model_calls(session, agent_run_id)
+
+
+@agent_runs_router.get("/{agent_run_id}/tool-calls", response_model=list[AgentToolCallResponse])
+def list_agent_run_tool_calls(
+    agent_run_id: str,
+    session: Session = Depends(get_db_session),
+    service: AgentService = Depends(get_agent_service),
+) -> list[AgentToolCallResponse]:
+    return service.list_tool_calls(session, agent_run_id)
+
+
+@agent_runs_router.get("/{agent_run_id}/skill-activations", response_model=list[SkillActivationResponse])
+def list_agent_run_skill_activations(
+    agent_run_id: str,
+    session: Session = Depends(get_db_session),
+    agent_service: AgentService = Depends(get_agent_service),
+    skill_service: SkillPackageService = Depends(get_skill_package_service),
+) -> list[SkillActivationResponse]:
+    agent_service.get_run(session, agent_run_id)
+    return skill_service.list_activations(session, agent_run_id)
 
 
 @agent_runs_router.post("/{agent_run_id}/events", response_model=AgentEventResponse, status_code=status.HTTP_201_CREATED)

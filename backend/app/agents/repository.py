@@ -7,7 +7,9 @@ from app.agents.models import (
     AgentBinding,
     AgentDefinition,
     AgentEvent,
+    AgentModelCall,
     AgentRun,
+    AgentSession,
     AgentToolAuthorization,
     AgentToolCall,
     AgentVersion,
@@ -38,7 +40,9 @@ class AgentRepository:
             ).all()
         )
 
-    def get_version(self, session: Session, version_id: str) -> AgentVersion | None:
+    def get_version(self, session: Session, version_id: str | None) -> AgentVersion | None:
+        if not version_id:
+            return None
         return session.get(AgentVersion, version_id)
 
     def get_version_by_hash(self, session: Session, *, definition_id: str, content_hash: str) -> AgentVersion | None:
@@ -66,6 +70,28 @@ class AgentRepository:
                 .order_by(AgentBinding.usage_key.asc())
             ).all()
         )
+
+    def get_session_by_owner(
+        self,
+        session: Session,
+        *,
+        agent_key: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> AgentSession | None:
+        return session.scalar(
+            select(AgentSession).where(
+                AgentSession.agent_key == agent_key,
+                AgentSession.owner_type == owner_type,
+                AgentSession.owner_id == owner_id,
+                AgentSession.status == "active",
+            )
+        )
+
+    def get_session(self, session: Session, agent_session_id: str | None) -> AgentSession | None:
+        if not agent_session_id:
+            return None
+        return session.get(AgentSession, agent_session_id)
 
     def list_runs(
         self,
@@ -102,6 +128,24 @@ class AgentRepository:
                 select(AgentEvent)
                 .where(AgentEvent.agent_run_id == agent_run_id)
                 .order_by(AgentEvent.seq_no.asc())
+            ).all()
+        )
+
+    def list_model_calls(self, session: Session, agent_run_id: str) -> list[AgentModelCall]:
+        return list(
+            session.scalars(
+                select(AgentModelCall)
+                .where(AgentModelCall.agent_run_id == agent_run_id)
+                .order_by(AgentModelCall.created_at.asc())
+            ).all()
+        )
+
+    def list_tool_calls(self, session: Session, agent_run_id: str) -> list[AgentToolCall]:
+        return list(
+            session.scalars(
+                select(AgentToolCall)
+                .where(AgentToolCall.agent_run_id == agent_run_id)
+                .order_by(AgentToolCall.created_at.asc())
             ).all()
         )
 

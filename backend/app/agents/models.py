@@ -98,6 +98,32 @@ class AgentBinding(Base):
     definition: Mapped["AgentDefinition"] = relationship(back_populates="bindings")
 
 
+class AgentSession(Base):
+    __tablename__ = "agent_session"
+    __table_args__ = (
+        Index("idx_agent_session_agent_owner", "agent_key", "owner_type", "owner_id"),
+        Index("idx_agent_session_status_updated_at", "status", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    definition_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_definition.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    agent_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    owner_type: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="active", nullable=False)
+    summary_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=now_utc,
+        onupdate=now_utc,
+        nullable=False,
+    )
+
+
 class AgentRun(Base):
     __tablename__ = "agent_run"
     __table_args__ = (
@@ -113,6 +139,10 @@ class AgentRun(Base):
     )
     agent_version_id: Mapped[str | None] = mapped_column(
         ForeignKey("agent_version.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    agent_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_session.id", ondelete="SET NULL"),
         nullable=True,
     )
     agent_key: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -151,6 +181,31 @@ class AgentEvent(Base):
     phase: Mapped[str] = mapped_column(String(120), default="", nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+
+
+class AgentModelCall(Base):
+    __tablename__ = "agent_model_call"
+    __table_args__ = (
+        Index("idx_agent_model_call_run_created_at", "agent_run_id", "created_at"),
+        Index("idx_agent_model_call_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    agent_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_run.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(80), default="deterministic", nullable=False)
+    route_key: Mapped[str] = mapped_column(String(80), default="json", nullable=False)
+    model_name: Mapped[str] = mapped_column(String(160), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="succeeded", nullable=False)
+    request_payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    response_payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    usage_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
 
 
 class AgentToolCall(Base):

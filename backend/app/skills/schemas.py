@@ -16,6 +16,15 @@ class SkillResourceResponse(BaseModel):
     created_at: datetime
 
 
+class SkillActivationResponse(BaseModel):
+    id: str
+    agent_run_id: str
+    package_id: str
+    version_id: str
+    activation_context: dict[str, Any]
+    created_at: datetime
+
+
 class SkillVersionResponse(BaseModel):
     id: str
     package_id: str

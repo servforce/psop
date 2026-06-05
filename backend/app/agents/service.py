@@ -10,7 +10,9 @@ from app.agents.models import (
     AgentBinding,
     AgentDefinition,
     AgentEvent,
+    AgentModelCall,
     AgentRun,
+    AgentSession,
     AgentToolAuthorization,
     AgentToolCall,
     AgentVersion,
@@ -21,13 +23,17 @@ from app.agents.schemas import (
     AgentDefinitionDetailResponse,
     AgentDefinitionSummaryResponse,
     AgentEventResponse,
+    AgentModelCallResponse,
     AgentRunResponse,
+    AgentSessionResponse,
     AgentToolAuthorizationResponse,
     AgentVersionSummaryResponse,
     AppendAgentEventRequest,
     CreateAgentRunRequest,
+    CreateAgentToolCallRequest,
     CreateToolAuthorizationRequest,
     ToolAuthorizationDecisionRequest,
+    AgentToolCallResponse,
 )
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
@@ -40,6 +46,8 @@ DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
         "role": "builder",
         "goal": "将人类知识、多模态资料和专家经验构建为 PSkill draft。",
         "usage_keys": ["pskill.build.default"],
+        "allowed_tools": ["psop.pskills.read", "psop.materials.read"],
+        "allowed_skill_names": ["pskill-builder", "ffmpeg-video-processing", "document-ocr-processing"],
         "output_schema": {"name": "PSkillBuilderResult"},
     },
     {
@@ -48,6 +56,8 @@ DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
         "role": "compiler",
         "goal": "将 PSkill 编译为 formal-v5 Execution Graph。",
         "usage_keys": ["pskill.compile.formal_v5"],
+        "allowed_tools": ["psop.pskills.read", "psop.compiler.validate_formal_v5"],
+        "allowed_skill_names": ["pskill-compiler-formal-v5"],
         "output_schema": {"name": "PSkillCompilerResult"},
     },
     {
@@ -56,6 +66,8 @@ DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
         "role": "tester",
         "goal": "发布前测试 PSkill、执行图、交互、安全和回归。",
         "usage_keys": ["pskill.test.pre_publish"],
+        "allowed_tools": ["psop.pskills.read", "psop.testing.write_diagnostics"],
+        "allowed_skill_names": ["pskill-tester"],
         "output_schema": {"name": "PSkillTestResult"},
     },
     {
@@ -64,6 +76,8 @@ DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
         "role": "runner",
         "goal": "在 RuntimeService 主权边界内为运行节点生成 observation。",
         "usage_keys": ["pskill.run.node"],
+        "allowed_tools": ["psop.runtime.read", "psop.run_events.write_low"],
+        "allowed_skill_names": ["pskill-runner-field-assistant"],
         "output_schema": {"name": "RuntimeAgentObservation"},
     },
     {
@@ -72,6 +86,8 @@ DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
         "role": "evaluator",
         "goal": "评估已完成 Run，进行质量归因并给出优化建议。",
         "usage_keys": ["pskill.evaluate.run"],
+        "allowed_tools": ["psop.runtime.read", "psop.evaluations.write_diagnostics"],
+        "allowed_skill_names": ["pskill-run-evaluator"],
         "output_schema": {"name": "RunEvaluationResult"},
     },
     {
@@ -80,6 +96,13 @@ DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
         "role": "governance",
         "goal": "将评估结果转为可验证、可审批、可回滚的系统改进提案。",
         "usage_keys": ["psop.governance.proposal"],
+        "allowed_tools": [
+            "psop.evaluations.read",
+            "psop.governance.write_proposal",
+            "psop.agent_version.activate",
+            "psop.skill_version.activate",
+        ],
+        "allowed_skill_names": ["psop-governance-manager"],
         "output_schema": {"name": "GovernanceProposalResult"},
     },
 ]
@@ -134,7 +157,15 @@ class AgentService:
                 session.add(version)
                 session.flush()
                 changed = True
-            if not definition.active_version_id:
+            active_version = self.repository.get_version(session, definition.active_version_id)
+            should_activate_seed = (
+                not active_version
+                or (
+                    active_version.version_label.startswith("seed-v")
+                    and active_version.content_hash != content_hash
+                )
+            )
+            if should_activate_seed:
                 definition.active_version_id = version.id
                 changed = True
 
@@ -189,6 +220,7 @@ class AgentService:
         agent_run = AgentRun(
             definition_id=definition.id,
             agent_version_id=definition.active_version_id,
+            agent_session_id=None,
             agent_key=definition.key,
             status="queued",
             owner_type=payload.owner_type,
@@ -198,6 +230,8 @@ class AgentService:
         )
         session.add(agent_run)
         session.flush()
+        agent_session = self._ensure_session_for_run(session, agent_run)
+        agent_run.agent_session_id = agent_session.id
         self.append_event(
             session,
             agent_run.id,
@@ -237,6 +271,9 @@ class AgentService:
         agent_run = self._get_run(session, agent_run_id)
         return self._build_run_response(agent_run)
 
+    def get_run_model(self, session: Session, agent_run_id: str) -> AgentRun:
+        return self._get_run(session, agent_run_id)
+
     def append_event(
         self,
         session: Session,
@@ -263,6 +300,84 @@ class AgentService:
         self._get_run(session, agent_run_id)
         return [self._build_event_response(item) for item in self.repository.list_events(session, agent_run_id)]
 
+    def list_model_calls(self, session: Session, agent_run_id: str) -> list[AgentModelCallResponse]:
+        self._get_run(session, agent_run_id)
+        return [self._build_model_call_response(item) for item in self.repository.list_model_calls(session, agent_run_id)]
+
+    def record_model_call(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        provider: str,
+        route_key: str,
+        model_name: str,
+        status: str,
+        request_payload: dict[str, Any],
+        response_payload: dict[str, Any],
+        usage_json: dict[str, Any] | None = None,
+        error_message: str = "",
+        commit: bool = True,
+    ) -> AgentModelCallResponse:
+        agent_run = self._get_run(session, agent_run_id)
+        now = now_utc()
+        model_call = AgentModelCall(
+            agent_run_id=agent_run.id,
+            provider=provider,
+            route_key=route_key,
+            model_name=model_name,
+            status=status,
+            request_payload=request_payload,
+            response_payload=response_payload,
+            usage_json=usage_json or {},
+            error_message=error_message,
+            started_at=now,
+            ended_at=now,
+        )
+        session.add(model_call)
+        session.flush()
+        if commit:
+            session.commit()
+        return self._build_model_call_response(model_call)
+
+    def create_tool_call(
+        self,
+        session: Session,
+        agent_run_id: str,
+        payload: CreateAgentToolCallRequest,
+        *,
+        commit: bool = True,
+    ) -> AgentToolCallResponse:
+        agent_run = self._get_run(session, agent_run_id)
+        tool_call = AgentToolCall(
+            agent_run_id=agent_run.id,
+            tool_name=payload.tool_name,
+            tool_provider=payload.tool_provider,
+            status="planned",
+            arguments_summary=payload.arguments_summary,
+            side_effect_level=payload.side_effect_level,
+            idempotency_key=payload.idempotency_key,
+        )
+        session.add(tool_call)
+        session.flush()
+        self.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="agent.tool_call.planned",
+                phase="tool",
+                payload={"tool_call_id": tool_call.id, "tool_name": tool_call.tool_name},
+            ),
+            commit=False,
+        )
+        if commit:
+            session.commit()
+        return self._build_tool_call_response(tool_call)
+
+    def list_tool_calls(self, session: Session, agent_run_id: str) -> list[AgentToolCallResponse]:
+        self._get_run(session, agent_run_id)
+        return [self._build_tool_call_response(item) for item in self.repository.list_tool_calls(session, agent_run_id)]
+
     def create_tool_authorization(
         self,
         session: Session,
@@ -272,6 +387,11 @@ class AgentService:
         tool_call = self.repository.get_tool_call(session, payload.agent_tool_call_id)
         if payload.agent_tool_call_id and not tool_call:
             raise SkillNotFoundError("未找到 Agent Tool Call。", details={"agent_tool_call_id": payload.agent_tool_call_id})
+        if tool_call and tool_call.agent_run_id != agent_run.id:
+            raise SkillValidationError(
+                "Agent Tool Call 不属于当前 AgentRun。",
+                details={"agent_run_id": agent_run.id, "agent_tool_call_id": tool_call.id},
+            )
         authorization = AgentToolAuthorization(
             agent_run_id=agent_run.id,
             agent_tool_call_id=payload.agent_tool_call_id,
@@ -403,6 +523,29 @@ class AgentService:
             )
         return authorization
 
+    def _ensure_session_for_run(self, session: Session, agent_run: AgentRun) -> AgentSession:
+        agent_session = self.repository.get_session(session, agent_run.agent_session_id)
+        if agent_session:
+            return agent_session
+        agent_session = self.repository.get_session_by_owner(
+            session,
+            agent_key=agent_run.agent_key,
+            owner_type=agent_run.owner_type,
+            owner_id=agent_run.owner_id,
+        )
+        if not agent_session:
+            agent_session = AgentSession(
+                definition_id=agent_run.definition_id,
+                agent_key=agent_run.agent_key,
+                owner_type=agent_run.owner_type,
+                owner_id=agent_run.owner_id,
+                status="active",
+                summary_json={},
+            )
+            session.add(agent_session)
+            session.flush()
+        return agent_session
+
     def _build_definition_summary(self, session: Session, definition: AgentDefinition) -> AgentDefinitionSummaryResponse:
         versions = self.repository.list_versions(session, definition.id)
         active_version = self.repository.get_version(session, definition.active_version_id)
@@ -456,6 +599,7 @@ class AgentService:
             id=agent_run.id,
             definition_id=agent_run.definition_id,
             agent_version_id=agent_run.agent_version_id,
+            agent_session_id=agent_run.agent_session_id,
             agent_key=agent_run.agent_key,
             status=agent_run.status,
             owner_type=agent_run.owner_type,
@@ -471,6 +615,20 @@ class AgentService:
         )
 
     @staticmethod
+    def _build_session_response(agent_session: AgentSession) -> AgentSessionResponse:
+        return AgentSessionResponse(
+            id=agent_session.id,
+            definition_id=agent_session.definition_id,
+            agent_key=agent_session.agent_key,
+            owner_type=agent_session.owner_type,
+            owner_id=agent_session.owner_id,
+            status=agent_session.status,
+            summary_json=agent_session.summary_json,
+            created_at=agent_session.created_at,
+            updated_at=agent_session.updated_at,
+        )
+
+    @staticmethod
     def _build_event_response(event: AgentEvent) -> AgentEventResponse:
         return AgentEventResponse(
             id=event.id,
@@ -480,6 +638,40 @@ class AgentService:
             phase=event.phase,
             payload=event.payload,
             occurred_at=event.occurred_at,
+        )
+
+    @staticmethod
+    def _build_model_call_response(model_call: AgentModelCall) -> AgentModelCallResponse:
+        return AgentModelCallResponse(
+            id=model_call.id,
+            agent_run_id=model_call.agent_run_id,
+            provider=model_call.provider,
+            route_key=model_call.route_key,
+            model_name=model_call.model_name,
+            status=model_call.status,
+            request_payload=model_call.request_payload,
+            response_payload=model_call.response_payload,
+            usage_json=model_call.usage_json,
+            error_message=model_call.error_message,
+            started_at=model_call.started_at,
+            ended_at=model_call.ended_at,
+            created_at=model_call.created_at,
+        )
+
+    @staticmethod
+    def _build_tool_call_response(tool_call: AgentToolCall) -> AgentToolCallResponse:
+        return AgentToolCallResponse(
+            id=tool_call.id,
+            agent_run_id=tool_call.agent_run_id,
+            tool_name=tool_call.tool_name,
+            tool_provider=tool_call.tool_provider,
+            status=tool_call.status,
+            arguments_summary=tool_call.arguments_summary,
+            result_summary=tool_call.result_summary,
+            side_effect_level=tool_call.side_effect_level,
+            idempotency_key=tool_call.idempotency_key,
+            created_at=tool_call.created_at,
+            updated_at=tool_call.updated_at,
         )
 
     @staticmethod
@@ -518,8 +710,8 @@ class AgentService:
             "instructions": {},
             "model_policy": {"route_key": "text"},
             "runtime_policy": {},
-            "allowed_tools": [],
-            "allowed_skill_names": [],
+            "allowed_tools": seed.get("allowed_tools", []),
+            "allowed_skill_names": seed.get("allowed_skill_names", []),
             "memory_policy": {},
             "planner_policy": {},
             "sandbox_policy": {},

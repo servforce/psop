@@ -16,6 +16,7 @@ from app.skills.schemas import (
     SkillPackageDetailResponse,
     SkillPackageSummaryResponse,
     SkillPackageSyncResponse,
+    SkillActivationResponse,
     SkillResourceResponse,
     SkillVersionResponse,
 )
@@ -155,6 +156,19 @@ class SkillPackageService:
         if not package:
             raise SkillNotFoundError("未找到 Skill package。", details={"package_name": package_name})
         return [self._build_version_response(session, item) for item in self.repository.list_versions(session, package.id)]
+
+    def list_activations(self, session: Session, agent_run_id: str) -> list[SkillActivationResponse]:
+        return [
+            SkillActivationResponse(
+                id=item.id,
+                agent_run_id=item.agent_run_id,
+                package_id=item.package_id,
+                version_id=item.version_id,
+                activation_context=item.activation_context,
+                created_at=item.created_at,
+            )
+            for item in self.repository.list_activations(session, agent_run_id)
+        ]
 
     def _scan_packages(self) -> list[ScannedSkillPackage]:
         result: list[ScannedSkillPackage] = []

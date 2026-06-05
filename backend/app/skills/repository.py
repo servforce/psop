@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.skills.models import SkillPackage, SkillResource, SkillVersion
+from app.skills.models import SkillActivation, SkillPackage, SkillResource, SkillVersion
 
 
 class SkillPackageRepository:
@@ -63,5 +63,28 @@ class SkillPackageRepository:
                 select(SkillResource)
                 .where(SkillResource.version_id == version_id)
                 .order_by(SkillResource.resource_path.asc())
+            ).all()
+        )
+
+    def get_activation(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        version_id: str,
+    ) -> SkillActivation | None:
+        return session.scalar(
+            select(SkillActivation).where(
+                SkillActivation.agent_run_id == agent_run_id,
+                SkillActivation.version_id == version_id,
+            )
+        )
+
+    def list_activations(self, session: Session, agent_run_id: str) -> list[SkillActivation]:
+        return list(
+            session.scalars(
+                select(SkillActivation)
+                .where(SkillActivation.agent_run_id == agent_run_id)
+                .order_by(SkillActivation.created_at.asc())
             ).all()
         )
