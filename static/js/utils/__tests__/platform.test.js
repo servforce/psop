@@ -9,6 +9,8 @@ function loadPlatformMethods() {
       PSOPConsoleHelpers: {
         buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
         buildPlatformAgentRunPath: (agentRunId) => `/admin/platform/agent-runs/${agentRunId}`,
+        buildPlatformSkillsPath: () => "/admin/platform/skills",
+        buildPlatformSkillPath: (packageName) => `/admin/platform/skills/${packageName}`,
         buildPlatformToolsPath: () => "/admin/platform/tools",
         buildPlatformToolPath: (toolName) => `/admin/platform/tools/${toolName}`,
         buildPlatformMemoryPath: () => "/admin/platform/memory",
@@ -45,6 +47,10 @@ test("platform methods build filters, labels, and paths", () => {
       owner_type: "runtime",
       owner_id: "run-1"
     },
+    skillPackageFilters: {
+      scope: "psop",
+      status: "active"
+    },
     memoryFilters: {
       namespace: "evaluation",
       memory_type: "episodic",
@@ -59,13 +65,16 @@ test("platform methods build filters, labels, and paths", () => {
   expect(methods.agentRunQueryString.call(context)).toBe(
     "agent_key=pskill.runner&status=waiting_tool_authorization&owner_type=runtime&owner_id=run-1"
   );
+  expect(methods.skillPackageQueryString.call(context)).toBe("scope=psop&status=active");
   expect(methods.memoryQueryString.call(context)).toBe(
     "namespace=evaluation&memory_type=episodic&status=pending_review&agent_key=psop.evaluator&q=regression&limit=100"
   );
   expect(methods.agentRunStatusLabel.call(context, "waiting_tool_authorization")).toBe("等待授权");
+  expect(methods.skillPackageScopeLabel.call(context, "psop")).toBe("PSOP");
   expect(methods.platformToolSideEffectLabel.call(context, "low_write")).toBe("Low Write");
   expect(methods.memoryStatusLabel.call(context, "pending_review")).toBe("待审核");
   expect(methods.platformAgentRunPath("run-1")).toBe("/admin/platform/agent-runs/run-1");
+  expect(methods.platformSkillPath("pskill-builder")).toBe("/admin/platform/skills/pskill-builder");
   expect(methods.platformRunLivePath("runtime-run-1")).toBe("/admin/runs/runtime-run-1/live");
   expect(methods.platformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
   expect(methods.platformMemoryEntryPath("mem-1")).toBe("/admin/platform/memory/mem-1");
@@ -138,6 +147,100 @@ test("platform methods load agent runs with detail observability streams", async
   expect(methods.agentRunDurationLabel.call(context, run)).toBe("3000 ms");
   expect(methods.agentRunToolFailureCount.call(context)).toBe(1);
   expect(methods.agentRunModelTokenUsage(context.currentAgentRunModelCalls[0])).toBe(42);
+});
+
+test("platform methods sync, load, validate, and activate skill packages", async () => {
+  const methods = loadPlatformMethods();
+  const summary = {
+    id: "pkg-1",
+    name: "pskill-builder",
+    scope: "psop",
+    status: "active",
+    version_count: 1,
+    active_version_id: "ver-1",
+    active_version_label: "sync-123"
+  };
+  const detail = {
+    ...summary,
+    versions: [
+      {
+        id: "ver-1",
+        version_label: "sync-123",
+        validation_status: "valid",
+        validation_diagnostics: [],
+        allowed_tools: ["psop.pskills.read"],
+        manifest_json: { name: "pskill-builder", description: "Build" },
+        resource_count: 1
+      }
+    ],
+    active_version: {
+      id: "ver-1",
+      allowed_tools: ["psop.pskills.read"],
+      manifest_json: { name: "pskill-builder", description: "Build" },
+      resource_index: [{ path: "SKILL.md", kind: "skill" }]
+    },
+    resources: [{ id: "res-1", resource_path: "SKILL.md", resource_kind: "skill", size_bytes: 100 }]
+  };
+  const validated = {
+    ...detail.versions[0],
+    validation_diagnostics: [{ severity: "warning", code: "missing_references", message: "missing refs" }]
+  };
+  const context = {
+    ...methods,
+    busy: {
+      skillPackages: false,
+      skillPackageDetail: false,
+      skillPackageAction: false,
+      platformAgentDefinitions: false
+    },
+    skillPackageFilters: { scope: "psop", status: "" },
+    skillPackages: [],
+    currentSkillPackage: null,
+    skillPackageSyncResult: null,
+    platformAgentDefinitions: [],
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/skills?scope=psop") {
+        return [summary];
+      }
+      if (url === "/skills/sync") {
+        return { changed: false, scanned_count: 1, package_count: 1, version_count: 1 };
+      }
+      if (url === "/agents") {
+        return [{ key: "pskill.builder" }];
+      }
+      if (url === "/agents/pskill.builder") {
+        return {
+          key: "pskill.builder",
+          active_version: { spec_json: { allowed_skill_names: ["pskill-builder"] } }
+        };
+      }
+      if (url === "/skills/pskill-builder") {
+        return detail;
+      }
+      if (url === "/skills/pskill-builder/versions/ver-1/validate") {
+        return validated;
+      }
+      if (url === "/skills/pskill-builder/versions/ver-1/activate") {
+        return { ...detail, active_version_id: "ver-1" };
+      }
+      return null;
+    }),
+    showNotice: jest.fn()
+  };
+
+  await methods.syncSkillPackages.call(context);
+  await methods.validateSkillPackageVersion.call(context, context.currentSkillPackage.versions[0]);
+  await methods.activateSkillPackageVersion.call(context, context.currentSkillPackage.versions[0]);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/skills/sync", { method: "POST" });
+  expect(context.apiRequest).toHaveBeenCalledWith("/skills?scope=psop");
+  expect(context.apiRequest).toHaveBeenCalledWith("/skills/pskill-builder");
+  expect(context.apiRequest).toHaveBeenCalledWith("/skills/pskill-builder/versions/ver-1/validate", { method: "POST" });
+  expect(context.apiRequest).toHaveBeenCalledWith("/skills/pskill-builder/versions/ver-1/activate", { method: "POST" });
+  expect(context.skillPackageSyncResult.package_count).toBe(1);
+  expect(context.currentSkillPackage.name).toBe("pskill-builder");
+  expect(context.currentSkillPackage.versions[0].validation_diagnostics).toHaveLength(1);
+  expect(methods.skillPackageUsedByAgents.call(context, context.currentSkillPackage).map((agent) => agent.key)).toEqual(["pskill.builder"]);
 });
 
 test("platform methods load tools and select the first row", async () => {

@@ -53,3 +53,25 @@ def list_skill_package_versions(
 ) -> list[SkillVersionResponse]:
     service.sync_packages(session)
     return service.list_versions(session, package_name)
+
+
+@router.post("/{package_name}/versions/{version_id}/validate", response_model=SkillVersionResponse)
+def validate_skill_package_version(
+    package_name: str,
+    version_id: str,
+    session: Session = Depends(get_db_session),
+    service: SkillPackageService = Depends(get_skill_package_service),
+) -> SkillVersionResponse:
+    service.sync_packages(session)
+    return service.validate_version(session, package_name, version_id)
+
+
+@router.post("/{package_name}/versions/{version_id}/activate", response_model=SkillPackageDetailResponse)
+def activate_skill_package_version(
+    package_name: str,
+    version_id: str,
+    session: Session = Depends(get_db_session),
+    service: SkillPackageService = Depends(get_skill_package_service),
+) -> SkillPackageDetailResponse:
+    service.sync_packages(session)
+    return service.activate_version(session, package_name, version_id)

@@ -451,6 +451,9 @@
   .ml-2 {
     margin-left: calc(var(--spacing) * 2);
   }
+  .ml-3 {
+    margin-left: calc(var(--spacing) * 3);
+  }
   .line-clamp-2 {
     overflow: hidden;
     display: -webkit-box;
@@ -2717,6 +2720,16 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
+  .sm\:grid-cols-\[6rem_minmax\(0\,1fr\)\] {
+    @media (width >= 40rem) {
+      grid-template-columns: 6rem minmax(0,1fr);
+    }
+  }
+  .sm\:grid-cols-\[minmax\(0\,1fr\)_7rem_6rem\] {
+    @media (width >= 40rem) {
+      grid-template-columns: minmax(0,1fr) 7rem 6rem;
+    }
+  }
   .sm\:grid-cols-\[minmax\(0\,1fr\)_7rem_8rem\] {
     @media (width >= 40rem) {
       grid-template-columns: minmax(0,1fr) 7rem 8rem;
@@ -2785,6 +2798,11 @@
   .lg\:grid-cols-\[minmax\(24rem\,0\.9fr\)_minmax\(0\,1\.25fr\)\] {
     @media (width >= 64rem) {
       grid-template-columns: minmax(24rem,0.9fr) minmax(0,1.25fr);
+    }
+  }
+  .lg\:grid-cols-\[minmax\(24rem\,0\.85fr\)_minmax\(0\,1\.25fr\)\] {
+    @media (width >= 64rem) {
+      grid-template-columns: minmax(24rem,0.85fr) minmax(0,1.25fr);
     }
   }
   .lg\:grid-cols-\[minmax\(25rem\,0\.85fr\)_minmax\(0\,1\.25fr\)\] {
@@ -2880,6 +2898,11 @@
       grid-template-columns: minmax(0,0.8fr) minmax(0,1.2fr);
     }
   }
+  .xl\:grid-cols-\[minmax\(0\,0\.9fr\)_minmax\(0\,1\.1fr\)\] {
+    @media (width >= 80rem) {
+      grid-template-columns: minmax(0,0.9fr) minmax(0,1.1fr);
+    }
+  }
   .xl\:grid-cols-\[minmax\(0\,0\.9fr\)_minmax\(0\,1\.2fr\)_minmax\(20rem\,0\.85fr\)\] {
     @media (width >= 80rem) {
       grid-template-columns: minmax(0,0.9fr) minmax(0,1.2fr) minmax(20rem,0.85fr);
@@ -2908,6 +2931,11 @@
   .xl\:grid-cols-\[minmax\(0\,1fr\)_28rem\] {
     @media (width >= 80rem) {
       grid-template-columns: minmax(0,1fr) 28rem;
+    }
+  }
+  .xl\:grid-cols-\[minmax\(16rem\,0\.5fr\)_minmax\(0\,1fr\)\] {
+    @media (width >= 80rem) {
+      grid-template-columns: minmax(16rem,0.5fr) minmax(0,1fr);
     }
   }
   .xl\:grid-cols-\[minmax\(16rem\,0\.45fr\)_minmax\(0\,1fr\)\] {

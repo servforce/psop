@@ -56,6 +56,18 @@ function resolveAdminRoute(pathname) {
     };
   }
 
+  if (normalized === "/admin/platform/skills") {
+    return { name: "platform-skills", params: {} };
+  }
+
+  const platformSkillMatch = normalized.match(/^\/admin\/platform\/skills\/([^/]+)$/);
+  if (platformSkillMatch) {
+    return {
+      name: "platform-skill",
+      params: { packageName: platformSkillMatch[1] }
+    };
+  }
+
   if (normalized === "/admin/platform/tools") {
     return { name: "platform-tools", params: {} };
   }
@@ -246,6 +258,14 @@ function buildPlatformAgentRunPath(agentRunId) {
   return `/admin/platform/agent-runs/${agentRunId}`;
 }
 
+function buildPlatformSkillsPath() {
+  return "/admin/platform/skills";
+}
+
+function buildPlatformSkillPath(packageName) {
+  return `/admin/platform/skills/${packageName}`;
+}
+
 function buildPlatformToolsPath() {
   return "/admin/platform/tools";
 }
@@ -316,6 +336,8 @@ module.exports = {
   buildToolAuthorizationsPath,
   buildPlatformAgentRunsPath,
   buildPlatformAgentRunPath,
+  buildPlatformSkillsPath,
+  buildPlatformSkillPath,
   buildPlatformToolsPath,
   buildPlatformToolPath,
   buildPlatformMemoryPath,

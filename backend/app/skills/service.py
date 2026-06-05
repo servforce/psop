@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 from sqlalchemy.orm import Session
 
-from app.pskills.exceptions import SkillNotFoundError
+from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
 from app.skills.models import SkillPackage, SkillResource, SkillVersion
 from app.skills.repository import SkillPackageRepository
@@ -157,6 +157,36 @@ class SkillPackageService:
             raise SkillNotFoundError("未找到 Skill package。", details={"package_name": package_name})
         return [self._build_version_response(session, item) for item in self.repository.list_versions(session, package.id)]
 
+    def validate_version(self, session: Session, package_name: str, version_id: str) -> SkillVersionResponse:
+        package, version = self._get_package_version(session, package_name, version_id)
+        diagnostics = self._validate_version_diagnostics(package, version)
+        version.validation_diagnostics = diagnostics
+        version.validation_status = self._validation_status_from_diagnostics(diagnostics)
+        version.updated_at = now_utc()
+        session.commit()
+        return self._build_version_response(session, version)
+
+    def activate_version(self, session: Session, package_name: str, version_id: str) -> SkillPackageDetailResponse:
+        package, version = self._get_package_version(session, package_name, version_id)
+        diagnostics = self._validate_version_diagnostics(package, version)
+        if any(item["severity"] == "error" for item in diagnostics):
+            version.validation_status = "invalid"
+            version.validation_diagnostics = diagnostics
+            version.updated_at = now_utc()
+            session.commit()
+            raise SkillValidationError(
+                "Skill package version 校验失败，不能激活。",
+                details={"package_name": package_name, "version_id": version_id, "diagnostics": diagnostics},
+            )
+        version.validation_status = self._validation_status_from_diagnostics(diagnostics)
+        version.validation_diagnostics = diagnostics
+        version.status = "active"
+        version.activated_at = now_utc()
+        package.active_version_id = version.id
+        package.updated_at = now_utc()
+        session.commit()
+        return self.get_package(session, package_name)
+
     def list_activations(self, session: Session, agent_run_id: str) -> list[SkillActivationResponse]:
         return [
             SkillActivationResponse(
@@ -169,6 +199,69 @@ class SkillPackageService:
             )
             for item in self.repository.list_activations(session, agent_run_id)
         ]
+
+    def _get_package_version(self, session: Session, package_name: str, version_id: str) -> tuple[SkillPackage, SkillVersion]:
+        package = self.repository.get_package_by_name(session, package_name)
+        if not package:
+            raise SkillNotFoundError("未找到 Skill package。", details={"package_name": package_name})
+        version = self.repository.get_version(session, version_id)
+        if not version or version.package_id != package.id:
+            raise SkillNotFoundError(
+                "未找到 Skill package version。",
+                details={"package_name": package_name, "version_id": version_id},
+            )
+        return package, version
+
+    @staticmethod
+    def _validate_version_diagnostics(package: SkillPackage, version: SkillVersion) -> list[dict[str, Any]]:
+        diagnostics: list[dict[str, Any]] = []
+        manifest = version.manifest_json if isinstance(version.manifest_json, dict) else {}
+        resource_index = version.resource_index if isinstance(version.resource_index, list) else []
+        resource_paths = {str(item.get("path", "")) for item in resource_index if isinstance(item, dict)}
+
+        if not manifest.get("name"):
+            diagnostics.append({"severity": "error", "code": "missing_name", "message": "SKILL.md frontmatter 缺少 name。"})
+        elif str(manifest.get("name")) != package.name:
+            diagnostics.append({
+                "severity": "error",
+                "code": "name_mismatch",
+                "message": "SKILL.md frontmatter name 必须与 package name 一致。",
+                "expected": package.name,
+                "actual": str(manifest.get("name")),
+            })
+        if not manifest.get("description"):
+            diagnostics.append({
+                "severity": "warning",
+                "code": "missing_description",
+                "message": "SKILL.md frontmatter 建议提供 description。",
+            })
+        if "SKILL.md" not in resource_paths:
+            diagnostics.append({"severity": "error", "code": "missing_skill_md", "message": "Skill package 必须包含 SKILL.md。"})
+        if not version.content_hash:
+            diagnostics.append({"severity": "error", "code": "missing_content_hash", "message": "SkillVersion 缺少 content_hash。"})
+        if not isinstance(version.allowed_tools, list):
+            diagnostics.append({"severity": "error", "code": "invalid_allowed_tools", "message": "allowed_tools 必须是列表。"})
+        if not version.allowed_tools:
+            diagnostics.append({
+                "severity": "warning",
+                "code": "empty_allowed_tools",
+                "message": "Skill package 未声明 allowed-tools。",
+            })
+        if not any(str(path).startswith("references/") for path in resource_paths):
+            diagnostics.append({
+                "severity": "warning",
+                "code": "missing_references",
+                "message": "建议为 Skill package 提供 references/ 资料。",
+            })
+        return diagnostics
+
+    @staticmethod
+    def _validation_status_from_diagnostics(diagnostics: list[dict[str, Any]]) -> str:
+        if any(item["severity"] == "error" for item in diagnostics):
+            return "invalid"
+        if any(item["severity"] == "warning" for item in diagnostics):
+            return "warning"
+        return "valid"
 
     def _scan_packages(self) -> list[ScannedSkillPackage]:
         result: list[ScannedSkillPackage] = []

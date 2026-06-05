@@ -12,6 +12,9 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
         psop_response = client.get("/api/v1/skills", params={"scope": "psop"})
         detail_response = client.get("/api/v1/skills/pskill-builder")
         versions_response = client.get("/api/v1/skills/pskill-builder/versions")
+        version_id = versions_response.json()[0]["id"]
+        validate_response = client.post(f"/api/v1/skills/pskill-builder/versions/{version_id}/validate")
+        activate_response = client.post(f"/api/v1/skills/pskill-builder/versions/{version_id}/activate")
         pskills_list_response = client.get("/api/v1/pskills")
 
     assert sync_response.status_code == 200
@@ -44,5 +47,10 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
 
     assert versions_response.status_code == 200
     assert versions_response.json()[0]["content_hash"] == detail["active_content_hash"]
+    assert validate_response.status_code == 200
+    assert validate_response.json()["validation_status"] == "warning"
+    assert validate_response.json()["validation_diagnostics"]
+    assert activate_response.status_code == 200
+    assert activate_response.json()["active_version_id"] == version_id
     assert pskills_list_response.status_code == 200
     assert pskills_list_response.json() == []

@@ -2,6 +2,8 @@
   const {
     buildPlatformAgentRunsPath,
     buildPlatformAgentRunPath,
+    buildPlatformSkillsPath,
+    buildPlatformSkillPath,
     buildPlatformToolsPath,
     buildPlatformToolPath,
     buildPlatformMemoryPath,
@@ -55,6 +57,16 @@
     "pskill.runner",
     "pskill.evaluator",
     "psop.governance"
+  ];
+
+  const SKILL_PACKAGE_SCOPE_OPTIONS = [
+    { value: "psop", label: "PSOP" },
+    { value: "public", label: "Public" }
+  ];
+
+  const SKILL_PACKAGE_STATUS_OPTIONS = [
+    { value: "active", label: "启用" },
+    { value: "archived", label: "已归档" }
   ];
 
   window.PSOPConsolePlatformMethods = {
@@ -159,6 +171,176 @@
         owner_id: ""
       };
       return this.applyAgentRunFilters();
+    },
+
+    async loadPlatformSkillsPage() {
+      await Promise.all([
+        this.loadSkillPackages(),
+        this.loadPlatformAgentDefinitions()
+      ]);
+      if (!this.currentSkillPackage && this.skillPackages.length) {
+        await this.loadSkillPackageDetail(this.skillPackages[0].name);
+      }
+    },
+
+    async loadPlatformSkillPage(packageName) {
+      await Promise.all([
+        this.loadSkillPackages(),
+        this.loadPlatformAgentDefinitions()
+      ]);
+      await this.loadSkillPackageDetail(packageName);
+    },
+
+    async loadSkillPackages() {
+      this.busy.skillPackages = true;
+      try {
+        const query = this.skillPackageQueryString();
+        const suffix = query ? `?${query}` : "";
+        const packages = await this.apiRequest(`/skills${suffix}`);
+        this.skillPackages = Array.isArray(packages) ? packages : [];
+        if (this.currentSkillPackage) {
+          const refreshed = this.skillPackages.find((item) => item.name === this.currentSkillPackage.name);
+          this.currentSkillPackage = refreshed ? { ...this.currentSkillPackage, ...refreshed } : this.currentSkillPackage;
+        }
+      } catch (error) {
+        this.showNotice("error", error.message || "Skill packages 加载失败。");
+      } finally {
+        this.busy.skillPackages = false;
+      }
+    },
+
+    async loadSkillPackageDetail(packageName) {
+      const name = String(packageName || "").trim();
+      if (!name) {
+        return;
+      }
+      this.busy.skillPackageDetail = true;
+      try {
+        this.currentSkillPackage = await this.apiRequest(`/skills/${encodeURIComponent(name)}`);
+        this.replaceSkillPackage(this.currentSkillPackage);
+      } catch (error) {
+        this.showNotice("error", error.message || "Skill package 详情加载失败。");
+      } finally {
+        this.busy.skillPackageDetail = false;
+      }
+    },
+
+    async syncSkillPackages() {
+      this.busy.skillPackageAction = true;
+      try {
+        this.skillPackageSyncResult = await this.apiRequest("/skills/sync", { method: "POST" });
+        await this.loadPlatformSkillsPage();
+        this.showNotice("success", "Skill packages 已同步。");
+      } catch (error) {
+        this.showNotice("error", error.message || "Skill packages 同步失败。");
+      } finally {
+        this.busy.skillPackageAction = false;
+      }
+    },
+
+    async validateSkillPackageVersion(version) {
+      if (!this.currentSkillPackage?.name || !version?.id) {
+        return;
+      }
+      this.busy.skillPackageAction = true;
+      try {
+        const updated = await this.apiRequest(
+          `/skills/${encodeURIComponent(this.currentSkillPackage.name)}/versions/${encodeURIComponent(version.id)}/validate`,
+          { method: "POST" }
+        );
+        this.replaceSkillPackageVersion(updated);
+        this.showNotice("success", "Skill package version 已校验。");
+      } catch (error) {
+        this.showNotice("error", error.message || "Skill package version 校验失败。");
+      } finally {
+        this.busy.skillPackageAction = false;
+      }
+    },
+
+    async activateSkillPackageVersion(version) {
+      if (!this.currentSkillPackage?.name || !version?.id) {
+        return;
+      }
+      this.busy.skillPackageAction = true;
+      try {
+        this.currentSkillPackage = await this.apiRequest(
+          `/skills/${encodeURIComponent(this.currentSkillPackage.name)}/versions/${encodeURIComponent(version.id)}/activate`,
+          { method: "POST" }
+        );
+        this.replaceSkillPackage(this.currentSkillPackage);
+        await this.loadSkillPackages();
+        this.showNotice("success", "Skill package version 已激活。");
+      } catch (error) {
+        this.showNotice("error", error.message || "Skill package version 激活失败。");
+      } finally {
+        this.busy.skillPackageAction = false;
+      }
+    },
+
+    async loadPlatformAgentDefinitions() {
+      if (this.platformAgentDefinitions.length) {
+        return;
+      }
+      this.busy.platformAgentDefinitions = true;
+      try {
+        const summaries = await this.apiRequest("/agents");
+        const agents = Array.isArray(summaries) ? summaries : [];
+        this.platformAgentDefinitions = await Promise.all(
+          agents.map((agent) => this.apiRequest(`/agents/${encodeURIComponent(agent.key)}`))
+        );
+      } catch (error) {
+        this.showNotice("error", error.message || "Agent 定义加载失败。");
+      } finally {
+        this.busy.platformAgentDefinitions = false;
+      }
+    },
+
+    skillPackageQueryString() {
+      const params = new URLSearchParams();
+      const scope = String(this.skillPackageFilters.scope || "").trim();
+      const status = String(this.skillPackageFilters.status || "").trim();
+      if (scope) {
+        params.set("scope", scope);
+      }
+      if (status) {
+        params.set("status", status);
+      }
+      return params.toString();
+    },
+
+    applySkillPackageFilters() {
+      this.currentSkillPackage = null;
+      return this.loadPlatformSkillsPage();
+    },
+
+    resetSkillPackageFilters() {
+      this.skillPackageFilters = { scope: "", status: "" };
+      return this.applySkillPackageFilters();
+    },
+
+    replaceSkillPackage(skillPackage) {
+      if (!skillPackage?.name) {
+        return;
+      }
+      const index = this.skillPackages.findIndex((item) => item.name === skillPackage.name);
+      if (index >= 0) {
+        this.skillPackages.splice(index, 1, { ...this.skillPackages[index], ...skillPackage });
+      } else {
+        this.skillPackages.unshift(skillPackage);
+      }
+    },
+
+    replaceSkillPackageVersion(version) {
+      if (!this.currentSkillPackage?.versions || !version?.id) {
+        return;
+      }
+      const index = this.currentSkillPackage.versions.findIndex((item) => item.id === version.id);
+      if (index >= 0) {
+        this.currentSkillPackage.versions.splice(index, 1, version);
+      }
+      if (this.currentSkillPackage.active_version?.id === version.id) {
+        this.currentSkillPackage.active_version = version;
+      }
     },
 
     async loadPlatformToolsPage() {
@@ -445,6 +627,14 @@
       return buildPlatformAgentRunPath(agentRunId);
     },
 
+    platformSkillsPath() {
+      return buildPlatformSkillsPath();
+    },
+
+    platformSkillPath(packageName) {
+      return buildPlatformSkillPath(packageName);
+    },
+
     platformRunLivePath(runId) {
       return buildRunLivePath(runId);
     },
@@ -485,6 +675,14 @@
       return AGENT_KEYS.map((key) => ({ value: key, label: key }));
     },
 
+    skillPackageScopeOptions() {
+      return SKILL_PACKAGE_SCOPE_OPTIONS;
+    },
+
+    skillPackageStatusOptions() {
+      return SKILL_PACKAGE_STATUS_OPTIONS;
+    },
+
     memoryTypeOptions() {
       return MEMORY_TYPE_OPTIONS;
     },
@@ -503,6 +701,14 @@
 
     agentRunStatusLabel(value) {
       return this.optionLabel(AGENT_RUN_STATUS_OPTIONS, value);
+    },
+
+    skillPackageScopeLabel(value) {
+      return this.optionLabel(SKILL_PACKAGE_SCOPE_OPTIONS, value);
+    },
+
+    skillPackageStatusLabel(value) {
+      return this.optionLabel(SKILL_PACKAGE_STATUS_OPTIONS, value);
     },
 
     memoryTypeLabel(value) {
@@ -599,6 +805,45 @@
       const prompt = Number(usage.prompt_tokens || 0);
       const completion = Number(usage.completion_tokens || 0);
       return prompt + completion || "N/A";
+    },
+
+    skillPackageUsedByAgents(skillPackage) {
+      const packageName = skillPackage?.name;
+      if (!packageName) {
+        return [];
+      }
+      return (this.platformAgentDefinitions || []).filter((agent) => {
+        const allowed = agent?.active_version?.spec_json?.allowed_skill_names || [];
+        return Array.isArray(allowed) && allowed.includes(packageName);
+      });
+    },
+
+    skillPackageResourceCountByKind(skillPackage, kind) {
+      const resources = skillPackage?.resources || skillPackage?.active_version?.resource_index || [];
+      return (resources || []).filter((item) => item.resource_kind === kind || item.kind === kind).length;
+    },
+
+    skillPackageValidationTone(value) {
+      const normalized = String(value || "").toLowerCase();
+      if (normalized === "valid") {
+        return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
+      }
+      if (normalized === "warning") {
+        return "border-amber-500/25 bg-amber-500/10 text-amber-200";
+      }
+      if (normalized === "invalid") {
+        return "border-rose-500/25 bg-rose-500/10 text-rose-200";
+      }
+      return "border-slate-600 bg-slate-900/70 text-slate-300";
+    },
+
+    skillPackageDiagnostics(version) {
+      return Array.isArray(version?.validation_diagnostics) ? version.validation_diagnostics : [];
+    },
+
+    skillPackageManifestLabel(version, field) {
+      const manifest = version?.manifest_json || {};
+      return manifest[field] || "N/A";
     },
 
     memoryStatusTone(value) {

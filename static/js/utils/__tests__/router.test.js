@@ -22,6 +22,8 @@ const {
   buildToolAuthorizationsPath,
   buildPlatformAgentRunsPath,
   buildPlatformAgentRunPath,
+  buildPlatformSkillsPath,
+  buildPlatformSkillPath,
   buildPlatformToolsPath,
   buildPlatformToolPath,
   buildPlatformMemoryPath,
@@ -70,6 +72,11 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
     name: "platform-agent-run",
     params: { agentRunId: "agent-run-123" }
   });
+  expect(resolveAdminRoute("/admin/platform/skills")).toEqual({ name: "platform-skills", params: {} });
+  expect(resolveAdminRoute("/admin/platform/skills/pskill-builder")).toEqual({
+    name: "platform-skill",
+    params: { packageName: "pskill-builder" }
+  });
   expect(resolveAdminRoute("/admin/platform/tools")).toEqual({ name: "platform-tools", params: {} });
   expect(resolveAdminRoute("/admin/platform/tools/psop.memory.search")).toEqual({
     name: "platform-tool",
@@ -87,6 +94,8 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
   expect(buildToolAuthorizationsPath()).toBe("/admin/platform/tool-authorizations");
   expect(buildPlatformAgentRunsPath()).toBe("/admin/platform/agent-runs");
   expect(buildPlatformAgentRunPath("agent-run-123")).toBe("/admin/platform/agent-runs/agent-run-123");
+  expect(buildPlatformSkillsPath()).toBe("/admin/platform/skills");
+  expect(buildPlatformSkillPath("pskill-builder")).toBe("/admin/platform/skills/pskill-builder");
   expect(buildPlatformToolsPath()).toBe("/admin/platform/tools");
   expect(buildPlatformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
   expect(buildPlatformMemoryPath()).toBe("/admin/platform/memory");

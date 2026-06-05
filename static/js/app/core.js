@@ -332,6 +332,7 @@
           ["governance-experiments-page", "/pages/governance-experiments.html"],
           ["tool-authorizations-page", "/pages/tool-authorizations.html"],
           ["platform-agent-runs-page", "/pages/platform-agent-runs.html"],
+          ["platform-skills-page", "/pages/platform-skills.html"],
           ["platform-tools-page", "/pages/platform-tools.html"],
           ["platform-memory-page", "/pages/platform-memory.html"],
           ["skill-detail-page", "/pages/skill-detail.html"],
@@ -476,6 +477,9 @@
           this.currentAgentRunSkillActivations = [];
           this.currentAgentRunToolAuthorizations = [];
         }
+        if (!["platform-skills", "platform-skill"].includes(this.route.name)) {
+          this.currentSkillPackage = null;
+        }
         if (!["platform-memory", "platform-memory-entry"].includes(this.route.name)) {
           this.currentMemoryEntry = null;
         }
@@ -554,6 +558,18 @@
           if (this.route.name === "platform-agent-run") {
             this.currentSkill = null;
             await this.loadPlatformAgentRunPage(this.route.params.agentRunId);
+            return;
+          }
+
+          if (this.route.name === "platform-skills") {
+            this.currentSkill = null;
+            await this.loadPlatformSkillsPage();
+            return;
+          }
+
+          if (this.route.name === "platform-skill") {
+            this.currentSkill = null;
+            await this.loadPlatformSkillPage(this.route.params.packageName);
             return;
           }
 
@@ -889,6 +905,9 @@
         }
         if (this.route.name === "platform-agent-runs" || this.route.name === "platform-agent-run") {
           return "Agent Runs";
+        }
+        if (this.route.name === "platform-skills" || this.route.name === "platform-skill") {
+          return "Skill Packages";
         }
         if (this.route.name === "platform-tools" || this.route.name === "platform-tool") {
           return "Tools";
