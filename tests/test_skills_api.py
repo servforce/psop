@@ -2238,6 +2238,9 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
         review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
         list_response = client.get(f"/api/v1/pskills/{created['id']}/test-scenarios")
         runs_response = client.get(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs")
+        tester_agent_run_response = client.get(f"/api/v1/agent-runs/{scenario_run['agent_run_id']}")
+        tester_agent_events_response = client.get(f"/api/v1/agent-runs/{scenario_run['agent_run_id']}/events")
+        tester_agent_model_calls_response = client.get(f"/api/v1/agent-runs/{scenario_run['agent_run_id']}/model-calls")
 
         review = review_response.json()
         cursor = review["cursor_anchors"][-1]
@@ -2256,6 +2259,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
         )
 
     assert scenario_response.status_code == 201
+    assert scenario["suite_id"]
     lane_ids = [lane["id"] for lane in scenario["timeline"]["lanes"]]
     assert lane_ids[:2] == ["sensor.gps", "sensor.pose3d"]
     assert scenario["timeline"]["lanes"][-1] == {"id": "expected.semantic", "kind": "output", "label": "文本"}
@@ -2273,6 +2277,10 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
 
     assert start_response.status_code == 202
     assert scenario_run["driver_status"] == "completed"
+    assert scenario_run["suite_id"] == scenario["suite_id"]
+    assert scenario_run["pskill_version_id"]
+    assert scenario_run["artifact_id"]
+    assert scenario_run["agent_run_id"]
     assert scenario_run["driver_cursor"] == 2
     assert scenario_run["result_summary"]["total"] == 1
     assert scenario_run["result_summary"]["passed"] == 1
@@ -2305,6 +2313,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert review_response.status_code == 200
     assert review["scenario"]["id"] == scenario["id"]
     assert review["scenario_run"]["id"] == scenario_run["id"]
+    assert review["scenario_run"]["agent_run_id"] == scenario_run["agent_run_id"]
     assert review["expectation_evaluations"][0]["expectation_id"] == "expect_completion"
     assert review["expectation_evaluations"][0]["status"] == "passed"
     judge_raw_response = review["expectation_evaluations"][0]["raw_response"]
@@ -2320,7 +2329,19 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert judge_raw_response["content"]
     assert review["replay_timeline"]
     assert list_response.json()[0]["latest_run"]["id"] == scenario_run["id"]
+    assert list_response.json()[0]["latest_run"]["agent_run_id"] == scenario_run["agent_run_id"]
     assert runs_response.json()[0]["id"] == scenario_run["id"]
+    assert tester_agent_run_response.status_code == 200
+    assert tester_agent_run_response.json()["agent_key"] == "pskill.tester"
+    assert tester_agent_run_response.json()["status"] == "succeeded"
+    assert tester_agent_run_response.json()["output_payload"]["decision"] == "pass"
+    tester_event_types = [item["event_type"] for item in tester_agent_events_response.json()]
+    assert "testing.run.linked" in tester_event_types
+    assert "testing.run.evaluation_started" in tester_event_types
+    assert "testing.agent.model_call.completed" in tester_event_types
+    assert "testing.run.evaluation_completed" in tester_event_types
+    assert tester_agent_model_calls_response.json()[0]["provider"] == "fake-openai-compatible"
+    assert tester_agent_model_calls_response.json()[0]["request_payload"]["expectation_id"] == "expect_completion"
 
     assert fork_response.status_code == 201
     assert forked["fork_seed"]["source_scenario_run_id"] == scenario_run["id"]

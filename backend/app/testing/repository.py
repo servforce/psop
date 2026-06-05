@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.compiler.models import ArtifactObject, EgCompileArtifact
 from app.runtime.models import Run
 from app.testing.models import (
+    PSkillTestSuite,
     SkillTestAsset,
     SkillTestExpectationEvaluation,
     SkillTestScenario,
@@ -39,6 +40,25 @@ class SkillTestRepository:
             )
             .order_by(EgCompileArtifact.created_at.desc())
         )
+
+    def get_default_suite(
+        self,
+        session: Session,
+        *,
+        pskill_definition_id: str,
+        pskill_version_id: str | None,
+        suite_type: str = "runtime_simulation",
+    ) -> PSkillTestSuite | None:
+        query = select(PSkillTestSuite).where(
+            PSkillTestSuite.pskill_definition_id == pskill_definition_id,
+            PSkillTestSuite.suite_type == suite_type,
+            PSkillTestSuite.status == "active",
+        )
+        if pskill_version_id:
+            query = query.where(PSkillTestSuite.pskill_version_id == pskill_version_id)
+        else:
+            query = query.where(PSkillTestSuite.pskill_version_id.is_(None))
+        return session.scalar(query.order_by(PSkillTestSuite.created_at.desc()))
 
     def get_run(self, session: Session, run_id: str | None) -> Run | None:
         if not run_id:

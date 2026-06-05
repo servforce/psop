@@ -11,6 +11,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
+from app.agents.service import AgentService
 from app.core.config import Settings
 from app.agent_prompts.service import AgentPromptService
 from app.compiler.models import ArtifactObject
@@ -25,6 +27,7 @@ from app.runtime.schemas import (
 )
 from app.runtime.service import RuntimeService
 from app.testing.models import (
+    PSkillTestSuite,
     SkillTestAsset,
     SkillTestExpectationEvaluation,
     SkillTestScenario,
@@ -108,6 +111,7 @@ class SkillTestService:
         runtime_service: RuntimeService | None = None,
         job_repository: JobRepository | None = None,
         agent_prompt_service: AgentPromptService | None = None,
+        agent_service: AgentService | None = None,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
@@ -120,6 +124,7 @@ class SkillTestService:
         )
         self.job_repository = job_repository or JobRepository()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
+        self.agent_service = agent_service or AgentService()
 
     def list_scenarios(self, session: Session, skill_id: str) -> list[SkillTestScenarioResponse]:
         self._get_skill(session, skill_id)
@@ -132,11 +137,14 @@ class SkillTestService:
         skill_id: str,
         payload: SkillTestScenarioCreateRequest,
     ) -> SkillTestScenarioResponse:
-        self._get_skill(session, skill_id)
+        skill = self._get_skill(session, skill_id)
         self._validate_target_artifact(session, skill_id, payload.target_compile_artifact_id)
         timeline = self._normalize_timeline(payload.timeline, duration_ms=payload.duration_ms)
+        artifact = self.repository.get_artifact(session, payload.target_compile_artifact_id)
+        suite = self._ensure_default_suite(session, skill=skill, pskill_version_id=artifact.pskill_version_id if artifact else None)
         scenario = SkillTestScenario(
             pskill_definition_id=skill_id,
+            suite_id=suite.id,
             target_compile_artifact_id=payload.target_compile_artifact_id,
             name=self._normalize_name(payload.name, field="name"),
             description=payload.description or "",
@@ -229,7 +237,7 @@ class SkillTestService:
             size_bytes=stored.size_bytes,
             checksum=stored.checksum,
             content_json={
-                "kind": "skill_test_asset",
+                "kind": "pskill_test_asset",
                 "filename": safe_filename,
                 "name": name or safe_filename,
                 "description": description,
@@ -313,9 +321,16 @@ class SkillTestService:
 
         timeline = self._normalize_timeline(payload.timeline_override or scenario.timeline, duration_ms=scenario.duration_ms)
         started_at = now_utc()
+        pskill_version_id, artifact_id = self._resolve_test_target(session, skill=skill, scenario=scenario)
+        suite = self._ensure_default_suite(session, skill=skill, pskill_version_id=pskill_version_id)
+        if not scenario.suite_id:
+            scenario.suite_id = suite.id
         scenario_run = SkillTestScenarioRun(
             pskill_definition_id=skill_id,
             scenario_id=scenario.id,
+            suite_id=scenario.suite_id or suite.id,
+            pskill_version_id=pskill_version_id,
+            artifact_id=artifact_id,
             status="running",
             driver_status="pending",
             driver_cursor=0,
@@ -327,6 +342,7 @@ class SkillTestService:
         )
         session.add(scenario_run)
         session.flush()
+        self._ensure_test_agent_run(session, scenario=scenario, scenario_run=scenario_run)
 
         terminal_context = self._build_run_terminal_context(
             skill_id=skill_id,
@@ -342,7 +358,7 @@ class SkillTestService:
                 CreateInvocationRequest(
                     skill_key=skill.key,
                     version_selector=scenario.target_version_selector or "latest",
-                    compile_artifact_id=scenario.target_compile_artifact_id,
+                    compile_artifact_id=artifact_id,
                     input_envelope={},
                     gateway_type="terminal",
                     terminal_context=terminal_context,
@@ -350,6 +366,7 @@ class SkillTestService:
             )
         scenario_run.invocation_id = invocation.id
         scenario_run.run_id = invocation.run_id
+        self._sync_test_agent_runtime_run(session, scenario_run)
         self._sync_scenario_run_from_runtime(session, scenario_run)
         driver_job = self._ensure_driver_job_pending(session, scenario_run, available_at=started_at)
         session.commit()
@@ -397,6 +414,7 @@ class SkillTestService:
             "status": "cancelled",
             "reason": reason or "cancelled by user",
         }
+        self._mark_test_agent_succeeded(session, scenario_run, output_payload=scenario_run.result_summary)
         self._cancel_driver_job(session, scenario_run, reason=reason)
         session.commit()
         return self._build_run_response(scenario_run)
@@ -444,6 +462,7 @@ class SkillTestService:
                 "reason": "runtime_ended_before_required_inputs_sent",
                 "remaining_input_event_ids": [item["id"] for item in input_events[cursor:]],
             }
+            self._mark_test_agent_succeeded(session, scenario_run, output_payload=scenario_run.result_summary)
             session.commit()
             return self._build_run_response(scenario_run)
 
@@ -465,6 +484,7 @@ class SkillTestService:
                             "reason": "runtime_ended_before_required_inputs_sent",
                             "remaining_input_event_ids": [item["id"] for item in input_events[cursor:]],
                         }
+                        self._mark_test_agent_succeeded(session, scenario_run, output_payload=scenario_run.result_summary)
                         session.commit()
                         return self._build_run_response(scenario_run)
                     if scheduled_at <= now:
@@ -549,6 +569,7 @@ class SkillTestService:
             "pending": 0,
             "status": scenario_run.status,
         }
+        self._mark_test_agent_started(session, scenario_run)
         for expectation in expectations:
             cutoff = self._scenario_time(scenario_run, int(expectation.get("at_ms") or 0))
             if run.status not in TERMINAL_RUNTIME_STATUSES and cutoff > now:
@@ -577,7 +598,11 @@ class SkillTestService:
             scenario_run.status = "passed"
             scenario_run.ended_at = scenario_run.ended_at or now_utc()
         summary["status"] = scenario_run.status
+        summary["decision"] = self._decision_for_summary(summary, run_status=run.status)
+        summary["score"] = self._score_for_summary(summary)
         scenario_run.result_summary = summary
+        if scenario_run.status in {"passed", "failed"}:
+            self._mark_test_agent_succeeded(session, scenario_run, output_payload=summary)
         session.commit()
         return self._build_run_response(scenario_run)
 
@@ -603,6 +628,7 @@ class SkillTestService:
         }
         scenario = SkillTestScenario(
             pskill_definition_id=source_run.pskill_definition_id,
+            suite_id=source_scenario.suite_id,
             target_compile_artifact_id=source_scenario.target_compile_artifact_id,
             name=payload.name or f"{source_scenario.name} fork",
             description=payload.description if payload.description is not None else source_scenario.description,
@@ -639,7 +665,7 @@ class SkillTestService:
             "debug_context": {
                 "kind": "skill_debug",
                 "skill_id": source_run.pskill_definition_id,
-                "source": "skill_test_scenario_run",
+                "source": "pskill_test_run",
                 "scenario_run_id": source_run.id,
                 "cursor": payload.cursor.model_dump(),
             },
@@ -672,8 +698,8 @@ class SkillTestService:
             terminal_seq=int(seed.get("terminal_seq") or 0),
             terminal_context=terminal_context,
             input_envelope={
-                "skill_test_scenario_id": scenario.id,
-                "skill_test_scenario_run_id": scenario_run.id,
+                "pskill_test_scenario_id": scenario.id,
+                "pskill_test_run_id": scenario_run.id,
                 "fork_seed": seed,
             },
         )
@@ -885,6 +911,16 @@ class SkillTestService:
             raw_response=raw_response,
         )
         session.add(evaluation)
+        self._record_test_agent_model_call(
+            session,
+            scenario_run,
+            expectation=expectation,
+            request_snapshot=request_snapshot,
+            response_payload=raw_response,
+            status="succeeded" if status in {"passed", "failed", "inconclusive"} else "failed",
+            provider=provider,
+            model=model,
+        )
         return evaluation
 
     def _ensure_driver_job_pending(
@@ -977,6 +1013,184 @@ class SkillTestService:
             if item.status in OPEN_SCENARIO_RUN_STATUSES:
                 return item
         return None
+
+    def _ensure_default_suite(
+        self,
+        session: Session,
+        *,
+        skill: PSkillDefinition,
+        pskill_version_id: str | None,
+    ) -> PSkillTestSuite:
+        suite = self.repository.get_default_suite(
+            session,
+            pskill_definition_id=skill.id,
+            pskill_version_id=pskill_version_id,
+        )
+        if suite:
+            return suite
+        suite = PSkillTestSuite(
+            pskill_definition_id=skill.id,
+            pskill_version_id=pskill_version_id,
+            name=f"{skill.name} Runtime Simulation",
+            suite_type="runtime_simulation",
+            status="active",
+        )
+        session.add(suite)
+        session.flush()
+        return suite
+
+    def _resolve_test_target(
+        self,
+        session: Session,
+        *,
+        skill: PSkillDefinition,
+        scenario: SkillTestScenario,
+    ) -> tuple[str | None, str | None]:
+        artifact = self.repository.get_artifact(session, scenario.target_compile_artifact_id)
+        if artifact:
+            return artifact.pskill_version_id, artifact.id
+        version_id = skill.latest_published_version_id or skill.latest_draft_version_id
+        artifact = self.repository.get_latest_ready_artifact(session, version_id)
+        return version_id, artifact.id if artifact else None
+
+    def _ensure_test_agent_run(
+        self,
+        session: Session,
+        *,
+        scenario: SkillTestScenario,
+        scenario_run: SkillTestScenarioRun,
+    ) -> str:
+        if scenario_run.agent_run_id:
+            return scenario_run.agent_run_id
+        run = self.agent_service.create_run(
+            session,
+            CreateAgentRunRequest(
+                agent_key="pskill.tester",
+                owner_type="pskill_test_run",
+                owner_id=scenario_run.id,
+                run_id=scenario_run.run_id,
+                input_payload={
+                    "pskill_definition_id": scenario_run.pskill_definition_id,
+                    "pskill_version_id": scenario_run.pskill_version_id,
+                    "scenario_id": scenario.id,
+                    "scenario_run_id": scenario_run.id,
+                    "suite_id": scenario_run.suite_id,
+                    "artifact_id": scenario_run.artifact_id,
+                },
+            ),
+            commit=False,
+        )
+        scenario_run.agent_run_id = run.id
+        self.agent_service.append_event(
+            session,
+            run.id,
+            AppendAgentEventRequest(
+                event_type="testing.run.linked",
+                phase="testing",
+                payload={"scenario_id": scenario.id, "scenario_run_id": scenario_run.id},
+            ),
+            commit=False,
+        )
+        return run.id
+
+    def _sync_test_agent_runtime_run(self, session: Session, scenario_run: SkillTestScenarioRun) -> None:
+        if not scenario_run.agent_run_id:
+            return
+        agent_run = self.agent_service.get_run_model(session, scenario_run.agent_run_id)
+        agent_run.run_id = scenario_run.run_id
+        input_payload = dict(agent_run.input_payload or {})
+        input_payload["runtime_run_id"] = scenario_run.run_id
+        agent_run.input_payload = input_payload
+
+    def _mark_test_agent_started(self, session: Session, scenario_run: SkillTestScenarioRun) -> None:
+        if not scenario_run.agent_run_id:
+            return
+        agent_run = self.agent_service.get_run_model(session, scenario_run.agent_run_id)
+        agent_run.status = "running"
+        agent_run.started_at = agent_run.started_at or now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="testing.run.evaluation_started",
+                phase="testing",
+                payload={"scenario_run_id": scenario_run.id, "runtime_run_id": scenario_run.run_id},
+            ),
+            commit=False,
+        )
+
+    def _mark_test_agent_succeeded(
+        self,
+        session: Session,
+        scenario_run: SkillTestScenarioRun,
+        *,
+        output_payload: dict[str, Any],
+    ) -> None:
+        if not scenario_run.agent_run_id:
+            return
+        agent_run = self.agent_service.get_run_model(session, scenario_run.agent_run_id)
+        agent_run.status = "succeeded"
+        agent_run.output_payload = {
+            "scenario_run_id": scenario_run.id,
+            "pskill_definition_id": scenario_run.pskill_definition_id,
+            **output_payload,
+        }
+        agent_run.error_message = ""
+        agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="testing.run.evaluation_completed",
+                phase="testing",
+                payload=agent_run.output_payload,
+            ),
+            commit=False,
+        )
+
+    def _record_test_agent_model_call(
+        self,
+        session: Session,
+        scenario_run: SkillTestScenarioRun,
+        *,
+        expectation: dict[str, Any],
+        request_snapshot: dict[str, Any],
+        response_payload: dict[str, Any],
+        status: str,
+        provider: str,
+        model: str,
+    ) -> None:
+        if not scenario_run.agent_run_id:
+            return
+        usage = {}
+        if isinstance(response_payload.get("usage"), dict):
+            usage = dict(response_payload["usage"])
+        self.agent_service.record_model_call(
+            session,
+            agent_run_id=scenario_run.agent_run_id,
+            provider=provider or "llm_inference_gateway",
+            route_key=str(request_snapshot.get("route_key") or TEXT_ROUTE_KEY),
+            model_name=model or "",
+            status=status,
+            request_payload={
+                "scenario_run_id": scenario_run.id,
+                "expectation_id": str(expectation.get("id") or ""),
+                "request": request_snapshot,
+            },
+            response_payload=response_payload,
+            usage_json=usage,
+            commit=False,
+        )
+        self.agent_service.append_event(
+            session,
+            scenario_run.agent_run_id,
+            AppendAgentEventRequest(
+                event_type="testing.agent.model_call.completed",
+                phase="testing",
+                payload={"scenario_run_id": scenario_run.id, "expectation_id": str(expectation.get("id") or ""), "status": status},
+            ),
+            commit=False,
+        )
 
     def _get_skill(self, session: Session, skill_id: str) -> PSkillDefinition:
         skill = self.repository.get_skill(session, skill_id)
@@ -1179,6 +1393,22 @@ class SkillTestService:
 
     def _timeline_expectation_events(self, timeline: dict[str, Any]) -> list[dict[str, Any]]:
         return [item for item in timeline.get("events", []) if isinstance(item, dict) and self._is_expectation_event(item)]
+
+    @staticmethod
+    def _score_for_summary(summary: dict[str, Any]) -> int:
+        total = int(summary.get("total") or 0)
+        if total <= 0:
+            return 100 if summary.get("status") == "passed" else 0
+        passed = int(summary.get("passed") or 0)
+        return max(0, min(100, round((passed / total) * 100)))
+
+    @staticmethod
+    def _decision_for_summary(summary: dict[str, Any], *, run_status: str) -> str:
+        if summary.get("pending", 0) > 0:
+            return "require_human_review"
+        if summary.get("failed", 0) > 0 or summary.get("inconclusive", 0) > 0 or run_status != "succeeded":
+            return "fail"
+        return "pass"
 
     def _scenario_time(self, scenario_run: SkillTestScenarioRun, at_ms: int) -> datetime:
         origin = self._aware_datetime(scenario_run.time_origin or scenario_run.started_at or scenario_run.created_at)
@@ -1483,8 +1713,8 @@ class SkillTestService:
             "test_context": {
                 "kind": "skill_blackbox_timeline_test",
                 "skill_id": skill_id,
-                "skill_test_scenario_id": scenario.id,
-                "skill_test_scenario_run_id": scenario_run.id,
+                "pskill_test_scenario_id": scenario.id,
+                "pskill_test_run_id": scenario_run.id,
             },
         }
         if override:
@@ -1493,8 +1723,8 @@ class SkillTestService:
                 {
                     "kind": "skill_blackbox_timeline_test",
                     "skill_id": skill_id,
-                    "skill_test_scenario_id": scenario.id,
-                    "skill_test_scenario_run_id": scenario_run.id,
+                    "pskill_test_scenario_id": scenario.id,
+                    "pskill_test_run_id": scenario_run.id,
                 }
             )
         return base
@@ -1736,6 +1966,7 @@ class SkillTestService:
         return SkillTestScenarioResponse(
             id=scenario.id,
             pskill_definition_id=scenario.pskill_definition_id,
+            suite_id=scenario.suite_id,
             name=scenario.name,
             description=scenario.description,
             target_version_selector=scenario.target_version_selector,
@@ -1773,6 +2004,10 @@ class SkillTestService:
             id=scenario_run.id,
             pskill_definition_id=scenario_run.pskill_definition_id,
             scenario_id=scenario_run.scenario_id,
+            suite_id=scenario_run.suite_id,
+            pskill_version_id=scenario_run.pskill_version_id,
+            artifact_id=scenario_run.artifact_id,
+            agent_run_id=scenario_run.agent_run_id,
             invocation_id=scenario_run.invocation_id,
             run_id=scenario_run.run_id,
             status=scenario_run.status,
@@ -1792,6 +2027,10 @@ class SkillTestService:
     def _build_run_summary(scenario_run: SkillTestScenarioRun) -> SkillTestScenarioRunSummary:
         return SkillTestScenarioRunSummary(
             id=scenario_run.id,
+            suite_id=scenario_run.suite_id,
+            pskill_version_id=scenario_run.pskill_version_id,
+            artifact_id=scenario_run.artifact_id,
+            agent_run_id=scenario_run.agent_run_id,
             status=scenario_run.status,
             driver_status=scenario_run.driver_status,
             run_id=scenario_run.run_id,

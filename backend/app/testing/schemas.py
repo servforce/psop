@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field
 
 class SkillTestScenarioRunSummary(BaseModel):
     id: str
+    suite_id: str | None = None
+    pskill_version_id: str | None = None
+    artifact_id: str | None = None
+    agent_run_id: str | None = None
     status: str
     driver_status: str
     run_id: str | None = None
@@ -42,6 +46,7 @@ class SkillTestScenarioUpdateRequest(BaseModel):
 class SkillTestScenarioResponse(BaseModel):
     id: str
     pskill_definition_id: str
+    suite_id: str | None = None
     name: str
     description: str
     target_version_selector: str
@@ -84,6 +89,10 @@ class SkillTestScenarioRunResponse(BaseModel):
     id: str
     pskill_definition_id: str
     scenario_id: str
+    suite_id: str | None = None
+    pskill_version_id: str | None = None
+    artifact_id: str | None = None
+    agent_run_id: str | None = None
     invocation_id: str | None = None
     run_id: str | None = None
     status: str
