@@ -75,6 +75,7 @@ class SessionTokenSnapshotResponse(BaseModel):
 class RunTraceResponse(BaseModel):
     id: str
     run_id: str
+    agent_run_id: str | None = None
     seq_no: int
     phase: str
     event_type: str
@@ -158,6 +159,7 @@ class RunEventResponse(BaseModel):
     run_id: str
     run_trace_id: str | None = None
     trace_event_id: str | None = None
+    agent_run_id: str | None = None
     artifact_object_id: str | None = None
     run_capability_binding_id: str | None = None
     direction: str

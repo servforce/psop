@@ -76,7 +76,7 @@ DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
         "role": "runner",
         "goal": "在 RuntimeService 主权边界内为运行节点生成 observation。",
         "usage_keys": ["pskill.run.node"],
-        "allowed_tools": ["psop.runtime.read", "psop.run_events.write_low"],
+        "allowed_tools": ["psop.runtime.read"],
         "allowed_skill_names": ["pskill-runner-field-assistant"],
         "output_schema": {"name": "RuntimeAgentObservation"},
     },

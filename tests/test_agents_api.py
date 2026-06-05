@@ -84,6 +84,7 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     }
     assert agent_detail_response.status_code == 200
     assert agent_detail_response.json()["active_version"]["spec_json"]["output_schema"]["name"] == "RuntimeAgentObservation"
+    assert agent_detail_response.json()["active_version"]["spec_json"]["allowed_tools"] == ["psop.runtime.read"]
     assert versions_response.status_code == 200
     assert versions_response.json()[0]["status"] == "published"
 

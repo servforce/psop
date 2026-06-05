@@ -534,6 +534,20 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
         terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
         bindings = runtime_service.list_run_bindings(session, invocation.run_id or "")
+        runner_runs = runtime_service.agent_service.list_runs(
+            session,
+            agent_key="pskill.runner",
+            owner_type="runtime_run",
+            owner_id=invocation.run_id or "",
+        )
+        runner_events_by_run = {
+            item.id: runtime_service.agent_service.list_events(session, item.id)
+            for item in runner_runs
+        }
+        runner_model_calls_by_run = {
+            item.id: runtime_service.agent_service.list_model_calls(session, item.id)
+            for item in runner_runs
+        }
 
     assert invocation.status == "running"
     assert invocation.terminal_session_id
@@ -561,6 +575,22 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert snapshots[-1].token_payload["observations"]["instruct_collect_context"]["input_summary"]["user_chars"] > 0
     runtime_llm_calls = inference_gateway.calls[1:]
     assert runtime_llm_calls
+    assert len(runner_runs) == len(runtime_llm_calls) == 3
+    runner_run_ids = {item.id for item in runner_runs}
+    assert all(item.agent_key == "pskill.runner" for item in runner_runs)
+    assert all(item.status == "succeeded" for item in runner_runs)
+    assert all(item.run_id == invocation.run_id for item in runner_runs)
+    assert all(item.output_payload["schema"] == "RuntimeAgentObservation" for item in runner_runs)
+    assert all(item.output_payload["observation"]["schema"] == "RuntimeAgentObservation" for item in runner_runs)
+    assert all("_trace_request" not in item.output_payload["observation"] for item in runner_runs)
+    assert all("request" not in item.output_payload["observation"] for item in runner_runs)
+    assert all(item.input_payload["runtime_context"]["latest_snapshot_seq"] >= 0 for item in runner_runs)
+    assert all(
+        {"agent.run.created", "runtime.node.started", "runtime.agent.model_call.completed", "runtime.agent.observation.returned"}
+        <= {event.event_type for event in runner_events_by_run[item.id]}
+        for item in runner_runs
+    )
+    assert all(calls and calls[0].provider == "llm_inference_gateway" for calls in runner_model_calls_by_run.values())
     assert all("平台级输出语言要求" in call["system_prompt"] for call in runtime_llm_calls)
     assert all("JSON 字段名和 decision/next_phase 等协议枚举值保持英文协议值" in call["system_prompt"] for call in runtime_llm_calls)
     assert all("reason、terminal_message、final_response、summary" in call["system_prompt"] for call in runtime_llm_calls)
@@ -568,6 +598,10 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     llm_trace_payloads = [
         event.payload for event in trace_events if event.event_type == "gateway.inference.completed"
     ]
+    llm_trace_agent_run_ids = {
+        event.agent_run_id for event in trace_events if event.event_type == "gateway.inference.completed"
+    }
+    assert llm_trace_agent_run_ids == runner_run_ids
     assert "input" not in llm_trace_payloads[0]["observation"]
     assert "_trace_request" not in llm_trace_payloads[0]["observation"]
     assert llm_trace_payloads[0]["observation"]["input_summary"]["system_prompt_hash"]
@@ -583,6 +617,8 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert terminal_session.terminal_session.status == "closed"
     assert [event.direction for event in terminal_events] == ["output", "input", "output", "output", "output"]
     assert terminal_events[1].payload_inline == "我已经完成当前步骤，并上传了现场说明。"
+    assert terminal_events[0].agent_run_id in runner_run_ids
+    assert terminal_events[1].agent_run_id is None
     assert {binding.requirement_key for binding in bindings} == {"terminal.input", "terminal.output"}
     assert len(replay.terminal_events) == 5
     assert len(replay.bindings) == 2

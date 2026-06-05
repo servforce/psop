@@ -9,6 +9,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
+from app.agents.service import AgentService
 from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
@@ -73,6 +75,7 @@ class RuntimeService:
         repository: RuntimeRepository | None = None,
         job_repository: JobRepository | None = None,
         agent_prompt_service: AgentPromptService | None = None,
+        agent_service: AgentService | None = None,
         object_store: ObjectStoreService | None = None,
     ) -> None:
         self.settings = settings
@@ -80,6 +83,7 @@ class RuntimeService:
         self.repository = repository or RuntimeRepository()
         self.job_repository = job_repository or JobRepository()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
+        self.agent_service = agent_service or AgentService()
         self.object_store = object_store
 
     def create_invocation(self, session: Session, payload: CreateInvocationRequest) -> InvocationResponse:
@@ -481,6 +485,7 @@ class RuntimeService:
                             )
                             observation = self._execute_node(
                                 session=session,
+                                run=run,
                                 node=node,
                                 token=token,
                                 artifact_payload=artifact_payload,
@@ -495,6 +500,7 @@ class RuntimeService:
                         token=token,
                         node=node,
                         observation=observation,
+                        agent_run_id=self._agent_run_id_from_observation(observation),
                     )
                     token = self._append_runtime_step(
                         session,
@@ -505,6 +511,7 @@ class RuntimeService:
                         enabled_after=[]
                         if entered_wait
                         else [item["id"] for item in self._enabled_nodes(artifact_payload, token)],
+                        agent_run_id=self._agent_run_id_from_observation(observation),
                     )
                     if entered_wait:
                         run.status = "waiting_input"
@@ -997,6 +1004,7 @@ class RuntimeService:
         node: dict[str, Any],
         observation: dict[str, Any],
         enabled_after: list[str],
+        agent_run_id: str | None = None,
     ) -> dict[str, Any]:
         next_seq = run.latest_snapshot_seq + 1
         run.latest_snapshot_seq = next_seq
@@ -1017,6 +1025,7 @@ class RuntimeService:
             run=run,
             phase=str(node.get("id")),
             event_type=self._event_type_for_node(node),
+            agent_run_id=agent_run_id,
             payload={
                 "node_id": node.get("id"),
                 "node_kind": node.get("kind"),
@@ -1037,6 +1046,7 @@ class RuntimeService:
                     payload_inline=str(observation["final_response"]),
                     binding_id=None,
                     source_ref={"kind": "runtime", "node_id": str(node.get("id"))},
+                    agent_run_id=agent_run_id,
                 )
         session.flush()
         return token
@@ -1049,6 +1059,7 @@ class RuntimeService:
         token: dict[str, Any],
         node: dict[str, Any],
         observation: dict[str, Any],
+        agent_run_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
         next_token = token
@@ -1071,6 +1082,7 @@ class RuntimeService:
                     payload_inline=terminal_message,
                     binding_id=None,
                     source_ref={"kind": "runtime", "node_id": str(node.get("id"))},
+                    agent_run_id=agent_run_id,
                 )
 
         if self._node_is_evaluation(node):
@@ -1108,6 +1120,7 @@ class RuntimeService:
                 run=run,
                 phase=str(node.get("id")),
                 event_type="runtime.wait_checkpoint.entered",
+                agent_run_id=agent_run_id,
                 payload={"wait": next_token.get("control", {}).get("wait", {})},
             )
 
@@ -1283,6 +1296,7 @@ class RuntimeService:
                 },
                 external_event_id=f"runtime:{run.id}:message-processing-failed:{run_trace.seq_no}",
                 run_trace_id=run_trace.id,
+                agent_run_id=run_trace.agent_run_id,
             )
         except Exception:
             LOGGER.exception("failed to append recoverable runtime failure terminal event", extra={"run_id": run.id})
@@ -1536,6 +1550,7 @@ class RuntimeService:
                 },
                 external_event_id=f"runtime:{run.id}:failed",
                 run_trace_id=run_trace.id,
+                agent_run_id=run_trace.agent_run_id,
             )
         except Exception:
             LOGGER.exception("failed to append runtime failure terminal event", extra={"run_id": run.id})
@@ -1584,11 +1599,13 @@ class RuntimeService:
         phase: str,
         event_type: str,
         payload: dict[str, Any],
+        agent_run_id: str | None = None,
     ) -> RunTrace:
         seq_no = run.latest_trace_seq + 1
         run.latest_trace_seq = seq_no
         event = RunTrace(
             run_id=run.id,
+            agent_run_id=agent_run_id,
             seq_no=seq_no,
             phase=phase,
             event_type=event_type,
@@ -1615,6 +1632,7 @@ class RuntimeService:
         source_ref: dict[str, Any] | None = None,
         external_event_id: str | None = None,
         run_trace_id: str | None = None,
+        agent_run_id: str | None = None,
         occurred_at=None,
     ) -> RunEvent:
         normalized_direction = direction.strip().lower()
@@ -1642,6 +1660,7 @@ class RuntimeService:
             terminal_session_id=terminal_session.id,
             run_id=run.id,
             run_trace_id=run_trace_id,
+            agent_run_id=agent_run_id,
             artifact_object_id=artifact_object_id,
             run_capability_binding_id=resolved_binding_id,
             direction=normalized_direction,
@@ -1873,6 +1892,7 @@ class RuntimeService:
             "payload_inline": event.payload_inline,
             "artifact_object_id": event.artifact_object_id,
             "binding_id": event.run_capability_binding_id,
+            "agent_run_id": event.agent_run_id,
             "source_ref": event.source_ref,
             "occurred_at": event.occurred_at.isoformat(),
         }
@@ -2065,6 +2085,7 @@ class RuntimeService:
         self,
         *,
         session: Session,
+        run: Run,
         node: dict[str, Any],
         token: dict[str, Any],
         artifact_payload: dict[str, Any],
@@ -2089,44 +2110,73 @@ class RuntimeService:
                 if attachments
                 else artifact_payload.get("capability_summary", {}).get("llm_route_key", TEXT_ROUTE_KEY)
             )
-            with start_span("gateway.inference", route_key=route_key, node_id=node.get("id")):
-                if attachments:
-                    if not hasattr(self.inference_gateway, "complete_multimodal"):
-                        raise RuntimeError("当前 LLM Inference Gateway 不支持多模态输入。")
-                    llm_completion = self.inference_gateway.complete_multimodal(
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        attachments=attachments,
-                        route_key=route_key,
-                    )
-                else:
-                    llm_completion = self.inference_gateway.complete(
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        route_key=route_key,
-                    )
+            input_summary = self._llm_prompt_summary(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                route_key=route_key,
+                agent_prompt=prompt_metadata,
+            )
+            input_parts = self._llm_attachment_summary(attachments)
+            agent_run_id = self._create_runtime_agent_run(
+                session,
+                run=run,
+                node=node,
+                token=token,
+                input_summary=input_summary,
+                input_parts=input_parts,
+            )
+            try:
+                with start_span("gateway.inference", route_key=route_key, node_id=node.get("id")):
+                    if attachments:
+                        if not hasattr(self.inference_gateway, "complete_multimodal"):
+                            raise RuntimeError("当前 LLM Inference Gateway 不支持多模态输入。")
+                        llm_completion = self.inference_gateway.complete_multimodal(
+                            system_prompt=system_prompt,
+                            user_prompt=user_prompt,
+                            attachments=attachments,
+                            route_key=route_key,
+                        )
+                    else:
+                        llm_completion = self.inference_gateway.complete(
+                            system_prompt=system_prompt,
+                            user_prompt=user_prompt,
+                            route_key=route_key,
+                        )
+            except Exception as exc:
+                self._mark_runtime_agent_failed(session, agent_run_id=agent_run_id, node=node, error_message=str(exc))
+                raise
             budgets = token.setdefault("budgets", {})
             budgets["llm_calls"] = int(budgets.get("llm_calls", 0)) + 1
             self._accumulate_llm_usage(budgets, llm_completion.usage)
             observation = {
+                "schema": "RuntimeAgentObservation",
                 "content": llm_completion.content,
                 "provider": llm_completion.provider,
                 "model": llm_completion.model,
-                "input_summary": self._llm_prompt_summary(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    route_key=route_key,
-                    agent_prompt=prompt_metadata,
-                ),
-                "input_parts": self._llm_attachment_summary(attachments),
+                "input_summary": input_summary,
+                "input_parts": input_parts,
                 "output": {"content": llm_completion.content},
                 "usage": llm_completion.usage,
                 "summary": "LLM 节点执行完成。",
+                "_agent_run_id": agent_run_id,
             }
             if llm_completion.request:
                 observation["_trace_request"] = llm_completion.request
             if self._node_is_evaluation(node):
                 observation.update(self._parse_evaluation_observation(llm_completion.content, node=node))
+            self._record_runtime_agent_model_call(
+                session,
+                agent_run_id=agent_run_id,
+                node=node,
+                route_key=route_key,
+                observation=observation,
+            )
+            self._mark_runtime_agent_succeeded(
+                session,
+                agent_run_id=agent_run_id,
+                node=node,
+                output_payload=self._runtime_agent_observation_payload(node=node, observation=observation),
+            )
             return observation
         if kind == "tool" or actor_name == "capability.demo_tool":
             user_input = self._extract_user_input(token.get("input_envelope", {}), artifact_payload)
@@ -2153,6 +2203,181 @@ class RuntimeService:
             return {"final_response": str(final_response), "summary": "Run 已完成。"}
         raise RuntimeError(f"Unsupported runtime node actor: {actor_name or kind}")
 
+    def _create_runtime_agent_run(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        node: dict[str, Any],
+        token: dict[str, Any],
+        input_summary: dict[str, Any],
+        input_parts: list[dict[str, Any]],
+    ) -> str:
+        agent_run = self.agent_service.create_run(
+            session,
+            CreateAgentRunRequest(
+                agent_key="pskill.runner",
+                owner_type="runtime_run",
+                owner_id=run.id,
+                run_id=run.id,
+                input_payload={
+                    "schema": "RuntimeAgentObservation",
+                    "run_id": run.id,
+                    "compile_artifact_id": run.compile_artifact_id,
+                    "node": self._runtime_agent_node_payload(node),
+                    "runtime_context": self._runtime_agent_context_payload(run=run, token=token),
+                    "input_summary": input_summary,
+                    "input_parts": input_parts,
+                },
+            ),
+            commit=False,
+        )
+        agent_run_model = self.agent_service.get_run_model(session, agent_run.id)
+        agent_run_model.status = "running"
+        agent_run_model.started_at = agent_run_model.started_at or now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="runtime.node.started",
+                phase=str(node.get("id") or ""),
+                payload={
+                    "run_id": run.id,
+                    "node_id": str(node.get("id") or ""),
+                    "node_kind": str(node.get("kind") or ""),
+                    "output_schema": "RuntimeAgentObservation",
+                },
+            ),
+            commit=False,
+        )
+        return agent_run.id
+
+    def _mark_runtime_agent_succeeded(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        node: dict[str, Any],
+        output_payload: dict[str, Any],
+    ) -> None:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        agent_run.status = "succeeded"
+        agent_run.output_payload = output_payload
+        agent_run.error_message = ""
+        agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="runtime.agent.observation.returned",
+                phase=str(node.get("id") or ""),
+                payload={
+                    "node_id": str(node.get("id") or ""),
+                    "output_schema": "RuntimeAgentObservation",
+                    "decision": str(output_payload.get("observation", {}).get("decision") or ""),
+                    "has_terminal_message": bool(output_payload.get("observation", {}).get("terminal_message")),
+                },
+            ),
+            commit=False,
+        )
+
+    def _mark_runtime_agent_failed(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        node: dict[str, Any],
+        error_message: str,
+    ) -> None:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        agent_run.status = "failed"
+        agent_run.error_message = error_message
+        agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="runtime.agent.failed",
+                phase=str(node.get("id") or ""),
+                payload={"node_id": str(node.get("id") or ""), "error_message": error_message},
+            ),
+            commit=False,
+        )
+
+    def _record_runtime_agent_model_call(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        node: dict[str, Any],
+        route_key: str,
+        observation: dict[str, Any],
+    ) -> None:
+        self.agent_service.record_model_call(
+            session,
+            agent_run_id=agent_run_id,
+            provider="llm_inference_gateway",
+            route_key=route_key,
+            model_name=str(observation.get("model") or ""),
+            status="succeeded",
+            request_payload={
+                "node": self._runtime_agent_node_payload(node),
+                "input_summary": observation.get("input_summary") if isinstance(observation.get("input_summary"), dict) else {},
+                "input_parts": observation.get("input_parts") if isinstance(observation.get("input_parts"), list) else [],
+            },
+            response_payload=self._runtime_agent_observation_payload(node=node, observation=observation),
+            usage_json=dict(observation.get("usage") or {}),
+            commit=False,
+        )
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="runtime.agent.model_call.completed",
+                phase=str(node.get("id") or ""),
+                payload={"node_id": str(node.get("id") or ""), "route_key": route_key},
+            ),
+            commit=False,
+        )
+
+    @staticmethod
+    def _runtime_agent_node_payload(node: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(node.get("id") or ""),
+            "kind": str(node.get("kind") or ""),
+            "actor": node.get("actor") if isinstance(node.get("actor"), dict) else {},
+        }
+
+    @staticmethod
+    def _runtime_agent_context_payload(*, run: Run, token: dict[str, Any]) -> dict[str, Any]:
+        terminal = token.get("terminal") if isinstance(token.get("terminal"), dict) else {}
+        events = terminal.get("events") if isinstance(terminal, dict) else []
+        latest_event = events[-1] if isinstance(events, list) and events else {}
+        control = token.get("control") if isinstance(token.get("control"), dict) else {}
+        wait = control.get("wait") if isinstance(control, dict) and isinstance(control.get("wait"), dict) else {}
+        return {
+            "status": str(token.get("status") or ""),
+            "phase": str(token.get("phase") or ""),
+            "runtime_phase": run.runtime_phase,
+            "latest_snapshot_seq": run.latest_snapshot_seq,
+            "latest_run_event_seq": run.latest_run_event_seq,
+            "latest_trace_seq": run.latest_trace_seq,
+            "wait": wait,
+            "latest_terminal_event": latest_event if isinstance(latest_event, dict) else {},
+        }
+
+    def _runtime_agent_observation_payload(self, *, node: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "schema": "RuntimeAgentObservation",
+            "node": self._runtime_agent_node_payload(node),
+            "observation": self._observation_for_agent_output(observation),
+        }
+
+    @staticmethod
+    def _agent_run_id_from_observation(observation: dict[str, Any]) -> str | None:
+        value = observation.get("_agent_run_id")
+        return str(value) if value else None
+
     def _merge_observation(self, *, node: dict[str, Any], token: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
         next_token = json.loads(json.dumps(token, ensure_ascii=False))
         token_observation = self._observation_for_token(observation)
@@ -2174,14 +2399,23 @@ class RuntimeService:
     @staticmethod
     def _observation_for_trace(observation: dict[str, Any]) -> dict[str, Any]:
         trace_observation = dict(observation)
+        trace_observation.pop("_agent_run_id", None)
         request = trace_observation.pop("_trace_request", None)
         if request:
             trace_observation["request"] = request
         return trace_observation
 
     @staticmethod
+    def _observation_for_agent_output(observation: dict[str, Any]) -> dict[str, Any]:
+        agent_observation = dict(observation)
+        agent_observation.pop("_agent_run_id", None)
+        agent_observation.pop("_trace_request", None)
+        return agent_observation
+
+    @staticmethod
     def _observation_for_token(observation: dict[str, Any]) -> dict[str, Any]:
         token_observation = dict(observation)
+        token_observation.pop("_agent_run_id", None)
         token_observation.pop("_trace_request", None)
         return token_observation
 
@@ -2481,6 +2715,7 @@ class RuntimeService:
             run_id=event.run_id,
             run_trace_id=event.run_trace_id,
             trace_event_id=event.run_trace_id,
+            agent_run_id=event.agent_run_id,
             artifact_object_id=event.artifact_object_id,
             run_capability_binding_id=event.run_capability_binding_id,
             direction=event.direction,
@@ -2556,6 +2791,7 @@ class RuntimeService:
         return RunTraceResponse(
             id=event.id,
             run_id=event.run_id,
+            agent_run_id=event.agent_run_id,
             seq_no=event.seq_no,
             phase=event.phase,
             event_type=event.event_type,

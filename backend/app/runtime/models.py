@@ -112,10 +112,12 @@ class RunTrace(Base):
     __table_args__ = (
         Index("idx_run_trace_run_phase_seq", "run_id", "phase", "seq_no"),
         Index("idx_run_trace_span_id", "span_id"),
+        Index("idx_run_trace_agent_run", "agent_run_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     run_id: Mapped[str] = mapped_column(ForeignKey("run.id", ondelete="CASCADE"), nullable=False)
+    agent_run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_run.id", ondelete="SET NULL"), nullable=True)
     seq_no: Mapped[int] = mapped_column(nullable=False)
     phase: Mapped[str] = mapped_column(String(64), nullable=False)
     event_type: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -185,6 +187,7 @@ class RunEvent(Base):
         UniqueConstraint("run_id", "external_event_id", name="uk_run_event_run_external"),
         Index("idx_run_event_run_seq", "run_id", "seq_no"),
         Index("idx_run_event_binding_seq", "run_capability_binding_id", "seq_no"),
+        Index("idx_run_event_agent_run", "agent_run_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
@@ -194,6 +197,7 @@ class RunEvent(Base):
     )
     run_id: Mapped[str] = mapped_column(ForeignKey("run.id", ondelete="CASCADE"), nullable=False)
     run_trace_id: Mapped[str | None] = mapped_column(ForeignKey("run_trace.id", ondelete="SET NULL"), nullable=True)
+    agent_run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_run.id", ondelete="SET NULL"), nullable=True)
     artifact_object_id: Mapped[str | None] = mapped_column(
         ForeignKey("artifact_object.id", ondelete="SET NULL"),
         nullable=True,
