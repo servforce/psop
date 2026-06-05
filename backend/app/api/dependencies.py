@@ -14,6 +14,7 @@ from app.evaluations.service import EvaluationService
 from app.governance.service import GovernanceService
 from app.memory.service import MemoryService
 from app.jobs.service import JobQueryService
+from app.observability.service import ObservabilityService
 from app.runtime.service import RuntimeService
 from app.testing.service import SkillTestService
 from app.tools.service import ToolService
@@ -127,3 +128,7 @@ def get_memory_service(_: Request) -> MemoryService:
 
 def get_tool_service(_: Request) -> ToolService:
     return ToolService()
+
+
+def get_observability_service(_: Request) -> ObservabilityService:
+    return ObservabilityService()
