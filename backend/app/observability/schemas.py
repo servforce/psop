@@ -67,6 +67,54 @@ class GlobalObservabilityMetrics(BaseModel):
     otel_service_name: str = ""
 
 
+class RuntimeObservabilityMetrics(BaseModel):
+    run_count: int = 0
+    run_status_counts: dict[str, int] = Field(default_factory=dict)
+    run_event_count: int = 0
+    run_event_kind_counts: dict[str, int] = Field(default_factory=dict)
+    run_trace_count: int = 0
+    run_trace_event_type_counts: dict[str, int] = Field(default_factory=dict)
+    run_trace_phase_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class AgentObservabilityMetrics(BaseModel):
+    agent_run_count: int = 0
+    agent_run_status_counts: dict[str, int] = Field(default_factory=dict)
+    agent_run_key_counts: dict[str, int] = Field(default_factory=dict)
+    agent_event_count: int = 0
+    agent_event_type_counts: dict[str, int] = Field(default_factory=dict)
+    agent_event_phase_counts: dict[str, int] = Field(default_factory=dict)
+    model_call_count: int = 0
+    model_call_status_counts: dict[str, int] = Field(default_factory=dict)
+    model_call_provider_counts: dict[str, int] = Field(default_factory=dict)
+    tool_call_count: int = 0
+    tool_call_status_counts: dict[str, int] = Field(default_factory=dict)
+    tool_call_side_effect_counts: dict[str, int] = Field(default_factory=dict)
+    tool_authorization_count: int = 0
+    tool_authorization_status_counts: dict[str, int] = Field(default_factory=dict)
+    tool_authorization_risk_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class OpenTelemetryStatus(BaseModel):
+    enabled: bool = False
+    configured: bool = False
+    traces_enabled: bool = False
+    logs_enabled: bool = False
+    console_exporter: bool = False
+    exporter_otlp_endpoint: str = ""
+    exporter_otlp_protocol: str = ""
+    service_name: str = ""
+
+
+class ObservabilityMetricsResponse(BaseModel):
+    generated_at: datetime
+    since: datetime
+    window_hours: int
+    runtime: RuntimeObservabilityMetrics
+    agents: AgentObservabilityMetrics
+    open_telemetry: OpenTelemetryStatus
+
+
 class DashboardMetricsResponse(BaseModel):
     generated_at: datetime
     window_hours: int

@@ -10,15 +10,19 @@ from app.core.config import Settings
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
 from app.governance.models import PsopImprovementProposal
 from app.pskills.models import PSkillDefinition, PSkillVersion, now_utc
-from app.runtime.models import Run, RunTrace
+from app.runtime.models import Run, RunEvent, RunTrace
 from app.testing.models import PSkillPublishGate
 from app.observability.schemas import (
     AgentDashboardMetrics,
+    AgentObservabilityMetrics,
     DashboardMetricsResponse,
     EvaluationDashboardMetrics,
     GlobalObservabilityMetrics,
     GovernanceDashboardMetrics,
+    ObservabilityMetricsResponse,
+    OpenTelemetryStatus,
     PSkillDashboardMetrics,
+    RuntimeObservabilityMetrics,
     RuntimeDashboardMetrics,
 )
 
@@ -60,6 +64,26 @@ class ObservabilityService:
             governance=self._governance_metrics(session),
             agents=self._agent_metrics(session, since=since),
             observability=self._global_metrics(session, settings=settings, since=since),
+        )
+
+    def get_global_metrics(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        window_hours: int = 24,
+        otel_configured: bool = False,
+    ) -> ObservabilityMetricsResponse:
+        resolved_window_hours = max(1, min(24 * 30, int(window_hours or 24)))
+        generated_at = now_utc()
+        since = generated_at - timedelta(hours=resolved_window_hours)
+        return ObservabilityMetricsResponse(
+            generated_at=generated_at,
+            since=since,
+            window_hours=resolved_window_hours,
+            runtime=self._runtime_observability_metrics(session, since=since),
+            agents=self._agent_observability_metrics(session, since=since),
+            open_telemetry=self._open_telemetry_status(settings=settings, configured=otel_configured),
         )
 
     def _pskill_metrics(self, session: Session, *, since: datetime) -> PSkillDashboardMetrics:
@@ -188,6 +212,65 @@ class ObservabilityService:
             otel_service_name=settings.otel_service_name,
         )
 
+    def _runtime_observability_metrics(self, session: Session, *, since: datetime) -> RuntimeObservabilityMetrics:
+        return RuntimeObservabilityMetrics(
+            run_count=self._count(session, Run, Run.created_at >= since),
+            run_status_counts=self._count_by(session, Run.status, Run.created_at >= since),
+            run_event_count=self._count(session, RunEvent, RunEvent.occurred_at >= since),
+            run_event_kind_counts=self._count_by(session, RunEvent.event_kind, RunEvent.occurred_at >= since),
+            run_trace_count=self._count(session, RunTrace, RunTrace.occurred_at >= since),
+            run_trace_event_type_counts=self._count_by(session, RunTrace.event_type, RunTrace.occurred_at >= since),
+            run_trace_phase_counts=self._count_by(session, RunTrace.phase, RunTrace.occurred_at >= since),
+        )
+
+    def _agent_observability_metrics(self, session: Session, *, since: datetime) -> AgentObservabilityMetrics:
+        return AgentObservabilityMetrics(
+            agent_run_count=self._count(session, AgentRun, AgentRun.created_at >= since),
+            agent_run_status_counts=self._count_by(session, AgentRun.status, AgentRun.created_at >= since),
+            agent_run_key_counts=self._count_by(session, AgentRun.agent_key, AgentRun.created_at >= since),
+            agent_event_count=self._count(session, AgentEvent, AgentEvent.occurred_at >= since),
+            agent_event_type_counts=self._count_by(session, AgentEvent.event_type, AgentEvent.occurred_at >= since),
+            agent_event_phase_counts=self._count_by(session, AgentEvent.phase, AgentEvent.occurred_at >= since),
+            model_call_count=self._count(session, AgentModelCall, AgentModelCall.created_at >= since),
+            model_call_status_counts=self._count_by(session, AgentModelCall.status, AgentModelCall.created_at >= since),
+            model_call_provider_counts=self._count_by(session, AgentModelCall.provider, AgentModelCall.created_at >= since),
+            tool_call_count=self._count(session, AgentToolCall, AgentToolCall.created_at >= since),
+            tool_call_status_counts=self._count_by(session, AgentToolCall.status, AgentToolCall.created_at >= since),
+            tool_call_side_effect_counts=self._count_by(
+                session,
+                AgentToolCall.side_effect_level,
+                AgentToolCall.created_at >= since,
+            ),
+            tool_authorization_count=self._count(
+                session,
+                AgentToolAuthorization,
+                AgentToolAuthorization.created_at >= since,
+            ),
+            tool_authorization_status_counts=self._count_by(
+                session,
+                AgentToolAuthorization.status,
+                AgentToolAuthorization.created_at >= since,
+            ),
+            tool_authorization_risk_counts=self._count_by(
+                session,
+                AgentToolAuthorization.risk_level,
+                AgentToolAuthorization.created_at >= since,
+            ),
+        )
+
+    @staticmethod
+    def _open_telemetry_status(*, settings: Settings, configured: bool) -> OpenTelemetryStatus:
+        return OpenTelemetryStatus(
+            enabled=settings.otel_enabled,
+            configured=configured,
+            traces_enabled=settings.otel_traces_enabled,
+            logs_enabled=settings.otel_logs_enabled,
+            console_exporter=settings.otel_console_exporter,
+            exporter_otlp_endpoint=settings.otel_exporter_otlp_endpoint,
+            exporter_otlp_protocol=settings.otel_exporter_otlp_protocol,
+            service_name=settings.otel_service_name,
+        )
+
     @staticmethod
     def _count(session: Session, model: type, *conditions: object) -> int:
         query = select(func.count()).select_from(model)
@@ -196,8 +279,11 @@ class ObservabilityService:
         return int(session.scalar(query) or 0)
 
     @staticmethod
-    def _count_by(session: Session, column: object) -> dict[str, int]:
-        rows = session.execute(select(column, func.count()).group_by(column)).all()
+    def _count_by(session: Session, column: object, *conditions: object) -> dict[str, int]:
+        query = select(column, func.count()).group_by(column)
+        for condition in conditions:
+            query = query.where(condition)
+        rows = session.execute(query).all()
         return {str(value): int(count) for value, count in rows}
 
     @staticmethod
