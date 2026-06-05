@@ -28,7 +28,8 @@ const {
   buildPlatformToolsPath,
   buildPlatformToolPath,
   buildPlatformMemoryPath,
-  buildPlatformMemoryEntryPath
+  buildPlatformMemoryEntryPath,
+  buildPlatformObservabilityPath
 } = require("../router.node.cjs");
 
 test("normalizePath handles root", () => {
@@ -95,6 +96,7 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
     name: "platform-memory-entry",
     params: { memoryId: "mem-123" }
   });
+  expect(resolveAdminRoute("/admin/platform/observability")).toEqual({ name: "platform-observability", params: {} });
   expect(resolveAdminRoute("/admin/platform/tool-authorizations")).toEqual({ name: "tool-authorizations", params: {} });
   expect(buildGovernanceProposalsPath()).toBe("/admin/governance/proposals");
   expect(buildGovernanceProposalPath("proposal-123")).toBe("/admin/governance/proposals/proposal-123");
@@ -108,6 +110,7 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
   expect(buildPlatformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
   expect(buildPlatformMemoryPath()).toBe("/admin/platform/memory");
   expect(buildPlatformMemoryEntryPath("mem-123")).toBe("/admin/platform/memory/mem-123");
+  expect(buildPlatformObservabilityPath()).toBe("/admin/platform/observability");
 });
 
 test("resolveAdminRoute extracts skill detail params", () => {

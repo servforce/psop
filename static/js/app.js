@@ -85,6 +85,10 @@
       return { name: "platform-memory", params: {} };
     }
 
+    if (normalized === "/admin/platform/observability") {
+      return { name: "platform-observability", params: {} };
+    }
+
     const platformMemoryMatch = normalized.match(/^\/admin\/platform\/memory\/([^/]+)$/);
     if (platformMemoryMatch) {
       return {
@@ -297,6 +301,10 @@
 
   function buildPlatformMemoryEntryPath(memoryId) {
     return `/admin/platform/memory/${memoryId}`;
+  }
+
+  function buildPlatformObservabilityPath() {
+    return "/admin/platform/observability";
   }
 
   function buildRunLivePath(runId) {
@@ -580,6 +588,14 @@
       dashboardFilters: {
         window_hours: 24
       },
+      observabilityMetrics: null,
+      observabilityFilters: {
+        window_hours: 24,
+        run_id: "",
+        trace_event_type: ""
+      },
+      observabilityRunTraces: [],
+      observabilityTraceLookupRunId: "",
       currentSkill: null,
       activeDetailTab: "overview",
       sourceLoadedSkillId: null,
@@ -964,7 +980,9 @@
         memoryUpdate: false,
         replayRuns: false,
         replayDetail: false,
-        dashboard: false
+        dashboard: false,
+        observabilityMetrics: false,
+        observabilityTraceLookup: false
       }
     };
   }
@@ -990,6 +1008,7 @@
     buildPlatformToolPath,
     buildPlatformMemoryPath,
     buildPlatformMemoryEntryPath,
+    buildPlatformObservabilityPath,
     buildRunLivePath,
     buildSkillRunLivePath,
     buildSkillDebugRunLivePath,
@@ -1024,6 +1043,7 @@
       ...window.PSOPConsoleEvaluationMethods,
       ...window.PSOPConsoleGovernanceMethods,
       ...window.PSOPConsoleDashboardMethods,
+      ...window.PSOPConsoleObservabilityMethods,
       ...window.PSOPConsolePlatformMethods,
       ...window.PSOPConsoleRuntimeMethods,
       ...window.PSOPConsoleFormatMethods

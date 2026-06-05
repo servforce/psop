@@ -24,6 +24,10 @@ export function resolveAdminRoute(pathname) {
     return { name: "tasks-list", params: {} };
   }
 
+  if (normalized === "/admin/platform/observability") {
+    return { name: "platform-observability", params: {} };
+  }
+
   const detailMatch = normalized.match(/^\/admin\/skills\/([^/]+)$/);
   if (detailMatch) {
     return {
@@ -144,6 +148,10 @@ export function buildDashboardPath() {
 
 export function buildTasksPath() {
   return "/admin/tasks";
+}
+
+export function buildPlatformObservabilityPath() {
+  return "/admin/platform/observability";
 }
 
 export function buildRunLivePath(runId) {

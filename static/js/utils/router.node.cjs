@@ -88,6 +88,10 @@ function resolveAdminRoute(pathname) {
     return { name: "platform-memory", params: {} };
   }
 
+  if (normalized === "/admin/platform/observability") {
+    return { name: "platform-observability", params: {} };
+  }
+
   const platformMemoryMatch = normalized.match(/^\/admin\/platform\/memory\/([^/]+)$/);
   if (platformMemoryMatch) {
     return {
@@ -290,6 +294,10 @@ function buildPlatformMemoryEntryPath(memoryId) {
   return `/admin/platform/memory/${memoryId}`;
 }
 
+function buildPlatformObservabilityPath() {
+  return "/admin/platform/observability";
+}
+
 function buildRunLivePath(runId) {
   return `/admin/runs/${runId}/live`;
 }
@@ -351,6 +359,7 @@ module.exports = {
   buildPlatformToolPath,
   buildPlatformMemoryPath,
   buildPlatformMemoryEntryPath,
+  buildPlatformObservabilityPath,
   buildRunLivePath,
   buildSkillRunLivePath,
   buildSkillDebugRunLivePath,

@@ -17,6 +17,7 @@
     <script defer src="/js/app.js"></script>
     <script defer src="/js/app/core.js"></script>
     <script defer src="/js/app/dashboard.js"></script>
+    <script defer src="/js/app/observability.js"></script>
     <script defer src="/js/app/skill-detail.js"></script>
     <script defer src="/js/app/compiler.js"></script>
     <script defer src="/js/app/agent-prompts.js"></script>
@@ -164,6 +165,16 @@
                 <span class="material-symbols-outlined text-[20px]">memory</span>
                 <span x-show="!sidebarCollapsed" x-transition.opacity>Memory</span>
               </button>
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="[route.name === 'platform-observability' ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="Observability"
+                @click="navigate('/admin/platform/observability')"
+              >
+                <span class="material-symbols-outlined text-[20px]">query_stats</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>Observability</span>
+              </button>
             </nav>
         </aside>
 
@@ -222,6 +233,7 @@
               <div id="platform-skills-page" class="h-full" x-show="!loadingPage && ['platform-skills', 'platform-skill'].includes(route.name)"></div>
               <div id="platform-tools-page" class="h-full" x-show="!loadingPage && ['platform-tools', 'platform-tool'].includes(route.name)"></div>
               <div id="platform-memory-page" class="h-full" x-show="!loadingPage && ['platform-memory', 'platform-memory-entry'].includes(route.name)"></div>
+              <div id="platform-observability-page" class="h-full" x-show="!loadingPage && route.name === 'platform-observability'"></div>
               <div id="skill-detail-page" class="h-full" x-show="!loadingPage && route.name === 'skill-detail' && currentSkill"></div>
               <div id="compiler-list-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-list'"></div>
               <div id="compiler-artifact-page" class="h-full" x-show="!loadingPage && ['compiler-artifact', 'skill-compiler-artifact'].includes(route.name) && compilerArtifact"></div>

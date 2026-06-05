@@ -1,0 +1,291 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <nav class="breadcrumb-bar border-0 pb-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-100" @click="navigate(platformObservabilityPath())">Observability</button>
+      </nav>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+        <label class="field-block w-44 shrink-0">
+          <span class="field-label">窗口</span>
+          <select x-model="observabilityFilters.window_hours" class="input-field h-9 py-0" @change="loadObservabilityMetrics()">
+            <template x-for="option in observabilityWindowOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.observabilityMetrics" @click="loadObservabilityMetrics()">
+          <span class="material-symbols-outlined text-[18px]">refresh</span>
+          <span class="hidden sm:inline">刷新</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(observabilityAgentRunsPath())">
+          <span class="material-symbols-outlined text-[18px]">manage_history</span>
+          <span class="hidden sm:inline">Agent Runs</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(observabilityToolAuthorizationsPath())">
+          <span class="material-symbols-outlined text-[18px]">admin_panel_settings</span>
+          <span class="hidden sm:inline">授权</span>
+        </button>
+        <div class="ml-auto shrink-0 text-right text-[11px] text-slate-500">
+          <p>Generated</p>
+          <p class="font-mono text-slate-400" x-text="observabilityGeneratedAt()"></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-auto">
+      <template x-if="!observabilityMetrics">
+        <div class="empty-state h-full min-h-80">
+          <span class="material-symbols-outlined text-[32px] text-slate-400">query_stats</span>
+          <p class="mt-3 text-base font-medium text-slate-100">暂无 Observability 数据</p>
+        </div>
+      </template>
+
+      <template x-if="observabilityMetrics">
+        <div class="space-y-4 p-4">
+          <div class="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-4">
+            <section class="rounded-md border border-slate-800 bg-slate-900/40 p-4">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Runtime</p>
+              <div class="mt-4 grid grid-cols-3 gap-3 text-xs">
+                <div>
+                  <p class="text-slate-500">Runs</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-slate-100 tabular-nums" x-text="observabilityNumber(observabilityMetrics.runtime.run_count)"></p>
+                </div>
+                <div>
+                  <p class="text-slate-500">Events</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-sky-200 tabular-nums" x-text="observabilityNumber(observabilityMetrics.runtime.run_event_count)"></p>
+                </div>
+                <div>
+                  <p class="text-slate-500">Traces</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-orange-200 tabular-nums" x-text="observabilityNumber(observabilityMetrics.runtime.run_trace_count)"></p>
+                </div>
+              </div>
+            </section>
+
+            <section class="rounded-md border border-slate-800 bg-slate-900/40 p-4">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Agents</p>
+              <div class="mt-4 grid grid-cols-4 gap-3 text-xs">
+                <div>
+                  <p class="text-slate-500">Runs</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-slate-100 tabular-nums" x-text="observabilityNumber(observabilityMetrics.agents.agent_run_count)"></p>
+                </div>
+                <div>
+                  <p class="text-slate-500">Events</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-sky-200 tabular-nums" x-text="observabilityNumber(observabilityMetrics.agents.agent_event_count)"></p>
+                </div>
+                <div>
+                  <p class="text-slate-500">Model</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-emerald-200 tabular-nums" x-text="observabilityNumber(observabilityMetrics.agents.model_call_count)"></p>
+                </div>
+                <div>
+                  <p class="text-slate-500">Tools</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-amber-200 tabular-nums" x-text="observabilityNumber(observabilityMetrics.agents.tool_call_count)"></p>
+                </div>
+              </div>
+            </section>
+
+            <section class="rounded-md border border-slate-800 bg-slate-900/40 p-4">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Tool Authorizations</p>
+              <div class="mt-4 grid grid-cols-3 gap-3 text-xs">
+                <div>
+                  <p class="text-slate-500">Total</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-slate-100 tabular-nums" x-text="observabilityNumber(observabilityMetrics.agents.tool_authorization_count)"></p>
+                </div>
+                <div>
+                  <p class="text-slate-500">Pending</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-amber-200 tabular-nums" x-text="observabilityNumber(observabilityMetrics.agents.tool_authorization_status_counts.pending)"></p>
+                </div>
+                <div>
+                  <p class="text-slate-500">High Risk</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-rose-200 tabular-nums" x-text="observabilityNumber(observabilityMetrics.agents.tool_authorization_risk_counts.high)"></p>
+                </div>
+              </div>
+            </section>
+
+            <section class="rounded-md border border-slate-800 bg-slate-900/40 p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">OpenTelemetry</p>
+                  <p class="mt-1 truncate font-mono text-xs text-slate-300" x-text="observabilityMetrics.open_telemetry.service_name || 'N/A'"></p>
+                </div>
+                <span class="rounded-full border px-2 py-0.5 text-[11px]" :class="observabilityOtelTone(observabilityMetrics.open_telemetry.configured)" x-text="observabilityMetrics.open_telemetry.configured ? 'configured' : 'not configured'"></span>
+              </div>
+              <div class="mt-4 space-y-2 text-xs">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-slate-500">Traces</span>
+                  <span class="status-badge" :class="observabilityOtelTone(observabilityMetrics.open_telemetry.traces_enabled)" x-text="observabilityMetrics.open_telemetry.traces_enabled ? 'on' : 'off'"></span>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-slate-500">Logs</span>
+                  <span class="status-badge" :class="observabilityOtelTone(observabilityMetrics.open_telemetry.logs_enabled)" x-text="observabilityMetrics.open_telemetry.logs_enabled ? 'on' : 'off'"></span>
+                </div>
+                <p class="truncate font-mono text-[11px] text-slate-500" x-text="observabilityMetrics.open_telemetry.exporter_otlp_endpoint"></p>
+              </div>
+            </section>
+          </div>
+
+          <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <section class="rounded-md border border-slate-800 bg-slate-900/40">
+              <div class="border-b border-slate-800 px-4 py-3">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Runtime Distributions</p>
+                <p class="mt-1 font-mono text-[11px] text-slate-500" x-text="'Since ' + observabilitySince()"></p>
+              </div>
+              <div class="grid grid-cols-1 divide-y divide-slate-800 lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+                <div class="p-4">
+                  <p class="text-xs font-medium text-slate-300">Run Status</p>
+                  <div class="mt-3 space-y-2">
+                    <template x-for="item in observabilityTopEntries(observabilityMetrics.runtime.run_status_counts)" :key="'run-status-' + item.key">
+                      <div class="flex items-center justify-between gap-3 text-xs">
+                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                        <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+                <div class="p-4">
+                  <p class="text-xs font-medium text-slate-300">RunEvent Kind</p>
+                  <div class="mt-3 space-y-2">
+                    <template x-for="item in observabilityTopEntries(observabilityMetrics.runtime.run_event_kind_counts)" :key="'run-event-' + item.key">
+                      <div class="flex items-center justify-between gap-3 text-xs">
+                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                        <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+                <div class="p-4">
+                  <p class="text-xs font-medium text-slate-300">RunTrace Type</p>
+                  <div class="mt-3 space-y-2">
+                    <template x-for="item in observabilityTopEntries(observabilityMetrics.runtime.run_trace_event_type_counts)" :key="'run-trace-' + item.key">
+                      <div class="flex items-center justify-between gap-3 text-xs">
+                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                        <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="rounded-md border border-slate-800 bg-slate-900/40">
+              <div class="border-b border-slate-800 px-4 py-3">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Agent Distributions</p>
+                <p class="mt-1 text-[11px] text-slate-500">AgentEvents / ModelCalls / ToolCalls / ToolAuthorizations</p>
+              </div>
+              <div class="grid grid-cols-1 divide-y divide-slate-800 lg:grid-cols-4 lg:divide-x lg:divide-y-0">
+                <div class="p-4">
+                  <p class="text-xs font-medium text-slate-300">Agent Key</p>
+                  <div class="mt-3 space-y-2">
+                    <template x-for="item in observabilityTopEntries(observabilityMetrics.agents.agent_run_key_counts)" :key="'agent-key-' + item.key">
+                      <div class="flex items-center justify-between gap-3 text-xs">
+                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                        <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+                <div class="p-4">
+                  <p class="text-xs font-medium text-slate-300">AgentEvent</p>
+                  <div class="mt-3 space-y-2">
+                    <template x-for="item in observabilityTopEntries(observabilityMetrics.agents.agent_event_type_counts)" :key="'agent-event-' + item.key">
+                      <div class="flex items-center justify-between gap-3 text-xs">
+                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                        <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+                <div class="p-4">
+                  <p class="text-xs font-medium text-slate-300">ToolCall</p>
+                  <div class="mt-3 space-y-2">
+                    <template x-for="item in observabilityTopEntries(observabilityMetrics.agents.tool_call_status_counts)" :key="'tool-call-' + item.key">
+                      <div class="flex items-center justify-between gap-3 text-xs">
+                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                        <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+                <div class="p-4">
+                  <p class="text-xs font-medium text-slate-300">Authorization</p>
+                  <div class="mt-3 space-y-2">
+                    <template x-for="item in observabilityTopEntries(observabilityMetrics.agents.tool_authorization_status_counts)" :key="'tool-auth-' + item.key">
+                      <div class="flex items-center justify-between gap-3 text-xs">
+                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                        <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <section class="rounded-md border border-slate-800 bg-slate-900/40">
+            <div class="border-b border-slate-800 px-4 py-3">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">RunTrace Query</p>
+            </div>
+            <div class="border-b border-slate-800 bg-slate-950/30 px-4 py-3">
+              <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+                <label class="field-block min-w-72 flex-1">
+                  <span class="field-label">Run ID</span>
+                  <input x-model="observabilityFilters.run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="run_id" @keydown.enter.prevent="loadObservabilityRunTraces()" />
+                </label>
+                <label class="field-block w-72 shrink-0">
+                  <span class="field-label">Trace Type</span>
+                  <select x-model="observabilityFilters.trace_event_type" class="input-field h-9 py-0" @change="loadObservabilityRunTraces()">
+                    <option value="">全部</option>
+                    <template x-for="eventType in observabilityTraceEventTypeOptions()" :key="eventType">
+                      <option :value="eventType" x-text="eventType"></option>
+                    </template>
+                  </select>
+                </label>
+                <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.observabilityTraceLookup" @click="loadObservabilityRunTraces()">
+                  <span class="material-symbols-outlined text-[18px]">search</span>
+                  <span class="hidden sm:inline">查询</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetObservabilityTraceQuery()">
+                  <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" x-show="observabilityTraceLookupRunId" @click="navigate(observabilityRunLivePath(observabilityTraceLookupRunId))">
+                  <span class="material-symbols-outlined text-[18px]">play_circle</span>
+                  <span class="hidden sm:inline">Run</span>
+                </button>
+              </div>
+            </div>
+
+            <template x-if="observabilityRunTraces.length === 0">
+              <div class="empty-state min-h-72">
+                <span class="material-symbols-outlined text-[32px] text-slate-400">timeline</span>
+                <p class="mt-3 text-base font-medium text-slate-100">暂无 RunTrace</p>
+              </div>
+            </template>
+
+            <template x-if="observabilityRunTraces.length > 0">
+              <div class="divide-y divide-slate-800">
+                <template x-for="trace in observabilityRunTraces" :key="trace.id">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[8rem_minmax(12rem,0.45fr)_minmax(0,1fr)]">
+                    <div>
+                      <p class="font-mono text-slate-300" x-text="'#' + trace.seq_no"></p>
+                      <p class="mt-1 font-mono text-[11px] text-slate-500" x-text="formatDateTime(trace.occurred_at)"></p>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="truncate font-semibold text-slate-100" x-text="trace.event_type"></p>
+                      <p class="mt-1 truncate text-slate-500" x-text="trace.phase || 'N/A'"></p>
+                      <p class="mt-2 truncate font-mono text-[11px] text-slate-500" x-text="trace.agent_run_id || 'agent:N/A'"></p>
+                    </div>
+                    <pre class="max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="observabilityTracePayloadPreview(trace)"></pre>
+                  </article>
+                </template>
+              </div>
+            </template>
+          </section>
+        </div>
+      </template>
+    </div>
+  </section>
+</div>

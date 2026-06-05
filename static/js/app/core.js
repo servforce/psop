@@ -336,6 +336,7 @@
           ["platform-skills-page", "/pages/platform-skills.html"],
           ["platform-tools-page", "/pages/platform-tools.html"],
           ["platform-memory-page", "/pages/platform-memory.html"],
+          ["platform-observability-page", "/pages/platform-observability.html"],
           ["skill-detail-page", "/pages/skill-detail.html"],
           ["compiler-list-page", "/pages/compiler-list.html"],
           ["compiler-artifact-page", "/pages/compiler-artifact-detail.html"],
@@ -484,6 +485,10 @@
         if (!["platform-memory", "platform-memory-entry"].includes(this.route.name)) {
           this.currentMemoryEntry = null;
         }
+        if (this.route.name !== "platform-observability") {
+          this.observabilityRunTraces = [];
+          this.observabilityTraceLookupRunId = "";
+        }
         if (!["compiler-artifact", "skill-compiler-artifact"].includes(this.route.name)) {
           this.destroyCompilerArtifactViewer();
           this.compilerArtifact = null;
@@ -602,6 +607,12 @@
           if (this.route.name === "platform-memory-entry") {
             this.currentSkill = null;
             await this.loadPlatformMemoryPage(this.route.params.memoryId);
+            return;
+          }
+
+          if (this.route.name === "platform-observability") {
+            this.currentSkill = null;
+            await this.loadPlatformObservabilityPage();
             return;
           }
 
@@ -924,6 +935,9 @@
         }
         if (this.route.name === "platform-memory" || this.route.name === "platform-memory-entry") {
           return "Memory";
+        }
+        if (this.route.name === "platform-observability") {
+          return "Observability";
         }
         if (this.route.name === "compiler-artifact") {
           return "EG Artifact";
