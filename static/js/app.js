@@ -9,7 +9,11 @@
 
   function resolveAdminRoute(pathname) {
     const normalized = normalizePath(pathname);
-    if (normalized === "/" || normalized === "/admin" || normalized === "/admin/skills") {
+    if (normalized === "/" || normalized === "/admin" || normalized === "/admin/dashboard") {
+      return { name: "dashboard", params: {} };
+    }
+
+    if (normalized === "/admin/skills") {
       return { name: "skills-list", params: {} };
     }
 
@@ -225,6 +229,10 @@
 
   function buildSkillDetailPath(skillId) {
     return `/admin/skills/${skillId}`;
+  }
+
+  function buildDashboardPath() {
+    return "/admin/dashboard";
   }
 
   function buildTasksPath() {
@@ -559,7 +567,7 @@
   function createInitialState() {
     return {
       apiBaseUrl: resolveApiBaseUrl(),
-      route: { name: "skills-list", params: {} },
+      route: { name: "dashboard", params: {} },
       sidebarCollapsed: false,
       createModalOpen: false,
       publishDrawerOpen: false,
@@ -568,6 +576,10 @@
       deleteTargetSkill: null,
       loadingPage: false,
       skills: [],
+      dashboardMetrics: null,
+      dashboardFilters: {
+        window_hours: 24
+      },
       currentSkill: null,
       activeDetailTab: "overview",
       sourceLoadedSkillId: null,
@@ -951,7 +963,8 @@
         memoryEntries: false,
         memoryUpdate: false,
         replayRuns: false,
-        replayDetail: false
+        replayDetail: false,
+        dashboard: false
       }
     };
   }
@@ -959,6 +972,7 @@
   window.PSOPConsoleHelpers = {
     normalizePath,
     resolveAdminRoute,
+    buildDashboardPath,
     buildSkillDetailPath,
     buildTasksPath,
     buildEvaluationReportsPath,
@@ -1009,6 +1023,7 @@
       ...window.PSOPConsoleTasksMethods,
       ...window.PSOPConsoleEvaluationMethods,
       ...window.PSOPConsoleGovernanceMethods,
+      ...window.PSOPConsoleDashboardMethods,
       ...window.PSOPConsolePlatformMethods,
       ...window.PSOPConsoleRuntimeMethods,
       ...window.PSOPConsoleFormatMethods

@@ -324,6 +324,7 @@
 
       async loadPageFragments() {
         const fragments = [
+          ["dashboard-page", "/pages/dashboard.html"],
           ["skills-list-page", "/pages/skills-list.html"],
           ["tasks-page", "/pages/tasks.html"],
           ["evaluation-reports-page", "/pages/evaluation-reports.html"],
@@ -492,6 +493,12 @@
         }
 
         try {
+          if (this.route.name === "dashboard") {
+            this.currentSkill = null;
+            await this.loadDashboardPage();
+            return;
+          }
+
           if (this.route.name === "skills-list") {
             this.currentSkill = null;
             this.activeDetailTab = "overview";
@@ -862,6 +869,9 @@
 
 
       routeTitle() {
+        if (this.route.name === "dashboard") {
+          return "Dashboard";
+        }
         if (
           [
             "skill-detail",

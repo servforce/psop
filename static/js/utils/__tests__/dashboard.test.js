@@ -1,0 +1,114 @@
+const fs = require("fs");
+const path = require("path");
+const vm = require("vm");
+
+function loadDashboardMethods() {
+  const code = fs.readFileSync(path.join(__dirname, "../../app/dashboard.js"), "utf8");
+  const sandbox = {
+    window: {
+      PSOPConsoleHelpers: {
+        buildDashboardPath: () => "/admin/dashboard",
+        buildEvaluationReportsPath: () => "/admin/evaluations",
+        buildEvaluationFindingsPath: () => "/admin/evaluations/findings",
+        buildGovernanceProposalsPath: () => "/admin/governance/proposals",
+        buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
+        buildPlatformSkillsPath: () => "/admin/platform/skills",
+        buildPlatformToolsPath: () => "/admin/platform/tools",
+        buildPlatformMemoryPath: () => "/admin/platform/memory",
+        buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations"
+      }
+    },
+    URLSearchParams,
+    Intl,
+    Number,
+    Math,
+    String,
+    Array,
+    Object,
+    Map
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox);
+  return sandbox.window.PSOPConsoleDashboardMethods;
+}
+
+test("dashboard methods load metrics through the observability API", async () => {
+  const methods = loadDashboardMethods();
+  const payload = {
+    generated_at: "2026-06-05T00:00:00Z",
+    window_hours: 72,
+    pskills: {},
+    runtime: {},
+    evaluations: {},
+    governance: {},
+    observability: {},
+    agents: [
+      {
+        agent_key: "pskill.runner",
+        recent_run_count: 3,
+        success_rate: 0.6667,
+        average_duration_ms: 1250,
+        tool_failure_rate: 0.1
+      }
+    ]
+  };
+  const context = {
+    ...methods,
+    busy: { dashboard: false },
+    dashboardFilters: { window_hours: 72 },
+    dashboardMetrics: null,
+    apiRequest: jest.fn(async () => payload),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadDashboardMetrics.call(context);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/observability/dashboard?window_hours=72");
+  expect(context.dashboardMetrics).toBe(payload);
+  expect(context.busy.dashboard).toBe(false);
+  expect(methods.dashboardPath()).toBe("/admin/dashboard");
+});
+
+test("dashboard methods format metrics and preserve the six-agent row order", () => {
+  const methods = loadDashboardMethods();
+  const context = {
+    ...methods,
+    dashboardMetrics: {
+      agents: [
+        {
+          agent_key: "pskill.runner",
+          recent_run_count: 2,
+          succeeded_count: 1,
+          success_rate: 0.5,
+          average_duration_ms: 3000,
+          tool_call_count: 2,
+          failed_tool_call_count: 1,
+          tool_failure_rate: 0.5
+        }
+      ],
+      evaluations: {
+        outcome_counts: { success: 1 },
+        finding_status_counts: { open: 2 }
+      }
+    },
+    formatDuration: (value) => `${value} ms`
+  };
+
+  const rows = methods.dashboardAgentRows.call(context);
+
+  expect(rows.map((row) => row.agent_key).slice(0, 6)).toEqual([
+    "pskill.builder",
+    "pskill.compiler",
+    "pskill.tester",
+    "pskill.runner",
+    "pskill.evaluator",
+    "psop.governance"
+  ]);
+  expect(rows[3].recent_run_count).toBe(2);
+  expect(methods.dashboardAgentLabel("psop.governance")).toBe("Governance");
+  expect(methods.dashboardPercent(0.6667)).toBe("67%");
+  expect(methods.dashboardNumber(12345)).toBe("12,345");
+  expect(methods.dashboardDuration.call(context, 3000)).toBe("3000 ms");
+  expect(methods.dashboardOutcomeCount.call(context, "success")).toBe(1);
+  expect(methods.dashboardFindingStatusCount.call(context, "open")).toBe(2);
+});

@@ -16,6 +16,7 @@
     <script defer src="/node_modules/bpmn-js/dist/bpmn-navigated-viewer.production.min.js"></script>
     <script defer src="/js/app.js"></script>
     <script defer src="/js/app/core.js"></script>
+    <script defer src="/js/app/dashboard.js"></script>
     <script defer src="/js/app/skill-detail.js"></script>
     <script defer src="/js/app/compiler.js"></script>
     <script defer src="/js/app/agent-prompts.js"></script>
@@ -53,6 +54,16 @@
             </div>
 
             <nav class="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 py-3">
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="[route.name === 'dashboard' ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="Dashboard"
+                @click="navigate('/admin/dashboard')"
+              >
+                <span class="material-symbols-outlined text-[20px]">monitoring</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>Dashboard</span>
+              </button>
               <button
                 type="button"
                 class="sidebar-link"
@@ -199,6 +210,7 @@
                 </div>
               </template>
 
+              <div id="dashboard-page" class="h-full" x-show="!loadingPage && route.name === 'dashboard'"></div>
               <div id="skills-list-page" class="h-full" x-show="!loadingPage && route.name === 'skills-list'"></div>
               <div id="tasks-page" class="h-full" x-show="!loadingPage && route.name === 'tasks-list'"></div>
               <div id="evaluation-reports-page" class="h-full" x-show="!loadingPage && ['evaluation-reports', 'evaluation-report'].includes(route.name)"></div>

@@ -1,6 +1,7 @@
 const {
   normalizePath,
   resolveAdminRoute,
+  buildDashboardPath,
   buildSkillDetailPath,
   buildRunLivePath,
   buildSkillRunLivePath,
@@ -36,6 +37,13 @@ test("normalizePath handles root", () => {
 
 test("normalizePath strips trailing slash", () => {
   expect(normalizePath("/docs/")).toBe("/docs");
+});
+
+test("resolveAdminRoute maps the dashboard entry routes", () => {
+  expect(resolveAdminRoute("/")).toEqual({ name: "dashboard", params: {} });
+  expect(resolveAdminRoute("/admin")).toEqual({ name: "dashboard", params: {} });
+  expect(resolveAdminRoute("/admin/dashboard")).toEqual({ name: "dashboard", params: {} });
+  expect(buildDashboardPath()).toBe("/admin/dashboard");
 });
 
 test("resolveAdminRoute maps the skills list route", () => {

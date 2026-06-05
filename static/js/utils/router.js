@@ -12,7 +12,11 @@ export function normalizePath(pathname) {
 
 export function resolveAdminRoute(pathname) {
   const normalized = normalizePath(pathname);
-  if (normalized === "/" || normalized === "/admin" || normalized === "/admin/skills") {
+  if (normalized === "/" || normalized === "/admin" || normalized === "/admin/dashboard") {
+    return { name: "dashboard", params: {} };
+  }
+
+  if (normalized === "/admin/skills") {
     return { name: "skills-list", params: {} };
   }
 
@@ -132,6 +136,10 @@ export function resolveAdminRoute(pathname) {
 
 export function buildSkillDetailPath(skillId) {
   return `/admin/skills/${skillId}`;
+}
+
+export function buildDashboardPath() {
+  return "/admin/dashboard";
 }
 
 export function buildTasksPath() {

@@ -12,7 +12,11 @@ function normalizePath(pathname) {
 
 function resolveAdminRoute(pathname) {
   const normalized = normalizePath(pathname);
-  if (normalized === "/" || normalized === "/admin" || normalized === "/admin/skills") {
+  if (normalized === "/" || normalized === "/admin" || normalized === "/admin/dashboard") {
+    return { name: "dashboard", params: {} };
+  }
+
+  if (normalized === "/admin/skills") {
     return { name: "skills-list", params: {} };
   }
 
@@ -218,6 +222,10 @@ function buildSkillDetailPath(skillId) {
   return `/admin/skills/${skillId}`;
 }
 
+function buildDashboardPath() {
+  return "/admin/dashboard";
+}
+
 function buildTasksPath() {
   return "/admin/tasks";
 }
@@ -325,6 +333,7 @@ function buildSkillCompilerArtifactPath(skillId, artifactId) {
 module.exports = {
   normalizePath,
   resolveAdminRoute,
+  buildDashboardPath,
   buildSkillDetailPath,
   buildTasksPath,
   buildEvaluationReportsPath,
