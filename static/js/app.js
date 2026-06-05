@@ -41,6 +41,30 @@
       return { name: "governance-experiments", params: {} };
     }
 
+    if (normalized === "/admin/platform/tools") {
+      return { name: "platform-tools", params: {} };
+    }
+
+    const platformToolMatch = normalized.match(/^\/admin\/platform\/tools\/([^/]+)$/);
+    if (platformToolMatch) {
+      return {
+        name: "platform-tool",
+        params: { toolName: platformToolMatch[1] }
+      };
+    }
+
+    if (normalized === "/admin/platform/memory") {
+      return { name: "platform-memory", params: {} };
+    }
+
+    const platformMemoryMatch = normalized.match(/^\/admin\/platform\/memory\/([^/]+)$/);
+    if (platformMemoryMatch) {
+      return {
+        name: "platform-memory-entry",
+        params: { memoryId: platformMemoryMatch[1] }
+      };
+    }
+
     if (normalized === "/admin/platform/tool-authorizations") {
       return { name: "tool-authorizations", params: {} };
     }
@@ -209,6 +233,22 @@
 
   function buildToolAuthorizationsPath() {
     return "/admin/platform/tool-authorizations";
+  }
+
+  function buildPlatformToolsPath() {
+    return "/admin/platform/tools";
+  }
+
+  function buildPlatformToolPath(toolName) {
+    return `/admin/platform/tools/${toolName}`;
+  }
+
+  function buildPlatformMemoryPath() {
+    return "/admin/platform/memory";
+  }
+
+  function buildPlatformMemoryEntryPath(memoryId) {
+    return `/admin/platform/memory/${memoryId}`;
   }
 
   function buildRunLivePath(runId) {
@@ -623,6 +663,28 @@
       toolAuthorizationFilters: {
         status: "pending"
       },
+      platformTools: [],
+      currentPlatformTool: null,
+      platformToolFilters: {
+        side_effect_level: "",
+        requires_authorization: ""
+      },
+      memoryEntries: [],
+      currentMemoryEntry: null,
+      memoryFilters: {
+        namespace: "",
+        memory_type: "",
+        status: "pending_review",
+        agent_key: "",
+        q: ""
+      },
+      memoryEditForm: {
+        status: "pending_review",
+        title: "",
+        content: "",
+        confidence: 50,
+        tags: ""
+      },
       publishFilters: {
         status: "",
         published_from: "",
@@ -816,6 +878,10 @@
         governanceExperimentLookup: false,
         toolAuthorizations: false,
         toolAuthorizationAction: false,
+        platformTools: false,
+        platformToolAction: false,
+        memoryEntries: false,
+        memoryUpdate: false,
         replayRuns: false,
         replayDetail: false
       }
@@ -834,6 +900,10 @@
     buildGovernanceProposalPath,
     buildGovernanceExperimentsPath,
     buildToolAuthorizationsPath,
+    buildPlatformToolsPath,
+    buildPlatformToolPath,
+    buildPlatformMemoryPath,
+    buildPlatformMemoryEntryPath,
     buildRunLivePath,
     buildSkillRunLivePath,
     buildSkillDebugRunLivePath,
@@ -867,6 +937,7 @@
       ...window.PSOPConsoleTasksMethods,
       ...window.PSOPConsoleEvaluationMethods,
       ...window.PSOPConsoleGovernanceMethods,
+      ...window.PSOPConsolePlatformMethods,
       ...window.PSOPConsoleRuntimeMethods,
       ...window.PSOPConsoleFormatMethods
     };

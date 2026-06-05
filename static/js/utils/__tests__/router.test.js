@@ -19,7 +19,11 @@ const {
   buildGovernanceProposalsPath,
   buildGovernanceProposalPath,
   buildGovernanceExperimentsPath,
-  buildToolAuthorizationsPath
+  buildToolAuthorizationsPath,
+  buildPlatformToolsPath,
+  buildPlatformToolPath,
+  buildPlatformMemoryPath,
+  buildPlatformMemoryEntryPath
 } = require("../router.node.cjs");
 
 test("normalizePath handles root", () => {
@@ -59,11 +63,25 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
     params: { proposalId: "proposal-123" }
   });
   expect(resolveAdminRoute("/admin/governance/experiments")).toEqual({ name: "governance-experiments", params: {} });
+  expect(resolveAdminRoute("/admin/platform/tools")).toEqual({ name: "platform-tools", params: {} });
+  expect(resolveAdminRoute("/admin/platform/tools/psop.memory.search")).toEqual({
+    name: "platform-tool",
+    params: { toolName: "psop.memory.search" }
+  });
+  expect(resolveAdminRoute("/admin/platform/memory")).toEqual({ name: "platform-memory", params: {} });
+  expect(resolveAdminRoute("/admin/platform/memory/mem-123")).toEqual({
+    name: "platform-memory-entry",
+    params: { memoryId: "mem-123" }
+  });
   expect(resolveAdminRoute("/admin/platform/tool-authorizations")).toEqual({ name: "tool-authorizations", params: {} });
   expect(buildGovernanceProposalsPath()).toBe("/admin/governance/proposals");
   expect(buildGovernanceProposalPath("proposal-123")).toBe("/admin/governance/proposals/proposal-123");
   expect(buildGovernanceExperimentsPath()).toBe("/admin/governance/experiments");
   expect(buildToolAuthorizationsPath()).toBe("/admin/platform/tool-authorizations");
+  expect(buildPlatformToolsPath()).toBe("/admin/platform/tools");
+  expect(buildPlatformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
+  expect(buildPlatformMemoryPath()).toBe("/admin/platform/memory");
+  expect(buildPlatformMemoryEntryPath("mem-123")).toBe("/admin/platform/memory/mem-123");
 });
 
 test("resolveAdminRoute extracts skill detail params", () => {

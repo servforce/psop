@@ -331,6 +331,8 @@
           ["governance-proposals-page", "/pages/governance-proposals.html"],
           ["governance-experiments-page", "/pages/governance-experiments.html"],
           ["tool-authorizations-page", "/pages/tool-authorizations.html"],
+          ["platform-tools-page", "/pages/platform-tools.html"],
+          ["platform-memory-page", "/pages/platform-memory.html"],
           ["skill-detail-page", "/pages/skill-detail.html"],
           ["compiler-list-page", "/pages/compiler-list.html"],
           ["compiler-artifact-page", "/pages/compiler-artifact-detail.html"],
@@ -462,6 +464,12 @@
         if (!["governance-proposals", "governance-proposal"].includes(this.route.name)) {
           this.currentGovernanceProposal = null;
         }
+        if (!["platform-tools", "platform-tool"].includes(this.route.name)) {
+          this.currentPlatformTool = null;
+        }
+        if (!["platform-memory", "platform-memory-entry"].includes(this.route.name)) {
+          this.currentMemoryEntry = null;
+        }
         if (!["compiler-artifact", "skill-compiler-artifact"].includes(this.route.name)) {
           this.destroyCompilerArtifactViewer();
           this.compilerArtifact = null;
@@ -525,6 +533,31 @@
           if (this.route.name === "tool-authorizations") {
             this.currentSkill = null;
             await this.loadToolAuthorizations();
+            return;
+          }
+
+          if (this.route.name === "platform-tools") {
+            this.currentSkill = null;
+            await this.loadPlatformToolsPage();
+            return;
+          }
+
+          if (this.route.name === "platform-tool") {
+            this.currentSkill = null;
+            await this.loadPlatformToolDetail(this.route.params.toolName);
+            await this.loadPlatformTools();
+            return;
+          }
+
+          if (this.route.name === "platform-memory") {
+            this.currentSkill = null;
+            await this.loadPlatformMemoryPage();
+            return;
+          }
+
+          if (this.route.name === "platform-memory-entry") {
+            this.currentSkill = null;
+            await this.loadPlatformMemoryPage(this.route.params.memoryId);
             return;
           }
 
@@ -832,6 +865,12 @@
         }
         if (this.route.name === "tool-authorizations") {
           return "工具授权";
+        }
+        if (this.route.name === "platform-tools" || this.route.name === "platform-tool") {
+          return "Tools";
+        }
+        if (this.route.name === "platform-memory" || this.route.name === "platform-memory-entry") {
+          return "Memory";
         }
         if (this.route.name === "compiler-artifact") {
           return "EG Artifact";

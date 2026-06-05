@@ -1,0 +1,179 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <nav class="breadcrumb-bar border-0 pb-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-100" @click="navigate(platformToolsPath())">Tools</button>
+      </nav>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+        <label class="field-block w-44 shrink-0">
+          <span class="field-label">副作用</span>
+          <select x-model="platformToolFilters.side_effect_level" class="input-field h-9 py-0" @change="applyPlatformToolFilters()">
+            <option value="">全部</option>
+            <template x-for="option in platformToolSideEffectOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="field-block w-40 shrink-0">
+          <span class="field-label">授权</span>
+          <select x-model="platformToolFilters.requires_authorization" class="input-field h-9 py-0" @change="applyPlatformToolFilters()">
+            <option value="">全部</option>
+            <template x-for="option in platformToolAuthOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.platformTools" @click="loadPlatformToolsPage()">
+          <span class="material-symbols-outlined text-[18px]">refresh</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetPlatformToolFilters()">
+          <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformToolAuthorizationsPath())">
+          <span class="material-symbols-outlined text-[18px]">admin_panel_settings</span>
+          <span>授权</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformMemoryPath())">
+          <span class="material-symbols-outlined text-[18px]">memory</span>
+          <span>Memory</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="grid min-h-0 flex-1 grid-cols-1 divide-y divide-slate-800 lg:grid-cols-[minmax(24rem,0.9fr)_minmax(0,1.25fr)] lg:divide-x lg:divide-y-0">
+      <section class="min-h-0 overflow-auto">
+        <template x-if="platformTools.length === 0">
+          <div class="empty-state h-full min-h-80">
+            <span class="material-symbols-outlined text-[32px] text-slate-400">build</span>
+            <p class="mt-3 text-base font-medium text-slate-100">暂无工具定义</p>
+          </div>
+        </template>
+        <template x-if="platformTools.length > 0">
+          <div class="divide-y divide-slate-800">
+            <template x-for="tool in platformTools" :key="tool.name">
+              <article class="bg-slate-950/20 p-4 transition hover:bg-slate-900/50" :class="currentPlatformTool?.name === tool.name ? 'bg-sky-500/10' : ''">
+                <button type="button" class="block w-full min-w-0 text-left" @click="navigate(platformToolPath(tool.name))">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="truncate text-sm font-semibold text-slate-100" x-text="tool.name"></p>
+                      <p class="mt-1 truncate text-xs text-slate-400" x-text="tool.description || tool.provider"></p>
+                    </div>
+                    <span class="status-badge shrink-0" :class="platformToolSideEffectTone(tool.side_effect_level)" x-text="platformToolSideEffectLabel(tool.side_effect_level)"></span>
+                  </div>
+                  <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <span class="status-badge" :class="platformToolAuthTone(tool.requires_authorization)" x-text="platformToolAuthLabel(tool.requires_authorization)"></span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300" x-text="(tool.allowed_agent_keys || []).length + ' agents'"></span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300" x-text="(tool.recent_call_count || 0) + ' calls'"></span>
+                    <span class="font-mono text-[11px] text-slate-500" x-text="platformFailureRateLabel(tool) + ' failure'"></span>
+                  </div>
+                </button>
+              </article>
+            </template>
+          </div>
+        </template>
+      </section>
+
+      <section class="min-h-0 overflow-auto">
+        <template x-if="!currentPlatformTool">
+          <div class="empty-state h-full min-h-80">
+            <span class="material-symbols-outlined text-[32px] text-slate-400">build</span>
+            <p class="mt-3 text-base font-medium text-slate-100">选择一个工具</p>
+          </div>
+        </template>
+
+        <template x-if="currentPlatformTool">
+          <div class="divide-y divide-slate-800">
+            <header class="p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Tool Definition</p>
+                  <p class="mt-1 break-words text-base font-semibold text-slate-100" x-text="currentPlatformTool.name"></p>
+                  <p class="mt-2 text-sm leading-6 text-slate-300" x-text="currentPlatformTool.description || 'N/A'"></p>
+                </div>
+                <div class="flex flex-wrap justify-end gap-2">
+                  <span class="status-badge" :class="platformToolSideEffectTone(currentPlatformTool.side_effect_level)" x-text="platformToolSideEffectLabel(currentPlatformTool.side_effect_level)"></span>
+                  <span class="status-badge" :class="platformToolAuthTone(currentPlatformTool.requires_authorization)" x-text="platformToolAuthLabel(currentPlatformTool.requires_authorization)"></span>
+                </div>
+              </div>
+              <div class="mt-4 flex flex-wrap gap-2">
+                <button type="button" class="button-secondary h-9 px-3" :disabled="busy.platformToolAction" @click="testPlatformTool(currentPlatformTool)">
+                  <span class="material-symbols-outlined text-[18px]">rule_settings</span>
+                  <span>Dry Run</span>
+                </button>
+                <button type="button" class="button-secondary h-9 px-3" @click="navigate(platformToolAuthorizationsPath())">
+                  <span class="material-symbols-outlined text-[18px]">admin_panel_settings</span>
+                  <span>授权历史</span>
+                </button>
+                <button type="button" class="button-secondary h-9 px-3" @click="copyText(currentPlatformTool.name, `platform-tool-${currentPlatformTool.name}`)">
+                  <span class="material-symbols-outlined text-[18px]" x-text="copyIcon(`platform-tool-${currentPlatformTool.name}`)"></span>
+                  <span>复制</span>
+                </button>
+              </div>
+            </header>
+
+            <div class="grid grid-cols-2 divide-x divide-slate-800 text-xs lg:grid-cols-4">
+              <div class="p-4">
+                <p class="text-slate-500">Provider</p>
+                <p class="mt-1 truncate text-slate-200" x-text="currentPlatformTool.provider"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Status</p>
+                <p class="mt-1 text-slate-200" x-text="formatStatus(currentPlatformTool.status)"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Calls</p>
+                <p class="mt-1 font-mono text-slate-300" x-text="currentPlatformTool.recent_call_count || 0"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Failure</p>
+                <p class="mt-1 font-mono text-slate-300" x-text="platformFailureRateLabel(currentPlatformTool)"></p>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 divide-y divide-slate-800 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] xl:divide-x xl:divide-y-0">
+              <section class="min-w-0 divide-y divide-slate-800">
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Allowed Agents</p>
+                  <template x-if="(currentPlatformTool.allowed_agent_keys || []).length === 0">
+                    <p class="mt-3 text-sm text-slate-400">暂无可调用 Agent</p>
+                  </template>
+                  <template x-if="(currentPlatformTool.allowed_agent_keys || []).length > 0">
+                    <div class="mt-3 flex flex-wrap gap-2">
+                      <template x-for="agentKey in currentPlatformTool.allowed_agent_keys" :key="agentKey">
+                        <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-[11px] text-slate-300" x-text="agentKey"></span>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Policy</p>
+                  <pre class="mt-3 max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="platformJsonPreview(currentPlatformTool.policy_summary)"></pre>
+                </div>
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Metadata</p>
+                  <pre class="mt-3 max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="platformJsonPreview(currentPlatformTool.metadata)"></pre>
+                </div>
+              </section>
+
+              <section class="min-w-0 divide-y divide-slate-800">
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Input Schema</p>
+                  <pre class="mt-3 max-h-64 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="platformJsonPreview(currentPlatformTool.input_schema)"></pre>
+                </div>
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Output Schema</p>
+                  <pre class="mt-3 max-h-64 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="platformJsonPreview(currentPlatformTool.output_schema)"></pre>
+                </div>
+              </section>
+            </div>
+          </div>
+        </template>
+      </section>
+    </div>
+  </section>
+</div>

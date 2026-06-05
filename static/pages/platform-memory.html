@@ -1,0 +1,222 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <nav class="breadcrumb-bar border-0 pb-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-100" @click="navigate(platformMemoryPath())">Memory</button>
+      </nav>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+        <label class="field-block w-40 shrink-0">
+          <span class="field-label">Namespace</span>
+          <input x-model="memoryFilters.namespace" class="input-field h-9 py-0" placeholder="default" @keydown.enter.prevent="searchMemoryEntries()" />
+        </label>
+        <label class="field-block w-40 shrink-0">
+          <span class="field-label">类型</span>
+          <select x-model="memoryFilters.memory_type" class="input-field h-9 py-0" @change="loadPlatformMemoryPage()">
+            <option value="">全部</option>
+            <template x-for="option in memoryTypeOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="field-block w-40 shrink-0">
+          <span class="field-label">状态</span>
+          <select x-model="memoryFilters.status" class="input-field h-9 py-0" @change="loadPlatformMemoryPage()">
+            <option value="">全部</option>
+            <template x-for="option in memoryStatusOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="field-block w-44 shrink-0">
+          <span class="field-label">Agent</span>
+          <input x-model="memoryFilters.agent_key" class="input-field h-9 py-0" placeholder="agent key" @keydown.enter.prevent="searchMemoryEntries()" />
+        </label>
+        <label class="field-block w-56 shrink-0">
+          <span class="field-label">搜索</span>
+          <input x-model="memoryFilters.q" class="input-field h-9 py-0" placeholder="content or title" @keydown.enter.prevent="searchMemoryEntries()" />
+        </label>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.memoryEntries" @click="searchMemoryEntries()">
+          <span class="material-symbols-outlined text-[18px]">search</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.memoryEntries" @click="loadPlatformMemoryPage()">
+          <span class="material-symbols-outlined text-[18px]">refresh</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetMemoryFilters()">
+          <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformToolsPath())">
+          <span class="material-symbols-outlined text-[18px]">build</span>
+          <span>Tools</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="grid min-h-0 flex-1 grid-cols-1 divide-y divide-slate-800 lg:grid-cols-[minmax(24rem,0.9fr)_minmax(0,1.25fr)] lg:divide-x lg:divide-y-0">
+      <section class="min-h-0 overflow-auto">
+        <template x-if="memoryEntries.length === 0">
+          <div class="empty-state h-full min-h-80">
+            <span class="material-symbols-outlined text-[32px] text-slate-400">memory</span>
+            <p class="mt-3 text-base font-medium text-slate-100">暂无 Memory</p>
+          </div>
+        </template>
+        <template x-if="memoryEntries.length > 0">
+          <div class="divide-y divide-slate-800">
+            <template x-for="entry in memoryEntries" :key="entry.id">
+              <article class="bg-slate-950/20 p-4 transition hover:bg-slate-900/50" :class="currentMemoryEntry?.id === entry.id ? 'bg-emerald-500/10' : ''">
+                <button type="button" class="block w-full min-w-0 text-left" @click="navigate(platformMemoryEntryPath(entry.id))">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="truncate text-sm font-semibold text-slate-100" x-text="entry.title || entry.content"></p>
+                      <p class="mt-1 line-clamp-2 text-xs leading-5 text-slate-400" x-text="entry.content"></p>
+                    </div>
+                    <span class="status-badge shrink-0" :class="memoryStatusTone(entry.status)" x-text="memoryStatusLabel(entry.status)"></span>
+                  </div>
+                  <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300" x-text="entry.namespace"></span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300" x-text="memoryTypeLabel(entry.memory_type)"></span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300" x-text="entry.confidence + '%'"></span>
+                    <span class="font-mono text-[11px] text-slate-500" x-text="formatDateTime(entry.created_at)"></span>
+                  </div>
+                  <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-800">
+                    <div class="h-full rounded-full" :class="memoryConfidenceTone(entry.confidence)" :style="'width: ' + memoryConfidenceWidth(entry.confidence)"></div>
+                  </div>
+                </button>
+              </article>
+            </template>
+          </div>
+        </template>
+      </section>
+
+      <section class="min-h-0 overflow-auto">
+        <template x-if="!currentMemoryEntry">
+          <div class="empty-state h-full min-h-80">
+            <span class="material-symbols-outlined text-[32px] text-slate-400">memory</span>
+            <p class="mt-3 text-base font-medium text-slate-100">选择一条 Memory</p>
+          </div>
+        </template>
+
+        <template x-if="currentMemoryEntry">
+          <div class="divide-y divide-slate-800">
+            <header class="p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Agent Memory</p>
+                  <p class="mt-1 break-words text-base font-semibold text-slate-100" x-text="currentMemoryEntry.title || currentMemoryEntry.id"></p>
+                  <p class="mt-2 font-mono text-[11px] text-slate-500" x-text="currentMemoryEntry.id"></p>
+                </div>
+                <span class="status-badge" :class="memoryStatusTone(currentMemoryEntry.status)" x-text="memoryStatusLabel(currentMemoryEntry.status)"></span>
+              </div>
+              <div class="mt-4 flex flex-wrap gap-2">
+                <button type="button" class="button-secondary h-9 px-3" :disabled="busy.memoryUpdate || currentMemoryEntry.status === 'active'" @click="updateMemoryEntryStatus(currentMemoryEntry, 'active')">
+                  <span class="material-symbols-outlined text-[18px]">check_circle</span>
+                  <span>启用</span>
+                </button>
+                <button type="button" class="button-danger h-9 px-3" :disabled="busy.memoryUpdate || currentMemoryEntry.status === 'rejected'" @click="updateMemoryEntryStatus(currentMemoryEntry, 'rejected')">
+                  <span class="material-symbols-outlined text-[18px]">cancel</span>
+                  <span>拒绝</span>
+                </button>
+                <button type="button" class="button-secondary h-9 px-3" :disabled="busy.memoryUpdate || currentMemoryEntry.status === 'archived'" @click="updateMemoryEntryStatus(currentMemoryEntry, 'archived')">
+                  <span class="material-symbols-outlined text-[18px]">archive</span>
+                  <span>归档</span>
+                </button>
+                <button type="button" class="button-secondary h-9 px-3" @click="copyText(currentMemoryEntry.id, `memory-${currentMemoryEntry.id}`)">
+                  <span class="material-symbols-outlined text-[18px]" x-text="copyIcon(`memory-${currentMemoryEntry.id}`)"></span>
+                  <span>复制</span>
+                </button>
+              </div>
+            </header>
+
+            <div class="grid grid-cols-2 divide-x divide-slate-800 text-xs lg:grid-cols-4">
+              <div class="p-4">
+                <p class="text-slate-500">Namespace</p>
+                <p class="mt-1 truncate text-slate-200" x-text="currentMemoryEntry.namespace"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Type</p>
+                <p class="mt-1 text-slate-200" x-text="memoryTypeLabel(currentMemoryEntry.memory_type)"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Agent</p>
+                <p class="mt-1 truncate font-mono text-slate-300" x-text="currentMemoryEntry.agent_key"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Source Refs</p>
+                <p class="mt-1 font-mono text-slate-300" x-text="memorySourceRefCount(currentMemoryEntry)"></p>
+              </div>
+            </div>
+
+            <form class="grid grid-cols-1 divide-y divide-slate-800 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] xl:divide-x xl:divide-y-0" @submit.prevent="saveMemoryEntry()">
+              <section class="min-w-0 divide-y divide-slate-800">
+                <div class="space-y-3 p-4">
+                  <label class="field-block">
+                    <span class="field-label">标题</span>
+                    <input x-model="memoryEditForm.title" class="input-field" />
+                  </label>
+                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label class="field-block">
+                      <span class="field-label">状态</span>
+                      <select x-model="memoryEditForm.status" class="input-field">
+                        <template x-for="option in memoryStatusOptions()" :key="option.value">
+                          <option :value="option.value" x-text="option.label"></option>
+                        </template>
+                      </select>
+                    </label>
+                    <label class="field-block">
+                      <span class="field-label">Confidence</span>
+                      <input x-model.number="memoryEditForm.confidence" type="number" min="0" max="100" class="input-field" />
+                    </label>
+                  </div>
+                  <label class="field-block">
+                    <span class="field-label">Tags</span>
+                    <input x-model="memoryEditForm.tags" class="input-field" placeholder="tag-a, tag-b" />
+                  </label>
+                  <label class="field-block">
+                    <span class="field-label">Content</span>
+                    <textarea x-model="memoryEditForm.content" class="input-field min-h-56 resize-y leading-6"></textarea>
+                  </label>
+                  <button type="submit" class="button-primary h-9 px-3" :disabled="busy.memoryUpdate">
+                    <span class="material-symbols-outlined text-[18px]">save</span>
+                    <span>保存</span>
+                  </button>
+                </div>
+              </section>
+
+              <section class="min-w-0 divide-y divide-slate-800">
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Source</p>
+                  <dl class="mt-3 space-y-2 text-xs">
+                    <div class="flex min-w-0 justify-between gap-3">
+                      <dt class="text-slate-500">Created By</dt>
+                      <dd class="truncate font-mono text-slate-300" x-text="currentMemoryEntry.created_by_agent_run_id || 'N/A'"></dd>
+                    </div>
+                    <div class="flex min-w-0 justify-between gap-3">
+                      <dt class="text-slate-500">Reviewed By</dt>
+                      <dd class="truncate font-mono text-slate-300" x-text="currentMemoryEntry.reviewed_by_agent_run_id || 'N/A'"></dd>
+                    </div>
+                    <div class="flex min-w-0 justify-between gap-3">
+                      <dt class="text-slate-500">Updated</dt>
+                      <dd class="font-mono text-slate-300" x-text="formatDateTime(currentMemoryEntry.updated_at)"></dd>
+                    </div>
+                  </dl>
+                </div>
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Source Refs</p>
+                  <pre class="mt-3 max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="platformJsonPreview(currentMemoryEntry.source_refs)"></pre>
+                </div>
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Metadata</p>
+                  <pre class="mt-3 max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="platformJsonPreview(currentMemoryEntry.metadata)"></pre>
+                </div>
+              </section>
+            </form>
+          </div>
+        </template>
+      </section>
+    </div>
+  </section>
+</div>

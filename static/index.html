@@ -23,6 +23,7 @@
     <script defer src="/js/app/tasks.js"></script>
     <script defer src="/js/app/evaluations.js"></script>
     <script defer src="/js/app/governance.js"></script>
+    <script defer src="/js/app/platform.js"></script>
     <script defer src="/js/app/runtime.js"></script>
     <script defer src="/js/app/formatters.js"></script>
     <script defer src="/node_modules/alpinejs/dist/cdn.min.js"></script>
@@ -112,6 +113,26 @@
                 <span class="material-symbols-outlined text-[20px]">admin_panel_settings</span>
                 <span x-show="!sidebarCollapsed" x-transition.opacity>工具授权</span>
               </button>
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="[['platform-tools', 'platform-tool'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="Tools"
+                @click="navigate('/admin/platform/tools')"
+              >
+                <span class="material-symbols-outlined text-[20px]">build</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>Tools</span>
+              </button>
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="[['platform-memory', 'platform-memory-entry'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="Memory"
+                @click="navigate('/admin/platform/memory')"
+              >
+                <span class="material-symbols-outlined text-[20px]">memory</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>Memory</span>
+              </button>
             </nav>
         </aside>
 
@@ -165,6 +186,8 @@
               <div id="governance-proposals-page" class="h-full" x-show="!loadingPage && ['governance-proposals', 'governance-proposal'].includes(route.name)"></div>
               <div id="governance-experiments-page" class="h-full" x-show="!loadingPage && route.name === 'governance-experiments'"></div>
               <div id="tool-authorizations-page" class="h-full" x-show="!loadingPage && route.name === 'tool-authorizations'"></div>
+              <div id="platform-tools-page" class="h-full" x-show="!loadingPage && ['platform-tools', 'platform-tool'].includes(route.name)"></div>
+              <div id="platform-memory-page" class="h-full" x-show="!loadingPage && ['platform-memory', 'platform-memory-entry'].includes(route.name)"></div>
               <div id="skill-detail-page" class="h-full" x-show="!loadingPage && route.name === 'skill-detail' && currentSkill"></div>
               <div id="compiler-list-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-list'"></div>
               <div id="compiler-artifact-page" class="h-full" x-show="!loadingPage && ['compiler-artifact', 'skill-compiler-artifact'].includes(route.name) && compilerArtifact"></div>
