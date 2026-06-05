@@ -10,6 +10,7 @@ from app.agent_harness.runner import AgentRunner
 from app.agents.service import AgentService
 from app.agent_prompts.service import AgentPromptService
 from app.compiler.service import CompilerService
+from app.evaluations.service import EvaluationService
 from app.jobs.service import JobQueryService
 from app.runtime.service import RuntimeService
 from app.testing.service import SkillTestService
@@ -107,3 +108,7 @@ def get_skill_test_service(request: Request) -> SkillTestService:
         inference_gateway=get_inference_gateway(request),
         object_store=get_object_store(request),
     )
+
+
+def get_evaluation_service(_: Request) -> EvaluationService:
+    return EvaluationService()
