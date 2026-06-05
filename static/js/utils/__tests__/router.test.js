@@ -15,7 +15,11 @@ const {
   buildTasksPath,
   buildEvaluationReportsPath,
   buildEvaluationReportPath,
-  buildEvaluationFindingsPath
+  buildEvaluationFindingsPath,
+  buildGovernanceProposalsPath,
+  buildGovernanceProposalPath,
+  buildGovernanceExperimentsPath,
+  buildToolAuthorizationsPath
 } = require("../router.node.cjs");
 
 test("normalizePath handles root", () => {
@@ -45,6 +49,21 @@ test("resolveAdminRoute maps evaluation routes", () => {
   expect(buildEvaluationReportsPath()).toBe("/admin/evaluations");
   expect(buildEvaluationReportPath("eval-123")).toBe("/admin/evaluations/eval-123");
   expect(buildEvaluationFindingsPath()).toBe("/admin/evaluations/findings");
+});
+
+test("resolveAdminRoute maps governance and platform authorization routes", () => {
+  expect(resolveAdminRoute("/admin/governance")).toEqual({ name: "governance-proposals", params: {} });
+  expect(resolveAdminRoute("/admin/governance/proposals")).toEqual({ name: "governance-proposals", params: {} });
+  expect(resolveAdminRoute("/admin/governance/proposals/proposal-123")).toEqual({
+    name: "governance-proposal",
+    params: { proposalId: "proposal-123" }
+  });
+  expect(resolveAdminRoute("/admin/governance/experiments")).toEqual({ name: "governance-experiments", params: {} });
+  expect(resolveAdminRoute("/admin/platform/tool-authorizations")).toEqual({ name: "tool-authorizations", params: {} });
+  expect(buildGovernanceProposalsPath()).toBe("/admin/governance/proposals");
+  expect(buildGovernanceProposalPath("proposal-123")).toBe("/admin/governance/proposals/proposal-123");
+  expect(buildGovernanceExperimentsPath()).toBe("/admin/governance/experiments");
+  expect(buildToolAuthorizationsPath()).toBe("/admin/platform/tool-authorizations");
 });
 
 test("resolveAdminRoute extracts skill detail params", () => {

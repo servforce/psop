@@ -1,0 +1,219 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <nav class="breadcrumb-bar border-0 pb-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-100" @click="navigate(governanceProposalsPath())">Governance</button>
+      </nav>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+        <label class="field-block w-40 shrink-0">
+          <span class="field-label">状态</span>
+          <select x-model="governanceProposalFilters.status" class="input-field h-9 py-0" @change="applyGovernanceProposalFilters()">
+            <option value="">全部</option>
+            <template x-for="option in governanceProposalStatusOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.governanceProposals" @click="loadGovernanceProposalsPage()">
+          <span class="material-symbols-outlined text-[18px]">refresh</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetGovernanceProposalFilters()">
+          <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(governanceExperimentsPath())">
+          <span class="material-symbols-outlined text-[18px]">science</span>
+          <span>Experiments</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(toolAuthorizationsPath())">
+          <span class="material-symbols-outlined text-[18px]">admin_panel_settings</span>
+          <span>授权</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/20 px-3 py-3">
+      <div class="grid gap-2 lg:grid-cols-[11rem_minmax(0,1fr)_minmax(16rem,0.7fr)_2.5rem]">
+        <label class="field-block">
+          <span class="field-label">类型</span>
+          <select x-model="governanceProposalForm.proposal_type" class="input-field h-9 py-0">
+            <template x-for="option in governanceProposalTypeOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="field-block min-w-0">
+          <span class="field-label">Problem Statement</span>
+          <input x-model="governanceProposalForm.problem_statement" class="input-field h-9 py-0" placeholder="system improvement proposal" @keydown.enter.prevent="createGovernanceProposal()" />
+        </label>
+        <label class="field-block min-w-0">
+          <span class="field-label">Target JSON</span>
+          <input x-model="governanceProposalForm.target_json" class="input-field h-9 py-0 font-mono text-xs" />
+        </label>
+        <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.governanceProposalCreate" @click="createGovernanceProposal()">
+          <span class="material-symbols-outlined text-[18px]">add</span>
+          <span>创建</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="grid min-h-0 flex-1 grid-cols-1 divide-y divide-slate-800 lg:grid-cols-[minmax(22rem,0.85fr)_minmax(0,1.35fr)] lg:divide-x lg:divide-y-0">
+      <section class="min-h-0 overflow-auto">
+        <template x-if="governanceProposals.length === 0">
+          <div class="empty-state h-full min-h-80">
+            <span class="material-symbols-outlined text-[32px] text-slate-400">account_tree</span>
+            <p class="mt-3 text-base font-medium text-slate-100">暂无治理提案</p>
+          </div>
+        </template>
+        <template x-if="governanceProposals.length > 0">
+          <div class="divide-y divide-slate-800">
+            <template x-for="proposal in governanceProposals" :key="proposal.id">
+              <article class="bg-slate-950/20 p-4 transition hover:bg-slate-900/50" :class="currentGovernanceProposal?.id === proposal.id ? 'bg-orange-500/10' : ''">
+                <button type="button" class="block w-full min-w-0 text-left" @click="navigate(governanceProposalPath(proposal.id))">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="truncate text-sm font-semibold text-slate-100" x-text="proposal.problem_statement"></p>
+                      <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="proposal.id"></p>
+                    </div>
+                    <span class="status-badge shrink-0" :class="statusBadgeTone(proposal.status)" x-text="governanceProposalStatusLabel(proposal.status)"></span>
+                  </div>
+                  <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300" x-text="governanceProposalTypeLabel(proposal.proposal_type)"></span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-400" x-text="governanceProposalSourceLabel(proposal)"></span>
+                    <span class="font-mono text-[11px] text-slate-500" x-text="formatDateTime(proposal.created_at)"></span>
+                  </div>
+                </button>
+              </article>
+            </template>
+          </div>
+        </template>
+      </section>
+
+      <section class="min-h-0 overflow-auto">
+        <template x-if="!currentGovernanceProposal">
+          <div class="empty-state h-full min-h-80">
+            <span class="material-symbols-outlined text-[32px] text-slate-400">rule_folder</span>
+            <p class="mt-3 text-base font-medium text-slate-100">选择一个提案</p>
+          </div>
+        </template>
+
+        <template x-if="currentGovernanceProposal">
+          <div class="divide-y divide-slate-800">
+            <header class="p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Improvement Proposal</p>
+                  <p class="mt-1 break-words text-base font-semibold text-slate-100" x-text="currentGovernanceProposal.problem_statement"></p>
+                  <p class="mt-2 font-mono text-[11px] text-slate-500" x-text="currentGovernanceProposal.id"></p>
+                </div>
+                <span class="status-badge" :class="statusBadgeTone(currentGovernanceProposal.status)" x-text="governanceProposalStatusLabel(currentGovernanceProposal.status)"></span>
+              </div>
+              <div class="mt-4 flex flex-wrap gap-2">
+                <button type="button" class="button-secondary h-9 px-3" :disabled="busy.governanceProposalAction || !governanceCanRunTests(currentGovernanceProposal)" @click="runGovernanceProposalTests(currentGovernanceProposal)">
+                  <span class="material-symbols-outlined text-[18px]">science</span>
+                  <span>测试</span>
+                </button>
+                <button type="button" class="button-secondary h-9 px-3" :disabled="busy.governanceProposalAction || !governanceCanReview(currentGovernanceProposal)" @click="submitGovernanceProposalReview(currentGovernanceProposal, 'approved')">
+                  <span class="material-symbols-outlined text-[18px]">check_circle</span>
+                  <span>批准</span>
+                </button>
+                <button type="button" class="button-danger h-9 px-3" :disabled="busy.governanceProposalAction || !governanceCanReview(currentGovernanceProposal)" @click="submitGovernanceProposalReview(currentGovernanceProposal, 'rejected')">
+                  <span class="material-symbols-outlined text-[18px]">cancel</span>
+                  <span>拒绝</span>
+                </button>
+                <button type="button" class="button-secondary h-9 px-3" :disabled="busy.governanceProposalAction || !governanceCanActivateCanary(currentGovernanceProposal)" @click="activateGovernanceProposalCanary(currentGovernanceProposal)">
+                  <span class="material-symbols-outlined text-[18px]">rocket_launch</span>
+                  <span>灰度</span>
+                </button>
+                <button type="button" class="button-danger h-9 px-3" :disabled="busy.governanceProposalAction || !governanceCanRollback(currentGovernanceProposal)" @click="rollbackGovernanceProposal(currentGovernanceProposal)">
+                  <span class="material-symbols-outlined text-[18px]">settings_backup_restore</span>
+                  <span>回滚</span>
+                </button>
+              </div>
+            </header>
+
+            <div class="grid grid-cols-2 divide-x divide-slate-800 text-xs lg:grid-cols-4">
+              <div class="p-4">
+                <p class="text-slate-500">类型</p>
+                <p class="mt-1 text-slate-200" x-text="governanceProposalTypeLabel(currentGovernanceProposal.proposal_type)"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">AgentRun</p>
+                <p class="mt-1 truncate font-mono text-slate-300" x-text="currentGovernanceProposal.agent_run_id"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Run</p>
+                <p class="mt-1 truncate font-mono text-slate-300" x-text="currentGovernanceProposal.source_run_id || 'N/A'"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Findings</p>
+                <p class="mt-1 font-mono text-slate-300" x-text="(currentGovernanceProposal.source_finding_ids || []).length"></p>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 divide-y divide-slate-800 xl:grid-cols-2 xl:divide-x xl:divide-y-0">
+              <section class="min-w-0 divide-y divide-slate-800">
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Target</p>
+                  <pre class="mt-3 max-h-48 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="governanceJsonPreview(currentGovernanceProposal.target)"></pre>
+                </div>
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Risk</p>
+                  <pre class="mt-3 max-h-48 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="governanceJsonPreview(currentGovernanceProposal.risk_assessment)"></pre>
+                </div>
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Evidence</p>
+                  <pre class="mt-3 max-h-48 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="governanceJsonPreview(currentGovernanceProposal.evidence_refs)"></pre>
+                </div>
+              </section>
+
+              <section class="min-w-0 divide-y divide-slate-800">
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Proposed Changes</p>
+                  <pre class="mt-3 max-h-48 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="governanceJsonPreview(currentGovernanceProposal.proposed_changes)"></pre>
+                </div>
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Required Tests</p>
+                  <pre class="mt-3 max-h-48 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="governanceJsonPreview(currentGovernanceProposal.required_tests)"></pre>
+                </div>
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Activation Plan</p>
+                  <pre class="mt-3 max-h-48 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="governanceJsonPreview(currentGovernanceProposal.activation_plan)"></pre>
+                </div>
+              </section>
+            </div>
+
+            <div class="p-4">
+              <div class="flex items-center justify-between gap-3">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Experiments</p>
+                <button type="button" class="button-secondary h-8 px-3" @click="navigate(governanceExperimentsPath())">
+                  <span class="material-symbols-outlined text-[17px]">open_in_new</span>
+                  <span>打开</span>
+                </button>
+              </div>
+              <div class="mt-3 divide-y divide-slate-800 rounded-md border border-slate-800">
+                <template x-if="(currentGovernanceProposal.experiments || []).length === 0">
+                  <p class="p-3 text-sm text-slate-400">暂无实验</p>
+                </template>
+                <template x-for="experiment in currentGovernanceProposal.experiments" :key="experiment.id">
+                  <div class="grid gap-2 p-3 text-xs sm:grid-cols-[minmax(0,1fr)_7rem_8rem]">
+                    <div class="min-w-0">
+                      <p class="truncate font-medium text-slate-200" x-text="experiment.summary"></p>
+                      <p class="mt-1 truncate font-mono text-slate-500" x-text="experiment.id"></p>
+                    </div>
+                    <span class="status-badge justify-center" :class="statusBadgeTone(experiment.status)" x-text="formatStatus(experiment.status)"></span>
+                    <span class="font-mono text-slate-500" x-text="formatDateTime(experiment.created_at)"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </template>
+      </section>
+    </div>
+  </section>
+</div>

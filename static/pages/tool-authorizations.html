@@ -1,0 +1,111 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <nav class="breadcrumb-bar border-0 pb-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-100" @click="navigate(toolAuthorizationsPath())">工具授权</button>
+      </nav>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+        <label class="field-block w-40 shrink-0">
+          <span class="field-label">状态</span>
+          <select x-model="toolAuthorizationFilters.status" class="input-field h-9 py-0" @change="applyToolAuthorizationFilters()">
+            <option value="">全部</option>
+            <template x-for="option in toolAuthorizationStatusOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.toolAuthorizations" @click="loadToolAuthorizations()">
+          <span class="material-symbols-outlined text-[18px]">refresh</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetToolAuthorizationFilters()">
+          <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(governanceProposalsPath())">
+          <span class="material-symbols-outlined text-[18px]">account_tree</span>
+          <span>治理</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-auto">
+      <template x-if="toolAuthorizations.length === 0">
+        <div class="empty-state h-full min-h-80">
+          <span class="material-symbols-outlined text-[32px] text-slate-400">admin_panel_settings</span>
+          <p class="mt-3 text-base font-medium text-slate-100">暂无工具授权请求</p>
+        </div>
+      </template>
+
+      <template x-if="toolAuthorizations.length > 0">
+        <div class="divide-y divide-slate-800">
+          <template x-for="authorization in toolAuthorizations" :key="authorization.id">
+            <article class="grid gap-0 bg-slate-950/20 text-sm transition hover:bg-slate-900/50 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.2fr)_minmax(20rem,0.85fr)] xl:divide-x xl:divide-slate-800">
+              <section class="min-w-0 p-4">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="status-badge" :class="statusBadgeTone(authorization.status)" x-text="toolAuthorizationStatusLabel(authorization.status)"></span>
+                  <span class="status-badge" :class="toolAuthorizationSideEffectTone(authorization.side_effect_level)" x-text="authorization.side_effect_level"></span>
+                  <span class="status-badge" :class="toolAuthorizationRiskTone(authorization.risk_level)" x-text="authorization.risk_level"></span>
+                </div>
+                <p class="mt-3 truncate font-semibold text-slate-100" x-text="authorization.tool_name"></p>
+                <p class="mt-1 truncate text-xs text-slate-400" x-text="authorization.tool_provider + (authorization.mcp_server_name ? ` / ${authorization.mcp_server_name}` : '')"></p>
+                <dl class="mt-4 space-y-2 text-xs">
+                  <div class="flex min-w-0 justify-between gap-3">
+                    <dt class="text-slate-500">AgentRun</dt>
+                    <dd class="truncate font-mono text-slate-300" x-text="authorization.agent_run_id"></dd>
+                  </div>
+                  <div class="flex min-w-0 justify-between gap-3">
+                    <dt class="text-slate-500">Run</dt>
+                    <dd class="truncate font-mono text-slate-300" x-text="authorization.run_id || 'N/A'"></dd>
+                  </div>
+                  <div class="flex min-w-0 justify-between gap-3">
+                    <dt class="text-slate-500">Reversible</dt>
+                    <dd class="text-slate-300" x-text="toolAuthorizationReversibleLabel(authorization)"></dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section class="min-w-0 divide-y divide-slate-800">
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">影响摘要</p>
+                  <p class="mt-2 text-sm leading-6 text-slate-200" x-text="authorization.expected_effect_summary || 'N/A'"></p>
+                </div>
+                <div class="p-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">风险说明</p>
+                  <p class="mt-2 text-sm leading-6 text-slate-300" x-text="authorization.authorization_reason || 'N/A'"></p>
+                </div>
+              </section>
+
+              <section class="min-w-0 divide-y divide-slate-800">
+                <div class="p-4">
+                  <div class="flex items-center justify-between gap-3">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">参数摘要</p>
+                    <span class="font-mono text-[11px] text-slate-500" x-text="formatDateTime(authorization.created_at)"></span>
+                  </div>
+                  <pre class="mt-3 max-h-40 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="governanceJsonPreview(authorization.tool_arguments_summary)"></pre>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 p-4">
+                  <button type="button" class="button-secondary h-9 px-3" :disabled="busy.toolAuthorizationAction || authorization.status !== 'pending'" @click="decideToolAuthorization(authorization, 'approve')">
+                    <span class="material-symbols-outlined text-[18px]">check_circle</span>
+                    <span>批准</span>
+                  </button>
+                  <button type="button" class="button-danger h-9 px-3" :disabled="busy.toolAuthorizationAction || authorization.status !== 'pending'" @click="decideToolAuthorization(authorization, 'reject')">
+                    <span class="material-symbols-outlined text-[18px]">cancel</span>
+                    <span>拒绝</span>
+                  </button>
+                  <button type="button" class="button-secondary h-9 px-3" @click="copyText(authorization.id, `tool-authorization-${authorization.id}`)">
+                    <span class="material-symbols-outlined text-[18px]" x-text="copyIcon(`tool-authorization-${authorization.id}`)"></span>
+                    <span>复制</span>
+                  </button>
+                </div>
+              </section>
+            </article>
+          </template>
+        </div>
+      </template>
+    </div>
+  </section>
+</div>

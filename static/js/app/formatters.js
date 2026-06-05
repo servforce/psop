@@ -139,6 +139,8 @@
           processing: "处理中",
           pending: "待处理",
           running: "运行中",
+          reviewing: "Review 中",
+          testing: "测试中",
           waiting_input: "等待输入",
           waiting_checkpoint: "等待检查点",
           waiting_runtime: "等待运行",
@@ -150,7 +152,11 @@
           inconclusive: "未定",
           queued: "排队中",
           accepted: "已接受",
+          approved: "已批准",
           succeeded: "成功",
+          activated: "已激活",
+          canary: "灰度中",
+          rolled_back: "已回滚",
           passed: "通过",
           failed: "失败",
           retryable_failed: "等待重试",
@@ -169,19 +175,19 @@
 
       statusBadgeTone(value) {
         const normalized = String(value || "").toLowerCase();
-        if (["active", "published", "succeeded", "success", "accepted", "ready"].includes(normalized)) {
+        if (["active", "published", "succeeded", "success", "accepted", "approved", "activated", "ready"].includes(normalized)) {
           return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
         }
         if (["passed"].includes(normalized)) {
           return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
         }
-        if (["compiling", "running", "waiting_input", "waiting_checkpoint", "waiting_runtime", "in_progress", "processing", "matched", "triggered", "output"].includes(normalized)) {
+        if (["compiling", "running", "testing", "canary", "waiting_input", "waiting_checkpoint", "waiting_runtime", "in_progress", "processing", "matched", "triggered", "output"].includes(normalized)) {
           return "border-sky-500/25 bg-sky-500/10 text-sky-200";
         }
-        if (["requested", "pending", "queued", "draft", "unpublished", "retrying", "retryable_failed", "sent", "inconclusive"].includes(normalized)) {
+        if (["requested", "pending", "queued", "draft", "reviewing", "unpublished", "retrying", "retryable_failed", "sent", "inconclusive"].includes(normalized)) {
           return "border-amber-500/25 bg-amber-500/10 text-amber-200";
         }
-        if (["failed", "error", "rejected", "cancelled", "canceled", "timeout", "timed_out", "deadletter", "dead_letter"].includes(normalized)) {
+        if (["failed", "error", "rejected", "cancelled", "canceled", "timeout", "timed_out", "deadletter", "dead_letter", "rolled_back"].includes(normalized)) {
           return "border-rose-500/30 bg-rose-500/10 text-rose-200";
         }
         if (["not_occurred"].includes(normalized)) {

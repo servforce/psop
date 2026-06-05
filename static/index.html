@@ -22,6 +22,7 @@
     <script defer src="/js/app/skill-test.js"></script>
     <script defer src="/js/app/tasks.js"></script>
     <script defer src="/js/app/evaluations.js"></script>
+    <script defer src="/js/app/governance.js"></script>
     <script defer src="/js/app/runtime.js"></script>
     <script defer src="/js/app/formatters.js"></script>
     <script defer src="/node_modules/alpinejs/dist/cdn.min.js"></script>
@@ -91,6 +92,26 @@
                 <span class="material-symbols-outlined text-[20px]">rule_settings</span>
                 <span x-show="!sidebarCollapsed" x-transition.opacity>Evaluations</span>
               </button>
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="[['governance-proposals', 'governance-proposal', 'governance-experiments'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="Governance"
+                @click="navigate('/admin/governance/proposals')"
+              >
+                <span class="material-symbols-outlined text-[20px]">account_tree</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>Governance</span>
+              </button>
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="[route.name === 'tool-authorizations' ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="工具授权"
+                @click="navigate('/admin/platform/tool-authorizations')"
+              >
+                <span class="material-symbols-outlined text-[20px]">admin_panel_settings</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>工具授权</span>
+              </button>
             </nav>
         </aside>
 
@@ -141,6 +162,9 @@
               <div id="tasks-page" class="h-full" x-show="!loadingPage && route.name === 'tasks-list'"></div>
               <div id="evaluation-reports-page" class="h-full" x-show="!loadingPage && ['evaluation-reports', 'evaluation-report'].includes(route.name)"></div>
               <div id="evaluation-findings-page" class="h-full" x-show="!loadingPage && route.name === 'evaluation-findings'"></div>
+              <div id="governance-proposals-page" class="h-full" x-show="!loadingPage && ['governance-proposals', 'governance-proposal'].includes(route.name)"></div>
+              <div id="governance-experiments-page" class="h-full" x-show="!loadingPage && route.name === 'governance-experiments'"></div>
+              <div id="tool-authorizations-page" class="h-full" x-show="!loadingPage && route.name === 'tool-authorizations'"></div>
               <div id="skill-detail-page" class="h-full" x-show="!loadingPage && route.name === 'skill-detail' && currentSkill"></div>
               <div id="compiler-list-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-list'"></div>
               <div id="compiler-artifact-page" class="h-full" x-show="!loadingPage && ['compiler-artifact', 'skill-compiler-artifact'].includes(route.name) && compilerArtifact"></div>

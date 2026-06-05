@@ -28,6 +28,26 @@ function resolveAdminRoute(pathname) {
     return { name: "evaluation-findings", params: {} };
   }
 
+  if (normalized === "/admin/governance" || normalized === "/admin/governance/proposals") {
+    return { name: "governance-proposals", params: {} };
+  }
+
+  const governanceProposalMatch = normalized.match(/^\/admin\/governance\/proposals\/([^/]+)$/);
+  if (governanceProposalMatch) {
+    return {
+      name: "governance-proposal",
+      params: { proposalId: governanceProposalMatch[1] }
+    };
+  }
+
+  if (normalized === "/admin/governance/experiments") {
+    return { name: "governance-experiments", params: {} };
+  }
+
+  if (normalized === "/admin/platform/tool-authorizations") {
+    return { name: "tool-authorizations", params: {} };
+  }
+
   const evaluationReportMatch = normalized.match(/^\/admin\/evaluations\/([^/]+)$/);
   if (evaluationReportMatch) {
     return {
@@ -166,6 +186,22 @@ function buildEvaluationFindingsPath() {
   return "/admin/evaluations/findings";
 }
 
+function buildGovernanceProposalsPath() {
+  return "/admin/governance/proposals";
+}
+
+function buildGovernanceProposalPath(proposalId) {
+  return `/admin/governance/proposals/${proposalId}`;
+}
+
+function buildGovernanceExperimentsPath() {
+  return "/admin/governance/experiments";
+}
+
+function buildToolAuthorizationsPath() {
+  return "/admin/platform/tool-authorizations";
+}
+
 function buildRunLivePath(runId) {
   return `/admin/runs/${runId}/live`;
 }
@@ -214,6 +250,10 @@ module.exports = {
   buildEvaluationReportsPath,
   buildEvaluationReportPath,
   buildEvaluationFindingsPath,
+  buildGovernanceProposalsPath,
+  buildGovernanceProposalPath,
+  buildGovernanceExperimentsPath,
+  buildToolAuthorizationsPath,
   buildRunLivePath,
   buildSkillRunLivePath,
   buildSkillDebugRunLivePath,

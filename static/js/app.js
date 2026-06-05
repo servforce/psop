@@ -25,6 +25,26 @@
       return { name: "evaluation-findings", params: {} };
     }
 
+    if (normalized === "/admin/governance" || normalized === "/admin/governance/proposals") {
+      return { name: "governance-proposals", params: {} };
+    }
+
+    const governanceProposalMatch = normalized.match(/^\/admin\/governance\/proposals\/([^/]+)$/);
+    if (governanceProposalMatch) {
+      return {
+        name: "governance-proposal",
+        params: { proposalId: governanceProposalMatch[1] }
+      };
+    }
+
+    if (normalized === "/admin/governance/experiments") {
+      return { name: "governance-experiments", params: {} };
+    }
+
+    if (normalized === "/admin/platform/tool-authorizations") {
+      return { name: "tool-authorizations", params: {} };
+    }
+
     const evaluationReportMatch = normalized.match(/^\/admin\/evaluations\/([^/]+)$/);
     if (evaluationReportMatch) {
       return {
@@ -173,6 +193,22 @@
 
   function buildEvaluationFindingsPath() {
     return "/admin/evaluations/findings";
+  }
+
+  function buildGovernanceProposalsPath() {
+    return "/admin/governance/proposals";
+  }
+
+  function buildGovernanceProposalPath(proposalId) {
+    return `/admin/governance/proposals/${proposalId}`;
+  }
+
+  function buildGovernanceExperimentsPath() {
+    return "/admin/governance/experiments";
+  }
+
+  function buildToolAuthorizationsPath() {
+    return "/admin/platform/tool-authorizations";
   }
 
   function buildRunLivePath(runId) {
@@ -566,6 +602,27 @@
         run_id: "",
         pskill_definition_id: ""
       },
+      governanceProposals: [],
+      currentGovernanceProposal: null,
+      governanceProposalFilters: {
+        status: ""
+      },
+      governanceProposalForm: {
+        proposal_type: "pskill_template_update",
+        problem_statement: "",
+        target_json: "{\n  \"kind\": \"psop_system_improvement\"\n}"
+      },
+      governanceReviewForm: {
+        decision: "approved",
+        review_notes: ""
+      },
+      governanceExperimentRows: [],
+      governanceExperimentLookupId: "",
+      governanceExperimentDetail: null,
+      toolAuthorizations: [],
+      toolAuthorizationFilters: {
+        status: "pending"
+      },
       publishFilters: {
         status: "",
         published_from: "",
@@ -752,6 +809,13 @@
         evaluationReport: false,
         evaluationFindings: false,
         evaluationFindingUpdate: false,
+        governanceProposals: false,
+        governanceProposalCreate: false,
+        governanceProposalAction: false,
+        governanceExperiments: false,
+        governanceExperimentLookup: false,
+        toolAuthorizations: false,
+        toolAuthorizationAction: false,
         replayRuns: false,
         replayDetail: false
       }
@@ -766,6 +830,10 @@
     buildEvaluationReportsPath,
     buildEvaluationReportPath,
     buildEvaluationFindingsPath,
+    buildGovernanceProposalsPath,
+    buildGovernanceProposalPath,
+    buildGovernanceExperimentsPath,
+    buildToolAuthorizationsPath,
     buildRunLivePath,
     buildSkillRunLivePath,
     buildSkillDebugRunLivePath,
@@ -798,6 +866,7 @@
       ...window.PSOPConsoleSkillTestMethods,
       ...window.PSOPConsoleTasksMethods,
       ...window.PSOPConsoleEvaluationMethods,
+      ...window.PSOPConsoleGovernanceMethods,
       ...window.PSOPConsoleRuntimeMethods,
       ...window.PSOPConsoleFormatMethods
     };

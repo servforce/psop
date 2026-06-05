@@ -165,6 +165,10 @@
                     <span class="material-symbols-outlined text-[17px]">close</span>
                     <span>驳回</span>
                   </button>
+                  <button type="button" class="button-secondary h-8 px-3" :disabled="busy.evaluationFindingUpdate || finding.status === 'converted_to_proposal'" @click="createProposalFromEvaluationFinding(finding)">
+                    <span class="material-symbols-outlined text-[17px]">account_tree</span>
+                    <span>转提案</span>
+                  </button>
                   <template x-for="ref in finding.evidence_refs" :key="`${finding.id}-${ref.kind}-${ref.id || ref.seq_no}`">
                     <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-[11px] text-slate-400" x-text="findingEvidenceLabel(ref)"></span>
                   </template>

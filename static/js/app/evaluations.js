@@ -148,6 +148,29 @@
       }
     },
 
+    async createProposalFromEvaluationFinding(finding) {
+      if (!finding?.id) {
+        return;
+      }
+      this.busy.evaluationFindingUpdate = true;
+      try {
+        const proposal = await this.apiRequest(`/evaluations/findings/${encodeURIComponent(finding.id)}/create-proposal`, {
+          method: "POST"
+        });
+        const convertedFinding = { ...finding, status: "converted_to_proposal" };
+        this.evaluationFindings = this.evaluationFindings.map((item) => item.id === finding.id ? convertedFinding : item);
+        if (this.currentEvaluation?.findings) {
+          this.currentEvaluation.findings = this.currentEvaluation.findings.map((item) => item.id === finding.id ? convertedFinding : item);
+        }
+        this.showNotice("success", "已创建治理提案。");
+        await this.navigate(this.governanceProposalPath(proposal.id));
+      } catch (error) {
+        this.showNotice("error", error.message || "创建治理提案失败。");
+      } finally {
+        this.busy.evaluationFindingUpdate = false;
+      }
+    },
+
     evaluationReportPath(evaluationId) {
       return `/admin/evaluations/${evaluationId}`;
     },

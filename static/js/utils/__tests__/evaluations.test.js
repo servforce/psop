@@ -70,3 +70,28 @@ test("evaluation methods update finding status in list and current report", asyn
   expect(context.currentEvaluation.findings[0]).toBe(updated);
   expect(context.busy.evaluationFindingUpdate).toBe(false);
 });
+
+test("evaluation methods create governance proposal from finding and navigate", async () => {
+  const methods = loadEvaluationMethods();
+  const finding = { id: "finding-1", status: "open", category: "runner_issue" };
+  const context = {
+    ...methods,
+    busy: { evaluationFindingUpdate: false },
+    evaluationFindings: [finding],
+    currentEvaluation: { findings: [finding] },
+    apiRequest: jest.fn(async () => ({ id: "proposal-1" })),
+    showNotice: jest.fn(),
+    navigate: jest.fn(),
+    governanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`
+  };
+
+  await methods.createProposalFromEvaluationFinding.call(context, finding);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/evaluations/findings/finding-1/create-proposal", {
+    method: "POST"
+  });
+  expect(context.evaluationFindings[0].status).toBe("converted_to_proposal");
+  expect(context.currentEvaluation.findings[0].status).toBe("converted_to_proposal");
+  expect(context.navigate).toHaveBeenCalledWith("/admin/governance/proposals/proposal-1");
+  expect(context.busy.evaluationFindingUpdate).toBe(false);
+});

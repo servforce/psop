@@ -328,6 +328,9 @@
           ["tasks-page", "/pages/tasks.html"],
           ["evaluation-reports-page", "/pages/evaluation-reports.html"],
           ["evaluation-findings-page", "/pages/evaluation-findings.html"],
+          ["governance-proposals-page", "/pages/governance-proposals.html"],
+          ["governance-experiments-page", "/pages/governance-experiments.html"],
+          ["tool-authorizations-page", "/pages/tool-authorizations.html"],
           ["skill-detail-page", "/pages/skill-detail.html"],
           ["compiler-list-page", "/pages/compiler-list.html"],
           ["compiler-artifact-page", "/pages/compiler-artifact-detail.html"],
@@ -456,6 +459,9 @@
         if (!["evaluation-reports", "evaluation-report"].includes(this.route.name)) {
           this.currentEvaluation = null;
         }
+        if (!["governance-proposals", "governance-proposal"].includes(this.route.name)) {
+          this.currentGovernanceProposal = null;
+        }
         if (!["compiler-artifact", "skill-compiler-artifact"].includes(this.route.name)) {
           this.destroyCompilerArtifactViewer();
           this.compilerArtifact = null;
@@ -494,6 +500,31 @@
           if (this.route.name === "evaluation-findings") {
             this.currentSkill = null;
             await this.loadEvaluationFindings();
+            return;
+          }
+
+          if (this.route.name === "governance-proposals") {
+            this.currentSkill = null;
+            await this.loadGovernanceProposalsPage();
+            return;
+          }
+
+          if (this.route.name === "governance-proposal") {
+            this.currentSkill = null;
+            await this.loadGovernanceProposalDetail(this.route.params.proposalId);
+            await this.loadGovernanceProposals();
+            return;
+          }
+
+          if (this.route.name === "governance-experiments") {
+            this.currentSkill = null;
+            await this.loadGovernanceExperiments();
+            return;
+          }
+
+          if (this.route.name === "tool-authorizations") {
+            this.currentSkill = null;
+            await this.loadToolAuthorizations();
             return;
           }
 
@@ -792,6 +823,15 @@
         }
         if (this.route.name === "evaluation-findings") {
           return "Findings";
+        }
+        if (this.route.name === "governance-proposals" || this.route.name === "governance-proposal") {
+          return "治理提案";
+        }
+        if (this.route.name === "governance-experiments") {
+          return "治理实验";
+        }
+        if (this.route.name === "tool-authorizations") {
+          return "工具授权";
         }
         if (this.route.name === "compiler-artifact") {
           return "EG Artifact";
