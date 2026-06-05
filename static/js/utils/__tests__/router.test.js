@@ -12,7 +12,10 @@ const {
   buildSkillTestScenarioRunReviewPath,
   buildCompilerArtifactPath,
   buildSkillCompilerArtifactPath,
-  buildTasksPath
+  buildTasksPath,
+  buildEvaluationReportsPath,
+  buildEvaluationReportPath,
+  buildEvaluationFindingsPath
 } = require("../router.node.cjs");
 
 test("normalizePath handles root", () => {
@@ -30,6 +33,18 @@ test("resolveAdminRoute maps the skills list route", () => {
 test("resolveAdminRoute maps the tasks route", () => {
   expect(resolveAdminRoute("/admin/tasks")).toEqual({ name: "tasks-list", params: {} });
   expect(buildTasksPath()).toBe("/admin/tasks");
+});
+
+test("resolveAdminRoute maps evaluation routes", () => {
+  expect(resolveAdminRoute("/admin/evaluations")).toEqual({ name: "evaluation-reports", params: {} });
+  expect(resolveAdminRoute("/admin/evaluations/findings")).toEqual({ name: "evaluation-findings", params: {} });
+  expect(resolveAdminRoute("/admin/evaluations/eval-123")).toEqual({
+    name: "evaluation-report",
+    params: { evaluationId: "eval-123" }
+  });
+  expect(buildEvaluationReportsPath()).toBe("/admin/evaluations");
+  expect(buildEvaluationReportPath("eval-123")).toBe("/admin/evaluations/eval-123");
+  expect(buildEvaluationFindingsPath()).toBe("/admin/evaluations/findings");
 });
 
 test("resolveAdminRoute extracts skill detail params", () => {

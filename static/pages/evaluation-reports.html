@@ -1,0 +1,179 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <nav class="breadcrumb-bar border-0 pb-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-100" @click="navigate('/admin/evaluations')">Run 评估</button>
+      </nav>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+        <label class="field-block min-w-72 flex-1">
+          <span class="field-label">Run ID</span>
+          <input
+            x-model="evaluationForm.run_id"
+            class="input-field h-9 py-0 font-mono text-xs"
+            placeholder="run_id"
+            @keydown.enter.prevent="createRunEvaluation()"
+          />
+        </label>
+        <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.evaluationReport" @click="createRunEvaluation()">
+          <span class="material-symbols-outlined text-[18px]">rule_settings</span>
+          <span class="hidden sm:inline">创建评估</span>
+        </button>
+        <label class="field-block min-w-72 flex-1">
+          <span class="field-label">Evaluation ID</span>
+          <input
+            x-model="evaluationForm.evaluation_id"
+            class="input-field h-9 py-0 font-mono text-xs"
+            placeholder="evaluation_id"
+            @keydown.enter.prevent="openEvaluationFromForm()"
+          />
+        </label>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.evaluationReport" @click="openEvaluationFromForm()">
+          <span class="material-symbols-outlined text-[18px]">open_in_new</span>
+          <span class="hidden sm:inline">打开</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(evaluationFindingsPath())">
+          <span class="material-symbols-outlined text-[18px]">find_in_page</span>
+          <span class="hidden sm:inline">Findings</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-auto">
+      <template x-if="!currentEvaluation">
+        <div class="empty-state h-full min-h-80">
+          <span class="material-symbols-outlined text-[32px] text-slate-400">rule_settings</span>
+          <p class="mt-3 text-base font-medium text-slate-100">暂无评估报告</p>
+        </div>
+      </template>
+
+      <template x-if="currentEvaluation">
+        <div class="grid min-h-full grid-cols-1 divide-y divide-slate-800 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)] lg:divide-x lg:divide-y-0">
+          <section class="min-w-0 divide-y divide-slate-800">
+            <div class="p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Run Evaluation</p>
+                  <p class="mt-1 font-mono text-xs text-slate-300" x-text="currentEvaluation.id"></p>
+                </div>
+                <span class="status-badge" :class="evaluationOutcomeTone(currentEvaluation.overall_outcome)" x-text="evaluationOutcomeLabel(currentEvaluation.overall_outcome)"></span>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 divide-x divide-slate-800">
+              <div class="p-4">
+                <p class="text-[11px] text-slate-500">质量分</p>
+                <p class="mt-1 text-3xl font-semibold leading-none tabular-nums" :class="evaluationScoreTone(currentEvaluation.quality_score)" x-text="currentEvaluation.quality_score"></p>
+                <div class="mt-3 h-1.5 rounded-full bg-slate-800">
+                  <span class="block h-full rounded-full bg-emerald-400" :style="{ width: evaluationScoreBarWidth(currentEvaluation.quality_score) }"></span>
+                </div>
+              </div>
+              <div class="p-4">
+                <p class="text-[11px] text-slate-500">Findings</p>
+                <p class="mt-1 text-3xl font-semibold leading-none text-slate-100 tabular-nums" x-text="evaluationFindingCount(currentEvaluation)"></p>
+                <p class="mt-3 text-xs text-slate-400">
+                  <span x-text="evaluationOpenFindingCount(currentEvaluation)"></span>
+                  <span> open</span>
+                </p>
+              </div>
+            </div>
+
+            <div class="p-4">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Summary</p>
+              <p class="mt-2 text-sm leading-6 text-slate-200" x-text="currentEvaluation.summary"></p>
+            </div>
+
+            <div class="p-4">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Refs</p>
+              <dl class="mt-3 space-y-2 text-xs">
+                <div class="flex min-w-0 items-center justify-between gap-3">
+                  <dt class="text-slate-500">Run</dt>
+                  <dd class="min-w-0 truncate font-mono text-slate-300" x-text="currentEvaluation.run_id"></dd>
+                </div>
+                <div class="flex min-w-0 items-center justify-between gap-3">
+                  <dt class="text-slate-500">PSkill</dt>
+                  <dd class="min-w-0 truncate font-mono text-slate-300" x-text="currentEvaluation.pskill_definition_id"></dd>
+                </div>
+                <div class="flex min-w-0 items-center justify-between gap-3">
+                  <dt class="text-slate-500">AgentRun</dt>
+                  <dd class="min-w-0 truncate font-mono text-slate-300" x-text="currentEvaluation.agent_run_id"></dd>
+                </div>
+              </dl>
+              <div class="mt-4 flex flex-wrap gap-2">
+                <button type="button" class="button-secondary h-9 px-3" @click="navigate(evaluationRunReplayPath(currentEvaluation))">
+                  <span class="material-symbols-outlined text-[18px]">replay</span>
+                  <span>Replay</span>
+                </button>
+                <button type="button" class="button-secondary h-9 px-3" @click="copyText(currentEvaluation.id, `evaluation-${currentEvaluation.id}`)">
+                  <span class="material-symbols-outlined text-[18px]" x-text="copyIcon(`evaluation-${currentEvaluation.id}`)"></span>
+                  <span>复制 ID</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="p-4">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Attribution</p>
+              <template x-if="evaluationAttributionCategories(currentEvaluation).length === 0">
+                <p class="mt-2 text-sm text-slate-400">N/A</p>
+              </template>
+              <div class="mt-3 space-y-2">
+                <template x-for="item in evaluationAttributionCategories(currentEvaluation)" :key="item.category">
+                  <div class="flex items-center justify-between gap-3 text-xs">
+                    <span class="min-w-0 truncate text-slate-300" x-text="findingCategoryLabel(item.category)"></span>
+                    <span class="font-mono text-slate-400" x-text="`${item.count} / -${item.penalty}`"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </section>
+
+          <section class="min-w-0 divide-y divide-slate-800">
+            <div class="flex h-11 items-center justify-between px-4">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Findings</p>
+              <button type="button" class="button-secondary h-8 px-3" @click="navigate(evaluationFindingsPath())">
+                <span class="material-symbols-outlined text-[17px]">find_in_page</span>
+                <span class="hidden sm:inline">全部</span>
+              </button>
+            </div>
+
+            <template x-if="currentEvaluation.findings.length === 0">
+              <div class="empty-state min-h-80">
+                <span class="material-symbols-outlined text-[32px] text-slate-400">verified</span>
+                <p class="mt-3 text-base font-medium text-slate-100">暂无 findings</p>
+              </div>
+            </template>
+
+            <template x-for="finding in currentEvaluation.findings" :key="finding.id">
+              <article class="p-4 hover:bg-slate-900/50">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="status-badge" :class="findingSeverityTone(finding.severity)" x-text="findingSeverityLabel(finding.severity)"></span>
+                  <span class="status-badge" :class="findingStatusTone(finding.status)" x-text="findingStatusLabel(finding.status)"></span>
+                  <span class="text-xs text-slate-400" x-text="findingCategoryLabel(finding.category)"></span>
+                </div>
+                <p class="mt-3 text-sm leading-6 text-slate-100" x-text="finding.description"></p>
+                <p class="mt-2 text-xs leading-5 text-slate-400" x-text="finding.recommended_action"></p>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <button type="button" class="button-secondary h-8 px-3" :disabled="busy.evaluationFindingUpdate" @click="updateEvaluationFindingStatus(finding, 'accepted')">
+                    <span class="material-symbols-outlined text-[17px]">check_circle</span>
+                    <span>接受</span>
+                  </button>
+                  <button type="button" class="button-secondary h-8 px-3" :disabled="busy.evaluationFindingUpdate" @click="updateEvaluationFindingStatus(finding, 'dismissed')">
+                    <span class="material-symbols-outlined text-[17px]">close</span>
+                    <span>驳回</span>
+                  </button>
+                  <template x-for="ref in finding.evidence_refs" :key="`${finding.id}-${ref.kind}-${ref.id || ref.seq_no}`">
+                    <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-[11px] text-slate-400" x-text="findingEvidenceLabel(ref)"></span>
+                  </template>
+                </div>
+              </article>
+            </template>
+          </section>
+        </div>
+      </template>
+    </div>
+  </section>
+</div>

@@ -21,6 +21,7 @@
     <script defer src="/js/app/agent-prompts.js"></script>
     <script defer src="/js/app/skill-test.js"></script>
     <script defer src="/js/app/tasks.js"></script>
+    <script defer src="/js/app/evaluations.js"></script>
     <script defer src="/js/app/runtime.js"></script>
     <script defer src="/js/app/formatters.js"></script>
     <script defer src="/node_modules/alpinejs/dist/cdn.min.js"></script>
@@ -80,6 +81,16 @@
                 <span class="material-symbols-outlined text-[20px]">task_alt</span>
                 <span x-show="!sidebarCollapsed" x-transition.opacity>任务</span>
               </button>
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="[['evaluation-reports', 'evaluation-report', 'evaluation-findings'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="Evaluations"
+                @click="navigate('/admin/evaluations')"
+              >
+                <span class="material-symbols-outlined text-[20px]">rule_settings</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>Evaluations</span>
+              </button>
             </nav>
         </aside>
 
@@ -128,6 +139,8 @@
 
               <div id="skills-list-page" class="h-full" x-show="!loadingPage && route.name === 'skills-list'"></div>
               <div id="tasks-page" class="h-full" x-show="!loadingPage && route.name === 'tasks-list'"></div>
+              <div id="evaluation-reports-page" class="h-full" x-show="!loadingPage && ['evaluation-reports', 'evaluation-report'].includes(route.name)"></div>
+              <div id="evaluation-findings-page" class="h-full" x-show="!loadingPage && route.name === 'evaluation-findings'"></div>
               <div id="skill-detail-page" class="h-full" x-show="!loadingPage && route.name === 'skill-detail' && currentSkill"></div>
               <div id="compiler-list-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-list'"></div>
               <div id="compiler-artifact-page" class="h-full" x-show="!loadingPage && ['compiler-artifact', 'skill-compiler-artifact'].includes(route.name) && compilerArtifact"></div>

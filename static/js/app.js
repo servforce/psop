@@ -17,6 +17,22 @@
       return { name: "tasks-list", params: {} };
     }
 
+    if (normalized === "/admin/evaluations") {
+      return { name: "evaluation-reports", params: {} };
+    }
+
+    if (normalized === "/admin/evaluations/findings") {
+      return { name: "evaluation-findings", params: {} };
+    }
+
+    const evaluationReportMatch = normalized.match(/^\/admin\/evaluations\/([^/]+)$/);
+    if (evaluationReportMatch) {
+      return {
+        name: "evaluation-report",
+        params: { evaluationId: evaluationReportMatch[1] }
+      };
+    }
+
     const detailMatch = normalized.match(/^\/admin\/skills\/([^/]+)$/);
     if (detailMatch) {
       return {
@@ -145,6 +161,18 @@
 
   function buildTasksPath() {
     return "/admin/tasks";
+  }
+
+  function buildEvaluationReportsPath() {
+    return "/admin/evaluations";
+  }
+
+  function buildEvaluationReportPath(evaluationId) {
+    return `/admin/evaluations/${evaluationId}`;
+  }
+
+  function buildEvaluationFindingsPath() {
+    return "/admin/evaluations/findings";
   }
 
   function buildRunLivePath(runId) {
@@ -525,6 +553,19 @@
         created_from: "",
         created_to: ""
       },
+      currentEvaluation: null,
+      evaluationForm: {
+        run_id: "",
+        evaluation_id: ""
+      },
+      evaluationFindings: [],
+      evaluationFindingFilters: {
+        status: "open",
+        category: "",
+        severity: "",
+        run_id: "",
+        pskill_definition_id: ""
+      },
       publishFilters: {
         status: "",
         published_from: "",
@@ -708,6 +749,9 @@
         skillTestSendData: false,
         skillTestCancel: false,
         tasks: false,
+        evaluationReport: false,
+        evaluationFindings: false,
+        evaluationFindingUpdate: false,
         replayRuns: false,
         replayDetail: false
       }
@@ -719,6 +763,9 @@
     resolveAdminRoute,
     buildSkillDetailPath,
     buildTasksPath,
+    buildEvaluationReportsPath,
+    buildEvaluationReportPath,
+    buildEvaluationFindingsPath,
     buildRunLivePath,
     buildSkillRunLivePath,
     buildSkillDebugRunLivePath,
@@ -750,6 +797,7 @@
       ...window.PSOPConsoleAgentPromptMethods,
       ...window.PSOPConsoleSkillTestMethods,
       ...window.PSOPConsoleTasksMethods,
+      ...window.PSOPConsoleEvaluationMethods,
       ...window.PSOPConsoleRuntimeMethods,
       ...window.PSOPConsoleFormatMethods
     };

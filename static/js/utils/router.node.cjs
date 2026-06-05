@@ -20,6 +20,22 @@ function resolveAdminRoute(pathname) {
     return { name: "tasks-list", params: {} };
   }
 
+  if (normalized === "/admin/evaluations") {
+    return { name: "evaluation-reports", params: {} };
+  }
+
+  if (normalized === "/admin/evaluations/findings") {
+    return { name: "evaluation-findings", params: {} };
+  }
+
+  const evaluationReportMatch = normalized.match(/^\/admin\/evaluations\/([^/]+)$/);
+  if (evaluationReportMatch) {
+    return {
+      name: "evaluation-report",
+      params: { evaluationId: evaluationReportMatch[1] }
+    };
+  }
+
   const detailMatch = normalized.match(/^\/admin\/skills\/([^/]+)$/);
   if (detailMatch) {
     return {
@@ -138,6 +154,18 @@ function buildTasksPath() {
   return "/admin/tasks";
 }
 
+function buildEvaluationReportsPath() {
+  return "/admin/evaluations";
+}
+
+function buildEvaluationReportPath(evaluationId) {
+  return `/admin/evaluations/${evaluationId}`;
+}
+
+function buildEvaluationFindingsPath() {
+  return "/admin/evaluations/findings";
+}
+
 function buildRunLivePath(runId) {
   return `/admin/runs/${runId}/live`;
 }
@@ -183,6 +211,9 @@ module.exports = {
   resolveAdminRoute,
   buildSkillDetailPath,
   buildTasksPath,
+  buildEvaluationReportsPath,
+  buildEvaluationReportPath,
+  buildEvaluationFindingsPath,
   buildRunLivePath,
   buildSkillRunLivePath,
   buildSkillDebugRunLivePath,

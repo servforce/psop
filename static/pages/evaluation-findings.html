@@ -1,0 +1,117 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <nav class="breadcrumb-bar border-0 pb-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/evaluations')">Run 评估</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-100" @click="navigate('/admin/evaluations/findings')">Findings</button>
+      </nav>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+        <label class="field-block w-36 shrink-0">
+          <span class="field-label">状态</span>
+          <select x-model="evaluationFindingFilters.status" class="input-field h-9 py-0" @change="applyEvaluationFindingFilters()">
+            <option value="">全部</option>
+            <template x-for="option in findingStatusOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="field-block w-40 shrink-0">
+          <span class="field-label">类别</span>
+          <select x-model="evaluationFindingFilters.category" class="input-field h-9 py-0" @change="applyEvaluationFindingFilters()">
+            <option value="">全部</option>
+            <template x-for="option in findingCategoryOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="field-block w-32 shrink-0">
+          <span class="field-label">严重度</span>
+          <select x-model="evaluationFindingFilters.severity" class="input-field h-9 py-0" @change="applyEvaluationFindingFilters()">
+            <option value="">全部</option>
+            <template x-for="option in findingSeverityOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="field-block min-w-56 flex-1">
+          <span class="field-label">Run ID</span>
+          <input
+            x-model="evaluationFindingFilters.run_id"
+            class="input-field h-9 py-0 font-mono text-xs"
+            placeholder="run_id"
+            @input.debounce.300ms="applyEvaluationFindingFilters()"
+          />
+        </label>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.evaluationFindings" @click="loadEvaluationFindings()">
+          <span class="material-symbols-outlined text-[18px]">refresh</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetEvaluationFindingFilters()">
+          <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="grid h-11 shrink-0 items-center gap-3 border-b border-slate-800 bg-slate-950/70 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500" style="grid-template-columns: minmax(0,1.05fr) 8rem 7rem 6rem minmax(0,1.5fr) 8.5rem;">
+      <span>Finding</span>
+      <span>类别</span>
+      <span class="text-center">严重度</span>
+      <span class="text-center">状态</span>
+      <span>建议</span>
+      <span class="text-center">时间</span>
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+      <template x-if="evaluationFindings.length === 0">
+        <div class="empty-state h-full min-h-80">
+          <span class="material-symbols-outlined text-[32px] text-slate-400">find_in_page</span>
+          <p class="mt-3 text-base font-medium text-slate-100">暂无匹配 findings</p>
+        </div>
+      </template>
+
+      <template x-if="evaluationFindings.length > 0">
+        <div class="divide-y divide-slate-800">
+          <template x-for="finding in evaluationFindings" :key="finding.id">
+            <article class="grid min-h-16 items-center gap-3 bg-slate-950/20 px-3 py-3 text-sm transition hover:bg-slate-900/50" style="grid-template-columns: minmax(0,1.05fr) 8rem 7rem 6rem minmax(0,1.5fr) 8.5rem;">
+              <button type="button" class="min-w-0 text-left" @click="navigate(evaluationReportPath(finding.evaluation_id))">
+                <span class="block truncate font-semibold text-slate-100" x-text="finding.description"></span>
+                <span class="mt-1 block truncate font-mono text-[11px] text-slate-500" x-text="finding.id"></span>
+              </button>
+              <div class="min-w-0 truncate text-slate-300" x-text="findingCategoryLabel(finding.category)"></div>
+              <div class="flex justify-center">
+                <span class="status-badge" :class="findingSeverityTone(finding.severity)" x-text="findingSeverityLabel(finding.severity)"></span>
+              </div>
+              <div class="flex justify-center">
+                <span class="status-badge" :class="findingStatusTone(finding.status)" x-text="findingStatusLabel(finding.status)"></span>
+              </div>
+              <div class="min-w-0 truncate text-slate-400" x-text="finding.recommended_action"></div>
+              <div class="text-center font-mono text-[11px] text-slate-500" x-text="formatDateTime(finding.created_at)"></div>
+              <div class="col-span-full flex flex-wrap items-center gap-2">
+                <button type="button" class="button-secondary h-8 px-3" :disabled="busy.evaluationFindingUpdate" @click="updateEvaluationFindingStatus(finding, 'accepted')">
+                  <span class="material-symbols-outlined text-[17px]">check_circle</span>
+                  <span>接受</span>
+                </button>
+                <button type="button" class="button-secondary h-8 px-3" :disabled="busy.evaluationFindingUpdate" @click="updateEvaluationFindingStatus(finding, 'dismissed')">
+                  <span class="material-symbols-outlined text-[17px]">close</span>
+                  <span>驳回</span>
+                </button>
+                <button type="button" class="button-secondary h-8 px-3" @click="navigate(evaluationReportPath(finding.evaluation_id))">
+                  <span class="material-symbols-outlined text-[17px]">open_in_new</span>
+                  <span>报告</span>
+                </button>
+                <template x-for="ref in finding.evidence_refs" :key="`${finding.id}-${ref.kind}-${ref.id || ref.seq_no}`">
+                  <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-[11px] text-slate-400" x-text="findingEvidenceLabel(ref)"></span>
+                </template>
+              </div>
+            </article>
+          </template>
+        </div>
+      </template>
+    </div>
+  </section>
+</div>

@@ -3,6 +3,8 @@
     normalizePath,
     resolveAdminRoute,
     buildSkillDetailPath,
+    buildEvaluationReportsPath,
+    buildEvaluationFindingsPath,
     buildRunLivePath,
     buildSkillRunLivePath,
     buildSkillDebugRunLivePath,
@@ -260,6 +262,8 @@
           drive_folder_upload: "返回上级目录",
           edit: "编辑",
           fact_check: "编辑语义事件",
+          filter_alt_off: "重置筛选",
+          find_in_page: "查看 Findings",
           format_indent_increase: "格式化",
           history: "查看历史",
           hub: "切换菜单",
@@ -272,6 +276,7 @@
           replay: "重新播放",
           restart_alt: "重置",
           rocket_launch: "发布",
+          rule_settings: "创建评估",
           schedule: "时钟事件",
           save: "保存",
           science: "测试",
@@ -321,6 +326,8 @@
         const fragments = [
           ["skills-list-page", "/pages/skills-list.html"],
           ["tasks-page", "/pages/tasks.html"],
+          ["evaluation-reports-page", "/pages/evaluation-reports.html"],
+          ["evaluation-findings-page", "/pages/evaluation-findings.html"],
           ["skill-detail-page", "/pages/skill-detail.html"],
           ["compiler-list-page", "/pages/compiler-list.html"],
           ["compiler-artifact-page", "/pages/compiler-artifact-detail.html"],
@@ -446,6 +453,9 @@
         if (this.route.name !== "tasks-list") {
           this.stopTaskPolling?.();
         }
+        if (!["evaluation-reports", "evaluation-report"].includes(this.route.name)) {
+          this.currentEvaluation = null;
+        }
         if (!["compiler-artifact", "skill-compiler-artifact"].includes(this.route.name)) {
           this.destroyCompilerArtifactViewer();
           this.compilerArtifact = null;
@@ -466,6 +476,24 @@
           if (this.route.name === "tasks-list") {
             this.currentSkill = null;
             await this.loadTasksPage();
+            return;
+          }
+
+          if (this.route.name === "evaluation-reports") {
+            this.currentSkill = null;
+            await this.loadEvaluationReportsPage();
+            return;
+          }
+
+          if (this.route.name === "evaluation-report") {
+            this.currentSkill = null;
+            await this.loadEvaluationReport(this.route.params.evaluationId);
+            return;
+          }
+
+          if (this.route.name === "evaluation-findings") {
+            this.currentSkill = null;
+            await this.loadEvaluationFindings();
             return;
           }
 
@@ -758,6 +786,12 @@
         }
         if (this.route.name === "tasks-list") {
           return "任务";
+        }
+        if (this.route.name === "evaluation-reports" || this.route.name === "evaluation-report") {
+          return "Run 评估";
+        }
+        if (this.route.name === "evaluation-findings") {
+          return "Findings";
         }
         if (this.route.name === "compiler-artifact") {
           return "EG Artifact";
