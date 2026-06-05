@@ -56,6 +56,7 @@ class DatabaseManager:
         from app.runtime import models as runtime_models  # noqa: F401
         from app.testing import models as skill_test_models  # noqa: F401
         from app.skills import models as skill_package_models  # noqa: F401
+        from app.tools import models as tool_models  # noqa: F401
 
         Base.metadata.create_all(self.engine)
 

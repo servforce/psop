@@ -16,6 +16,7 @@ from app.memory.service import MemoryService
 from app.jobs.service import JobQueryService
 from app.runtime.service import RuntimeService
 from app.testing.service import SkillTestService
+from app.tools.service import ToolService
 from app.pskills.service import SkillsService
 from app.skills.service import SkillPackageService
 from app.gateway.asr import AsrGateway
@@ -122,3 +123,7 @@ def get_governance_service(_: Request) -> GovernanceService:
 
 def get_memory_service(_: Request) -> MemoryService:
     return MemoryService()
+
+
+def get_tool_service(_: Request) -> ToolService:
+    return ToolService()

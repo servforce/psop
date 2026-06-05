@@ -12,6 +12,7 @@ from app.api.routes.skill_packages import router as skill_packages_router
 from app.api.routes.skill_tests import router as skill_tests_router
 from app.api.routes.skills import router as skills_router
 from app.api.routes.system import router as system_router
+from app.api.routes.tools import router as tools_router
 
 
 api_router = APIRouter()
@@ -23,6 +24,7 @@ api_router.include_router(agent_prompts_router)
 api_router.include_router(skill_packages_router)
 api_router.include_router(skills_router, prefix="/pskills")
 api_router.include_router(skill_tests_router)
+api_router.include_router(tools_router)
 api_router.include_router(compiler_router)
 api_router.include_router(evaluations_router)
 api_router.include_router(governance_router)
