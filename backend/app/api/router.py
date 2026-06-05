@@ -6,6 +6,7 @@ from app.api.routes.compiler import router as compiler_router
 from app.api.routes.evaluations import router as evaluations_router
 from app.api.routes.governance import router as governance_router
 from app.api.routes.inference import router as inference_router
+from app.api.routes.memory import router as memory_router
 from app.api.routes.runtime import gateway_router, replay_router, runtime_router, runs_router, terminal_router, ws_router
 from app.api.routes.skill_packages import router as skill_packages_router
 from app.api.routes.skill_tests import router as skill_tests_router
@@ -25,6 +26,7 @@ api_router.include_router(skill_tests_router)
 api_router.include_router(compiler_router)
 api_router.include_router(evaluations_router)
 api_router.include_router(governance_router)
+api_router.include_router(memory_router)
 api_router.include_router(inference_router)
 api_router.include_router(gateway_router)
 api_router.include_router(runs_router)

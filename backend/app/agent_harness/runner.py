@@ -14,6 +14,7 @@ from app.agents.schemas import (
     AgentRunResponse,
 )
 from app.agents.service import AgentService
+from app.memory.service import MemoryService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
 from app.skills.models import SkillActivation
@@ -39,11 +40,13 @@ class AgentRunner:
         skill_service: SkillPackageService | None = None,
         skill_repository: SkillPackageRepository | None = None,
         tool_policy: ToolPolicy | None = None,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self.agent_service = agent_service or AgentService()
         self.skill_service = skill_service or SkillPackageService()
         self.skill_repository = skill_repository or SkillPackageRepository()
         self.tool_policy = tool_policy or ToolPolicy()
+        self.memory_service = memory_service or MemoryService()
 
     def run_once(self, session: Session, agent_run_id: str) -> AgentRunResponse:
         agent_run = self.agent_service.get_run_model(session, agent_run_id)
@@ -96,6 +99,7 @@ class AgentRunner:
 
         if decision.decision_type == "final_output":
             agent_run.output_payload = decision.output_payload
+            memory_count = self._write_memory_candidates(session, agent_run=agent_run, output_payload=decision.output_payload)
             agent_run.status = "succeeded"
             agent_run.ended_at = now_utc()
             self.agent_service.append_event(
@@ -104,7 +108,7 @@ class AgentRunner:
                 AppendAgentEventRequest(
                     event_type="agent.final_output",
                     phase="output",
-                    payload={"output_schema": spec.get("output_schema", {})},
+                    payload={"output_schema": spec.get("output_schema", {}), "memory_candidate_count": memory_count},
                 ),
                 commit=False,
             )
@@ -331,6 +335,35 @@ class AgentRunner:
             ),
         )
         return self.agent_service.get_run(session, agent_run.id)
+
+    def _write_memory_candidates(
+        self,
+        session: Session,
+        *,
+        agent_run: AgentRun,
+        output_payload: dict[str, Any],
+    ) -> int:
+        candidates = output_payload.get("memory_candidates") if isinstance(output_payload, dict) else None
+        if not isinstance(candidates, list) or not candidates:
+            return 0
+        entries = self.memory_service.write_candidates(
+            session,
+            agent_key=agent_run.agent_key,
+            created_by_agent_run_id=agent_run.id,
+            candidates=candidates,
+            commit=False,
+        )
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="agent.memory_candidates.written",
+                phase="memory",
+                payload={"memory_entry_ids": [item.id for item in entries]},
+            ),
+            commit=False,
+        )
+        return len(entries)
 
     @staticmethod
     def _decision_from_input(input_payload: dict[str, Any]) -> AgentDecision:

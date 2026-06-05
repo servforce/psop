@@ -16,6 +16,8 @@ DEFAULT_TOOL_SIDE_EFFECTS: dict[str, str] = {
     "psop.evaluations.read": "read",
     "psop.evaluations.write_diagnostics": "low_write",
     "psop.governance.write_proposal": "low_write",
+    "psop.memory.search": "read",
+    "psop.memory.write_candidate": "low_write",
     "psop.media.compute": "compute",
     "psop.document.compute": "compute",
     "psop.repository.commit_patch": "high_write",

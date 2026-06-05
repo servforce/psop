@@ -12,6 +12,7 @@ from app.agent_prompts.service import AgentPromptService
 from app.compiler.service import CompilerService
 from app.evaluations.service import EvaluationService
 from app.governance.service import GovernanceService
+from app.memory.service import MemoryService
 from app.jobs.service import JobQueryService
 from app.runtime.service import RuntimeService
 from app.testing.service import SkillTestService
@@ -117,3 +118,7 @@ def get_evaluation_service(_: Request) -> EvaluationService:
 
 def get_governance_service(_: Request) -> GovernanceService:
     return GovernanceService()
+
+
+def get_memory_service(_: Request) -> MemoryService:
+    return MemoryService()
