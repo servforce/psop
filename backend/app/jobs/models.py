@@ -25,7 +25,7 @@ class RuntimeJob(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     run_id: Mapped[str | None] = mapped_column(ForeignKey("run.id", ondelete="CASCADE"), nullable=True)
     compile_request_id: Mapped[str | None] = mapped_column(
-        ForeignKey("skill_compile_request.id", ondelete="CASCADE"),
+        ForeignKey("pskill_compile_request.id", ondelete="CASCADE"),
         nullable=True,
     )
     worker_name: Mapped[str] = mapped_column(String(160), default="", nullable=False)

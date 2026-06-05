@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import (
+    get_agent_service,
     get_app_settings,
     get_compiler_service,
     get_database_manager,
@@ -15,6 +16,8 @@ from app.api.dependencies import (
     get_gitlab_gateway,
     get_inference_gateway,
 )
+from app.agents.schemas import AgentEventResponse
+from app.agents.service import AgentService
 from app.core.config import Settings
 from app.compiler.schemas import (
     CompileArtifactResponse,
@@ -78,6 +81,19 @@ def get_compile_progress(
     service: CompilerService = Depends(get_compiler_service),
 ) -> PublishProgressResponse:
     return service.get_compile_progress(session, compile_request_id)
+
+
+@router.get("/requests/{compile_request_id}/agent-events", response_model=list[AgentEventResponse])
+def list_compile_agent_events(
+    compile_request_id: str,
+    session: Session = Depends(get_db_session),
+    compiler_service: CompilerService = Depends(get_compiler_service),
+    agent_service: AgentService = Depends(get_agent_service),
+) -> list[AgentEventResponse]:
+    compile_request = compiler_service.get_compile_request(session, compile_request_id)
+    if not compile_request.agent_run_id:
+        return []
+    return agent_service.list_events(session, compile_request.agent_run_id)
 
 
 @router.get("/requests/{compile_request_id}/events")

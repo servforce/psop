@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.compiler.models import ArtifactObject, CompileDiagnostic, EgCompileArtifact, SkillCompileRequest
+from app.compiler.models import ArtifactObject, CompileDiagnostic, EgCompileArtifact, PSkillCompileRequest
 from app.pskills.models import PSkillDefinition, PSkillVersion
 
 
@@ -18,11 +18,11 @@ class CompilerRepository:
             return None
         return session.get(PSkillVersion, version_id)
 
-    def get_compile_request(self, session: Session, request_id: str) -> SkillCompileRequest | None:
-        return session.get(SkillCompileRequest, request_id)
+    def get_compile_request(self, session: Session, request_id: str) -> PSkillCompileRequest | None:
+        return session.get(PSkillCompileRequest, request_id)
 
-    def get_compile_request_by_dedupe_key(self, session: Session, dedupe_key: str) -> SkillCompileRequest | None:
-        return session.scalar(select(SkillCompileRequest).where(SkillCompileRequest.dedupe_key == dedupe_key))
+    def get_compile_request_by_dedupe_key(self, session: Session, dedupe_key: str) -> PSkillCompileRequest | None:
+        return session.scalar(select(PSkillCompileRequest).where(PSkillCompileRequest.dedupe_key == dedupe_key))
 
     def list_compile_requests(
         self,
@@ -30,17 +30,17 @@ class CompilerRepository:
         *,
         skill_id: str | None = None,
         status: str | None = None,
-    ) -> list[SkillCompileRequest]:
-        query = select(SkillCompileRequest).order_by(SkillCompileRequest.requested_at.desc())
+    ) -> list[PSkillCompileRequest]:
+        query = select(PSkillCompileRequest).order_by(PSkillCompileRequest.requested_at.desc())
         if skill_id:
-            query = query.where(SkillCompileRequest.pskill_definition_id == skill_id)
+            query = query.where(PSkillCompileRequest.pskill_definition_id == skill_id)
         if status:
-            query = query.where(SkillCompileRequest.status == status)
+            query = query.where(PSkillCompileRequest.status == status)
         return list(session.scalars(query).all())
 
     def get_artifact_for_request(self, session: Session, request_id: str) -> EgCompileArtifact | None:
         return session.scalar(
-            select(EgCompileArtifact).where(EgCompileArtifact.skill_compile_request_id == request_id)
+            select(EgCompileArtifact).where(EgCompileArtifact.compile_request_id == request_id)
         )
 
     def get_artifact(self, session: Session, artifact_id: str) -> EgCompileArtifact | None:
@@ -53,8 +53,7 @@ class CompilerRepository:
         return list(
             session.scalars(
                 select(CompileDiagnostic)
-                .where(CompileDiagnostic.skill_compile_request_id == request_id)
+                .where(CompileDiagnostic.compile_request_id == request_id)
                 .order_by(CompileDiagnostic.created_at.asc())
             ).all()
         )
-

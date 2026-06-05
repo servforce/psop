@@ -9,6 +9,8 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
+from app.agents.service import AgentService
 from app.compiler.agent import SkillCompileAgent
 from app.compiler.formal_v5 import (
     FORMAL_REVISION,
@@ -18,7 +20,7 @@ from app.compiler.formal_v5 import (
 from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
-from app.compiler.models import ArtifactObject, CompileDiagnostic, EgCompileArtifact, SkillCompileRequest
+from app.compiler.models import ArtifactObject, CompileDiagnostic, EgCompileArtifact, PSkillCompileRequest
 from app.compiler.repository import CompilerRepository
 from app.compiler.schemas import (
     CompileArtifactResponse,
@@ -85,6 +87,7 @@ class CompilerService:
         compile_agent: SkillCompileAgent | None = None,
         repository: CompilerRepository | None = None,
         job_repository: JobRepository | None = None,
+        agent_service: AgentService | None = None,
     ) -> None:
         self.settings = settings
         self.gitlab_gateway = gitlab_gateway
@@ -92,6 +95,7 @@ class CompilerService:
         self.compile_agent = compile_agent or SkillCompileAgent(self.inference_gateway)
         self.repository = repository or CompilerRepository()
         self.job_repository = job_repository or JobRepository()
+        self.agent_service = agent_service or AgentService()
 
     def create_compile_request_for_publish(
         self,
@@ -100,7 +104,7 @@ class CompilerService:
         pskill_definition: PSkillDefinition,
         pskill_version: PSkillVersion,
         publish_record_id: str | None = None,
-    ) -> SkillCompileRequest:
+    ) -> PSkillCompileRequest:
         if not pskill_version.source_commit_sha:
             raise SkillValidationError("发布版本缺少冻结 commit SHA，无法创建编译任务。")
 
@@ -109,7 +113,7 @@ class CompilerService:
         if existing:
             return existing
 
-        compile_request = SkillCompileRequest(
+        compile_request = PSkillCompileRequest(
             pskill_definition_id=pskill_definition.id,
             pskill_version_id=pskill_version.id,
             trigger_type="publish",
@@ -119,6 +123,12 @@ class CompilerService:
         )
         session.add(compile_request)
         session.flush()
+        self._ensure_compile_agent_run(
+            session,
+            compile_request,
+            pskill_definition=pskill_definition,
+            pskill_version=pskill_version,
+        )
         LOGGER.info(
             "compile request created for publish",
             extra={
@@ -198,7 +208,7 @@ class CompilerService:
                 details={"skill_id": skill_id, "pskill_version_id": pskill_version.id},
             )
 
-        compile_request = SkillCompileRequest(
+        compile_request = PSkillCompileRequest(
             pskill_definition_id=pskill_definition.id,
             pskill_version_id=pskill_version.id,
             trigger_type="manual",
@@ -208,6 +218,12 @@ class CompilerService:
         )
         session.add(compile_request)
         session.flush()
+        self._ensure_compile_agent_run(
+            session,
+            compile_request,
+            pskill_definition=pskill_definition,
+            pskill_version=pskill_version,
+        )
 
         progress_payload = build_publish_progress_payload(
             compile_request_id=compile_request.id,
@@ -251,7 +267,7 @@ class CompilerService:
         *,
         progress: PublishProgressReporter | None = None,
         mark_job_terminal: bool = True,
-    ) -> SkillCompileRequest:
+    ) -> PSkillCompileRequest:
         compile_request = self.repository.get_compile_request(session, compile_request_id)
         if not compile_request:
             raise SkillNotFoundError("未找到编译请求。", details={"compile_request_id": compile_request_id})
@@ -263,6 +279,12 @@ class CompilerService:
         pskill_version = self.repository.get_pskill_version(session, compile_request.pskill_version_id)
         if not pskill_definition or not pskill_version:
             raise SkillNotFoundError("编译请求关联的 Skill 或版本不存在。")
+        self._ensure_compile_agent_run(
+            session,
+            compile_request,
+            pskill_definition=pskill_definition,
+            pskill_version=pskill_version,
+        )
 
         with log_context(
             skill_id=pskill_definition.id,
@@ -274,6 +296,7 @@ class CompilerService:
 
         compile_request.status = "running"
         compile_request.started_at = now_utc()
+        self._mark_compile_agent_started(session, compile_request)
         session.flush()
 
         try:
@@ -321,6 +344,7 @@ class CompilerService:
                 compile_request.status = "failed"
                 compile_request.error_message = blocking[0]["message"]
                 compile_request.finished_at = now_utc()
+                self._mark_compile_agent_failed(session, compile_request, blocking[0]["message"])
                 if progress:
                     progress.mark(
                         "manifest_checked",
@@ -353,6 +377,7 @@ class CompilerService:
             ):
                 artifact, agent_diagnostics = self._compile_with_agent(
                     session=session,
+                    compile_request=compile_request,
                     pskill_definition=pskill_definition,
                     pskill_version=pskill_version,
                     document=document,
@@ -365,6 +390,7 @@ class CompilerService:
                 compile_request.status = "failed"
                 compile_request.error_message = error_message
                 compile_request.finished_at = now_utc()
+                self._mark_compile_agent_failed(session, compile_request, error_message)
                 if mark_job_terminal:
                     self._mark_job(session, compile_request.id, "failed", error_message)
                 session.commit()
@@ -417,7 +443,7 @@ class CompilerService:
                 session.flush()
 
                 eg_artifact = EgCompileArtifact(
-                    skill_compile_request_id=compile_request.id,
+                    compile_request_id=compile_request.id,
                     pskill_version_id=pskill_version.id,
                     artifact_object_id=artifact_object.id,
                     formal_revision=artifact["formal_revision"],
@@ -433,6 +459,15 @@ class CompilerService:
             compile_request.status = "succeeded"
             compile_request.error_message = ""
             compile_request.finished_at = now_utc()
+            self._mark_compile_agent_succeeded(
+                session,
+                compile_request,
+                output_payload={
+                    "artifact_id": eg_artifact.id,
+                    "graph_summary": eg_artifact.graph_summary,
+                    "capability_summary": eg_artifact.capability_summary,
+                },
+            )
             if mark_job_terminal:
                 self._mark_job(session, compile_request.id, "succeeded")
             session.commit()
@@ -452,9 +487,10 @@ class CompilerService:
             compile_request.status = "failed"
             compile_request.error_message = error_message
             compile_request.finished_at = now_utc()
+            self._mark_compile_agent_failed(session, compile_request, error_message)
             session.add(
                 CompileDiagnostic(
-                    skill_compile_request_id=compile_request.id,
+                    compile_request_id=compile_request.id,
                     pskill_version_id=pskill_version.id,
                     severity="error",
                     code="compile.failed",
@@ -480,7 +516,7 @@ class CompilerService:
             )
             return compile_request
 
-    def process_compile_job(self, session: Session, job_id: str) -> SkillCompileRequest:
+    def process_compile_job(self, session: Session, job_id: str) -> PSkillCompileRequest:
         job = self.job_repository.get_runtime_job(session, job_id)
         if not job:
             raise SkillNotFoundError("未找到运行任务。", details={"job_id": job_id})
@@ -508,7 +544,7 @@ class CompilerService:
                 self._finalize_publish_job(session, job.id, compile_request)
         return compile_request
 
-    def process_compile_job_for_request(self, session: Session, compile_request_id: str) -> SkillCompileRequest:
+    def process_compile_job_for_request(self, session: Session, compile_request_id: str) -> PSkillCompileRequest:
         job = self.job_repository.get_compile_job(session, compile_request_id)
         if job:
             if job.status != "running":
@@ -596,9 +632,9 @@ class CompilerService:
             )
 
         normalized = validation.artifact
-        normalized["compile_request_id"] = artifact.skill_compile_request_id
+        normalized["compile_request_id"] = artifact.compile_request_id
 
-        compile_request = self.repository.get_compile_request(session, artifact.skill_compile_request_id)
+        compile_request = self.repository.get_compile_request(session, artifact.compile_request_id)
         pskill_version = self.repository.get_pskill_version(session, artifact.pskill_version_id)
         pskill_definition = (
             self.repository.get_pskill_definition(session, compile_request.pskill_definition_id)
@@ -631,12 +667,169 @@ class CompilerService:
         LOGGER.info(
             "compile artifact updated",
             extra={
-                "compile_request_id": artifact.skill_compile_request_id,
+                "compile_request_id": artifact.compile_request_id,
                 "artifact_id": artifact.id,
                 "artifact_object_id": artifact.artifact_object_id,
             },
         )
         return self._build_artifact_response(session, artifact, include_payload=True)
+
+    def _ensure_compile_agent_run(
+        self,
+        session: Session,
+        compile_request: PSkillCompileRequest,
+        *,
+        pskill_definition: PSkillDefinition,
+        pskill_version: PSkillVersion,
+    ) -> str:
+        if compile_request.agent_run_id:
+            return compile_request.agent_run_id
+        run = self.agent_service.create_run(
+            session,
+            CreateAgentRunRequest(
+                agent_key="pskill.compiler",
+                owner_type="pskill_compile_request",
+                owner_id=compile_request.id,
+                input_payload={
+                    "compile_request_id": compile_request.id,
+                    "pskill_definition_id": pskill_definition.id,
+                    "pskill_version_id": pskill_version.id,
+                    "source_commit_sha": compile_request.source_commit_sha,
+                    "trigger_type": compile_request.trigger_type,
+                },
+            ),
+            commit=False,
+        )
+        compile_request.agent_run_id = run.id
+        self.agent_service.append_event(
+            session,
+            run.id,
+            AppendAgentEventRequest(
+                event_type="compile.request.linked",
+                phase="compiler",
+                payload={"compile_request_id": compile_request.id, "pskill_key": pskill_definition.key},
+            ),
+            commit=False,
+        )
+        return run.id
+
+    def _mark_compile_agent_started(self, session: Session, compile_request: PSkillCompileRequest) -> None:
+        if not compile_request.agent_run_id:
+            return
+        agent_run = self.agent_service.get_run_model(session, compile_request.agent_run_id)
+        agent_run.status = "running"
+        agent_run.started_at = agent_run.started_at or now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="compile.request.started",
+                phase="compiler",
+                payload={"compile_request_id": compile_request.id},
+            ),
+            commit=False,
+        )
+
+    def _mark_compile_agent_succeeded(
+        self,
+        session: Session,
+        compile_request: PSkillCompileRequest,
+        *,
+        output_payload: dict[str, Any],
+    ) -> None:
+        if not compile_request.agent_run_id:
+            return
+        agent_run = self.agent_service.get_run_model(session, compile_request.agent_run_id)
+        agent_run.status = "succeeded"
+        agent_run.output_payload = {
+            "compile_request_id": compile_request.id,
+            "ready": True,
+            **output_payload,
+        }
+        agent_run.error_message = ""
+        agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="compile.request.succeeded",
+                phase="compiler",
+                payload=agent_run.output_payload,
+            ),
+            commit=False,
+        )
+
+    def _mark_compile_agent_failed(
+        self,
+        session: Session,
+        compile_request: PSkillCompileRequest,
+        error_message: str,
+    ) -> None:
+        if not compile_request.agent_run_id:
+            return
+        agent_run = self.agent_service.get_run_model(session, compile_request.agent_run_id)
+        agent_run.status = "failed"
+        agent_run.error_message = error_message
+        agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="compile.request.failed",
+                phase="compiler",
+                payload={"compile_request_id": compile_request.id, "error_message": error_message},
+            ),
+            commit=False,
+        )
+
+    def _record_compile_agent_model_call(
+        self,
+        session: Session,
+        compile_request: PSkillCompileRequest,
+        *,
+        attempt: int,
+        candidate,
+        repair_diagnostics: list[FormalDiagnostic],
+    ) -> None:
+        if not compile_request.agent_run_id:
+            return
+        response_payload = {
+            "attempt": attempt,
+            "artifact_candidate_returned": candidate.artifact is not None,
+            "diagnostics": [item.as_dict() for item in candidate.diagnostics],
+            "context_diagnostics": [item.as_dict() for item in candidate.context_diagnostics],
+            "compiler_metadata": candidate.compiler_metadata,
+        }
+        self.agent_service.record_model_call(
+            session,
+            agent_run_id=compile_request.agent_run_id,
+            provider="llm_inference_gateway",
+            route_key=str(candidate.compiler_metadata.get("agent_prompt", {}).get("route_key") or "text"),
+            model_name=str(candidate.compiler_metadata.get("agent_prompt", {}).get("model") or ""),
+            status="succeeded" if candidate.artifact is not None else "failed",
+            request_payload={
+                "compile_request_id": compile_request.id,
+                "attempt": attempt,
+                "repair_diagnostics": [item.as_dict() for item in repair_diagnostics],
+            },
+            response_payload=response_payload,
+            usage_json=dict(candidate.usage or {}),
+            commit=False,
+        )
+        self.agent_service.append_event(
+            session,
+            compile_request.agent_run_id,
+            AppendAgentEventRequest(
+                event_type="compile.agent.model_call.completed",
+                phase="compiler",
+                payload={
+                    "compile_request_id": compile_request.id,
+                    "attempt": attempt,
+                    "artifact_candidate_returned": candidate.artifact is not None,
+                },
+            ),
+            commit=False,
+        )
 
     def _validate_document(self, pskill_definition: PSkillDefinition, document: SkillDocument) -> list[dict[str, Any]]:
         diagnostics: list[dict[str, Any]] = [
@@ -671,6 +864,7 @@ class CompilerService:
         self,
         *,
         session: Session,
+        compile_request: PSkillCompileRequest,
         pskill_definition: PSkillDefinition,
         pskill_version: PSkillVersion,
         document: SkillDocument,
@@ -718,6 +912,13 @@ class CompilerService:
                             candidate.usage,
                         )
                         session.flush()
+                    self._record_compile_agent_model_call(
+                        session,
+                        compile_request,
+                        attempt=attempt + 1,
+                        candidate=candidate,
+                        repair_diagnostics=repair_diagnostics,
+                    )
                 except Exception as exc:
                     record_span_exception(span, exc)
                     raise
@@ -799,7 +1000,7 @@ class CompilerService:
         self,
         session: Session,
         job_id: str,
-        compile_request: SkillCompileRequest,
+        compile_request: PSkillCompileRequest,
     ) -> None:
         job = self.job_repository.get_runtime_job(session, job_id)
         if not job:
@@ -905,14 +1106,14 @@ class CompilerService:
     @staticmethod
     def _add_diagnostics(
         session: Session,
-        compile_request: SkillCompileRequest,
+        compile_request: PSkillCompileRequest,
         pskill_version: PSkillVersion,
         diagnostics: list[dict[str, Any]],
     ) -> None:
         for diagnostic in diagnostics:
             session.add(
                 CompileDiagnostic(
-                    skill_compile_request_id=compile_request.id,
+                    compile_request_id=compile_request.id,
                     pskill_version_id=pskill_version.id,
                     severity=diagnostic["severity"],
                     code=diagnostic["code"],
@@ -925,13 +1126,14 @@ class CompilerService:
     def _build_compile_request_response(
         self,
         session: Session,
-        compile_request: SkillCompileRequest,
+        compile_request: PSkillCompileRequest,
     ) -> CompileRequestResponse:
         artifact = self.repository.get_artifact_for_request(session, compile_request.id)
         return CompileRequestResponse(
             id=compile_request.id,
             pskill_definition_id=compile_request.pskill_definition_id,
             pskill_version_id=compile_request.pskill_version_id,
+            agent_run_id=compile_request.agent_run_id,
             trigger_type=compile_request.trigger_type,
             source_commit_sha=compile_request.source_commit_sha,
             status=compile_request.status,
@@ -949,7 +1151,8 @@ class CompilerService:
     def _build_diagnostic_response(diagnostic: CompileDiagnostic) -> CompileDiagnosticResponse:
         return CompileDiagnosticResponse(
             id=diagnostic.id,
-            skill_compile_request_id=diagnostic.skill_compile_request_id,
+            compile_request_id=diagnostic.compile_request_id,
+            skill_compile_request_id=diagnostic.compile_request_id,
             pskill_version_id=diagnostic.pskill_version_id,
             severity=diagnostic.severity,
             code=diagnostic.code,
@@ -969,7 +1172,8 @@ class CompilerService:
         artifact_object = self.repository.get_artifact_object(session, artifact.artifact_object_id)
         return CompileArtifactResponse(
             id=artifact.id,
-            skill_compile_request_id=artifact.skill_compile_request_id,
+            compile_request_id=artifact.compile_request_id,
+            skill_compile_request_id=artifact.compile_request_id,
             pskill_version_id=artifact.pskill_version_id,
             artifact_object_id=artifact.artifact_object_id,
             formal_revision=artifact.formal_revision,

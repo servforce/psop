@@ -9,10 +9,10 @@ from app.pskills.models import generate_uuid, now_utc
 from app.infra.database import Base
 
 
-class SkillCompileRequest(Base):
-    __tablename__ = "skill_compile_request"
+class PSkillCompileRequest(Base):
+    __tablename__ = "pskill_compile_request"
     __table_args__ = (
-        Index("idx_skill_compile_request_status_requested_at", "status", "requested_at"),
+        Index("idx_pskill_compile_request_status_requested_at", "status", "requested_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
@@ -23,6 +23,10 @@ class SkillCompileRequest(Base):
     pskill_version_id: Mapped[str] = mapped_column(
         ForeignKey("pskill_version.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    agent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_run.id", ondelete="SET NULL"),
+        nullable=True,
     )
     trigger_type: Mapped[str] = mapped_column(String(32), default="publish", nullable=False)
     source_commit_sha: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -64,8 +68,8 @@ class EgCompileArtifact(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    skill_compile_request_id: Mapped[str] = mapped_column(
-        ForeignKey("skill_compile_request.id", ondelete="CASCADE"),
+    compile_request_id: Mapped[str] = mapped_column(
+        ForeignKey("pskill_compile_request.id", ondelete="CASCADE"),
         unique=True,
         nullable=False,
     )
@@ -88,12 +92,12 @@ class EgCompileArtifact(Base):
 class CompileDiagnostic(Base):
     __tablename__ = "compile_diagnostic"
     __table_args__ = (
-        Index("idx_compile_diagnostic_request_severity", "skill_compile_request_id", "severity"),
+        Index("idx_compile_diagnostic_request_severity", "compile_request_id", "severity"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    skill_compile_request_id: Mapped[str] = mapped_column(
-        ForeignKey("skill_compile_request.id", ondelete="CASCADE"),
+    compile_request_id: Mapped[str] = mapped_column(
+        ForeignKey("pskill_compile_request.id", ondelete="CASCADE"),
         nullable=False,
     )
     pskill_version_id: Mapped[str] = mapped_column(
@@ -106,4 +110,3 @@ class CompileDiagnostic(Base):
     location: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     category: Mapped[str] = mapped_column(String(64), default="compiler", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
-

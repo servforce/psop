@@ -10,6 +10,7 @@ class CompileRequestResponse(BaseModel):
     id: str
     pskill_definition_id: str
     pskill_version_id: str
+    agent_run_id: str | None = None
     trigger_type: str
     source_commit_sha: str
     status: str
@@ -25,7 +26,8 @@ class CompileRequestResponse(BaseModel):
 
 class CompileDiagnosticResponse(BaseModel):
     id: str
-    skill_compile_request_id: str
+    compile_request_id: str
+    skill_compile_request_id: str | None = None
     pskill_version_id: str
     severity: str
     code: str
@@ -37,7 +39,8 @@ class CompileDiagnosticResponse(BaseModel):
 
 class CompileArtifactResponse(BaseModel):
     id: str
-    skill_compile_request_id: str
+    compile_request_id: str
+    skill_compile_request_id: str | None = None
     pskill_version_id: str
     artifact_object_id: str
     formal_revision: str

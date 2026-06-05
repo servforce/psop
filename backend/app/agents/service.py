@@ -211,7 +211,13 @@ class AgentService:
             raise SkillNotFoundError("未找到 Agent。", details={"agent_key": agent_key})
         return [self._build_version_response(item) for item in self.repository.list_versions(session, definition.id)]
 
-    def create_run(self, session: Session, payload: CreateAgentRunRequest) -> AgentRunResponse:
+    def create_run(
+        self,
+        session: Session,
+        payload: CreateAgentRunRequest,
+        *,
+        commit: bool = True,
+    ) -> AgentRunResponse:
         if self.ensure_seed_data(session):
             session.flush()
         definition = self.repository.get_definition_by_key(session, payload.agent_key)
@@ -242,7 +248,8 @@ class AgentService:
             ),
             commit=False,
         )
-        session.commit()
+        if commit:
+            session.commit()
         return self._build_run_response(agent_run)
 
     def list_runs(

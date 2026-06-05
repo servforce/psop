@@ -1605,18 +1605,39 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
         compile_response = client.post(f"/api/v1/compiler/pskills/{skill_id}/compile")
         compile_payload = compile_response.json()
         compile_request_id = compile_payload["id"]
+        compile_agent_run_id = compile_payload["agent_run_id"]
         progress_response = client.get(f"/api/v1/compiler/requests/{compile_request_id}/progress")
         retry_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        compiled_payload = retry_response.json()
+        compile_agent_events_response = client.get(f"/api/v1/compiler/requests/{compile_request_id}/agent-events")
+        compile_agent_run_response = client.get(f"/api/v1/agent-runs/{compile_agent_run_id}")
+        compile_agent_model_calls_response = client.get(f"/api/v1/agent-runs/{compile_agent_run_id}/model-calls")
+        list_response = client.get("/api/v1/compiler/requests")
         detail_response = client.get(f"/api/v1/pskills/{skill_id}")
 
     assert compile_response.status_code == 202
     assert compile_payload["trigger_type"] == "manual"
     assert compile_payload["status"] == "pending"
+    assert compile_agent_run_id
     assert progress_response.status_code == 200
     assert progress_response.json()["stages"][-1]["label"] == "完成编译"
     assert retry_response.status_code == 200
-    assert retry_response.json()["status"] == "succeeded"
-    assert retry_response.json()["artifact_id"]
+    assert compiled_payload["status"] == "succeeded"
+    assert compiled_payload["agent_run_id"] == compile_agent_run_id
+    assert compiled_payload["artifact_id"]
+    assert compile_agent_run_response.status_code == 200
+    assert compile_agent_run_response.json()["agent_key"] == "pskill.compiler"
+    assert compile_agent_run_response.json()["status"] == "succeeded"
+    assert compile_agent_run_response.json()["output_payload"]["compile_request_id"] == compile_request_id
+    assert compile_agent_model_calls_response.status_code == 200
+    assert compile_agent_model_calls_response.json()[0]["provider"] == "llm_inference_gateway"
+    assert compile_agent_events_response.status_code == 200
+    event_types = [item["event_type"] for item in compile_agent_events_response.json()]
+    assert "compile.request.linked" in event_types
+    assert "compile.request.started" in event_types
+    assert "compile.agent.model_call.completed" in event_types
+    assert "compile.request.succeeded" in event_types
+    assert list_response.json()[0]["agent_run_id"] == compile_agent_run_id
     assert detail_response.json()["latest_published_version"] is None
 
 
