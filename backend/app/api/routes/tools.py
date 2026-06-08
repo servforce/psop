@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_tool_service
-from app.tools.schemas import ToolDefinitionResponse
+from app.tools.schemas import ToolDefinitionResponse, ToolTestRequest, ToolTestResponse
 from app.tools.service import ToolService
 
 
@@ -34,3 +34,13 @@ def get_tool(
     service: ToolService = Depends(get_tool_service),
 ) -> ToolDefinitionResponse:
     return service.get_tool(session, tool_name)
+
+
+@router.post("/{tool_name}/test", response_model=ToolTestResponse)
+def test_tool(
+    tool_name: str,
+    payload: ToolTestRequest,
+    session: Session = Depends(get_db_session),
+    service: ToolService = Depends(get_tool_service),
+) -> ToolTestResponse:
+    return service.test_tool(session, tool_name, payload)

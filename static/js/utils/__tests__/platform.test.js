@@ -286,22 +286,49 @@ test("platform methods load tools and select the first row", async () => {
       failure_rate: 0
     }
   ];
+  const dryRun = {
+    tool_name: "psop.memory.search",
+    executable: true,
+    dry_run: true,
+    side_effect_level: "read",
+    requires_authorization: false,
+    policy_reason: "console_test_allowed",
+    input_echo: { query: "runtime findings", limit: 3 },
+    output_preview: { status: "dry_run_succeeded" },
+    policy_decision: { allowed: true, reason: "auto_allowed" }
+  };
   const context = {
     ...methods,
-    busy: { platformTools: false },
+    busy: { platformTools: false, platformToolAction: false },
     platformToolFilters: { side_effect_level: "read", requires_authorization: "false" },
     platformTools: [],
     currentPlatformTool: null,
-    apiRequest: jest.fn(async () => tools),
+    platformToolTestResult: null,
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/tools/psop.memory.search/test") {
+        return dryRun;
+      }
+      return tools;
+    }),
     showNotice: jest.fn()
   };
 
   await methods.loadPlatformToolsPage.call(context);
+  await methods.testPlatformTool.call(context, context.currentPlatformTool);
 
   expect(context.apiRequest).toHaveBeenCalledWith("/tools?side_effect_level=read&requires_authorization=false");
+  expect(context.apiRequest).toHaveBeenCalledWith("/tools/psop.memory.search/test", {
+    method: "POST",
+    body: JSON.stringify({
+      arguments_summary: { query: "runtime findings", limit: 3 },
+      requested_side_effect_level: "read"
+    })
+  });
   expect(context.platformTools).toEqual(tools);
   expect(context.currentPlatformTool.name).toBe("psop.memory.search");
+  expect(context.platformToolTestResult.policy_reason).toBe("console_test_allowed");
   expect(context.busy.platformTools).toBe(false);
+  expect(context.busy.platformToolAction).toBe(false);
 });
 
 test("platform methods search and save memory entries", async () => {

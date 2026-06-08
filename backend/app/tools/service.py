@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agent_harness.tools import AUTH_REQUIRED_LEVELS, DEFAULT_TOOL_SIDE_EFFECTS
+from app.agent_harness.tools import AUTH_REQUIRED_LEVELS, DEFAULT_TOOL_SIDE_EFFECTS, ToolPolicy
 from app.agents.service import AgentService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
@@ -12,7 +12,7 @@ from app.skills.repository import SkillPackageRepository
 from app.skills.service import SkillPackageService
 from app.tools.models import ToolDefinition
 from app.tools.repository import ToolRepository
-from app.tools.schemas import ToolDefinitionResponse
+from app.tools.schemas import ToolDefinitionResponse, ToolTestRequest, ToolTestResponse
 
 
 VALID_SIDE_EFFECT_LEVELS = {"read", "compute", "low_write", "high_write", "external_action", "physical_action"}
@@ -51,6 +51,7 @@ class ToolService:
         self.agent_service = agent_service or AgentService()
         self.skill_service = skill_service or SkillPackageService()
         self.skill_repository = skill_repository or SkillPackageRepository()
+        self.tool_policy = ToolPolicy()
 
     def ensure_seed_data(self, session: Session) -> bool:
         changed = False
@@ -136,6 +137,61 @@ class ToolService:
             raise SkillNotFoundError("未找到工具定义。", details={"tool_name": tool_name})
         return self._build_tool_response(session, tool)
 
+    def test_tool(self, session: Session, tool_name: str, payload: ToolTestRequest) -> ToolTestResponse:
+        changed = self.ensure_seed_data(session)
+        changed = self.agent_service.ensure_seed_data(session) or changed
+        if changed:
+            session.commit()
+        self.skill_service.sync_packages(session)
+        tool = self.repository.get_tool_by_name(session, tool_name)
+        if not tool:
+            raise SkillNotFoundError("未找到工具定义。", details={"tool_name": tool_name})
+        if payload.requested_side_effect_level:
+            self._validate_optional_filter(
+                "requested_side_effect_level",
+                payload.requested_side_effect_level,
+                VALID_SIDE_EFFECT_LEVELS,
+            )
+
+        effective_allowed_tools = set(DEFAULT_TOOL_SIDE_EFFECTS)
+        agent_key = self._normalize_optional(payload.agent_key)
+        if agent_key:
+            effective_allowed_tools = self._effective_allowed_tools_for_agent(session, agent_key)
+        policy_decision = self.tool_policy.check(
+            tool_name=tool.name,
+            tool_provider=tool.provider,
+            requested_side_effect_level=self._normalize_optional(payload.requested_side_effect_level),
+            effective_allowed_tools=effective_allowed_tools,
+        )
+        executable = (
+            tool.status == "active"
+            and policy_decision.allowed
+            and not policy_decision.requires_authorization
+            and policy_decision.side_effect_level in {"read", "compute"}
+        )
+        policy_reason = self._tool_test_policy_reason(tool, policy_decision.reason, executable=executable)
+        return ToolTestResponse(
+            tool_name=tool.name,
+            executable=executable,
+            dry_run=True,
+            side_effect_level=policy_decision.side_effect_level,
+            requires_authorization=policy_decision.requires_authorization,
+            policy_reason=policy_reason,
+            input_echo=dict(payload.arguments_summary or {}),
+            output_preview=self._build_tool_test_output_preview(
+                tool,
+                executable=executable,
+                arguments_summary=payload.arguments_summary or {},
+            ),
+            policy_decision={
+                "allowed": policy_decision.allowed,
+                "reason": policy_decision.reason,
+                "agent_key": agent_key or None,
+                "console_test_supported_levels": ["read", "compute"],
+                "dry_run_only": True,
+            },
+        )
+
     def _build_tool_response(self, session: Session, tool: ToolDefinition) -> ToolDefinitionResponse:
         recent_call_count = self.repository.count_tool_calls(session, tool.name)
         failed_call_count = self.repository.count_failed_tool_calls(session, tool.name)
@@ -164,6 +220,49 @@ class ToolService:
             created_at=tool.created_at,
             updated_at=tool.updated_at,
         )
+
+    def _effective_allowed_tools_for_agent(self, session: Session, agent_key: str) -> set[str]:
+        definition = self.agent_service.repository.get_definition_by_key(session, agent_key)
+        if not definition:
+            raise SkillNotFoundError("未找到 Agent。", details={"agent_key": agent_key})
+        version = self.agent_service.repository.get_version(session, definition.active_version_id)
+        if not version:
+            return set()
+        spec = version.spec_json if isinstance(version.spec_json, dict) else {}
+        agent_allowed_tools = set(str(item) for item in spec.get("allowed_tools") or [])
+        skill_allowed_tools = self._active_skill_allowed_tools(session, spec.get("allowed_skill_names") or [])
+        return agent_allowed_tools & skill_allowed_tools
+
+    @staticmethod
+    def _tool_test_policy_reason(tool: ToolDefinition, policy_reason: str, *, executable: bool) -> str:
+        if executable:
+            return "console_test_allowed"
+        if tool.status != "active":
+            return "tool_not_active"
+        if policy_reason == "requires_authorization":
+            return "requires_tool_authorization"
+        if tool.side_effect_level not in {"read", "compute"}:
+            return "unsupported_side_effect_for_console_test"
+        return policy_reason
+
+    @staticmethod
+    def _build_tool_test_output_preview(
+        tool: ToolDefinition,
+        *,
+        executable: bool,
+        arguments_summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not executable:
+            return {
+                "status": "not_executed",
+                "message": "Console tool test is dry-run only and did not execute this tool.",
+            }
+        return {
+            "status": "dry_run_succeeded",
+            "tool_name": tool.name,
+            "provider": tool.provider,
+            "accepted_argument_keys": sorted(str(key) for key in arguments_summary),
+        }
 
     def _allowed_agent_keys(self, session: Session, tool_name: str) -> list[str]:
         keys: list[str] = []

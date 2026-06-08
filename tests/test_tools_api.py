@@ -92,6 +92,43 @@ def test_tools_api_reports_recent_tool_call_failure_stats() -> None:
     assert detail["failure_rate"] == 1.0
 
 
+def test_tools_api_dry_runs_read_compute_and_explains_authorization_policy() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        read_response = client.post(
+            "/api/v1/tools/psop.memory.search/test",
+            json={"arguments_summary": {"query": "runtime findings"}},
+        )
+        compute_response = client.post(
+            "/api/v1/tools/psop.compiler.validate_formal_v5/test",
+            json={"arguments_summary": {"artifact_id": "artifact-1"}},
+        )
+        high_write_response = client.post(
+            "/api/v1/tools/psop.agent_version.activate/test",
+            json={"arguments_summary": {"agent_key": "pskill.runner", "version_id": "version-1"}},
+        )
+
+    assert read_response.status_code == 200
+    read_result = read_response.json()
+    assert read_result["executable"] is True
+    assert read_result["dry_run"] is True
+    assert read_result["policy_reason"] == "console_test_allowed"
+    assert read_result["output_preview"]["status"] == "dry_run_succeeded"
+    assert read_result["input_echo"] == {"query": "runtime findings"}
+
+    assert compute_response.status_code == 200
+    assert compute_response.json()["executable"] is True
+    assert compute_response.json()["side_effect_level"] == "compute"
+
+    assert high_write_response.status_code == 200
+    high_write_result = high_write_response.json()
+    assert high_write_result["executable"] is False
+    assert high_write_result["requires_authorization"] is True
+    assert high_write_result["policy_reason"] == "requires_tool_authorization"
+    assert high_write_result["output_preview"]["status"] == "not_executed"
+
+
 def test_tools_api_rejects_invalid_side_effect_filter() -> None:
     client, _, _ = create_test_client()
 

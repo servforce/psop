@@ -780,6 +780,7 @@
       },
       platformTools: [],
       currentPlatformTool: null,
+      platformToolTestResult: null,
       platformToolFilters: {
         side_effect_level: "",
         requires_authorization: ""

@@ -24,3 +24,21 @@ class ToolDefinitionResponse(BaseModel):
     policy_summary: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+
+class ToolTestRequest(BaseModel):
+    arguments_summary: dict[str, Any] = Field(default_factory=dict)
+    requested_side_effect_level: str | None = None
+    agent_key: str | None = None
+
+
+class ToolTestResponse(BaseModel):
+    tool_name: str
+    executable: bool
+    dry_run: bool = True
+    side_effect_level: str
+    requires_authorization: bool
+    policy_reason: str
+    input_echo: dict[str, Any] = Field(default_factory=dict)
+    output_preview: dict[str, Any] = Field(default_factory=dict)
+    policy_decision: dict[str, Any] = Field(default_factory=dict)

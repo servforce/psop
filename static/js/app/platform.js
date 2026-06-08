@@ -427,6 +427,7 @@
       this.busy.platformTools = true;
       try {
         this.currentPlatformTool = await this.apiRequest(`/tools/${encodeURIComponent(name)}`);
+        this.platformToolTestResult = null;
       } catch (error) {
         this.showNotice("error", error.message || "工具详情加载失败。");
       } finally {
@@ -464,20 +465,46 @@
         return;
       }
       this.currentPlatformTool = tool;
+      this.platformToolTestResult = null;
     },
 
-    testPlatformTool(tool) {
+    async testPlatformTool(tool) {
       if (!tool?.name) {
         return;
       }
-      if (["read", "compute"].includes(tool.side_effect_level) && !tool.requires_authorization) {
-        this.showNotice("success", `${tool.name} 可由 Agent Harness 自动执行，无需工具授权。`);
-        return;
+      this.busy.platformToolAction = true;
+      try {
+        this.platformToolTestResult = await this.apiRequest(`/tools/${encodeURIComponent(tool.name)}/test`, {
+          method: "POST",
+          body: JSON.stringify({
+            arguments_summary: this.platformToolTestArguments(tool),
+            requested_side_effect_level: tool.side_effect_level
+          })
+        });
+        this.showNotice(
+          this.platformToolTestResult.executable ? "success" : "error",
+          this.platformToolTestResult.executable
+            ? `${tool.name} dry-run 通过。`
+            : `${tool.name} dry-run 未执行：${this.platformToolTestResult.policy_reason}。`
+        );
+      } catch (error) {
+        this.showNotice("error", error.message || "工具 dry-run 失败。");
+      } finally {
+        this.busy.platformToolAction = false;
       }
-      const message = tool.requires_authorization
-        ? "该工具需要 Tool Authorization，不能从控制台直接测试。"
-        : "当前只支持 read/compute 工具的控制台 dry-run 判断。";
-      this.showNotice("error", message);
+    },
+
+    platformToolTestArguments(tool) {
+      if (!tool?.name) {
+        return {};
+      }
+      if (tool.name === "psop.memory.search") {
+        return { query: "runtime findings", limit: 3 };
+      }
+      if (tool.name === "psop.compiler.validate_formal_v5") {
+        return { artifact: { graph_version: "formal-v5", nodes: [], edges: [] } };
+      }
+      return { sample: true };
     },
 
     async loadPlatformMemoryPage(memoryId) {
