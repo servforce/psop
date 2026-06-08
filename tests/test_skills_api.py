@@ -2769,8 +2769,8 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
     assert terminal_events_response.status_code == 200
     assert run_traces_response.status_code == 200
     assert snapshots_response.status_code == 200
-    terminal_messages = [message for message in messages if message["event_type"] == "terminal.event.appended"]
-    trace_messages = [message for message in messages if message["event_type"] == "trace.event.appended"]
+    terminal_messages = [message for message in messages if message["event_type"] == "run.event.appended"]
+    trace_messages = [message for message in messages if message["event_type"] == "run.trace.appended"]
     snapshot_messages = [
         message for message in messages if message["event_type"] == "session_token.snapshot.appended"
     ]
@@ -2852,7 +2852,7 @@ def test_run_websocket_broadcasts_binding_updates() -> None:
     assert resolve_response.status_code == 200
     assert run_traces_response.status_code == 200
     event_types = [message["event_type"] for message in messages]
-    assert event_types == ["trace.event.appended", "binding.updated", "run.updated"]
+    assert event_types == ["run.trace.appended", "binding.updated", "run.updated"]
     assert [trace["event_type"] for trace in appended_traces] == ["binding.updated"]
     assert messages[0]["payload"]["event_type"] == "binding.updated"
     assert messages[1]["payload"]["bindings"]

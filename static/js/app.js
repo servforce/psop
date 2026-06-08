@@ -704,6 +704,7 @@
         tool_authorization_risk_level: "",
         tool_authorization_tool_name: "",
         run_id: "",
+        run_trace_event_type: "",
         trace_event_type: "",
         agent_run_id: ""
       },

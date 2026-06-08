@@ -264,7 +264,7 @@ test("run live websocket authorization events refresh authorization list", async
   };
 
   methods.handleRunWsEvent.call(context, {
-    event_type: "terminal.event.appended",
+    event_type: "run.event.appended",
     payload: {
       id: "run-event-1",
       event_kind: "tool_authorization_request",
@@ -285,6 +285,48 @@ test("run live websocket authorization events refresh authorization list", async
 
   expect(context.apiRequest).toHaveBeenCalledWith("/runs/run-1/tool-authorizations");
   expect(context.liveRunToolAuthorizations).toEqual([latest]);
+});
+
+test("run live websocket accepts legacy run event aliases", () => {
+  const methods = loadRuntimeMethods();
+  const runEvent = {
+    id: "run-event-legacy",
+    run_id: "run-1",
+    direction: "output",
+    event_kind: "agent_output",
+    seq_no: 4,
+    payload_inline: "legacy event",
+    parts: []
+  };
+  const runTrace = {
+    id: "run-trace-legacy",
+    run_id: "run-1",
+    event_type: "runtime.failed",
+    seq_no: 5,
+    payload: {}
+  };
+  const context = {
+    ...methods,
+    liveRun: { id: "run-1" },
+    liveRunTerminalEvents: [],
+    liveRunTraceEvents: [],
+    liveRunToolAuthorizations: [],
+    replayDetail: null,
+    mergeTerminalEvents: jest.fn(),
+    refreshLiveRunToolAuthorizations: jest.fn()
+  };
+
+  methods.handleRunWsEvent.call(context, {
+    event_type: "terminal.event.appended",
+    payload: runEvent
+  });
+  methods.handleRunWsEvent.call(context, {
+    event_type: "trace.event.appended",
+    payload: runTrace
+  });
+
+  expect(context.mergeTerminalEvents).toHaveBeenCalledWith([runEvent]);
+  expect(context.liveRunTraceEvents).toEqual([runTrace]);
 });
 
 test("run live websocket events update replay timeline evidence incrementally", () => {
@@ -378,11 +420,11 @@ test("run live websocket events update replay timeline evidence incrementally", 
   };
 
   methods.handleRunWsEvent.call(context, {
-    event_type: "terminal.event.appended",
+    event_type: "run.event.appended",
     payload: runEvent
   });
   methods.handleRunWsEvent.call(context, {
-    event_type: "trace.event.appended",
+    event_type: "run.trace.appended",
     payload: traceEvent
   });
   methods.handleRunWsEvent.call(context, {
@@ -551,7 +593,7 @@ test("run replay selection follows event id from location", () => {
   const methods = loadRuntimeMethods("?event_id=run-event-1");
   const replayEvent = {
     seq_no: 4,
-    event_type: "terminal.event.appended",
+    event_type: "run.event.appended",
     occurred_at: "2026-01-01T00:00:04.000Z",
     payload: { id: "run-event-1" }
   };
@@ -769,7 +811,7 @@ test("run replay finding evidence refs select matching timeline item", () => {
   const eventItem = {
     seq_no: 8,
     phase: "terminal",
-    event_type: "terminal.event.appended",
+    event_type: "run.event.appended",
     occurred_at: "2026-01-01T00:00:08.000Z",
     source_kind: "run_event",
     source_id: "event-1",

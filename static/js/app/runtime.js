@@ -401,14 +401,14 @@
         if (event.event_type === "run.updated" && event.payload) {
           this.applyLiveRunUpdate(event.payload);
         }
-        if (event.event_type === "terminal.event.appended" && event.payload) {
+        if (["run.event.appended", "terminal.event.appended"].includes(event.event_type) && event.payload) {
           this.mergeTerminalEvents([event.payload]);
           this.mergeLiveRunReplayRunEvents([event.payload]);
           if (this.isToolAuthorizationRunEvent(event.payload)) {
             this.refreshLiveRunToolAuthorizations();
           }
         }
-        if (event.event_type === "trace.event.appended" && event.payload) {
+        if (["run.trace.appended", "trace.event.appended"].includes(event.event_type) && event.payload) {
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq(this.liveRunTraceEvents, [event.payload]);
           this.mergeLiveRunReplayRunTraces([event.payload]);
         }
@@ -1449,7 +1449,7 @@
         return {
           seq_no: Number(event?.seq_no || 0),
           phase: "terminal",
-          event_type: "terminal.event.appended",
+          event_type: "run.event.appended",
           title: event?.direction === "input" ? "终端输入" : "终端输出",
           summary: this.liveRunReplayRunEventSummary(event),
           payload: event || {},

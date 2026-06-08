@@ -37,7 +37,7 @@ TOOL_AUTHORIZATION_WS_CHANNEL = "global"
 
 def run_event_ws_message(run_id: str, event: Any) -> dict[str, Any]:
     return {
-        "event_type": "terminal.event.appended",
+        "event_type": "run.event.appended",
         "run_id": run_id,
         "invocation_id": None,
         "seq_no": event.seq_no,
@@ -48,7 +48,7 @@ def run_event_ws_message(run_id: str, event: Any) -> dict[str, Any]:
 
 def run_trace_ws_message(run_id: str, event: Any) -> dict[str, Any]:
     return {
-        "event_type": "trace.event.appended",
+        "event_type": "run.trace.appended",
         "run_id": run_id,
         "invocation_id": None,
         "seq_no": event.seq_no,

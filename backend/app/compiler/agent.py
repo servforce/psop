@@ -193,7 +193,7 @@ class SkillCompileAgent:
                 "workflow_step_required_fields": ["id", "title", "goal", "source_evidence"],
                 "business_node_rule": (
                     "每个 workflow step 必须编译为 instruct_<step_id> 和 evaluate_<step_id> 两个节点。"
-                    "instruct 节点必须输出到终端并进入 wait checkpoint；evaluate 节点必须消费 terminal evidence 并输出 JSON decision。"
+                    "instruct 节点必须输出到终端并进入 wait checkpoint；evaluate 节点必须消费 RunEvent evidence 并输出 JSON decision。"
                 ),
                 "node_sequence_rule": (
                     "start -> instruct_<first_step> -> wait -> evaluate_<first_step> -> "

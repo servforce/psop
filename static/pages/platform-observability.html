@@ -453,8 +453,8 @@
                   <input x-model="observabilityFilters.run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="run_id" @keydown.enter.prevent="loadObservabilityRunTraces()" />
                 </label>
                 <label class="field-block w-72 shrink-0">
-                  <span class="field-label">Trace Type</span>
-                  <select x-model="observabilityFilters.trace_event_type" class="input-field h-9 py-0" @change="loadObservabilityRunTraces()">
+                  <span class="field-label">RunTrace Type</span>
+                  <select x-model="observabilityFilters.run_trace_event_type" class="input-field h-9 py-0" @change="loadObservabilityRunTraces()">
                     <option value="">全部</option>
                     <template x-for="eventType in observabilityTraceEventTypeOptions()" :key="eventType">
                       <option :value="eventType" x-text="eventType"></option>

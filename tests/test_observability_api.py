@@ -563,11 +563,23 @@ def test_observability_run_trace_query_filters_recent_runtime_traces() -> None:
 
         response = client.get(
             "/api/v1/observability/run-traces",
+            params={"window_hours": 24, "run_trace_event_type": "runtime.failed", "limit": 10},
+        )
+        legacy_response = client.get(
+            "/api/v1/observability/run-traces",
             params={"window_hours": 24, "event_type": "runtime.failed", "limit": 10},
         )
         run_response = client.get(
             "/api/v1/observability/run-traces",
             params={"window_hours": 24, "run_id": run.id, "agent_run_id": agent_run.id, "limit": 10},
+        )
+        runtime_trace_response = client.get(
+            f"/api/v1/runs/{run.id}/traces",
+            params={"run_trace_event_type": "runtime.failed"},
+        )
+        legacy_runtime_trace_response = client.get(
+            f"/api/v1/runs/{run.id}/traces",
+            params={"event_type": "runtime.failed"},
         )
 
     assert response.status_code == 200
@@ -580,9 +592,22 @@ def test_observability_run_trace_query_filters_recent_runtime_traces() -> None:
     assert payload[0]["span_id"] == "span-newer"
     assert payload[0]["payload"] == {"error": "newer"}
 
+    assert legacy_response.status_code == 200
+    assert legacy_response.json() == payload
+
     assert run_response.status_code == 200
     run_payload = run_response.json()
     assert {item["id"] for item in run_payload} == {"run-trace-observe-newer", "run-trace-observe-older"}
+
+    assert runtime_trace_response.status_code == 200
+    runtime_trace_payload = runtime_trace_response.json()
+    assert [item["id"] for item in runtime_trace_payload] == [
+        "run-trace-observe-older",
+        "run-trace-observe-newer",
+        "run-trace-observe-old-window",
+    ]
+    assert legacy_runtime_trace_response.status_code == 200
+    assert legacy_runtime_trace_response.json() == runtime_trace_payload
 
 
 def test_replay_trace_lookup_accepts_otel_trace_id() -> None:

@@ -38,6 +38,10 @@
     return Math.max(1, Math.min(720, Math.round(hours)));
   }
 
+  function runTraceEventTypeFilter(filters = {}) {
+    return String(filters.run_trace_event_type || filters.trace_event_type || "").trim();
+  }
+
   window.PSOPConsoleObservabilityMethods = {
     async loadPlatformObservabilityPage() {
       await this.loadObservabilityMetrics();
@@ -84,7 +88,7 @@
       ) {
         await this.loadObservabilityToolAuthorizations();
       }
-      if (this.observabilityFilters.run_id || this.observabilityFilters.trace_event_type) {
+      if (this.observabilityFilters.run_id || runTraceEventTypeFilter(this.observabilityFilters)) {
         await this.loadObservabilityRunTraces();
       }
       if (this.observabilityFilters.agent_run_id) {
@@ -395,13 +399,13 @@
 
     async loadObservabilityRunTraces() {
       const runId = String(this.observabilityFilters.run_id || "").trim();
-      const eventType = String(this.observabilityFilters.trace_event_type || "").trim();
+      const eventType = runTraceEventTypeFilter(this.observabilityFilters);
 
       this.busy.observabilityTraceLookup = true;
       try {
         const params = new URLSearchParams();
         if (eventType) {
-          params.set("event_type", eventType);
+          params.set("run_trace_event_type", eventType);
         }
         let path = "";
         if (runId) {
@@ -424,6 +428,7 @@
 
     resetObservabilityTraceQuery() {
       this.observabilityFilters.run_id = "";
+      this.observabilityFilters.run_trace_event_type = "";
       this.observabilityFilters.trace_event_type = "";
       this.observabilityRunTraces = [];
       this.observabilityTraceLookupRunId = "";
@@ -431,7 +436,8 @@
 
     async selectObservabilityTraceEventType(eventType) {
       this.observabilityFilters.run_id = "";
-      this.observabilityFilters.trace_event_type = eventType || "";
+      this.observabilityFilters.run_trace_event_type = eventType || "";
+      this.observabilityFilters.trace_event_type = "";
       await this.loadObservabilityRunTraces();
     },
 

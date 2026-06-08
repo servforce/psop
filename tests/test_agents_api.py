@@ -360,7 +360,7 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
     assert tool_authorization_ws_connected["event_type"] == "ws.connected"
     assert authorization_response.status_code == 201
     assert authorization["run_event_id"]
-    assert request_run_ws_message["event_type"] == "terminal.event.appended"
+    assert request_run_ws_message["event_type"] == "run.event.appended"
     assert request_run_ws_message["payload"]["event_kind"] == "tool_authorization_request"
     assert request_tool_authorization_ws_message["event_type"] == "tool.authorization_requested"
     assert request_tool_authorization_ws_message["authorization_id"] == authorization["id"]
@@ -378,19 +378,19 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
     assert request_events[0]["payload_inline"]["status"] == "pending"
 
     assert approve_response.status_code == 200
-    assert response_run_ws_message["event_type"] == "terminal.event.appended"
+    assert response_run_ws_message["event_type"] == "run.event.appended"
     assert response_run_ws_message["payload"]["event_kind"] == "tool_authorization_response"
     assert response_tool_authorization_ws_message["event_type"] == "tool.authorization_approved"
     assert response_tool_authorization_ws_message["authorization_id"] == authorization["id"]
     assert expiring_authorization_response.status_code == 201
     assert expiring_authorization["status"] == "pending"
-    assert expiring_request_run_ws_message["event_type"] == "terminal.event.appended"
+    assert expiring_request_run_ws_message["event_type"] == "run.event.appended"
     assert expiring_request_run_ws_message["payload"]["event_kind"] == "tool_authorization_request"
     assert expiring_request_tool_authorization_ws_message["event_type"] == "tool.authorization_requested"
     assert expiring_request_tool_authorization_ws_message["authorization_id"] == expiring_authorization["id"]
     assert expire_response.status_code == 200
     assert expire_response.json()["status"] == "expired"
-    assert expired_run_ws_message["event_type"] == "terminal.event.appended"
+    assert expired_run_ws_message["event_type"] == "run.event.appended"
     assert expired_run_ws_message["payload"]["event_kind"] == "tool_authorization_response"
     assert expired_tool_authorization_ws_message["event_type"] == "tool.authorization_expired"
     assert expired_tool_authorization_ws_message["authorization_id"] == expiring_authorization["id"]
@@ -476,7 +476,7 @@ def test_agent_runner_tool_authorization_request_broadcasts_run_live_and_global_
     assert run_once_response.status_code == 200
     assert run_once_response.json()["status"] == "waiting_tool_authorization"
 
-    assert request_run_ws_message["event_type"] == "terminal.event.appended"
+    assert request_run_ws_message["event_type"] == "run.event.appended"
     assert request_run_ws_message["payload"]["event_kind"] == "tool_authorization_request"
     assert request_run_ws_message["payload"]["agent_run_id"] == agent_run["id"]
     assert request_run_ws_message["payload"]["source_ref"]["authorization_id"] == authorization["id"]
@@ -575,13 +575,13 @@ def test_runtime_cancel_cancels_open_tool_authorizations_and_agent_run() -> None
     assert cancelled_agent_run_response.json()["error_message"] == "tool_authorization_cancelled"
     assert tool_calls_response.json()[0]["status"] == "denied"
 
-    assert cancelled_trace_ws_message["event_type"] == "trace.event.appended"
+    assert cancelled_trace_ws_message["event_type"] == "run.trace.appended"
     assert cancelled_trace_ws_message["payload"]["event_type"] == "runtime.cancelled"
     assert cancelled_snapshot_ws_message["event_type"] == "session_token.snapshot.appended"
     assert cancelled_snapshot_ws_message["payload"]["selection_summary"]["reason"] == "cancelled"
     assert cancelled_run_updated_ws_message["event_type"] == "run.updated"
     assert cancelled_run_updated_ws_message["payload"]["status"] == "cancelled"
-    assert cancelled_run_ws_message["event_type"] == "terminal.event.appended"
+    assert cancelled_run_ws_message["event_type"] == "run.event.appended"
     assert cancelled_run_ws_message["payload"]["event_kind"] == "tool_authorization_response"
     assert cancelled_run_ws_message["payload"]["payload_inline"]["decision"] == "cancelled"
     assert cancelled_tool_authorization_ws_message["event_type"] == "tool.authorization_cancelled"

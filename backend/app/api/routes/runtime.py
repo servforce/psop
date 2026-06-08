@@ -173,11 +173,16 @@ def list_snapshots(
 @runs_router.get("/{run_id}/traces", response_model=list[RunTraceResponse])
 def list_run_traces(
     run_id: str,
-    event_type: str | None = Query(default=None),
+    run_trace_event_type: str | None = Query(default=None),
+    event_type: str | None = Query(default=None, deprecated=True),
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
 ) -> list[RunTraceResponse]:
-    return service.list_run_traces(session, run_id, event_type=event_type)
+    return service.list_run_traces(
+        session,
+        run_id,
+        event_type=run_trace_event_type or event_type,
+    )
 
 
 @runs_router.get("/{run_id}/binding-requirements", response_model=list[BindingRequirementResponse])
@@ -270,11 +275,11 @@ def get_run_event_content(
 ) -> Response:
     event = service.get_run_event(session, run_id, event_id)
     if not event.artifact_object_id:
-        raise SkillValidationError("当前 Terminal Event 没有可展示的对象内容。", details={"run_id": run_id, "event_id": event_id})
+        raise SkillValidationError("当前 RunEvent 没有可展示的对象内容。", details={"run_id": run_id, "event_id": event_id})
     artifact_object = session.get(ArtifactObject, event.artifact_object_id)
     if not artifact_object:
         raise SkillValidationError(
-            "未找到 Terminal Event 对应的对象内容。",
+            "未找到 RunEvent 对应的对象内容。",
             details={"run_id": run_id, "event_id": event_id, "artifact_object_id": event.artifact_object_id},
         )
     try:
@@ -306,13 +311,13 @@ def get_run_event_part_content(
     part = service.get_run_event_part(session, run_id, event_id, part_id)
     if not part.artifact_object_id:
         raise SkillValidationError(
-            "当前 Terminal Event Part 没有可展示的对象内容。",
+            "当前 RunEventPart 没有可展示的对象内容。",
             details={"run_id": run_id, "event_id": event_id, "part_id": part_id},
         )
     artifact_object = session.get(ArtifactObject, part.artifact_object_id)
     if not artifact_object:
         raise SkillValidationError(
-            "未找到 Terminal Event Part 对应的对象内容。",
+            "未找到 RunEventPart 对应的对象内容。",
             details={"run_id": run_id, "event_id": event_id, "part_id": part_id, "artifact_object_id": part.artifact_object_id},
         )
     try:
@@ -349,13 +354,13 @@ async def append_run_event(
         object_store=object_store,
     )
     previous_run = service.get_run(session, run_id)
-    previous_terminal_seq = previous_run.latest_run_event_seq
+    previous_run_event_seq = previous_run.latest_run_event_seq
     previous_trace_seq = previous_run.latest_trace_seq
     previous_snapshot_seq = previous_run.latest_snapshot_seq
     result = service.append_run_event(session, run_id, payload, idempotency_key=idempotency_key)
     await _broadcast_run_events_after(
         run_id,
-        previous_terminal_seq,
+        previous_run_event_seq,
         session=session,
         service=service,
     )
@@ -395,15 +400,15 @@ async def _parse_run_event_request(
     try:
         body = await request.json()
     except json.JSONDecodeError as exc:
-        raise SkillValidationError("terminal event JSON 请求体无效。", details={"error": str(exc)}) from exc
+        raise SkillValidationError("RunEvent JSON 请求体无效。", details={"error": str(exc)}) from exc
     if not isinstance(body, dict):
-        raise SkillValidationError("terminal event 请求体必须是对象。")
+        raise SkillValidationError("RunEvent 请求体必须是对象。")
     if "parts" in body:
-        raise SkillValidationError("terminal event 请求不接收客户端 parts；请使用 text 字段和 multipart 文件字段提交。")
+        raise SkillValidationError("RunEvent 请求不接收客户端 parts；请使用 text 字段和 multipart 文件字段提交。")
     body = _normalize_json_run_event_body(body)
     payload = AppendRunEventRequest.model_validate(body)
     if any(str(part.kind or "").lower() != "text" for part in payload.parts):
-        raise SkillValidationError("包含二进制 part 的 terminal event 必须使用 multipart/form-data 提交。")
+        raise SkillValidationError("包含二进制 part 的 RunEvent 必须使用 multipart/form-data 提交。")
     return payload
 
 
@@ -418,15 +423,15 @@ async def _parse_multipart_run_event_request(
     form = await request.form()
     raw_event = form.get("event")
     if not isinstance(raw_event, str) or not raw_event.strip():
-        raise SkillValidationError("multipart terminal event 必须包含 event JSON 字段。")
+        raise SkillValidationError("multipart RunEvent 必须包含 event JSON 字段。")
     try:
         event_body = json.loads(raw_event)
     except json.JSONDecodeError as exc:
-        raise SkillValidationError("multipart terminal event.event 不是有效 JSON。", details={"error": str(exc)}) from exc
+        raise SkillValidationError("multipart RunEvent.event 不是有效 JSON。", details={"error": str(exc)}) from exc
     if not isinstance(event_body, dict):
-        raise SkillValidationError("multipart terminal event.event 必须是 JSON 对象。")
+        raise SkillValidationError("multipart RunEvent.event 必须是 JSON 对象。")
     if "parts" in event_body:
-        raise SkillValidationError("multipart terminal event.event 不接收 parts；请将自然语言放入 text，文件作为表单文件字段提交。")
+        raise SkillValidationError("multipart RunEvent.event 不接收 parts；请将自然语言放入 text，文件作为表单文件字段提交。")
 
     uploads: list[tuple[str, UploadFile]] = []
     for key, value in form.multi_items():
@@ -460,7 +465,7 @@ async def _parse_multipart_run_event_request(
         )
 
     if not parsed_parts:
-        raise SkillValidationError("terminal event 必须包含文本或至少一个图片、音频、视频文件。")
+        raise SkillValidationError("RunEvent 必须包含文本或至少一个图片、音频、视频文件。")
 
     event_body["parts"] = [part.model_dump(mode="json") for part in parsed_parts]
     event_body["text"] = event_text or None
@@ -591,12 +596,12 @@ def _multipart_event_payload(parts: list[RunEventPartInput]) -> dict[str, Any]:
 
 async def _broadcast_run_events_after(
     run_id: str,
-    previous_terminal_seq: int,
+    previous_run_event_seq: int,
     *,
     session: Session,
     service: RuntimeService,
 ) -> None:
-    events = service.list_run_events(session, run_id, from_seq=previous_terminal_seq + 1)
+    events = service.list_run_events(session, run_id, from_seq=previous_run_event_seq + 1)
     for event in events:
         await run_ws_hub.broadcast(run_id, run_event_ws_message(run_id, event))
 

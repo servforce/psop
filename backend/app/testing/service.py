@@ -1016,7 +1016,7 @@ class SkillTestService:
     ):
         if isinstance(event.get("parts"), list) and event["parts"]:
             parts = self._terminal_parts_for_timeline_event(session, scenario_run, event)
-            return self.runtime_service.append_terminal_event(
+            return self.runtime_service.append_run_event(
                 session,
                 scenario_run.run_id or "",
                 AppendTerminalEventRequest(
@@ -1054,7 +1054,7 @@ class SkillTestService:
                     metadata=self._metadata_for_asset_part(asset),
                 )
             ]
-        return self.runtime_service.append_terminal_event(
+        return self.runtime_service.append_run_event(
             session,
             scenario_run.run_id or "",
             AppendTerminalEventRequest(
@@ -2809,7 +2809,7 @@ class SkillTestService:
             while snapshots and self._aware_datetime(snapshots[0].created_at) <= occurred_at:
                 latest_snapshot_seq = snapshots.pop(0).seq_no
             payload = item.payload if isinstance(item.payload, dict) else {}
-            if item.event_type == "terminal.event.appended":
+            if item.event_type in {"run.event.appended", "terminal.event.appended"}:
                 latest_terminal_seq = max(latest_terminal_seq, int(payload.get("seq_no") or 0))
             anchors.append(
                 {

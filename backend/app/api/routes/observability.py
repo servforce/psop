@@ -52,7 +52,8 @@ def get_observability_metrics(
 def list_observability_run_traces(
     window_hours: int = Query(default=24, ge=1, le=24 * 30),
     run_id: str | None = Query(default=None),
-    event_type: str | None = Query(default=None),
+    run_trace_event_type: str | None = Query(default=None),
+    event_type: str | None = Query(default=None, deprecated=True),
     phase: str | None = Query(default=None),
     agent_run_id: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -63,7 +64,7 @@ def list_observability_run_traces(
         session,
         window_hours=window_hours,
         run_id=run_id,
-        event_type=event_type,
+        event_type=run_trace_event_type or event_type,
         phase=phase,
         agent_run_id=agent_run_id,
         limit=limit,

@@ -13,7 +13,11 @@ def test_prompt_registry_loads_agent_prompt_packs() -> None:
     creation_pack = registry.load_agent("skill_creation/conversational_draft/v1")
 
     assert compile_pack.agent_id == "psop.skill_compilation.formal_v5_compile"
+    assert "PSkill 编译智能体" in compile_pack.system_prompt
     assert "SKILL 编译智能体" in compile_pack.system_prompt
+    assert "RunEvent transcript" in compile_pack.system_prompt
+    assert "token.run_events" in compile_pack.system_prompt
+    assert "token.terminal.events" in compile_pack.system_prompt
     assert compile_pack.prompt_hash
     assert creation_pack.agent_id == "psop.skill_creation.conversational_draft"
     assert creation_pack.route_key == "text"

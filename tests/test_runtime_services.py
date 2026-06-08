@@ -10,7 +10,7 @@ from app.compiler.service import CompilerService
 from app.compiler.formal_v5 import validate_and_normalize_artifact
 from app.jobs.repository import JobRepository
 from app.memory.models import AgentMemoryEntry
-from app.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest
+from app.runtime.schemas import AppendRunEventRequest, CreateInvocationRequest
 from app.runtime.service import RuntimeService
 from app.pskills.exceptions import SkillsGatewayError, SkillValidationError
 from app.pskills.schemas import CreateSkillRequest, PublishSkillRequest
@@ -131,6 +131,7 @@ def test_compiler_emits_mvp_formal_v5_artifact(runtime_stack) -> None:
     assert inference_gateway.calls[0]["system_prompt"] == PromptRegistry().load_default_compile_agent().system_prompt
     prompt_payload = json.loads(inference_gateway.calls[0]["user_prompt"])
     assert "runtime_language_rule" in prompt_payload["workflow_compilation_contract"]
+    assert "RunEvent evidence" in prompt_payload["workflow_compilation_contract"]["business_node_rule"]
     assert "reason、terminal_message" in prompt_payload["workflow_compilation_contract"]["runtime_language_rule"]
     assert "用户可见自然语言必须使用简体中文" in inference_gateway.calls[0]["system_prompt"]
     assert artifact.artifact["graph_summary"]["template"] == "formal-v5 skill workflow graph"
@@ -635,7 +636,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
             ),
         )
         initial_run = runtime_service.get_run(session, invocation.run_id or "")
-        initial_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        initial_events = runtime_service.list_run_events(session, invocation.run_id or "")
         legacy_snapshots = runtime_service.repository.list_snapshots(session, invocation.run_id or "")
         legacy_token = json.loads(json.dumps(legacy_snapshots[-1].token_payload, ensure_ascii=False))
         legacy_observation = legacy_token.setdefault("observations", {}).setdefault("instruct_collect_context", {})
@@ -646,10 +647,10 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         legacy_snapshots[-1].token_payload = legacy_token
         session.flush()
 
-        appended = runtime_service.append_terminal_event(
+        appended = runtime_service.append_run_event(
             session,
             invocation.run_id or "",
-            AppendTerminalEventRequest(
+            AppendRunEventRequest(
                 direction="input",
                 event_kind="terminal.text.input.v1",
                 mime_type="text/plain",
@@ -660,9 +661,9 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         run = runtime_service.get_run(session, invocation.run_id or "")
         replay = runtime_service.build_replay(session, invocation.run_id or "")
         snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
-        trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+        trace_events = runtime_service.list_run_traces(session, invocation.run_id or "")
         terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
-        terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        terminal_events = runtime_service.list_run_events(session, invocation.run_id or "")
         bindings = runtime_service.list_run_bindings(session, invocation.run_id or "")
         runner_runs = runtime_service.agent_service.list_runs(
             session,
@@ -699,6 +700,10 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert [snapshot.seq_no for snapshot in snapshots] == [0, 1, 2, 3, 4, 5]
     assert snapshots[-1].token_payload["budgets"]["llm_input_tokens"] == 30
     assert snapshots[-1].token_payload["budgets"]["llm_output_tokens"] == 15
+    assert snapshots[-1].token_payload["metadata"]["run_event_cursor"] == snapshots[-1].token_payload["metadata"]["terminal_cursor"]
+    assert snapshots[-1].token_payload["run_events"] == snapshots[-1].token_payload["terminal"]["events"]
+    assert snapshots[-1].token_payload["run_events"][-1]["seq_no"] == snapshots[-1].token_payload["metadata"]["run_event_cursor"]
+    assert terminal_events[-1].seq_no >= snapshots[-1].token_payload["metadata"]["run_event_cursor"]
     assert all(snapshot.token_payload.get("memory", {}) == {} for snapshot in snapshots)
     serialized_snapshots = json.dumps(
         [snapshot.token_payload for snapshot in snapshots],
@@ -723,6 +728,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert all("_trace_request" not in item.output_payload["observation"] for item in runner_runs)
     assert all("request" not in item.output_payload["observation"] for item in runner_runs)
     assert all(item.input_payload["runtime_context"]["latest_snapshot_seq"] >= 0 for item in runner_runs)
+    assert all("latest_run_event" in item.input_payload["runtime_context"] for item in runner_runs)
     assert all(
         {"agent.run.created", "runtime.node.started", "runtime.agent.model_call.completed", "runtime.agent.observation.returned"}
         <= {event.event_type for event in runner_events_by_run[item.id]}
@@ -763,7 +769,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert [item.event_type for item in replay.timeline][:5] == [
         "binding.resolved",
         "runtime.start.completed",
-        "terminal.event.appended",
+        "run.event.appended",
         "runtime.wait_checkpoint.entered",
         "gateway.inference.completed",
     ]
@@ -953,10 +959,10 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
             )
             initial_run = runtime_service.get_run(session, invocation.run_id or "")
 
-            runtime_service.append_terminal_event(
+            runtime_service.append_run_event(
                 session,
                 invocation.run_id or "",
-                AppendTerminalEventRequest(
+                AppendRunEventRequest(
                     direction="input",
                     event_kind="terminal.text.input.v1",
                     mime_type="text/plain",
@@ -967,16 +973,16 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
             run = runtime_service.get_run(session, invocation.run_id or "")
             refreshed_invocation = runtime_service.get_invocation(session, invocation.id)
             terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
-            terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
-            trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+            terminal_events = runtime_service.list_run_events(session, invocation.run_id or "")
+            trace_events = runtime_service.list_run_traces(session, invocation.run_id or "")
             snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
             replay = runtime_service.build_replay(session, invocation.run_id or "")
 
             with pytest.raises(SkillValidationError):
-                runtime_service.append_terminal_event(
+                runtime_service.append_run_event(
                     session,
                     invocation.run_id or "",
-                    AppendTerminalEventRequest(
+                    AppendRunEventRequest(
                         direction="input",
                         event_kind="terminal.text.input.v1",
                         payload_inline="不应接受新输入",
@@ -1002,38 +1008,38 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
     assert "已中止" in [item.title for item in replay.timeline]
 
 
-def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
+def test_run_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
     database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
 
     with database_manager.session() as session:
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="terminal-event-unit",
-                name="Terminal Event Unit",
+                key="run-event-unit",
+                name="RunEvent Unit",
                 description="Validate terminal transcript append.",
             ),
         )
         published = skills_service.publish_skill(
             session,
             skill_id=skill.id,
-            payload=PublishSkillRequest(publish_reason="Terminal event unit publish"),
+            payload=PublishSkillRequest(publish_reason="RunEvent unit publish"),
         )
         process_publish_job(session, compiler_service, published.compile_request.id)
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="terminal-event-unit",
+                skill_key="run-event-unit",
                 input_envelope={"user_input": "初始输入"},
             ),
         )
         bindings = runtime_service.list_run_bindings(session, invocation.run_id or "")
         input_binding = next(item for item in bindings if item.requirement_key == "terminal.input")
 
-        appended = runtime_service.append_terminal_event(
+        appended = runtime_service.append_run_event(
             session,
             invocation.run_id or "",
-            AppendTerminalEventRequest(
+            AppendRunEventRequest(
                 direction="input",
                 event_kind="terminal.text.input.v1",
                 mime_type="text/plain",
@@ -1042,10 +1048,10 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
                 external_event_id="evt-001",
             ),
         )
-        duplicate = runtime_service.append_terminal_event(
+        duplicate = runtime_service.append_run_event(
             session,
             invocation.run_id or "",
-            AppendTerminalEventRequest(
+            AppendRunEventRequest(
                 direction="input",
                 event_kind="terminal.text.input.v1",
                 mime_type="text/plain",
@@ -1054,13 +1060,13 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
                 external_event_id="evt-001",
             ),
         )
-        events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        events = runtime_service.list_run_events(session, invocation.run_id or "")
 
         with pytest.raises(SkillValidationError):
-            runtime_service.append_terminal_event(
+            runtime_service.append_run_event(
                 session,
                 invocation.run_id or "",
-                AppendTerminalEventRequest(
+                AppendRunEventRequest(
                     direction="sideways",
                     event_kind="terminal.text.input.v1",
                     payload_inline="bad",
@@ -1102,8 +1108,8 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
             ),
         )
         run = failing_runtime.get_run(session, invocation.run_id or "")
-        trace_events = failing_runtime.list_trace_events(session, invocation.run_id or "")
-        terminal_events = failing_runtime.list_terminal_events(session, invocation.run_id or "")
+        trace_events = failing_runtime.list_run_traces(session, invocation.run_id or "")
+        terminal_events = failing_runtime.list_run_events(session, invocation.run_id or "")
 
     assert invocation.status == "failed"
     assert run.status == "failed"
@@ -1146,7 +1152,7 @@ def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(r
                 input_envelope={"user_input": "触发 gateway 失败"},
             ),
         )
-        trace_events = failing_runtime.list_trace_events(session, invocation.run_id or "")
+        trace_events = failing_runtime.list_run_traces(session, invocation.run_id or "")
 
     payload = trace_events[-1].payload
     details = payload["error_details"]
@@ -1195,10 +1201,10 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
             ),
         )
         first_run = runtime_service.get_run(session, invocation.run_id or "")
-        failing_runtime.append_terminal_event(
+        failing_runtime.append_run_event(
             session,
             invocation.run_id or "",
-            AppendTerminalEventRequest(
+            AppendRunEventRequest(
                 direction="input",
                 event_kind="terminal.text.input.v1",
                 mime_type="text/plain",
@@ -1207,15 +1213,15 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
             ),
         )
         recovered_run = runtime_service.get_run(session, invocation.run_id or "")
-        trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+        trace_events = runtime_service.list_run_traces(session, invocation.run_id or "")
         terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
-        terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        terminal_events = runtime_service.list_run_events(session, invocation.run_id or "")
         snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
 
-        retry = runtime_service.append_terminal_event(
+        retry = runtime_service.append_run_event(
             session,
             invocation.run_id or "",
-            AppendTerminalEventRequest(
+            AppendRunEventRequest(
                 direction="input",
                 event_kind="terminal.text.input.v1",
                 mime_type="text/plain",
@@ -1239,6 +1245,8 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
     assert terminal_events[-1].trace_event_id == trace_events[-1].id
     assert terminal_events[-1].payload_inline == "刚才服务器开小差了，请您重试！"
     assert snapshots[-1].token_payload["status"] == "waiting"
+    assert snapshots[-1].token_payload["metadata"]["run_event_cursor"] == terminal_events[-1].seq_no
     assert snapshots[-1].token_payload["metadata"]["terminal_cursor"] == terminal_events[-1].seq_no
+    assert snapshots[-1].token_payload["run_events"] == snapshots[-1].token_payload["terminal"]["events"]
     assert retry.seq_no > terminal_events[-1].seq_no
     assert final_run.status == "succeeded"

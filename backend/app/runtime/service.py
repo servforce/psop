@@ -354,9 +354,12 @@ class RuntimeService:
             copied_run_events.append(self._run_event_token_payload_with_parts(session, copied))
 
         terminal = token.setdefault("terminal", {})
-        terminal["events"] = copied_run_events
+        token["run_events"] = list(copied_run_events)
+        terminal["events"] = list(copied_run_events)
         terminal["latest_seq"] = run.latest_run_event_seq
-        token.setdefault("metadata", {})["terminal_cursor"] = run.latest_run_event_seq
+        metadata = token.setdefault("metadata", {})
+        metadata["run_event_cursor"] = run.latest_run_event_seq
+        metadata["terminal_cursor"] = run.latest_run_event_seq
         session.add(
             SessionTokenSnapshot(
                 run_id=run.id,
@@ -737,7 +740,7 @@ class RuntimeService:
     def get_run_event(self, session: Session, run_id: str, event_id: str) -> RunEventResponse:
         event = self.repository.get_run_event(session, event_id)
         if not event or event.run_id != run_id:
-            raise SkillNotFoundError("未找到 Terminal Event。", details={"run_id": run_id, "event_id": event_id})
+            raise SkillNotFoundError("未找到 RunEvent。", details={"run_id": run_id, "event_id": event_id})
         return self._build_run_event_response(session, event)
 
     def list_run_event_parts(self, session: Session, run_id: str) -> list[RunEventPartResponse]:
@@ -757,11 +760,11 @@ class RuntimeService:
     ) -> RunEventPartResponse:
         event = self.repository.get_run_event(session, event_id)
         if not event or event.run_id != run_id:
-            raise SkillNotFoundError("未找到 Terminal Event。", details={"run_id": run_id, "event_id": event_id})
+            raise SkillNotFoundError("未找到 RunEvent。", details={"run_id": run_id, "event_id": event_id})
         part = self.repository.get_run_event_part_by_public_id(session, run_event_id=event_id, part_id=part_id)
         if not part or part.run_id != run_id:
             raise SkillNotFoundError(
-                "未找到 Terminal Event Part。",
+                "未找到 RunEventPart。",
                 details={"run_id": run_id, "event_id": event_id, "part_id": part_id},
             )
         return self._build_run_event_part_response(part)
@@ -796,7 +799,7 @@ class RuntimeService:
                 )
 
         if run.status in {"succeeded", "failed", "cancelled", "aborted"}:
-            raise SkillValidationError("Run 已结束，不能继续追加终端输入。", details={"run_id": run_id, "status": run.status})
+            raise SkillValidationError("Run 已结束，不能继续追加 RunEvent。", details={"run_id": run_id, "status": run.status})
         terminal_session = self.repository.get_terminal_session_for_run(session, run_id)
         if not terminal_session or terminal_session.status != "open":
             raise SkillValidationError("当前 Run 没有可用的 Terminal Session。", details={"run_id": run_id})
@@ -1624,7 +1627,7 @@ class RuntimeService:
                 agent_run_id=run_trace.agent_run_id,
             )
         except Exception:
-            LOGGER.exception("failed to append recoverable runtime failure terminal event", extra={"run_id": run.id})
+            LOGGER.exception("failed to append recoverable runtime failure RunEvent", extra={"run_id": run.id})
             return None
 
     @staticmethod
@@ -1815,10 +1818,7 @@ class RuntimeService:
         recovered["phase"] = "waiting"
         if run_event:
             event_payload = self._run_event_token_payload(run_event)
-            terminal = recovered.setdefault("terminal", {})
-            terminal.setdefault("events", []).append(event_payload)
-            terminal["latest_seq"] = run_event.seq_no
-            recovered.setdefault("metadata", {})["terminal_cursor"] = run_event.seq_no
+            self._append_run_event_payload_to_token(recovered, event_payload=event_payload, seq_no=run_event.seq_no)
         return recovered
 
     def _append_recoverable_failure_snapshot(
@@ -1878,7 +1878,7 @@ class RuntimeService:
                 agent_run_id=run_trace.agent_run_id,
             )
         except Exception:
-            LOGGER.exception("failed to append runtime failure terminal event", extra={"run_id": run.id})
+            LOGGER.exception("failed to append runtime failure RunEvent", extra={"run_id": run.id})
 
     @staticmethod
     def _runtime_failure_terminal_message(error: str) -> str:
@@ -1964,11 +1964,11 @@ class RuntimeService:
     ) -> RunEvent:
         normalized_direction = direction.strip().lower()
         if normalized_direction not in {"input", "output"}:
-            raise SkillValidationError("terminal event direction 只能是 input 或 output。", details={"direction": direction})
+            raise SkillValidationError("RunEvent direction 只能是 input 或 output。", details={"direction": direction})
         if not event_kind:
-            raise SkillValidationError("terminal event 必须包含 event_kind。")
+            raise SkillValidationError("RunEvent 必须包含 event_kind。")
         if not mime_type:
-            raise SkillValidationError("terminal event 必须包含 mime_type。")
+            raise SkillValidationError("RunEvent 必须包含 mime_type。")
         if terminal_session.run_id != run.id:
             raise SkillValidationError("Terminal Session 与 Run 不匹配。")
 
@@ -1979,7 +1979,7 @@ class RuntimeService:
         if resolved_binding_id:
             binding = self.repository.get_run_capability_binding(session, resolved_binding_id)
             if not binding or binding.run_id != run.id or binding.status != "active":
-                raise SkillValidationError("terminal event binding 无效。", details={"binding_id": resolved_binding_id})
+                raise SkillValidationError("RunEvent binding 无效。", details={"binding_id": resolved_binding_id})
 
         next_seq = run.latest_run_event_seq + 1
         run.latest_run_event_seq = next_seq
@@ -2004,7 +2004,7 @@ class RuntimeService:
         for order_index, part in enumerate(self._normalize_run_event_parts(event, parts or []), start=1):
             if part.artifact_object_id and not self.repository.get_artifact_object(session, part.artifact_object_id):
                 raise SkillValidationError(
-                    "terminal event part artifact_object_id 无效。",
+                    "RunEventPart artifact_object_id 无效。",
                     details={"part_id": part.part_id, "artifact_object_id": part.artifact_object_id},
                 )
             session.add(
@@ -2062,7 +2062,7 @@ class RuntimeService:
         if not kind:
             kind = self._part_kind_for_mime_type((part.mime_type or "").strip().lower())
         if kind not in {"text", "image", "video", "audio"}:
-            raise SkillValidationError("terminal event part kind 仅支持 text/image/video/audio。", details={"kind": part.kind})
+            raise SkillValidationError("RunEventPart kind 仅支持 text/image/video/audio。", details={"kind": part.kind})
         if kind == "text" and not str(part.text or "").strip():
             raise SkillValidationError("text part 必须包含 text。", details={"part_id": part.part_id})
         if kind != "text" and not part.artifact_object_id:
@@ -2070,7 +2070,7 @@ class RuntimeService:
         mime_type = (part.mime_type or "").strip().lower()
         if kind != "text" and not mime_type.startswith(f"{kind}/"):
             raise SkillValidationError(
-                "terminal event part kind 与 mime_type 不匹配。",
+                "RunEventPart kind 与 mime_type 不匹配。",
                 details={"part_id": part.part_id, "kind": kind, "mime_type": part.mime_type},
             )
         part_id = (part.part_id or "").strip()
@@ -2092,20 +2092,17 @@ class RuntimeService:
         )
 
     def _sync_run_events(self, session: Session, *, run: Run, token: dict[str, Any]) -> dict[str, Any]:
-        cursor = int(_get_path(token, "metadata.terminal_cursor") or 0)
+        cursor = int(_get_path(token, "metadata.run_event_cursor") or _get_path(token, "metadata.terminal_cursor") or 0)
+        next_token = json.loads(json.dumps(token, ensure_ascii=False, default=str))
+        self._ensure_run_event_projection(next_token)
         events = self.repository.list_run_events(session, run.id, from_seq=cursor + 1)
         if not events:
-            return token
+            return next_token
 
-        next_token = json.loads(json.dumps(token, ensure_ascii=False, default=str))
-        terminal = next_token.setdefault("terminal", {})
-        token_events = terminal.setdefault("events", [])
         input_envelope = next_token.setdefault("input_envelope", {})
         for event in events:
             event_payload = self._run_event_token_payload_with_parts(session, event)
-            token_events.append(event_payload)
-            terminal["latest_seq"] = event.seq_no
-            next_token.setdefault("metadata", {})["terminal_cursor"] = event.seq_no
+            self._append_run_event_payload_to_token(next_token, event_payload=event_payload, seq_no=event.seq_no)
             if event.direction == "input":
                 input_text = self._terminal_input_text(event, event_payload.get("parts") if isinstance(event_payload.get("parts"), list) else None)
                 if input_text:
@@ -2351,7 +2348,12 @@ class RuntimeService:
             "budgets": {"llm_calls": 0, "tool_calls": 0},
             "outputs": {},
             "control": {},
-            "metadata": {"artifact_version": artifact_payload.get("artifact_version"), "terminal_cursor": 0},
+            "metadata": {
+                "artifact_version": artifact_payload.get("artifact_version"),
+                "run_event_cursor": 0,
+                "terminal_cursor": 0,
+            },
+            "run_events": [],
             "terminal": {"events": [], "latest_seq": 0},
             "facts": {},
             "registers": {},
@@ -2686,8 +2688,7 @@ class RuntimeService:
 
     @staticmethod
     def _runtime_agent_context_payload(*, run: Run, token: dict[str, Any]) -> dict[str, Any]:
-        terminal = token.get("terminal") if isinstance(token.get("terminal"), dict) else {}
-        events = terminal.get("events") if isinstance(terminal, dict) else []
+        events = RuntimeService._token_run_events(token)
         latest_event = events[-1] if isinstance(events, list) and events else {}
         control = token.get("control") if isinstance(token.get("control"), dict) else {}
         wait = control.get("wait") if isinstance(control, dict) and isinstance(control.get("wait"), dict) else {}
@@ -2699,6 +2700,7 @@ class RuntimeService:
             "latest_run_event_seq": run.latest_run_event_seq,
             "latest_trace_seq": run.latest_trace_seq,
             "wait": wait,
+            "latest_run_event": latest_event if isinstance(latest_event, dict) else {},
             "latest_terminal_event": latest_event if isinstance(latest_event, dict) else {},
         }
 
@@ -2835,13 +2837,60 @@ class RuntimeService:
         latest_evidence = control.get("latest_evidence") if isinstance(control, dict) else None
         if isinstance(latest_evidence, dict) and isinstance(latest_evidence.get("parts"), list):
             return [part for part in latest_evidence["parts"] if isinstance(part, dict)]
-        terminal = token.get("terminal") if isinstance(token.get("terminal"), dict) else {}
-        events = terminal.get("events") if isinstance(terminal, dict) else []
+        events = RuntimeService._token_run_events(token)
         if isinstance(events, list):
             for event in reversed(events):
                 if isinstance(event, dict) and event.get("direction") == "input" and isinstance(event.get("parts"), list):
                     return [part for part in event["parts"] if isinstance(part, dict)]
         return []
+
+    @staticmethod
+    def _token_run_events(token: dict[str, Any]) -> list[Any]:
+        run_events = token.get("run_events")
+        if isinstance(run_events, list):
+            return run_events
+        terminal = token.get("terminal") if isinstance(token.get("terminal"), dict) else {}
+        terminal_events = terminal.get("events") if isinstance(terminal, dict) else []
+        return terminal_events if isinstance(terminal_events, list) else []
+
+    @staticmethod
+    def _ensure_run_event_projection(token: dict[str, Any]) -> tuple[list[Any], list[Any], dict[str, Any]]:
+        terminal = token.setdefault("terminal", {})
+        terminal_events = terminal.get("events")
+        if not isinstance(terminal_events, list):
+            terminal_events = []
+            terminal["events"] = terminal_events
+
+        run_events = token.get("run_events")
+        if not isinstance(run_events, list):
+            run_events = list(terminal_events)
+            token["run_events"] = run_events
+        elif terminal_events and not run_events:
+            run_events.extend(terminal_events)
+        elif run_events and not terminal_events:
+            terminal_events.extend(run_events)
+
+        metadata = token.setdefault("metadata", {})
+        run_event_cursor = metadata.get("run_event_cursor")
+        terminal_cursor = metadata.get("terminal_cursor")
+        latest_seq = terminal.get("latest_seq")
+        if run_event_cursor is None:
+            metadata["run_event_cursor"] = terminal_cursor if terminal_cursor is not None else latest_seq or 0
+        if terminal_cursor is None:
+            metadata["terminal_cursor"] = metadata.get("run_event_cursor") or latest_seq or 0
+
+        return run_events, terminal_events, terminal
+
+    @staticmethod
+    def _append_run_event_payload_to_token(token: dict[str, Any], *, event_payload: dict[str, Any], seq_no: int) -> None:
+        run_events, terminal_events, terminal = RuntimeService._ensure_run_event_projection(token)
+        run_events.append(event_payload)
+        if terminal_events is not run_events:
+            terminal_events.append(event_payload)
+        terminal["latest_seq"] = seq_no
+        metadata = token.setdefault("metadata", {})
+        metadata["run_event_cursor"] = seq_no
+        metadata["terminal_cursor"] = seq_no
 
     @staticmethod
     def _llm_attachment_summary(attachments: list[LlmAttachment]) -> list[dict[str, Any]]:
@@ -3370,7 +3419,7 @@ class RuntimeService:
         return ReplayTimelineItem(
             seq_no=event.seq_no,
             phase="terminal",
-            event_type="terminal.event.appended",
+            event_type="run.event.appended",
             title=title,
             summary=summary,
             payload=event.model_dump(mode="json"),
