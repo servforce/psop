@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 from typing import Any
 
 from pydantic import ValidationError
@@ -20,7 +21,9 @@ from app.agents.service import AgentService
 from app.memory.schemas import MemorySearchRequest
 from app.memory.service import MemoryService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
+from app.pskills.manifest import SkillDocument, document_from_manifest_snapshot, parse_skill_yaml, render_skill_yaml
 from app.pskills.models import now_utc
+from app.pskills.service import SkillsService
 from app.skills.models import SkillActivation
 from app.skills.repository import SkillPackageRepository
 from app.skills.service import SkillPackageService
@@ -45,6 +48,7 @@ class AgentRunner:
         skill_repository: SkillPackageRepository | None = None,
         tool_policy: ToolPolicy | None = None,
         memory_service: MemoryService | None = None,
+        pskills_service: SkillsService | None = None,
         output_guardrail: OutputGuardrail | None = None,
         planner: AgentPlanner | None = None,
     ) -> None:
@@ -53,6 +57,7 @@ class AgentRunner:
         self.skill_repository = skill_repository or SkillPackageRepository()
         self.tool_policy = tool_policy or ToolPolicy()
         self.memory_service = memory_service or MemoryService()
+        self.pskills_service = pskills_service
         self.output_guardrail = output_guardrail or OutputGuardrail()
         self.planner = planner or AgentPlanner()
 
@@ -348,6 +353,45 @@ class AgentRunner:
 
     def _execute_native_tool_call(self, session: Session, *, tool_call: Any) -> dict[str, Any]:
         arguments = tool_call.arguments_summary or {}
+        if tool_call.tool_name == "psop.pskills.get":
+            pskill_id = self._pskill_id_from_arguments(session, arguments)
+            detail = self._require_pskills_service().get_skill_detail(session, pskill_id)
+            return {"result": detail.model_dump(mode="json")}
+        if tool_call.tool_name == "psop.materials.list":
+            pskill_id = self._pskill_id_from_arguments(session, arguments)
+            materials = self._require_pskills_service().list_materials(session, skill_id=pskill_id)
+            return {
+                "result": {
+                    "material_count": len(materials),
+                    "materials": [item.model_dump(mode="json") for item in materials],
+                }
+            }
+        if tool_call.tool_name == "psop.materials.read_analysis":
+            pskill_id = self._pskill_id_from_arguments(session, arguments)
+            material_id = self._required_tool_argument(arguments, "material_id")
+            analysis = self._require_pskills_service().get_material_analysis(
+                session,
+                skill_id=pskill_id,
+                material_id=material_id,
+            )
+            return {"result": analysis.model_dump(mode="json")}
+        if tool_call.tool_name == "psop.repository.read_file":
+            pskill_id = self._pskill_id_from_arguments(session, arguments)
+            path = self._required_tool_argument(arguments, "path", "file_path")
+            file_response = self._require_pskills_service().get_repository_file(session, skill_id=pskill_id, path=path)
+            return {"result": file_response.model_dump(mode="json")}
+        if tool_call.tool_name == "psop.repository.propose_patch":
+            return {"result": self._propose_repository_patch(session, arguments)}
+        if tool_call.tool_name == "psop.pskill_manifest.parse":
+            content = self._required_tool_argument(arguments, "content", "skill_yaml_content")
+            document = parse_skill_yaml(content)
+            return {"result": {"document": document.model_dump(mode="json"), "manifest": document.skill.model_dump(mode="json")}}
+        if tool_call.tool_name == "psop.pskill_manifest.render":
+            manifest = arguments.get("document", arguments.get("manifest", arguments.get("snapshot")))
+            if not isinstance(manifest, dict):
+                raise SkillValidationError("psop.pskill_manifest.render 缺少 manifest。", details={"arguments_summary": arguments})
+            document = self._document_from_tool_manifest(manifest)
+            return {"result": {"content": render_skill_yaml(document), "document": document.model_dump(mode="json")}}
         if tool_call.tool_name == "psop.memory.search":
             try:
                 payload = MemorySearchRequest(
@@ -443,6 +487,119 @@ class AgentRunner:
             )
             return {"result": activation}
         return {"result": {"native_execution": "not_implemented", "tool_name": tool_call.tool_name}}
+
+    def _propose_repository_patch(self, session: Session, arguments: dict[str, Any]) -> dict[str, Any]:
+        pskill_id = self._pskill_id_from_arguments(session, arguments)
+        files = arguments.get("files", arguments.get("proposed_files"))
+        if not isinstance(files, dict) or not files:
+            raise SkillValidationError(
+                "psop.repository.propose_patch 缺少 files。",
+                details={"arguments_summary": arguments},
+            )
+
+        file_changes: list[dict[str, Any]] = []
+        combined_diff: list[str] = []
+        base_commit_sha = str(arguments.get("base_commit_sha") or "")
+        current_files = arguments.get("current_files", {})
+        if not isinstance(current_files, dict):
+            current_files = {}
+        for raw_path, proposed_content in files.items():
+            path = str(raw_path).strip()
+            if not path:
+                raise SkillValidationError("psop.repository.propose_patch 包含空文件路径。")
+            if not isinstance(proposed_content, str):
+                raise SkillValidationError(
+                    "psop.repository.propose_patch 文件内容必须是字符串。",
+                    details={"path": path},
+                )
+            current_content = ""
+            current_head = ""
+            change_type = "create"
+            if path in current_files:
+                current_content = str(current_files[path] or "")
+                current_head = base_commit_sha
+                change_type = "modify" if current_content else "create"
+            else:
+                try:
+                    current_file = self._require_pskills_service().get_repository_file(session, skill_id=pskill_id, path=path)
+                    current_content = current_file.content
+                    current_head = current_file.head_commit_sha
+                    change_type = "modify"
+                except SkillNotFoundError:
+                    current_head = base_commit_sha
+            diff_lines = list(
+                difflib.unified_diff(
+                    current_content.splitlines(keepends=True),
+                    proposed_content.splitlines(keepends=True),
+                    fromfile=f"a/{path}",
+                    tofile=f"b/{path}",
+                    lineterm="",
+                )
+            )
+            diff_text = "\n".join(line.rstrip("\n") for line in diff_lines)
+            combined_diff.extend(diff_lines)
+            file_changes.append(
+                {
+                    "path": path,
+                    "change_type": change_type,
+                    "base_commit_sha": base_commit_sha or current_head,
+                    "head_commit_sha": current_head,
+                    "proposed_content": proposed_content,
+                    "diff": diff_text,
+                    "changed": current_content != proposed_content,
+                }
+            )
+        return {
+            "status": "patch_proposed",
+            "pskill_id": pskill_id,
+            "summary": str(arguments.get("summary") or arguments.get("draft_summary") or ""),
+            "file_change_count": len(file_changes),
+            "file_changes": file_changes,
+            "diff": "\n".join(line.rstrip("\n") for line in combined_diff),
+            "committed": False,
+            "requires_human_apply": True,
+            "commit_tool": "psop.repository.commit_patch",
+        }
+
+    def _require_pskills_service(self) -> SkillsService:
+        if not self.pskills_service:
+            raise SkillValidationError("AgentRunner 未配置 PSkill service，无法执行 PSkill repository 工具。")
+        return self.pskills_service
+
+    def _pskill_id_from_arguments(self, session: Session, arguments: dict[str, Any]) -> str:
+        pskill_id = str(arguments.get("pskill_id") or arguments.get("skill_id") or "").strip()
+        if pskill_id:
+            return pskill_id
+        pskill_key = str(arguments.get("pskill_key") or arguments.get("skill_key") or "").strip()
+        if not pskill_key:
+            raise SkillValidationError(
+                "工具参数缺少 PSkill 标识。",
+                details={"required_any_of": ["pskill_id", "skill_id", "pskill_key", "skill_key"]},
+            )
+        definition = self._require_pskills_service().repository.get_pskill_definition_by_key(session, pskill_key)
+        if not definition:
+            raise SkillNotFoundError("未找到对应的 Skill。", details={"pskill_key": pskill_key})
+        return definition.id
+
+    @staticmethod
+    def _required_tool_argument(arguments: dict[str, Any], *names: str) -> str:
+        for name in names:
+            value = arguments.get(name)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        raise SkillValidationError("工具参数缺失。", details={"required_any_of": list(names), "arguments_summary": arguments})
+
+    @staticmethod
+    def _document_from_tool_manifest(manifest: dict[str, Any]) -> SkillDocument:
+        if "skill" in manifest:
+            try:
+                return SkillDocument.model_validate(manifest)
+            except Exception as error:
+                raise SkillValidationError(
+                    "psop.pskill_manifest.render manifest 无效。",
+                    details={"error": str(error)},
+                ) from error
+        return document_from_manifest_snapshot(manifest)
 
     def _activate_skills(self, session: Session, *, agent_run: AgentRun, spec: dict[str, Any]) -> tuple[set[str], list[str]]:
         self.skill_service.sync_packages(session)

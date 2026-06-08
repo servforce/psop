@@ -514,6 +514,124 @@ def test_agent_runner_executes_auto_allowed_memory_tools() -> None:
     assert "tool.execution_succeeded" in [item["event_type"] for item in search_events_response.json()]
 
 
+def test_agent_runner_executes_builder_source_and_manifest_tools_without_committing_patch() -> None:
+    client, _, _ = create_test_client()
+
+    def run_builder_tool(tool_name: str, arguments_summary: dict, side_effect_level: str = "read"):
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.builder",
+                "owner_type": "pskill_draft",
+                "owner_id": f"builder-tool-{tool_name}",
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": tool_name,
+                        "side_effect_level": side_effect_level,
+                        "arguments_summary": arguments_summary,
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        return run_response, run_once_response, tool_calls_response, authorizations_response, events_response
+
+    with client:
+        created_response = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "builder-source-tools",
+                "name": "Builder Source Tools",
+                "description": "Exercise builder repository tools.",
+            },
+        )
+        skill_id = created_response.json()["id"]
+        source_response = client.get(f"/api/v1/pskills/{skill_id}/source")
+        source_payload = source_response.json()
+
+        read_run, read_once, read_tool_calls, read_authorizations, read_events = run_builder_tool(
+            "psop.repository.read_file",
+            {"pskill_id": skill_id, "path": "SKILL.md"},
+        )
+        parse_run, parse_once, parse_tool_calls, parse_authorizations, parse_events = run_builder_tool(
+            "psop.pskill_manifest.parse",
+            {"skill_yaml_content": source_payload["skill_yaml_content"]},
+            side_effect_level="compute",
+        )
+        parsed_manifest = parse_once.json()["output_payload"]["tool_result"]["result"]["manifest"]
+        render_run, render_once, render_tool_calls, render_authorizations, render_events = run_builder_tool(
+            "psop.pskill_manifest.render",
+            {"manifest": parsed_manifest},
+            side_effect_level="compute",
+        )
+        proposed_skill_md = source_payload["skill_md_content"] + "\n## Builder Draft\n\n- Proposed by pskill.builder.\n"
+        patch_run, patch_once, patch_tool_calls, patch_authorizations, patch_events = run_builder_tool(
+            "psop.repository.propose_patch",
+            {
+                "pskill_id": skill_id,
+                "base_commit_sha": source_payload["head_commit_sha"],
+                "summary": "Add builder draft section.",
+                "files": {"SKILL.md": proposed_skill_md},
+            },
+            side_effect_level="low_write",
+        )
+        after_source_response = client.get(f"/api/v1/pskills/{skill_id}/source")
+
+    assert created_response.status_code == 201
+    assert source_response.status_code == 200
+
+    assert read_run.status_code == 201
+    assert read_once.status_code == 200
+    read_payload = read_once.json()
+    assert read_payload["status"] == "succeeded"
+    assert read_payload["output_payload"]["tool_result"]["result"]["file_path"] == "SKILL.md"
+    assert read_payload["output_payload"]["tool_result"]["result"]["content"] == source_payload["skill_md_content"]
+    assert read_authorizations.json() == []
+    assert read_tool_calls.json()[0]["result_summary"]["result"]["file_path"] == "SKILL.md"
+    assert "tool.execution_succeeded" in [item["event_type"] for item in read_events.json()]
+
+    assert parse_run.status_code == 201
+    assert parse_once.status_code == 200
+    assert parse_once.json()["output_payload"]["tool_result"]["result"]["manifest"]["identity"]["key"] == (
+        "builder-source-tools"
+    )
+    assert parse_authorizations.json() == []
+    assert parse_tool_calls.json()[0]["status"] == "succeeded"
+    assert "tool.execution_succeeded" in [item["event_type"] for item in parse_events.json()]
+
+    assert render_run.status_code == 201
+    assert render_once.status_code == 200
+    assert "skill:" in render_once.json()["output_payload"]["tool_result"]["result"]["content"]
+    assert "builder-source-tools" in render_once.json()["output_payload"]["tool_result"]["result"]["content"]
+    assert render_authorizations.json() == []
+    assert render_tool_calls.json()[0]["status"] == "succeeded"
+    assert "tool.execution_succeeded" in [item["event_type"] for item in render_events.json()]
+
+    assert patch_run.status_code == 201
+    assert patch_once.status_code == 200
+    patch_payload = patch_once.json()
+    assert patch_payload["status"] == "succeeded"
+    patch_result = patch_payload["output_payload"]["tool_result"]["result"]
+    assert patch_result["status"] == "patch_proposed"
+    assert patch_result["committed"] is False
+    assert patch_result["requires_human_apply"] is True
+    assert patch_result["file_changes"][0]["path"] == "SKILL.md"
+    assert patch_result["file_changes"][0]["changed"] is True
+    assert "+## Builder Draft" in patch_result["diff"]
+    assert patch_authorizations.json() == []
+    assert patch_tool_calls.json()[0]["result_summary"]["result"]["committed"] is False
+    assert "tool.execution_succeeded" in [item["event_type"] for item in patch_events.json()]
+
+    assert after_source_response.status_code == 200
+    assert after_source_response.json()["head_commit_sha"] == source_payload["head_commit_sha"]
+    assert after_source_response.json()["skill_md_content"] == source_payload["skill_md_content"]
+
+
 def test_agent_runner_records_authorized_tool_execution_failure_event() -> None:
     client, _, _ = create_test_client()
 
