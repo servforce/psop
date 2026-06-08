@@ -835,54 +835,6 @@ class RuntimeService:
             event=event_response,
         )
 
-    def list_trace_events(
-        self,
-        session: Session,
-        run_id: str,
-        *,
-        event_type: str | None = None,
-    ) -> list[RunTraceResponse]:
-        return self.list_run_traces(session, run_id, event_type=event_type)
-
-    def list_terminal_events(
-        self,
-        session: Session,
-        run_id: str,
-        *,
-        from_seq: int | None = None,
-        to_seq: int | None = None,
-    ) -> list[RunEventResponse]:
-        return self.list_run_events(session, run_id, from_seq=from_seq, to_seq=to_seq)
-
-    def get_terminal_event(self, session: Session, run_id: str, event_id: str) -> RunEventResponse:
-        return self.get_run_event(session, run_id, event_id)
-
-    def get_terminal_event_part(
-        self,
-        session: Session,
-        run_id: str,
-        event_id: str,
-        part_id: str,
-    ) -> RunEventPartResponse:
-        return self.get_run_event_part(session, run_id, event_id, part_id)
-
-    def append_terminal_event(
-        self,
-        session: Session,
-        run_id: str,
-        payload: AppendRunEventRequest,
-        *,
-        idempotency_key: str | None = None,
-        process_after_append: bool = True,
-    ) -> RunEventAppendResponse:
-        return self.append_run_event(
-            session,
-            run_id,
-            payload,
-            idempotency_key=idempotency_key,
-            process_after_append=process_after_append,
-        )
-
     def list_binding_requirements(self, session: Session, run_id: str) -> list[BindingRequirementResponse]:
         if not self.repository.get_run(session, run_id):
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})

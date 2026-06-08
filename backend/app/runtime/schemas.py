@@ -301,12 +301,3 @@ class ReplayTraceLookupResponse(BaseModel):
     run: RunResponse
     timeline_item: ReplayTimelineItem
     replay: ReplayDetailResponse
-
-
-TraceEventResponse = RunTraceResponse
-TerminalEventSource = RunEventSource
-AppendTerminalEventRequest = AppendRunEventRequest
-TerminalEventPartInput = RunEventPartInput
-TerminalEventPartResponse = RunEventPartResponse
-TerminalEventResponse = RunEventResponse
-TerminalEventAppendResponse = RunEventAppendResponse
