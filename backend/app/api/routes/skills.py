@@ -279,7 +279,6 @@ async def pskill_activity_websocket(websocket: WebSocket, skill_id: str) -> None
         return
 
 
-@router.post("/{skill_id}/raw-materials", response_model=PSkillMaterialDetailResponse, status_code=201)
 @router.post("/{skill_id}/materials", response_model=PSkillMaterialDetailResponse, status_code=201)
 async def create_material(
     skill_id: str,
@@ -308,7 +307,6 @@ async def create_material(
     )
 
 
-@router.get("/{skill_id}/raw-materials", response_model=list[PSkillMaterialResponse])
 @router.get("/{skill_id}/materials", response_model=list[PSkillMaterialResponse])
 def list_materials(
     skill_id: str,
@@ -318,10 +316,6 @@ def list_materials(
     return service.list_materials(session, skill_id=skill_id)
 
 
-@router.post(
-    "/{skill_id}/raw-materials/generate-skill-draft",
-    response_model=PSkillMaterialGenerationResponse,
-)
 @router.post(
     "/{skill_id}/materials/generate-skill-draft",
     response_model=PSkillMaterialGenerationResponse,
@@ -336,10 +330,6 @@ def generate_skill_draft_from_materials(
 
 
 @router.post(
-    "/{skill_id}/raw-materials/batch-analyze",
-    response_model=BatchAnalyzeMaterialsResponse,
-)
-@router.post(
     "/{skill_id}/materials/batch-analyze",
     response_model=BatchAnalyzeMaterialsResponse,
 )
@@ -352,10 +342,6 @@ def batch_analyze_materials(
     return service.batch_analyze_materials(session, skill_id=skill_id, payload=payload or BatchAnalyzeMaterialsRequest())
 
 
-@router.post(
-    "/{skill_id}/raw-materials/{material_id}/analyze",
-    response_model=PSkillMaterialAnalysisResponse,
-)
 @router.post(
     "/{skill_id}/materials/{material_id}/analyze",
     response_model=PSkillMaterialAnalysisResponse,
@@ -370,10 +356,6 @@ def analyze_material(
 
 
 @router.get(
-    "/{skill_id}/raw-materials/{material_id}/analysis",
-    response_model=PSkillMaterialAnalysisResponse,
-)
-@router.get(
     "/{skill_id}/materials/{material_id}/analysis",
     response_model=PSkillMaterialAnalysisResponse,
 )
@@ -386,7 +368,6 @@ def get_material_analysis(
     return service.get_material_analysis(session, skill_id=skill_id, material_id=material_id)
 
 
-@router.get("/{skill_id}/raw-materials/{material_id}", response_model=PSkillMaterialDetailResponse)
 @router.get("/{skill_id}/materials/{material_id}", response_model=PSkillMaterialDetailResponse)
 def get_material(
     skill_id: str,
@@ -397,7 +378,6 @@ def get_material(
     return service.get_material(session, skill_id=skill_id, material_id=material_id)
 
 
-@router.get("/{skill_id}/raw-materials/{material_id}/content")
 @router.get("/{skill_id}/materials/{material_id}/content")
 def get_material_content(
     skill_id: str,
@@ -415,7 +395,6 @@ def get_material_content(
     )
 
 
-@router.get("/{skill_id}/raw-materials/{material_id}/derived-assets/{asset_id}/content")
 @router.get("/{skill_id}/materials/{material_id}/derived-assets/{asset_id}/content")
 def get_material_derived_asset_content(
     skill_id: str,
@@ -504,7 +483,6 @@ def _parse_single_byte_range(range_header: str, size: int) -> tuple[int, int] | 
     return start, min(end, size - 1)
 
 
-@router.delete("/{skill_id}/raw-materials/{material_id}", response_model=DeletePSkillMaterialResponse)
 @router.delete("/{skill_id}/materials/{material_id}", response_model=DeletePSkillMaterialResponse)
 def delete_material(
     skill_id: str,

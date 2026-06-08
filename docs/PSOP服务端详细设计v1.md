@@ -131,7 +131,7 @@ backend/app/
 - 创建 Skill 时通过 GitLab gateway 创建项目和默认 `README.md`、`SKILL.md`、`skill.yaml`。
 - 保存 Skill metadata、source 和 repository file 时同步 GitLab commit 和 draft `manifest_snapshot`。
 - 发布 Skill 时冻结 GitLab branch head，创建 published `PPSkillVersion`、`PPSkillPublishRecord`、`SkillCompileRequest` 和 `RuntimeJob(job_type=compile)`。
-- 管理 raw materials：上传、对象存储、分析、派生资产、从视频素材生成 Skill draft。
+- 管理 materials：上传、对象存储、分析、派生资产、从视频素材生成 Skill draft。
 
 当前 Skill source 事实源：
 
