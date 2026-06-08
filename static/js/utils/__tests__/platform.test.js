@@ -399,7 +399,7 @@ test("platform methods sync, load, create, validate, and activate skill packages
     promptSkillPackageVersionManifest: jest.fn(() => JSON.stringify({
       name: "pskill-builder",
       description: "Candidate builder package",
-      "allowed-tools": ["psop.pskills.read", "psop.materials.read"]
+      "allowed-tools": ["psop.pskills.read", "psop.materials.read_analysis"]
     })),
     showNotice: jest.fn()
   };
@@ -421,9 +421,9 @@ test("platform methods sync, load, create, validate, and activate skill packages
   const createCall = context.apiRequest.mock.calls.find(([url]) => url === "/skills/pskill-builder/versions");
   const createBody = JSON.parse(createCall[1].body);
   expect(createBody.version_label).toBe("builder-candidate");
-  expect(createBody.manifest_json["allowed-tools"]).toEqual(["psop.pskills.read", "psop.materials.read"]);
+  expect(createBody.manifest_json["allowed-tools"]).toEqual(["psop.pskills.read", "psop.materials.read_analysis"]);
   expect(createBody.resource_index[0].path).toBe("SKILL.md");
-  expect(createBody.allowed_tools).toEqual(["psop.pskills.read", "psop.materials.read"]);
+  expect(createBody.allowed_tools).toEqual(["psop.pskills.read", "psop.materials.read_analysis"]);
   expect(context.skillPackageSyncResult.package_count).toBe(1);
   expect(context.currentSkillPackage.name).toBe("pskill-builder");
   expect(context.currentSkillPackage.versions.find((version) => version.id === "ver-1").validation_diagnostics).toHaveLength(1);

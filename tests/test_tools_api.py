@@ -39,6 +39,7 @@ def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
         "psop.agent_version.activate",
         "psop.skill_version.activate",
     } | BUILDER_ALLOWED_TOOLS <= set(tools)
+    assert "psop.materials.read" not in tools
     assert "psop.run_events.write_low" not in tools
 
     assert tools["psop.pskills.read"]["side_effect_level"] == "read"

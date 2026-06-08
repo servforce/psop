@@ -23,7 +23,6 @@ DEFAULT_TOOL_DESCRIPTIONS: dict[str, str] = {
     "psop.pskills.read": "读取 PSkill 定义、版本和 source 摘要。",
     "psop.materials.list": "列出 PSkill materials。",
     "psop.materials.read_analysis": "读取 PSkill material 分析结果。",
-    "psop.materials.read": "读取 PSkill materials 和分析结果。",
     "psop.repository.read_file": "读取 PSkill source 仓库文件。",
     "psop.repository.propose_patch": "生成可 review 的 PSkill draft patch。",
     "psop.pskill_manifest.parse": "解析 pskill.yaml manifest。",

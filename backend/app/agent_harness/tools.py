@@ -11,7 +11,6 @@ DEFAULT_TOOL_SIDE_EFFECTS: dict[str, str] = {
     "psop.pskills.read": "read",
     "psop.materials.list": "read",
     "psop.materials.read_analysis": "read",
-    "psop.materials.read": "read",
     "psop.repository.read_file": "read",
     "psop.repository.propose_patch": "low_write",
     "psop.pskill_manifest.parse": "compute",
