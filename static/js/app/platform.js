@@ -1305,9 +1305,10 @@
       }
       if (["run_trace", "trace"].includes(kind)) {
         const runId = String(ref.run_id || "").trim();
+        const traceId = String(ref.run_trace_id || ref.trace_id || id).trim();
         const seqNo = String(ref.seq_no || ref.trace_seq_no || "").trim();
         const href = runId
-          ? buildReplayPath(runId, { seq_no: seqNo })
+          ? buildReplayPath(runId, traceId ? { trace_id: traceId } : { seq_no: seqNo })
           : this.platformMemoryPath();
         return { key: `run-trace-${id || `${runId}-${seqNo}`}`, label: `RunTrace ${id || seqNo || runId}`, href };
       }

@@ -107,7 +107,7 @@ function loadPlatformHarness(locationSearch = "") {
         buildRunLivePath: (runId) => `/admin/runs/${runId}/live`,
         buildReplayPath: (runId, focus = {}) => {
           const params = new URLSearchParams();
-          for (const key of ["event_id", "seq_no", "snapshot_seq"]) {
+          for (const key of ["event_id", "trace_id", "seq_no", "snapshot_seq"]) {
             if (focus[key]) {
               params.set(key, focus[key]);
             }
@@ -838,7 +838,7 @@ test("platform methods search and save memory entries", async () => {
     {
       key: "run-trace-trace-1",
       label: "RunTrace trace-1",
-      href: "/admin/runs/runtime-run-1/live/replay?seq_no=7"
+      href: "/admin/runs/runtime-run-1/live/replay?trace_id=trace-1"
     },
     {
       key: "run-event-run-event-1",
