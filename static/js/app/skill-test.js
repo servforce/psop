@@ -2113,7 +2113,7 @@
         this.skillTestRuns = window.PSOPRuntimeEvents.mergeById(this.skillTestRuns || [], [review.scenario_run]);
         if (review.replay?.run) {
           this.liveRun = review.replay.run;
-          this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_events || review.replay.terminal_events || []);
+          this.liveRunEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_events || review.replay.terminal_events || []);
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_traces || review.replay.trace_events || []);
           this.liveRunBindings = window.PSOPRuntimeEvents.mergeById([], review.replay.bindings || []);
         }
@@ -3094,7 +3094,7 @@
             }
           ];
         }
-        const payload = this.formatTerminalPayload(event.payload_inline);
+        const payload = this.formatRunEventPayloadValue(event.payload_inline);
         const sections = [];
         if (event.asset_id) {
           sections.push({
@@ -3131,17 +3131,17 @@
       },
 
 
-      skillTestReviewTerminalEventParts(event) {
+      skillTestReviewRunEventParts(event) {
         return Array.isArray(event?.parts) ? event.parts : [];
       },
 
 
-      skillTestReviewTerminalEventHasParts(event) {
-        return this.skillTestReviewTerminalEventParts(event).length > 0;
+      skillTestReviewRunEventHasParts(event) {
+        return this.skillTestReviewRunEventParts(event).length > 0;
       },
 
 
-      skillTestReviewTerminalPartMediaUrl(event, part) {
+      skillTestReviewRunEventPartMediaUrl(event, part) {
         if (!event?.run_id || !event?.id || !part?.part_id || !part?.artifact_object_id) {
           return "";
         }
@@ -3176,7 +3176,7 @@
         if (runEvent) {
           pairs.push(
             ["RunEvent 序号", runEvent.seq_no === undefined || runEvent.seq_no === null ? "" : `#${runEvent.seq_no}`],
-            ["方向", this.terminalDirectionLabel(runEvent.direction)],
+            ["方向", this.runEventDirectionLabel(runEvent.direction)],
             ["发生时间", this.formatDateTime(runEvent.occurred_at)],
             ["RunEvent 类型", runEvent.event_kind],
             ["RunEvent MIME 类型", runEvent.mime_type],
@@ -3459,7 +3459,7 @@
       },
 
 
-      filteredSkillTestReviewTerminalEvents() {
+      filteredSkillTestReviewRunEvents() {
         const replay = this.skillTestReview?.replay || {};
         const events = replay.run_events || replay.terminal_events || [];
         if (this.skillTestReviewPlayheadMsValue() >= this.skillTestReviewDurationMs()) {

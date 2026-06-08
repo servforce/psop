@@ -25,11 +25,11 @@ test("run live page is read-only and uses interaction data tabs", () => {
   expect(html).not.toContain("event.event_kind");
   expect(html).not.toContain("event.mime_type");
   expect(html).not.toContain("event.artifact_object_id");
-  expect(html).not.toContain("terminalEventActorIcon");
-  expect(html).not.toContain("terminalEventAvatarClass");
-  expect(html).toContain("liveRunInteractionTab === 'terminal'");
+  expect(html).not.toContain("runEventActorIcon");
+  expect(html).not.toContain("runEventAvatarClass");
+  expect(html).toContain("liveRunInteractionTab === 'run-events'");
   expect(html).toContain("liveRunInteractionTab === 'replay'");
-  expect(html).toContain("<span>terminal</span>");
+  expect(html).toContain("<span>RunEvents</span>");
   expect(html).toContain("<span>replay</span>");
   expect(html).not.toContain("liveRunInteractionTab === 'trace'");
   expect(html).not.toContain("Trace Events");
@@ -42,8 +42,8 @@ test("run live page is read-only and uses interaction data tabs", () => {
   expect(html).not.toContain("terminalInputAttachments()");
   expect(html).not.toContain("handleTerminalInputFile($event)");
   expect(html).not.toContain("sendTerminalInput()");
-  expect(html).toContain("terminalEventParts(event)");
-  expect(html).toContain("terminalEventPartMediaUrl(event, part)");
+  expect(html).toContain("runEventParts(event)");
+  expect(html).toContain("runEventPartMediaUrl(event, part)");
 });
 
 test("skill detail page does not expose the debug tab", () => {

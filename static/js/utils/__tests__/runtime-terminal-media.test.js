@@ -43,7 +43,7 @@ function createRuntimeHarness() {
     ...loadRuntimeMethods(),
     apiBaseUrl: "/api/v1",
     liveRun: { id: "run-1" },
-    liveRunTerminalEvents: [],
+    liveRunEvents: [],
     selectedLiveRunProcessEventKey: "",
     formatBytes(value) {
       return `${value} B`;
@@ -51,13 +51,13 @@ function createRuntimeHarness() {
     formatDateTime(value) {
       return value || "N/A";
     },
-    terminalDirectionLabel(value) {
+    runEventDirectionLabel(value) {
       return value === "output" ? "输出" : "输入";
     }
   };
 }
 
-test("terminal image events expose media URL and description", () => {
+test("run event image events expose media URL and description", () => {
   const app = createRuntimeHarness();
   const event = {
     id: "event-1",
@@ -72,13 +72,13 @@ test("terminal image events expose media URL and description", () => {
     }
   };
 
-  expect(app.terminalEventIsImage(event)).toBe(true);
-  expect(app.terminalEventMediaUrl(event)).toBe("/api/v1/runs/run-1/events/event-1/content");
-  expect(app.terminalEventDisplayText(event)).toBe("已拍摄接线端子。");
-  expect(app.terminalEventShouldShowPlainText(event)).toBe(false);
+  expect(app.runEventIsImage(event)).toBe(true);
+  expect(app.runEventMediaUrl(event)).toBe("/api/v1/runs/run-1/events/event-1/content");
+  expect(app.runEventDisplayText(event)).toBe("已拍摄接线端子。");
+  expect(app.runEventShouldShowPlainText(event)).toBe(false);
 });
 
-test("terminal multipart events expose server-generated part media URLs", () => {
+test("RunEvent multipart events expose server-generated part media URLs", () => {
   const app = createRuntimeHarness();
   const event = {
     id: "event-4",
@@ -105,18 +105,18 @@ test("terminal multipart events expose server-generated part media URLs", () => 
     ]
   };
 
-  expect(app.terminalEventHasParts(event)).toBe(true);
-  expect(app.terminalEventParts(event).map((part) => part.part_id)).toEqual(["text_1", "image_1"]);
-  expect(app.terminalEventPartIsText(event.parts[0])).toBe(true);
-  expect(app.terminalEventPartIsImage(event.parts[1])).toBe(true);
-  expect(app.terminalEventPartDisplayText(event.parts[1])).toBe("");
-  expect(app.terminalEventPartFileName(event.parts[1])).toBe("panel.png");
-  expect(app.terminalEventPartMediaUrl(event, event.parts[1])).toBe(
+  expect(app.runEventHasParts(event)).toBe(true);
+  expect(app.runEventParts(event).map((part) => part.part_id)).toEqual(["text_1", "image_1"]);
+  expect(app.runEventPartIsText(event.parts[0])).toBe(true);
+  expect(app.runEventPartIsImage(event.parts[1])).toBe(true);
+  expect(app.runEventPartDisplayText(event.parts[1])).toBe("");
+  expect(app.runEventPartFileName(event.parts[1])).toBe("panel.png");
+  expect(app.runEventPartMediaUrl(event, event.parts[1])).toBe(
     "/api/v1/runs/run-1/events/event-4/parts/image_1/content"
   );
 });
 
-test("terminal JSON events render as structured payload", () => {
+test("RunEvent JSON events render as structured payload", () => {
   const app = createRuntimeHarness();
   const event = {
     id: "event-2",
@@ -130,24 +130,24 @@ test("terminal JSON events render as structured payload", () => {
     }
   };
 
-  expect(app.terminalEventShouldShowJson(event)).toBe(true);
-  expect(app.terminalEventJsonText(event)).toContain("\"lat\": 31.2");
-  expect(app.terminalEventActorLabel(event)).toBe("Runtime");
+  expect(app.runEventShouldShowJson(event)).toBe(true);
+  expect(app.runEventJsonText(event)).toContain("\"lat\": 31.2");
+  expect(app.runEventActorLabel(event)).toBe("Runtime");
 });
 
-test("terminal transcript message widths separate metadata from bubble sizing", () => {
+test("RunEvent transcript message widths separate metadata from bubble sizing", () => {
   const app = createRuntimeHarness();
   const runtimeEvent = { direction: "output" };
   const userEvent = { direction: "input" };
 
-  expect(app.terminalEventMessageShellClass(runtimeEvent)).toBe("w-fit");
-  expect(app.terminalEventMessageShellStyle(runtimeEvent)).toBe("max-width: 70%;");
-  expect(app.terminalEventContentClass(runtimeEvent)).toBe("items-start");
-  expect(app.terminalEventBubbleClass(runtimeEvent)).toContain("w-fit");
-  expect(app.terminalEventMessageShellClass(userEvent)).toBe("w-fit");
-  expect(app.terminalEventMessageShellStyle(userEvent)).toBe("max-width: 70%;");
-  expect(app.terminalEventContentClass(userEvent)).toBe("items-end");
-  expect(app.terminalEventBubbleClass(userEvent)).toContain("w-fit");
+  expect(app.runEventMessageShellClass(runtimeEvent)).toBe("w-fit");
+  expect(app.runEventMessageShellStyle(runtimeEvent)).toBe("max-width: 70%;");
+  expect(app.runEventContentClass(runtimeEvent)).toBe("items-start");
+  expect(app.runEventBubbleClass(runtimeEvent)).toContain("w-fit");
+  expect(app.runEventMessageShellClass(userEvent)).toBe("w-fit");
+  expect(app.runEventMessageShellStyle(userEvent)).toBe("max-width: 70%;");
+  expect(app.runEventContentClass(userEvent)).toBe("items-end");
+  expect(app.runEventBubbleClass(userEvent)).toContain("w-fit");
 });
 
 test("terminal PDF events render inline instead of as generic downloads", () => {
@@ -165,17 +165,17 @@ test("terminal PDF events render inline instead of as generic downloads", () => 
     }
   };
 
-  expect(app.terminalEventIsPdf(event)).toBe(true);
-  expect(app.terminalEventIsGenericFile(event)).toBe(false);
-  expect(app.terminalEventFileName(event)).toBe("manual.pdf");
-  expect(app.terminalEventFileMeta(event)).toBe("2048 B");
-  expect(app.terminalEventFileIcon(event)).toBe("picture_as_pdf");
+  expect(app.runEventIsPdf(event)).toBe(true);
+  expect(app.runEventIsGenericFile(event)).toBe(false);
+  expect(app.runEventFileName(event)).toBe("manual.pdf");
+  expect(app.runEventFileMeta(event)).toBe("2048 B");
+  expect(app.runEventFileIcon(event)).toBe("picture_as_pdf");
 });
 
 test("live run process lanes infer terminal input and output content kinds", () => {
   const app = createRuntimeHarness();
   app.liveRun = { id: "run-1", started_at: "2026-05-13T00:00:00Z" };
-  app.liveRunTerminalEvents = [
+  app.liveRunEvents = [
     {
       id: "input-1",
       seq_no: 1,
@@ -234,22 +234,22 @@ test("live run process lanes infer terminal input and output content kinds", () 
     "output.image",
     "output.data"
   ]);
-  expect(app.liveRunProcessEventKind(app.liveRunTerminalEvents[2])).toBe("mixed");
-  expect(app.liveRunProcessEventSummary(app.liveRunTerminalEvents[2])).toBe("补充照片 + panel.png");
-  expect(app.liveRunProcessEventKind(app.liveRunTerminalEvents[3])).toBe("image");
-  expect(app.liveRunProcessEventAtMs(app.liveRunTerminalEvents[0])).toBe(0);
-  expect(app.liveRunProcessEventAtMs(app.liveRunTerminalEvents[1])).toBe(25000);
-  expect(app.liveRunProcessTimelineEventLeftStyle(app.liveRunTerminalEvents[4])).toBe("left: clamp(4rem, 100%, calc(100% - 4rem))");
+  expect(app.liveRunProcessEventKind(app.liveRunEvents[2])).toBe("mixed");
+  expect(app.liveRunProcessEventSummary(app.liveRunEvents[2])).toBe("补充照片 + panel.png");
+  expect(app.liveRunProcessEventKind(app.liveRunEvents[3])).toBe("image");
+  expect(app.liveRunProcessEventAtMs(app.liveRunEvents[0])).toBe(0);
+  expect(app.liveRunProcessEventAtMs(app.liveRunEvents[1])).toBe(25000);
+  expect(app.liveRunProcessTimelineEventLeftStyle(app.liveRunEvents[4])).toBe("left: clamp(4rem, 100%, calc(100% - 4rem))");
   expect(app.liveRunProcessLaneIcon({ kind: "text" })).toBe("text_fields");
   expect(app.liveRunProcessLaneTone("input.text")).toContain("border-orange-500/30");
   expect(app.liveRunProcessLaneTone("input.image")).toContain("border-emerald-500/25");
   expect(app.liveRunProcessLaneTone("output.text")).toContain("border-cyan-500/30");
-  expect(app.liveRunProcessEventFrameTone(app.liveRunTerminalEvents[1])).toContain("border-cyan-500/45");
+  expect(app.liveRunProcessEventFrameTone(app.liveRunEvents[1])).toContain("border-cyan-500/45");
 });
 
 test("live run process selection exposes global previous and next nodes", () => {
   const app = createRuntimeHarness();
-  app.liveRunTerminalEvents = [
+  app.liveRunEvents = [
     {
       id: "input-1",
       seq_no: 1,
@@ -279,18 +279,18 @@ test("live run process selection exposes global previous and next nodes", () => 
     }
   ];
 
-  app.openLiveRunProcessEventDrawer(app.liveRunTerminalEvents[1]);
+  app.openLiveRunProcessEventDrawer(app.liveRunEvents[1]);
 
   expect(app.selectedLiveRunProcessEvent().id).toBe("output-1");
   expect(app.liveRunProcessNeighborItems().map((item) => item.event?.id || null)).toEqual(["input-1", "output-1", "input-2"]);
   expect(app.liveRunProcessNeighborItems().map((item) => item.label)).toEqual(["上一个", "当前", "下一个"]);
-  expect(app.liveRunProcessEventDetailText(app.liveRunTerminalEvents[1])).toBe("Runtime 输出");
+  expect(app.liveRunProcessEventDetailText(app.liveRunEvents[1])).toBe("Runtime 输出");
 
   app.closeLiveRunProcessEventDrawer();
   expect(app.selectedLiveRunProcessEventKey).toBe("");
-  app.selectLiveRunProcessEvent(app.liveRunTerminalEvents[1]);
+  app.selectLiveRunProcessEvent(app.liveRunEvents[1]);
 
-  app.liveRunTerminalEvents = [app.liveRunTerminalEvents[0]];
+  app.liveRunEvents = [app.liveRunEvents[0]];
   app.ensureLiveRunProcessSelection();
   expect(app.selectedLiveRunProcessEventKey).toBe("");
 });

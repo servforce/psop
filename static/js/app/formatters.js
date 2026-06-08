@@ -217,19 +217,19 @@
       },
 
 
-      terminalDirectionLabel(value) {
+      runEventDirectionLabel(value) {
         return value === "output" ? "输出" : "输入";
       },
 
 
-      terminalDirectionTone(value) {
+      runEventDirectionTone(value) {
         return value === "output"
           ? "border-sky-500/25 bg-sky-500/10 text-sky-200"
           : "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
       },
 
 
-      formatTerminalPayload(value) {
+      formatRunEventPayloadValue(value) {
         if (typeof value === "string") {
           return value;
         }
@@ -240,7 +240,7 @@
       },
 
 
-      formatTerminalEventPayload(event) {
+      formatRunEventPayload(event) {
         if (!event) {
           return "";
         }
@@ -251,7 +251,7 @@
         if (event.mime_type && event.mime_type !== "text/plain") {
           lines.push(`mime_type: ${event.mime_type}`);
         }
-        const payload = this.formatTerminalPayload(event.payload_inline);
+        const payload = this.formatRunEventPayloadValue(event.payload_inline);
         if (payload) {
           lines.push(payload);
         }

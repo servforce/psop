@@ -337,7 +337,7 @@ test("scenario review provides scrub and fork actions", () => {
   expect(html).toContain('data-tooltip="播放/暂停"');
   expect(html).toContain("restartSkillTestReviewPlayback()");
   expect(html).toContain("updateSkillTestReviewPlayhead($event.target.value)");
-  expect(html).toContain("filteredSkillTestReviewTerminalEvents()");
+  expect(html).toContain("filteredSkillTestReviewRunEvents()");
   expect(html).toContain("max-w-full overflow-hidden whitespace-pre-wrap break-all");
   expect(html).toContain("divide-y divide-slate-800");
   expect(html).not.toContain("min-w-0 rounded-md border border-slate-800 bg-slate-900/35 p-3");
@@ -392,7 +392,7 @@ test("run live page exposes input and output process swimlanes", () => {
   expect(html).toContain("输入输出");
   expect(html).toContain("liveRunInteractionTab === 'io'");
   expect(html).toContain("data-live-run-process-panel");
-  expect(html).toContain("liveRunProcessTerminalEvents().length");
+  expect(html).toContain("liveRunProcessRunEvents().length");
   expect(html).not.toContain("输入输出过程");
   expect(html).not.toContain("liveRunProcessLanes().length} lanes");
   expect(html).toContain("liveRunProcessLanes()");
@@ -421,12 +421,12 @@ test("run live page exposes input and output process swimlanes", () => {
   expect(html).toContain("输入输出事件详情");
   expect(html).toContain("liveRunProcessEventMetadata(item.event)");
   expect(html).toContain("liveRunProcessEventDetailText(item.event)");
-  expect(html).toContain("terminalEventPartMediaUrl(item.event, part)");
-  expect(html).toContain("terminalEventMediaUrl(item.event)");
+  expect(html).toContain("runEventPartMediaUrl(item.event, part)");
+  expect(html).toContain("runEventMediaUrl(item.event)");
   expect(appJs).toContain("selectedLiveRunProcessEventKey");
   expect(shellJs).toContain("selectedLiveRunProcessEventKey");
-  expect(appJs).toContain('new Set(["terminal", "events", "io", "replay", "authorizations"])');
-  expect(appJs).toContain("liveRunProcessTerminalEvents()");
+  expect(appJs).toContain('new Set(["run-events", "events", "io", "replay", "authorizations"])');
+  expect(appJs).toContain("liveRunProcessRunEvents()");
   expect(appJs).toContain("liveRunProcessEventKind(event)");
   expect(appJs).toContain("liveRunProcessLanes()");
   expect(appJs).toContain("liveRunProcessNeighborItems()");

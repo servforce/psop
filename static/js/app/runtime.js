@@ -126,7 +126,7 @@
             this.selectedLiveRunSnapshotBaseSeq = "";
             this.selectedLiveRunSnapshotTargetSeq = "";
           }
-          const [run, bindings, terminalEvents, traceEvents, replayDetail, toolAuthorizations] = await Promise.all([
+          const [run, bindings, runEvents, traceEvents, replayDetail, toolAuthorizations] = await Promise.all([
             this.apiRequest(`/runs/${runId}`),
             this.apiRequest(`/runs/${runId}/bindings`),
             this.apiRequest(`/runs/${runId}/events`),
@@ -138,11 +138,11 @@
           this.liveRunLoadedRunId = runId;
           this.liveRunBindings = bindings;
           this.liveRunTerminalSession = this.liveRunTerminalSessionFromRun(run);
-          this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq([], terminalEvents);
+          this.liveRunEvents = window.PSOPRuntimeEvents.mergeBySeq([], runEvents);
           this.liveRunToolAuthorizations = Array.isArray(toolAuthorizations) ? toolAuthorizations : [];
           this.updateLiveRunLatestTerminalSeq();
           this.ensureLiveRunProcessSelection();
-          this.scrollTerminalTranscriptToBottom();
+          this.scrollRunEventTranscriptToBottom();
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], traceEvents);
           this.replayDetail = replayDetail;
           this.ensureLiveRunSnapshotCompareSelection();
@@ -157,14 +157,15 @@
 
 
       syncLiveRunInteractionTabFromRoute(isSameRun = false) {
-        const allowedTabs = new Set(["terminal", "events", "io", "replay", "authorizations"]);
+        const allowedTabs = new Set(["run-events", "events", "io", "replay", "authorizations"]);
         const requestedView = String(this.route?.params?.view || "");
-        if (allowedTabs.has(requestedView)) {
-          this.liveRunInteractionTab = requestedView;
+        const normalizedView = requestedView === "terminal" ? "run-events" : requestedView;
+        if (allowedTabs.has(normalizedView)) {
+          this.liveRunInteractionTab = normalizedView;
           return;
         }
         if (!isSameRun || !allowedTabs.has(this.liveRunInteractionTab)) {
-          this.liveRunInteractionTab = "terminal";
+          this.liveRunInteractionTab = "run-events";
         }
       },
 
@@ -179,14 +180,14 @@
         this.busy.terminalInput = true;
         const optimisticEvent = this.buildOptimisticTerminalInputEvent(runId, textPayload, attachments);
         let acceptedByServer = false;
-        this.mergeTerminalEvents([optimisticEvent]);
+        this.mergeRunEvents([optimisticEvent]);
         this.terminalInputForm.payload = "";
         this.clearTerminalInputAttachments();
         try {
           if (attachments.length) {
             const result = await this.sendTerminalRuntimeMultipartEvent(runId, textPayload, attachments, optimisticEvent.external_event_id);
             acceptedByServer = true;
-            this.mergeTerminalEvents([result.event]);
+            this.mergeRunEvents([result.event]);
           } else {
             const response = await this.apiRequest(`/runs/${runId}/events`, {
               method: "POST",
@@ -200,7 +201,7 @@
               })
             });
             acceptedByServer = true;
-            this.mergeTerminalEvents([response.event]);
+            this.mergeRunEvents([response.event]);
           }
           await this.loadRunLive(runId);
         } catch (error) {
@@ -208,14 +209,14 @@
             acceptedByServer = await this.reconcileTerminalInputAcceptance(runId, optimisticEvent.external_event_id);
           }
           if (!acceptedByServer) {
-            this.removeOptimisticTerminalEvent(optimisticEvent.id);
+            this.removeOptimisticRunEvent(optimisticEvent.id);
             this.terminalInputForm.payload = textPayload;
             this.terminalInputForm.attachments = attachments;
           } else {
             try {
               await this.loadRunLive(runId);
             } catch {
-              // The accepted terminal event remains the source of truth; a later refresh can recover run state.
+              // The accepted RunEvent remains the source of truth; a later refresh can recover run state.
             }
           }
           if (!acceptedByServer) {
@@ -402,7 +403,7 @@
           this.applyLiveRunUpdate(event.payload);
         }
         if (["run.event.appended", "terminal.event.appended"].includes(event.event_type) && event.payload) {
-          this.mergeTerminalEvents([event.payload]);
+          this.mergeRunEvents([event.payload]);
           this.mergeLiveRunReplayRunEvents([event.payload]);
           if (this.isToolAuthorizationRunEvent(event.payload)) {
             this.refreshLiveRunToolAuthorizations();
@@ -434,7 +435,7 @@
       },
 
 
-      mergeTerminalEvents(events) {
+      mergeRunEvents(events) {
         const incoming = events || [];
         const realIncomingSeqs = new Set(
           incoming
@@ -442,12 +443,12 @@
             .map((event) => Number(event.seq_no))
         );
         const baseEvents = realIncomingSeqs.size
-          ? this.liveRunTerminalEvents.filter((event) => !realIncomingSeqs.has(Number(event.seq_no)))
-          : this.liveRunTerminalEvents;
-        this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq(baseEvents, incoming);
+          ? this.liveRunEvents.filter((event) => !realIncomingSeqs.has(Number(event.seq_no)))
+          : this.liveRunEvents;
+        this.liveRunEvents = window.PSOPRuntimeEvents.mergeBySeq(baseEvents, incoming);
         this.updateLiveRunLatestTerminalSeq();
         this.ensureLiveRunProcessSelection();
-        this.scrollTerminalTranscriptToBottom();
+        this.scrollRunEventTranscriptToBottom();
       },
 
       isToolAuthorizationRunEvent(event) {
@@ -520,7 +521,7 @@
         if (!this.liveRun) {
           return;
         }
-        const eventSeqs = this.liveRunTerminalEvents.map((event) => Number(event.seq_no) || 0);
+        const eventSeqs = this.liveRunEvents.map((event) => Number(event.seq_no) || 0);
         const latestSeq = eventSeqs.length
           ? Math.max(...eventSeqs)
           : Number(this.liveRun.latest_run_event_seq || this.liveRun.latest_terminal_seq || 0);
@@ -533,7 +534,7 @@
         return (
           Math.max(
             Number(this.liveRun?.latest_run_event_seq || this.liveRun?.latest_terminal_seq || 0),
-            ...this.liveRunTerminalEvents.map((event) => Number(event.seq_no) || 0)
+            ...this.liveRunEvents.map((event) => Number(event.seq_no) || 0)
           ) + 1
         );
       },
@@ -652,8 +653,8 @@
       },
 
 
-      removeOptimisticTerminalEvent(eventId) {
-        this.liveRunTerminalEvents = this.liveRunTerminalEvents.filter((event) => event.id !== eventId);
+      removeOptimisticRunEvent(eventId) {
+        this.liveRunEvents = this.liveRunEvents.filter((event) => event.id !== eventId);
         this.updateLiveRunLatestTerminalSeq();
       },
 
@@ -668,7 +669,7 @@
           if (!acceptedEvent) {
             return false;
           }
-          this.mergeTerminalEvents([acceptedEvent]);
+          this.mergeRunEvents([acceptedEvent]);
           return true;
         } catch {
           return false;
@@ -762,54 +763,54 @@
       },
 
 
-      terminalEventParts(event) {
+      runEventParts(event) {
         return Array.isArray(event?.parts) ? event.parts : [];
       },
 
 
-      terminalEventHasParts(event) {
-        return this.terminalEventParts(event).length > 0;
+      runEventHasParts(event) {
+        return this.runEventParts(event).length > 0;
       },
 
 
-      terminalEventPartMimeType(part) {
+      runEventPartMimeType(part) {
         return String(part?.mime_type || "").toLowerCase();
       },
 
 
-      terminalEventPartIsText(part) {
-        return String(part?.kind || "").toLowerCase() === "text" || this.terminalEventPartMimeType(part).startsWith("text/");
+      runEventPartIsText(part) {
+        return String(part?.kind || "").toLowerCase() === "text" || this.runEventPartMimeType(part).startsWith("text/");
       },
 
 
-      terminalEventPartIsImage(part) {
-        return String(part?.kind || "").toLowerCase() === "image" || this.terminalEventPartMimeType(part).startsWith("image/");
+      runEventPartIsImage(part) {
+        return String(part?.kind || "").toLowerCase() === "image" || this.runEventPartMimeType(part).startsWith("image/");
       },
 
 
-      terminalEventPartIsAudio(part) {
-        return String(part?.kind || "").toLowerCase() === "audio" || this.terminalEventPartMimeType(part).startsWith("audio/");
+      runEventPartIsAudio(part) {
+        return String(part?.kind || "").toLowerCase() === "audio" || this.runEventPartMimeType(part).startsWith("audio/");
       },
 
 
-      terminalEventPartIsVideo(part) {
-        return String(part?.kind || "").toLowerCase() === "video" || this.terminalEventPartMimeType(part).startsWith("video/");
+      runEventPartIsVideo(part) {
+        return String(part?.kind || "").toLowerCase() === "video" || this.runEventPartMimeType(part).startsWith("video/");
       },
 
 
-      terminalEventPartDisplayText(part) {
+      runEventPartDisplayText(part) {
         return String(part?.text || "").trim();
       },
 
 
-      terminalEventPartFileName(part) {
+      runEventPartFileName(part) {
         const metadata = part?.metadata && typeof part.metadata === "object" ? part.metadata : {};
-        const value = metadata.filename || metadata.name || part?.part_id || "terminal-attachment";
-        return String(value).split("/").filter(Boolean).pop() || "terminal-attachment";
+        const value = metadata.filename || metadata.name || part?.part_id || "run-event-attachment";
+        return String(value).split("/").filter(Boolean).pop() || "run-event-attachment";
       },
 
 
-      terminalEventPartMediaUrl(event, part) {
+      runEventPartMediaUrl(event, part) {
         if (part?._local_url) {
           return part._local_url;
         }
@@ -828,19 +829,19 @@
       },
 
 
-      terminalEventMimeType(event) {
+      runEventMimeType(event) {
         return String(event?.mime_type || "").toLowerCase();
       },
 
 
-      terminalEventFileExtension(event) {
-        const fileName = this.terminalEventFileName(event).toLowerCase();
+      runEventFileExtension(event) {
+        const fileName = this.runEventFileName(event).toLowerCase();
         const match = fileName.match(/\.([a-z0-9]+)$/);
         return match ? match[1] : "";
       },
 
 
-      terminalEventInferredMimeType(event) {
+      runEventInferredMimeType(event) {
         const eventKind = String(event?.event_kind || "").toLowerCase();
         if (eventKind.includes(".image.")) {
           return "image/*";
@@ -851,7 +852,7 @@
         if (eventKind.includes(".video.")) {
           return "video/*";
         }
-        const extension = this.terminalEventFileExtension(event);
+        const extension = this.runEventFileExtension(event);
         const mimeTypes = {
           apng: "image/apng",
           avif: "image/avif",
@@ -880,23 +881,23 @@
       },
 
 
-      terminalEventPresentationMimeType(event) {
-        const mimeType = this.terminalEventMimeType(event);
+      runEventPresentationMimeType(event) {
+        const mimeType = this.runEventMimeType(event);
         if (mimeType && mimeType !== "application/octet-stream") {
           return mimeType;
         }
-        return this.terminalEventInferredMimeType(event) || mimeType;
+        return this.runEventInferredMimeType(event) || mimeType;
       },
 
 
-      terminalEventPayloadObject(event) {
+      runEventPayloadObject(event) {
         const payload = event?.payload_inline;
         return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
       },
 
 
-      terminalEventPayloadTextValue(event, keys) {
-        const payload = this.terminalEventPayloadObject(event);
+      runEventPayloadTextValue(event, keys) {
+        const payload = this.runEventPayloadObject(event);
         if (!payload) {
           return "";
         }
@@ -908,7 +909,7 @@
       },
 
 
-      terminalEventDisplayText(event) {
+      runEventDisplayText(event) {
         const payload = event?.payload_inline;
         if (typeof payload === "string") {
           return payload;
@@ -916,7 +917,7 @@
         if (payload === null || payload === undefined) {
           return "";
         }
-        return this.terminalEventPayloadTextValue(event, [
+        return this.runEventPayloadTextValue(event, [
           "description",
           "message",
           "text",
@@ -929,7 +930,7 @@
       },
 
 
-      terminalEventJsonText(event) {
+      runEventJsonText(event) {
         const payload = event?.payload_inline;
         if (payload === null || payload === undefined) {
           return "";
@@ -941,8 +942,8 @@
       },
 
 
-      terminalEventSourceUrl(event) {
-        const payload = this.terminalEventPayloadObject(event);
+      runEventSourceUrl(event) {
+        const payload = this.runEventPayloadObject(event);
         if (!payload) {
           return "";
         }
@@ -953,8 +954,8 @@
       },
 
 
-      terminalEventMediaUrl(event) {
-        const inlineUrl = this.terminalEventSourceUrl(event);
+      runEventMediaUrl(event) {
+        const inlineUrl = this.runEventSourceUrl(event);
         if (inlineUrl) {
           return inlineUrl;
         }
@@ -969,108 +970,108 @@
       },
 
 
-      terminalEventIsImage(event) {
-        return this.terminalEventPresentationMimeType(event).startsWith("image/");
+      runEventIsImage(event) {
+        return this.runEventPresentationMimeType(event).startsWith("image/");
       },
 
 
-      terminalEventIsAudio(event) {
-        return this.terminalEventPresentationMimeType(event).startsWith("audio/");
+      runEventIsAudio(event) {
+        return this.runEventPresentationMimeType(event).startsWith("audio/");
       },
 
 
-      terminalEventIsVideo(event) {
-        return this.terminalEventPresentationMimeType(event).startsWith("video/");
+      runEventIsVideo(event) {
+        return this.runEventPresentationMimeType(event).startsWith("video/");
       },
 
 
-      terminalEventIsJson(event) {
-        const mimeType = this.terminalEventPresentationMimeType(event);
+      runEventIsJson(event) {
+        const mimeType = this.runEventPresentationMimeType(event);
         return mimeType === "application/json" || mimeType.endsWith("+json");
       },
 
 
-      terminalEventIsPdf(event) {
-        return this.terminalEventPresentationMimeType(event) === "application/pdf";
+      runEventIsPdf(event) {
+        return this.runEventPresentationMimeType(event) === "application/pdf";
       },
 
 
-      terminalEventIsGenericFile(event) {
-        const mimeType = this.terminalEventPresentationMimeType(event);
+      runEventIsGenericFile(event) {
+        const mimeType = this.runEventPresentationMimeType(event);
         const eventKind = String(event?.event_kind || "").toLowerCase();
         return Boolean(
-          this.terminalEventMediaUrl(event) &&
-            !this.terminalEventIsImage(event) &&
-            !this.terminalEventIsAudio(event) &&
-            !this.terminalEventIsVideo(event) &&
-            !this.terminalEventIsPdf(event) &&
-            !this.terminalEventIsJson(event) &&
+          this.runEventMediaUrl(event) &&
+            !this.runEventIsImage(event) &&
+            !this.runEventIsAudio(event) &&
+            !this.runEventIsVideo(event) &&
+            !this.runEventIsPdf(event) &&
+            !this.runEventIsJson(event) &&
             (event?.artifact_object_id || eventKind.includes(".file.") || ["application/pdf", "application/octet-stream"].includes(mimeType))
         );
       },
 
 
-      terminalEventShouldShowJson(event) {
+      runEventShouldShowJson(event) {
         const payload = event?.payload_inline;
         if (!payload || typeof payload !== "object") {
           return false;
         }
-        if (this.terminalEventIsJson(event)) {
+        if (this.runEventIsJson(event)) {
           return true;
         }
         if (
-          this.terminalEventIsImage(event) ||
-          this.terminalEventIsAudio(event) ||
-          this.terminalEventIsVideo(event) ||
-          this.terminalEventIsPdf(event) ||
-          this.terminalEventIsGenericFile(event)
+          this.runEventIsImage(event) ||
+          this.runEventIsAudio(event) ||
+          this.runEventIsVideo(event) ||
+          this.runEventIsPdf(event) ||
+          this.runEventIsGenericFile(event)
         ) {
           return false;
         }
-        return !this.terminalEventDisplayText(event);
+        return !this.runEventDisplayText(event);
       },
 
 
-      terminalEventShouldShowPlainText(event) {
+      runEventShouldShowPlainText(event) {
         return Boolean(
-          this.terminalEventDisplayText(event) &&
-            !this.terminalEventShouldShowJson(event) &&
-            !this.terminalEventIsImage(event) &&
-            !this.terminalEventIsAudio(event) &&
-            !this.terminalEventIsVideo(event) &&
-            !this.terminalEventIsPdf(event)
+          this.runEventDisplayText(event) &&
+            !this.runEventShouldShowJson(event) &&
+            !this.runEventIsImage(event) &&
+            !this.runEventIsAudio(event) &&
+            !this.runEventIsVideo(event) &&
+            !this.runEventIsPdf(event)
         );
       },
 
 
-      terminalEventFileName(event) {
-        const payload = this.terminalEventPayloadObject(event);
+      runEventFileName(event) {
+        const payload = this.runEventPayloadObject(event);
         const value =
           payload?.filename ||
           payload?.name ||
           payload?.title ||
           payload?.object_key ||
           event?.event_kind ||
-          "terminal-attachment";
-        return String(value).split("/").filter(Boolean).pop() || "terminal-attachment";
+          "run-event-attachment";
+        return String(value).split("/").filter(Boolean).pop() || "run-event-attachment";
       },
 
 
-      terminalEventFileSize(event) {
-        const payload = this.terminalEventPayloadObject(event);
+      runEventFileSize(event) {
+        const payload = this.runEventPayloadObject(event);
         const size = Number(payload?.size_bytes ?? payload?.size ?? 0);
         return Number.isFinite(size) && size > 0 ? size : 0;
       },
 
 
-      terminalEventFileMeta(event) {
-        const size = this.terminalEventFileSize(event);
+      runEventFileMeta(event) {
+        const size = this.runEventFileSize(event);
         return size ? this.formatBytes(size) : "";
       },
 
 
-      terminalEventFileIcon(event) {
-        const mimeType = this.terminalEventPresentationMimeType(event);
+      runEventFileIcon(event) {
+        const mimeType = this.runEventPresentationMimeType(event);
         if (mimeType === "application/pdf") {
           return "picture_as_pdf";
         }
@@ -1081,37 +1082,37 @@
       },
 
 
-      terminalEventActorLabel(event) {
+      runEventActorLabel(event) {
         return String(event?.direction || "").toLowerCase() === "output" ? "Runtime" : "用户";
       },
 
 
-      terminalEventRowClass(event) {
+      runEventRowClass(event) {
         return String(event?.direction || "").toLowerCase() === "input" ? "justify-end" : "justify-start";
       },
 
 
-      terminalEventMessageShellClass(event) {
+      runEventMessageShellClass(event) {
         return "w-fit";
       },
 
 
-      terminalEventMessageShellStyle(event) {
+      runEventMessageShellStyle(event) {
         return "max-width: 70%;";
       },
 
 
-      terminalEventContentClass(event) {
+      runEventContentClass(event) {
         return String(event?.direction || "").toLowerCase() === "input" ? "items-end" : "items-start";
       },
 
 
-      terminalEventMetaClass(event) {
+      runEventMetaClass(event) {
         return String(event?.direction || "").toLowerCase() === "input" ? "justify-end text-right" : "justify-start";
       },
 
 
-      terminalEventBubbleClass(event) {
+      runEventBubbleClass(event) {
         return String(event?.direction || "").toLowerCase() === "input"
           ? "w-fit max-w-full bg-[#262626]"
           : "w-fit max-w-full bg-[#262626]";
@@ -1119,7 +1120,7 @@
 
 
       liveRunRawEvents() {
-        return (this.liveRunTerminalEvents || [])
+        return (this.liveRunEvents || [])
           .slice()
           .sort((left, right) => {
             const leftSeq = Number(left?.seq_no || 0);
@@ -1189,7 +1190,7 @@
 
 
       liveRunRawEventPartsSummary(rawEvent) {
-        const parts = this.terminalEventParts(rawEvent);
+        const parts = this.runEventParts(rawEvent);
         if (!parts.length) {
           return "0 parts";
         }
@@ -1247,8 +1248,8 @@
 
 
       openTerminalMediaPreview(event, part = null) {
-        const src = part ? this.terminalEventPartMediaUrl(event, part) : this.terminalEventMediaUrl(event);
-        const isImage = part ? this.terminalEventPartIsImage(part) : this.terminalEventIsImage(event);
+        const src = part ? this.runEventPartMediaUrl(event, part) : this.runEventMediaUrl(event);
+        const isImage = part ? this.runEventPartIsImage(part) : this.runEventIsImage(event);
         if (!src || !isImage) {
           return;
         }
@@ -1256,8 +1257,8 @@
           open: true,
           kind: "image",
           src,
-          title: part ? this.terminalEventPartFileName(part) : this.terminalEventFileName(event),
-          description: part ? this.terminalEventPartDisplayText(part) : this.terminalEventDisplayText(event)
+          title: part ? this.runEventPartFileName(part) : this.runEventFileName(event),
+          description: part ? this.runEventPartDisplayText(part) : this.runEventDisplayText(event)
         };
       },
 
@@ -1273,9 +1274,9 @@
       },
 
 
-      scrollTerminalTranscriptToBottom() {
+      scrollRunEventTranscriptToBottom() {
         this.$nextTick(() => {
-          const element = this.$refs?.terminalTranscriptScroll;
+          const element = this.$refs?.runEventTranscriptScroll;
           if (element) {
             element.scrollTop = element.scrollHeight;
           }
@@ -1932,7 +1933,7 @@
       },
 
 
-      liveRunReplayTerminalCount() {
+      liveRunReplayRunEventCount() {
         return this.replayDetail?.run?.id === this.liveRun?.id
           ? (this.replayDetail.run_events || this.replayDetail.terminal_events || []).length
           : 0;
@@ -2312,8 +2313,8 @@
       },
 
 
-      liveRunProcessTerminalEvents() {
-        return (this.liveRunTerminalEvents || [])
+      liveRunProcessRunEvents() {
+        return (this.liveRunEvents || [])
           .filter((event) => ["input", "output"].includes(String(event?.direction || "").toLowerCase()))
           .slice()
           .sort((left, right) => this.compareLiveRunProcessEvents(left, right));
@@ -2342,7 +2343,7 @@
 
 
       liveRunProcessOriginTime() {
-        const eventTimes = this.liveRunProcessTerminalEvents()
+        const eventTimes = this.liveRunProcessRunEvents()
           .map((event) => this.liveRunProcessEventTimestamp(event))
           .filter((value) => Number.isFinite(value) && value > 0);
         if (eventTimes.length) {
@@ -2364,7 +2365,7 @@
 
 
       liveRunProcessDurationMs() {
-        const eventOffsets = this.liveRunProcessTerminalEvents().map((event) => this.liveRunProcessEventAtMs(event));
+        const eventOffsets = this.liveRunProcessRunEvents().map((event) => this.liveRunProcessEventAtMs(event));
         return Math.max(1000, ...eventOffsets);
       },
 
@@ -2419,7 +2420,7 @@
 
       liveRunProcessPartKind(part) {
         const kind = String(part?.kind || "").toLowerCase();
-        const mimeType = this.terminalEventPartMimeType(part);
+        const mimeType = this.runEventPartMimeType(part);
         if (kind === "image" || mimeType.startsWith("image/")) {
           return "image";
         }
@@ -2440,30 +2441,30 @@
 
 
       liveRunProcessEventKind(event) {
-        const parts = this.terminalEventParts(event);
+        const parts = this.runEventParts(event);
         if (parts.length) {
           const kinds = Array.from(new Set(parts.map((part) => this.liveRunProcessPartKind(part))));
           return kinds.length === 1 ? kinds[0] : "mixed";
         }
-        if (this.terminalEventMimeType(event).startsWith("multipart/")) {
+        if (this.runEventMimeType(event).startsWith("multipart/")) {
           return "mixed";
         }
-        if (this.terminalEventIsImage(event)) {
+        if (this.runEventIsImage(event)) {
           return "image";
         }
-        if (this.terminalEventIsAudio(event)) {
+        if (this.runEventIsAudio(event)) {
           return "audio";
         }
-        if (this.terminalEventIsVideo(event)) {
+        if (this.runEventIsVideo(event)) {
           return "video";
         }
-        if (this.terminalEventIsPdf(event) || this.terminalEventIsGenericFile(event)) {
+        if (this.runEventIsPdf(event) || this.runEventIsGenericFile(event)) {
           return "file";
         }
-        if (this.terminalEventShouldShowJson(event)) {
+        if (this.runEventShouldShowJson(event)) {
           return "data";
         }
-        if (this.terminalEventDisplayText(event)) {
+        if (this.runEventDisplayText(event)) {
           return "text";
         }
         if (event?.artifact_object_id) {
@@ -2496,7 +2497,7 @@
 
       liveRunProcessLanes() {
         const lanes = new Map();
-        this.liveRunProcessTerminalEvents().forEach((event) => {
+        this.liveRunProcessRunEvents().forEach((event) => {
           const id = this.liveRunProcessLaneIdForEvent(event);
           if (lanes.has(id)) {
             return;
@@ -2589,7 +2590,7 @@
 
 
       liveRunProcessEventsForLane(laneId) {
-        return this.liveRunProcessTerminalEvents()
+        return this.liveRunProcessRunEvents()
           .map((event, index) => ({ event, index }))
           .filter((item) => this.liveRunProcessLaneIdForEvent(item.event) === laneId)
           .map((item) => ({
@@ -2633,7 +2634,7 @@
 
 
       liveRunProcessEventTitle(event) {
-        const direction = this.terminalDirectionLabel?.(event?.direction) || (event?.direction === "output" ? "输出" : "输入");
+        const direction = this.runEventDirectionLabel?.(event?.direction) || (event?.direction === "output" ? "输出" : "输入");
         const seq = event?.seq_no === undefined || event?.seq_no === null ? "" : ` #${event.seq_no}`;
         return `${direction}${seq}`;
       },
@@ -2643,26 +2644,26 @@
         if (!event) {
           return "";
         }
-        const parts = this.terminalEventParts(event);
+        const parts = this.runEventParts(event);
         if (parts.length) {
           const labels = parts.map((part) => {
-            if (this.terminalEventPartIsText(part)) {
-              return this.terminalEventPartDisplayText(part);
+            if (this.runEventPartIsText(part)) {
+              return this.runEventPartDisplayText(part);
             }
-            return this.terminalEventPartFileName(part);
+            return this.runEventPartFileName(part);
           }).filter(Boolean);
           return labels.join(" + ") || event.event_kind || "multipart";
         }
-        if (this.terminalEventDisplayText(event)) {
-          return this.terminalEventDisplayText(event);
+        if (this.runEventDisplayText(event)) {
+          return this.runEventDisplayText(event);
         }
-        if (this.terminalEventIsImage(event) || this.terminalEventIsAudio(event) || this.terminalEventIsVideo(event) || this.terminalEventIsPdf(event) || this.terminalEventIsGenericFile(event)) {
-          return this.terminalEventFileName(event);
+        if (this.runEventIsImage(event) || this.runEventIsAudio(event) || this.runEventIsVideo(event) || this.runEventIsPdf(event) || this.runEventIsGenericFile(event)) {
+          return this.runEventFileName(event);
         }
-        if (this.terminalEventShouldShowJson(event)) {
-          return this.terminalEventJsonText(event);
+        if (this.runEventShouldShowJson(event)) {
+          return this.runEventJsonText(event);
         }
-        return event.event_kind || "terminal event";
+        return event.event_kind || "RunEvent";
       },
 
 
@@ -2670,25 +2671,25 @@
         if (!event) {
           return "";
         }
-        const parts = this.terminalEventParts(event);
+        const parts = this.runEventParts(event);
         if (parts.length) {
           return parts
             .map((part, index) => {
-              const label = this.terminalEventPartIsText(part)
-                ? this.terminalEventPartDisplayText(part)
-                : this.terminalEventPartFileName(part);
+              const label = this.runEventPartIsText(part)
+                ? this.runEventPartDisplayText(part)
+                : this.runEventPartFileName(part);
               return `part ${index + 1}: ${part.kind || "file"} ${part.mime_type || ""}\n${label || part.part_id || ""}`.trim();
             })
             .join("\n\n");
         }
-        if (this.terminalEventDisplayText(event)) {
-          return this.terminalEventDisplayText(event);
+        if (this.runEventDisplayText(event)) {
+          return this.runEventDisplayText(event);
         }
-        if (this.terminalEventShouldShowJson(event)) {
-          return this.terminalEventJsonText(event);
+        if (this.runEventShouldShowJson(event)) {
+          return this.runEventJsonText(event);
         }
-        if (this.terminalEventIsImage(event) || this.terminalEventIsAudio(event) || this.terminalEventIsVideo(event) || this.terminalEventIsPdf(event) || this.terminalEventIsGenericFile(event)) {
-          return [this.terminalEventFileName(event), this.terminalEventFileMeta(event)].filter(Boolean).join("\n");
+        if (this.runEventIsImage(event) || this.runEventIsAudio(event) || this.runEventIsVideo(event) || this.runEventIsPdf(event) || this.runEventIsGenericFile(event)) {
+          return [this.runEventFileName(event), this.runEventFileMeta(event)].filter(Boolean).join("\n");
         }
         return event.event_kind || "";
       },
@@ -2709,7 +2710,7 @@
           return [];
         }
         const pairs = [
-          ["方向", this.terminalDirectionLabel?.(event.direction) || event.direction],
+          ["方向", this.runEventDirectionLabel?.(event.direction) || event.direction],
           ["内容", this.liveRunProcessLaneLabel({ kind: this.liveRunProcessEventKind(event) })],
           ["RunEvent 序号", event.seq_no === undefined || event.seq_no === null ? "" : `#${event.seq_no}`],
           ["相对时间", this.formatLiveRunProcessMs(this.liveRunProcessEventAtMs(event))],
@@ -2744,7 +2745,7 @@
         if (!this.selectedLiveRunProcessEventKey) {
           return null;
         }
-        return this.liveRunProcessTerminalEvents().find((event) => this.liveRunProcessEventKey(event) === this.selectedLiveRunProcessEventKey) || null;
+        return this.liveRunProcessRunEvents().find((event) => this.liveRunProcessEventKey(event) === this.selectedLiveRunProcessEventKey) || null;
       },
 
 
@@ -2765,7 +2766,7 @@
         if (!selected) {
           return [];
         }
-        const events = this.liveRunProcessTerminalEvents();
+        const events = this.liveRunProcessRunEvents();
         const selectedKey = this.liveRunProcessEventKey(selected);
         const index = events.findIndex((event) => this.liveRunProcessEventKey(event) === selectedKey);
         return [

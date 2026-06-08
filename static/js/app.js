@@ -1036,10 +1036,10 @@
       liveRun: null,
       liveRunBindings: [],
       liveRunTerminalSession: null,
-      liveRunTerminalEvents: [],
+      liveRunEvents: [],
       liveRunTraceEvents: [],
       liveRunToolAuthorizations: [],
-      liveRunInteractionTab: "terminal",
+      liveRunInteractionTab: "run-events",
       liveRunEventFilters: {
         q: "",
         direction: "",

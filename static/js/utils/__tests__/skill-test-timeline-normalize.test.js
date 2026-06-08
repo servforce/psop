@@ -159,7 +159,7 @@ function createTimelineHarness() {
     formatDateTime(value) {
       return value || "N/A";
     },
-    formatTerminalPayload(value) {
+    formatRunEventPayloadValue(value) {
       if (typeof value === "string") {
         return value;
       }
@@ -168,7 +168,7 @@ function createTimelineHarness() {
       }
       return JSON.stringify(value, null, 2);
     },
-    terminalDirectionLabel(value) {
+    runEventDirectionLabel(value) {
       return value === "output" ? "输出" : "输入";
     },
     statusBadgeTone() {
@@ -1193,7 +1193,7 @@ test("review refresh replaces pending semantic judgement with saved judge output
   app.skillTestReview = initialReview;
   app.skillTestRun = initialReview.scenario_run;
   app.skillTestRuns = [];
-  app.liveRunTerminalEvents = [];
+  app.liveRunEvents = [];
   app.liveRunTraceEvents = [];
   app.liveRunBindings = [];
   app.route = { name: "skill-test-scenario-review" };
@@ -1336,7 +1336,7 @@ test("running review records open at the current run time", () => {
   expect(app.skillTestReviewPlaybackRunning).toBe(false);
 });
 
-test("terminal transcript keeps all events visible at the end of a historical review", () => {
+test("RunEvent transcript keeps all events visible at the end of a historical review", () => {
   const app = createTimelineHarness();
   const review = {
     scenario_timeline: duplicateSemanticTimeline(),
@@ -1361,5 +1361,5 @@ test("terminal transcript keeps all events visible at the end of a historical re
   app.skillTestRun = review.scenario_run;
   app.updateSkillTestReviewPlayhead(600000);
 
-  expect(app.filteredSkillTestReviewTerminalEvents().map((event) => event.id)).toEqual(["early", "late"]);
+  expect(app.filteredSkillTestReviewRunEvents().map((event) => event.id)).toEqual(["early", "late"]);
 });

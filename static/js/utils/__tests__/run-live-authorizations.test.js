@@ -179,7 +179,7 @@ test("run live opens the raw events tab from the Run Events route view", () => {
   const context = {
     ...methods,
     route: { name: "run-live", params: { runId: "run-1", view: "events" } },
-    liveRunInteractionTab: "terminal",
+    liveRunInteractionTab: "run-events",
     currentSkill: null
   };
 
@@ -194,6 +194,19 @@ test("run live opens the raw events tab from the Run Events route view", () => {
   expect(html).toContain("navigate(runEventsPath(liveRun.id))");
 });
 
+test("run live maps legacy terminal route view to run events tab", () => {
+  const methods = loadRuntimeMethods();
+  const context = {
+    ...methods,
+    route: { name: "run-live", params: { runId: "run-1", view: "terminal" } },
+    liveRunInteractionTab: "events"
+  };
+
+  methods.syncLiveRunInteractionTabFromRoute.call(context, false);
+
+  expect(context.liveRunInteractionTab).toBe("run-events");
+});
+
 test("loadRunLive loads run-scoped tool authorizations", async () => {
   const methods = loadRuntimeMethods();
   const authorization = {
@@ -205,7 +218,7 @@ test("loadRunLive loads run-scoped tool authorizations", async () => {
     ...methods,
     busy: { liveRun: false },
     liveRunLoadedRunId: "",
-    liveRunTerminalEvents: [],
+    liveRunEvents: [],
     liveRunTraceEvents: [],
     liveRunToolAuthorizations: [],
     selectedLiveRunReplayItemKey: "",
@@ -233,7 +246,7 @@ test("loadRunLive loads run-scoped tool authorizations", async () => {
       return null;
     }),
     ensureLiveRunProcessSelection: jest.fn(),
-    scrollTerminalTranscriptToBottom: jest.fn(),
+    scrollRunEventTranscriptToBottom: jest.fn(),
     connectRunWebSocket: jest.fn()
   };
 
@@ -259,7 +272,7 @@ test("run live websocket authorization events refresh authorization list", async
       }
       return [];
     }),
-    mergeTerminalEvents: jest.fn(),
+    mergeRunEvents: jest.fn(),
     refreshLiveRunToolAuthorizations: jest.fn()
   };
 
@@ -272,7 +285,7 @@ test("run live websocket authorization events refresh authorization list", async
     }
   });
 
-  expect(context.mergeTerminalEvents).toHaveBeenCalledWith([
+  expect(context.mergeRunEvents).toHaveBeenCalledWith([
     {
       id: "run-event-1",
       event_kind: "tool_authorization_request",
@@ -308,11 +321,11 @@ test("run live websocket accepts legacy run event aliases", () => {
   const context = {
     ...methods,
     liveRun: { id: "run-1" },
-    liveRunTerminalEvents: [],
+    liveRunEvents: [],
     liveRunTraceEvents: [],
     liveRunToolAuthorizations: [],
     replayDetail: null,
-    mergeTerminalEvents: jest.fn(),
+    mergeRunEvents: jest.fn(),
     refreshLiveRunToolAuthorizations: jest.fn()
   };
 
@@ -325,7 +338,7 @@ test("run live websocket accepts legacy run event aliases", () => {
     payload: runTrace
   });
 
-  expect(context.mergeTerminalEvents).toHaveBeenCalledWith([runEvent]);
+  expect(context.mergeRunEvents).toHaveBeenCalledWith([runEvent]);
   expect(context.liveRunTraceEvents).toEqual([runTrace]);
 });
 
@@ -387,7 +400,7 @@ test("run live websocket events update replay timeline evidence incrementally", 
   const context = {
     ...methods,
     liveRun: { id: "run-1", status: "waiting_input", latest_snapshot_seq: 1 },
-    liveRunTerminalEvents: [],
+    liveRunEvents: [],
     liveRunTraceEvents: [],
     liveRunBindings: [],
     liveRunToolAuthorizations: [],
@@ -416,7 +429,7 @@ test("run live websocket events update replay timeline evidence incrementally", 
     selectedLiveRunSnapshotBaseSeq: "",
     selectedLiveRunSnapshotTargetSeq: "",
     ensureLiveRunProcessSelection: jest.fn(),
-    scrollTerminalTranscriptToBottom: jest.fn()
+    scrollRunEventTranscriptToBottom: jest.fn()
   };
 
   methods.handleRunWsEvent.call(context, {
@@ -440,9 +453,9 @@ test("run live websocket events update replay timeline evidence incrementally", 
     payload: updatedRun
   });
 
-  expect(context.liveRunTerminalEvents).toEqual([runEvent]);
+  expect(context.liveRunEvents).toEqual([runEvent]);
   expect(context.liveRunTraceEvents).toEqual([traceEvent]);
-  expect(methods.liveRunReplayTerminalCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayRunEventCount.call(context)).toBe(1);
   expect(methods.liveRunReplayTraceCount.call(context)).toBe(1);
   expect(context.replayDetail.run_events).toEqual([runEvent]);
   expect(context.replayDetail.terminal_events).toEqual([runEvent]);
@@ -990,7 +1003,7 @@ test("run live raw events tab filters and exports original run events", () => {
       direction: "",
       event_kind: ""
     },
-    liveRunTerminalEvents: [
+    liveRunEvents: [
       {
         id: "event-2",
         run_id: "run-1",
@@ -1024,15 +1037,15 @@ test("run live raw events tab filters and exports original run events", () => {
     "terminal.multimodal.input.v1",
     "terminal.text.output.v1"
   ]);
-  expect(methods.liveRunRawEventPartsSummary(context.liveRunTerminalEvents[1])).toBe("1 parts · image:image/png");
+  expect(methods.liveRunRawEventPartsSummary(context.liveRunEvents[1])).toBe("1 parts · image:image/png");
 
   context.liveRunEventFilters.direction = "input";
   context.liveRunEventFilters.q = "fault.png";
 
   expect(methods.liveRunRawFilteredEvents.call(context).map((event) => event.id)).toEqual(["event-1"]);
-  expect(methods.liveRunRawEventSourceLabel(context.liveRunTerminalEvents[1])).toBe("web · terminal");
-  expect(methods.liveRunRawEventJsonText.call(context, context.liveRunTerminalEvents[1])).toContain("fault.png");
-  expect(methods.liveRunProcessEventMetadata.call(context, context.liveRunTerminalEvents[1])).toEqual(
+  expect(methods.liveRunRawEventSourceLabel(context.liveRunEvents[1])).toBe("web · terminal");
+  expect(methods.liveRunRawEventJsonText.call(context, context.liveRunEvents[1])).toContain("fault.png");
+  expect(methods.liveRunProcessEventMetadata.call(context, context.liveRunEvents[1])).toEqual(
     expect.arrayContaining([{ label: "RunEvent 序号", value: "#1" }])
   );
 

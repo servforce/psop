@@ -21,10 +21,10 @@ from app.jobs.repository import JobRepository
 from app.jobs.types import PSKILL_TEST_JOB_TYPE
 from app.runtime.models import Run
 from app.runtime.schemas import (
-    AppendTerminalEventRequest,
+    AppendRunEventRequest,
     CreateInvocationRequest,
     InvocationResponse,
-    TerminalEventPartInput,
+    RunEventPartInput,
 )
 from app.runtime.service import RuntimeService
 from app.testing.models import (
@@ -729,7 +729,7 @@ class SkillTestService:
         expectations = self._timeline_expectation_events(scenario_run.timeline)
         self.repository.delete_expectation_evaluations(session, scenario_run.id)
         replay = self.runtime_service.build_replay(session, run.id)
-        output_events = [item for item in replay.terminal_events if item.direction == "output"]
+        output_events = [item for item in self._replay_run_events(replay) if item.direction == "output"]
         now = now_utc()
         summary = {
             "total": len(expectations),
@@ -1015,11 +1015,11 @@ class SkillTestService:
         scheduled_at: datetime,
     ):
         if isinstance(event.get("parts"), list) and event["parts"]:
-            parts = self._terminal_parts_for_timeline_event(session, scenario_run, event)
+            parts = self._run_event_parts_for_timeline_event(session, scenario_run, event)
             return self.runtime_service.append_run_event(
                 session,
                 scenario_run.run_id or "",
-                AppendTerminalEventRequest(
+                AppendRunEventRequest(
                     direction="input",
                     event_kind="terminal.multimodal.input.v1",
                     mime_type="multipart/mixed",
@@ -1035,7 +1035,7 @@ class SkillTestService:
         asset_id = event.get("asset_id")
         artifact_object_id = event.get("artifact_object_id")
         payload_inline = event.get("payload_inline")
-        parts: list[TerminalEventPartInput] = []
+        parts: list[RunEventPartInput] = []
         if asset_id:
             asset = self.repository.get_asset(session, str(asset_id))
             if not asset or asset.scenario_id != scenario_run.scenario_id:
@@ -1044,7 +1044,7 @@ class SkillTestService:
             payload_inline = self._payload_for_asset_event(event, asset)
             event = {**event, "mime_type": asset.mime_type}
             parts = [
-                TerminalEventPartInput(
+                RunEventPartInput(
                     part_id="asset_1",
                     kind=self._part_kind_for_mime_type(asset.mime_type),
                     mime_type=asset.mime_type,
@@ -1057,7 +1057,7 @@ class SkillTestService:
         return self.runtime_service.append_run_event(
             session,
             scenario_run.run_id or "",
-            AppendTerminalEventRequest(
+            AppendRunEventRequest(
                 direction="input",
                 event_kind=str(event.get("event_kind") or self._default_event_kind_for_lane(str(event.get("lane_id") or ""))),
                 mime_type=str(event.get("mime_type") or self._default_mime_for_lane(str(event.get("lane_id") or ""))),
@@ -1071,13 +1071,13 @@ class SkillTestService:
             process_after_append=False,
         )
 
-    def _terminal_parts_for_timeline_event(
+    def _run_event_parts_for_timeline_event(
         self,
         session: Session,
         scenario_run: SkillTestScenarioRun,
         event: dict[str, Any],
-    ) -> list[TerminalEventPartInput]:
-        parts: list[TerminalEventPartInput] = []
+    ) -> list[RunEventPartInput]:
+        parts: list[RunEventPartInput] = []
         seen_part_ids: set[str] = set()
         for index, raw_part in enumerate(event.get("parts") or []):
             if not isinstance(raw_part, dict):
@@ -1089,7 +1089,7 @@ class SkillTestService:
             seen_part_ids.add(part_id)
             if kind == "text":
                 parts.append(
-                    TerminalEventPartInput(
+                    RunEventPartInput(
                         part_id=part_id,
                         kind="text",
                         mime_type=str(raw_part.get("mime_type") or "text/plain"),
@@ -1114,7 +1114,7 @@ class SkillTestService:
                     details={"part_id": part_id, "kind": resolved_kind, "mime_type": asset.mime_type},
                 )
             parts.append(
-                TerminalEventPartInput(
+                RunEventPartInput(
                     part_id=part_id,
                     kind=resolved_kind,
                     mime_type=asset.mime_type,
@@ -2329,7 +2329,7 @@ class SkillTestService:
         return "text" if mime_type.startswith("text/") else "file"
 
     @staticmethod
-    def _payload_for_timeline_parts(parts: list[TerminalEventPartInput]) -> dict[str, Any]:
+    def _payload_for_timeline_parts(parts: list[RunEventPartInput]) -> dict[str, Any]:
         summary = "\n".join(
             filter(
                 None,
@@ -2424,7 +2424,7 @@ class SkillTestService:
             default=DEFAULT_JUDGE_FINAL_OUTPUT_BUDGET_CHARS,
             maximum=40_000,
         )
-        compact_outputs, compaction = cls._compact_judge_terminal_outputs(
+        compact_outputs, compaction = cls._compact_judge_run_outputs(
             scoped_outputs,
             transcript_budget=transcript_budget,
             event_budget=event_budget,
@@ -2452,14 +2452,14 @@ class SkillTestService:
         }
 
     @classmethod
-    def _compact_judge_terminal_outputs(
+    def _compact_judge_run_outputs(
         cls,
         scoped_outputs: list[Any],
         *,
         transcript_budget: int,
         event_budget: int,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        candidates = [cls._compact_judge_terminal_output(item, event_budget=event_budget) for item in scoped_outputs]
+        candidates = [cls._compact_judge_run_output(item, event_budget=event_budget) for item in scoped_outputs]
         included_reversed: list[dict[str, Any]] = []
         included_chars = 0
         for candidate in reversed(candidates):
@@ -2496,7 +2496,7 @@ class SkillTestService:
         }
 
     @classmethod
-    def _compact_judge_terminal_output(cls, event: Any, *, event_budget: int) -> dict[str, Any]:
+    def _compact_judge_run_output(cls, event: Any, *, event_budget: int) -> dict[str, Any]:
         payload_text = cls._judge_text(cls._event_value(event, "payload_inline"))
         truncated_text, truncated = cls._truncate_judge_text(payload_text, event_budget)
         return {
@@ -2720,8 +2720,8 @@ class SkillTestService:
         output_events = []
         if replay:
             output_events = sorted(
-                [item for item in replay.terminal_events if getattr(item, "direction", "") == "output"],
-                key=lambda item: (self._terminal_event_at_ms(scenario_run, item), int(getattr(item, "seq_no", 0) or 0)),
+                [item for item in self._replay_run_events(replay) if getattr(item, "direction", "") == "output"],
+                key=lambda item: (self._run_event_at_ms(scenario_run, item), int(getattr(item, "seq_no", 0) or 0)),
             )
 
         previous_stage_ms = -1
@@ -2732,7 +2732,7 @@ class SkillTestService:
             actual_outputs = [
                 self._build_stage_actual_output(scenario_run, item)
                 for item in output_events
-                if previous_stage_ms < self._terminal_event_at_ms(scenario_run, item) <= stage_time_ms
+                if previous_stage_ms < self._run_event_at_ms(scenario_run, item) <= stage_time_ms
             ]
             stage_outputs.append(
                 SkillTestStageOutputResponse(
@@ -2751,13 +2751,13 @@ class SkillTestService:
 
     def _build_stage_actual_output(self, scenario_run: SkillTestScenarioRun, event: Any) -> SkillTestStageActualOutputResponse:
         seq_no = self._event_value(event, "seq_no")
-        event_id = str(self._event_value(event, "id") or f"terminal_output_{seq_no or uuid.uuid4()}")
+        event_id = str(self._event_value(event, "id") or f"run_output_{seq_no or uuid.uuid4()}")
         return SkillTestStageActualOutputResponse(
             id=f"stage_output_{event_id}",
             run_event_id=event_id,
             terminal_event_id=event_id,
             seq_no=int(seq_no) if seq_no is not None else None,
-            at_ms=self._terminal_event_at_ms(scenario_run, event),
+            at_ms=self._run_event_at_ms(scenario_run, event),
             occurred_at=self._coerce_datetime(self._event_value(event, "occurred_at")),
             event_kind=str(self._event_value(event, "event_kind") or ""),
             mime_type=str(self._event_value(event, "mime_type") or ""),
@@ -2780,12 +2780,19 @@ class SkillTestService:
             created_at=evaluation.created_at,
         )
 
-    def _terminal_event_at_ms(self, scenario_run: SkillTestScenarioRun, event: Any) -> int:
+    def _run_event_at_ms(self, scenario_run: SkillTestScenarioRun, event: Any) -> int:
         origin = self._aware_datetime(scenario_run.time_origin or scenario_run.started_at or scenario_run.created_at)
         occurred_at = self._coerce_datetime(self._event_value(event, "occurred_at"))
         if not occurred_at:
             return 0
         return max(0, int((self._aware_datetime(occurred_at) - origin).total_seconds() * 1000))
+
+    @staticmethod
+    def _replay_run_events(replay: Any) -> list[Any]:
+        run_events = getattr(replay, "run_events", None)
+        if run_events is None:
+            run_events = getattr(replay, "terminal_events", [])
+        return list(run_events or [])
 
     def _cursor_for_time_ms(self, time_ms: int, cursor_anchors: list[dict[str, Any]]) -> dict[str, int]:
         cutoff_ms = max(0, int(time_ms or 0))
