@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 
 from app.agent_harness.runner import AgentRunner
@@ -26,9 +26,18 @@ from app.api.dependencies import (
     get_agent_service,
     get_db_session,
     get_memory_service,
+    get_runtime_service,
     get_skill_package_service,
 )
 from app.memory.schemas import MemoryEntryResponse
+from app.runtime.schemas import RunEventResponse
+from app.runtime.service import RuntimeService
+from app.runtime.websocket import (
+    run_event_ws_message,
+    run_ws_hub,
+    tool_authorization_ws_hub,
+    tool_authorization_ws_message,
+)
 from app.memory.service import MemoryService
 from app.skills.schemas import SkillActivationResponse
 from app.skills.service import SkillPackageService
@@ -38,6 +47,8 @@ agents_router = APIRouter(tags=["agents"])
 agent_runs_router = APIRouter(prefix="/agent-runs", tags=["agent-runs"])
 tool_authorizations_router = APIRouter(prefix="/tool-authorizations", tags=["tool-authorizations"])
 run_tool_authorizations_router = APIRouter(prefix="/runs", tags=["tool-authorizations"])
+tool_authorizations_ws_router = APIRouter(prefix="/ws", tags=["ws"])
+TOOL_AUTHORIZATION_WS_CHANNEL = "global"
 
 
 @agents_router.get("/agents", response_model=list[AgentDefinitionSummaryResponse])
@@ -232,12 +243,20 @@ def list_run_tool_authorizations(
     response_model=AgentToolAuthorizationResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def create_tool_authorization(
+async def create_tool_authorization(
     payload: CreateToolAuthorizationRequest,
     session: Session = Depends(get_db_session),
     service: AgentService = Depends(get_agent_service),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
 ) -> AgentToolAuthorizationResponse:
-    return service.create_tool_authorization(session, payload)
+    authorization = service.create_tool_authorization(session, payload)
+    await _broadcast_tool_authorization_change(
+        session=session,
+        runtime_service=runtime_service,
+        authorization=authorization,
+        action="requested",
+    )
+    return authorization
 
 
 @tool_authorizations_router.get("", response_model=list[AgentToolAuthorizationResponse])
@@ -260,20 +279,99 @@ def get_tool_authorization(
 
 
 @tool_authorizations_router.post("/{authorization_id}/approve", response_model=AgentToolAuthorizationResponse)
-def approve_tool_authorization(
+async def approve_tool_authorization(
     authorization_id: str,
     payload: ToolAuthorizationDecisionRequest | None = None,
     session: Session = Depends(get_db_session),
     service: AgentService = Depends(get_agent_service),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
 ) -> AgentToolAuthorizationResponse:
-    return service.approve_tool_authorization(session, authorization_id, payload or ToolAuthorizationDecisionRequest())
+    authorization = service.approve_tool_authorization(session, authorization_id, payload or ToolAuthorizationDecisionRequest())
+    await _broadcast_tool_authorization_change(
+        session=session,
+        runtime_service=runtime_service,
+        authorization=authorization,
+        action="approved",
+    )
+    return authorization
 
 
 @tool_authorizations_router.post("/{authorization_id}/reject", response_model=AgentToolAuthorizationResponse)
-def reject_tool_authorization(
+async def reject_tool_authorization(
     authorization_id: str,
     payload: ToolAuthorizationDecisionRequest | None = None,
     session: Session = Depends(get_db_session),
     service: AgentService = Depends(get_agent_service),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
 ) -> AgentToolAuthorizationResponse:
-    return service.reject_tool_authorization(session, authorization_id, payload or ToolAuthorizationDecisionRequest())
+    authorization = service.reject_tool_authorization(session, authorization_id, payload or ToolAuthorizationDecisionRequest())
+    await _broadcast_tool_authorization_change(
+        session=session,
+        runtime_service=runtime_service,
+        authorization=authorization,
+        action="rejected",
+    )
+    return authorization
+
+
+@tool_authorizations_ws_router.websocket("/tool-authorizations")
+async def tool_authorizations_websocket(websocket: WebSocket) -> None:
+    await tool_authorization_ws_hub.connect(TOOL_AUTHORIZATION_WS_CHANNEL, websocket)
+    try:
+        await websocket.send_json(
+            {
+                "event_type": "ws.connected",
+                "authorization_id": None,
+                "run_id": None,
+                "agent_run_id": None,
+                "occurred_at": None,
+                "payload": {"message": "connected"},
+            }
+        )
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        tool_authorization_ws_hub.disconnect(TOOL_AUTHORIZATION_WS_CHANNEL, websocket)
+
+
+async def _broadcast_tool_authorization_change(
+    *,
+    session: Session,
+    runtime_service: RuntimeService,
+    authorization: AgentToolAuthorizationResponse,
+    action: str,
+) -> None:
+    await tool_authorization_ws_hub.broadcast(
+        TOOL_AUTHORIZATION_WS_CHANNEL,
+        tool_authorization_ws_message(authorization, action=action),
+    )
+    run_event = _find_tool_authorization_run_event(
+        session=session,
+        runtime_service=runtime_service,
+        authorization=authorization,
+        action=action,
+    )
+    if run_event and authorization.run_id:
+        await run_ws_hub.broadcast(authorization.run_id, run_event_ws_message(authorization.run_id, run_event))
+
+
+def _find_tool_authorization_run_event(
+    *,
+    session: Session,
+    runtime_service: RuntimeService,
+    authorization: AgentToolAuthorizationResponse,
+    action: str,
+) -> RunEventResponse | None:
+    if not authorization.run_id or not authorization.run_event_id:
+        return None
+    if action == "requested":
+        return runtime_service.get_run_event(session, authorization.run_id, authorization.run_event_id)
+
+    expected_kind = "tool_authorization_response"
+    events = runtime_service.list_run_events(session, authorization.run_id)
+    for event in reversed(events):
+        if event.event_kind != expected_kind:
+            continue
+        if event.source_ref.get("authorization_id") == authorization.id:
+            return event
+    return None

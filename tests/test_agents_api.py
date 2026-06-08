@@ -198,33 +198,47 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
             },
         )
         agent_run = agent_run_response.json()
-        authorization_response = client.post(
-            "/api/v1/tool-authorizations",
-            json={
-                "agent_run_id": agent_run["id"],
-                "run_id": run_id,
-                "tool_name": "psop.repository.commit_patch",
-                "side_effect_level": "high_write",
-                "risk_level": "high",
-                "authorization_reason": "写 Git commit 属于高副作用操作。",
-                "tool_arguments_summary": {"path": "SKILL.md", "change": "append section"},
-                "expected_effect_summary": "提交 PSkill 源码 patch。",
-                "reversible": True,
-            },
-        )
-        authorization = authorization_response.json()
-        request_events_response = client.get(f"/api/v1/runs/{run_id}/events")
-        approve_response = client.post(
-            f"/api/v1/tool-authorizations/{authorization['id']}/approve",
-            json={"response_payload": {"approved_by": "tester"}},
-        )
+        with client.websocket_connect(f"/ws/runs/{run_id}") as run_ws:
+            run_ws_connected = run_ws.receive_json()
+            with client.websocket_connect("/ws/tool-authorizations") as tool_authorization_ws:
+                tool_authorization_ws_connected = tool_authorization_ws.receive_json()
+                authorization_response = client.post(
+                    "/api/v1/tool-authorizations",
+                    json={
+                        "agent_run_id": agent_run["id"],
+                        "run_id": run_id,
+                        "tool_name": "psop.repository.commit_patch",
+                        "side_effect_level": "high_write",
+                        "risk_level": "high",
+                        "authorization_reason": "写 Git commit 属于高副作用操作。",
+                        "tool_arguments_summary": {"path": "SKILL.md", "change": "append section"},
+                        "expected_effect_summary": "提交 PSkill 源码 patch。",
+                        "reversible": True,
+                    },
+                )
+                authorization = authorization_response.json()
+                request_run_ws_message = run_ws.receive_json()
+                request_tool_authorization_ws_message = tool_authorization_ws.receive_json()
+                request_events_response = client.get(f"/api/v1/runs/{run_id}/events")
+                approve_response = client.post(
+                    f"/api/v1/tool-authorizations/{authorization['id']}/approve",
+                    json={"response_payload": {"approved_by": "tester"}},
+                )
+                response_run_ws_message = run_ws.receive_json()
+                response_tool_authorization_ws_message = tool_authorization_ws.receive_json()
         response_events_response = client.get(f"/api/v1/runs/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
 
     assert invocation_response.status_code == 201
     assert agent_run_response.status_code == 201
+    assert run_ws_connected["event_type"] == "ws.connected"
+    assert tool_authorization_ws_connected["event_type"] == "ws.connected"
     assert authorization_response.status_code == 201
     assert authorization["run_event_id"]
+    assert request_run_ws_message["event_type"] == "terminal.event.appended"
+    assert request_run_ws_message["payload"]["event_kind"] == "tool_authorization_request"
+    assert request_tool_authorization_ws_message["event_type"] == "tool.authorization_requested"
+    assert request_tool_authorization_ws_message["authorization_id"] == authorization["id"]
     request_events = [
         event for event in request_events_response.json() if event["event_kind"] == "tool_authorization_request"
     ]
@@ -239,6 +253,10 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
     assert request_events[0]["payload_inline"]["status"] == "pending"
 
     assert approve_response.status_code == 200
+    assert response_run_ws_message["event_type"] == "terminal.event.appended"
+    assert response_run_ws_message["payload"]["event_kind"] == "tool_authorization_response"
+    assert response_tool_authorization_ws_message["event_type"] == "tool.authorization_approved"
+    assert response_tool_authorization_ws_message["authorization_id"] == authorization["id"]
     response_events = [
         event for event in response_events_response.json() if event["event_kind"] == "tool_authorization_response"
     ]

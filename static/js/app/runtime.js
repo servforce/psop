@@ -323,6 +323,9 @@
         }
         if (event.event_type === "terminal.event.appended" && event.payload) {
           this.mergeTerminalEvents([event.payload]);
+          if (this.isToolAuthorizationRunEvent(event.payload)) {
+            this.refreshLiveRunToolAuthorizations();
+          }
         }
         if (event.event_type === "trace.event.appended" && event.payload) {
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq(this.liveRunTraceEvents, [event.payload]);
@@ -347,6 +350,22 @@
         this.updateLiveRunLatestTerminalSeq();
         this.ensureLiveRunProcessSelection();
         this.scrollTerminalTranscriptToBottom();
+      },
+
+      isToolAuthorizationRunEvent(event) {
+        return ["tool_authorization_request", "tool_authorization_response"].includes(event?.event_kind);
+      },
+
+      async refreshLiveRunToolAuthorizations() {
+        if (!this.liveRun?.id) {
+          return;
+        }
+        try {
+          const toolAuthorizations = await this.apiRequest(`/runs/${this.liveRun.id}/tool-authorizations`);
+          this.liveRunToolAuthorizations = Array.isArray(toolAuthorizations) ? toolAuthorizations : [];
+        } catch {
+          // REST remains the recovery path on the next full Run Live refresh.
+        }
       },
 
       liveRunAuthorizationCountByStatus(status) {

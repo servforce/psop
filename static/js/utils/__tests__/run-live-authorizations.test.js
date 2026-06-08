@@ -62,6 +62,8 @@ test("run live page exposes embedded tool authorization tab", () => {
   expect(html).toContain("decideLiveRunToolAuthorization(authorization, 'reject')");
   expect(appJs).toContain("liveRunToolAuthorizations");
   expect(runtimeJs).toContain("/runs/${runId}/tool-authorizations");
+  expect(runtimeJs).toContain("isToolAuthorizationRunEvent");
+  expect(runtimeJs).toContain("refreshLiveRunToolAuthorizations");
 });
 
 test("loadRunLive loads run-scoped tool authorizations", async () => {
@@ -115,6 +117,47 @@ test("loadRunLive loads run-scoped tool authorizations", async () => {
   expect(context.apiRequest).toHaveBeenCalledWith("/runs/run-1/tool-authorizations");
   expect(context.liveRunToolAuthorizations).toEqual([authorization]);
   expect(context.liveRunAuthorizationCountByStatus("pending")).toBe(1);
+});
+
+test("run live websocket authorization events refresh authorization list", async () => {
+  const methods = loadRuntimeMethods();
+  const latest = { id: "auth-1", status: "pending", tool_name: "psop.repository.commit_patch" };
+  const context = {
+    ...methods,
+    liveRun: { id: "run-1" },
+    liveRunToolAuthorizations: [],
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/runs/run-1/tool-authorizations") {
+        return [latest];
+      }
+      return [];
+    }),
+    mergeTerminalEvents: jest.fn(),
+    refreshLiveRunToolAuthorizations: jest.fn()
+  };
+
+  methods.handleRunWsEvent.call(context, {
+    event_type: "terminal.event.appended",
+    payload: {
+      id: "run-event-1",
+      event_kind: "tool_authorization_request",
+      seq_no: 3
+    }
+  });
+
+  expect(context.mergeTerminalEvents).toHaveBeenCalledWith([
+    {
+      id: "run-event-1",
+      event_kind: "tool_authorization_request",
+      seq_no: 3
+    }
+  ]);
+  expect(context.refreshLiveRunToolAuthorizations).toHaveBeenCalled();
+
+  await methods.refreshLiveRunToolAuthorizations.call(context);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/runs/run-1/tool-authorizations");
+  expect(context.liveRunToolAuthorizations).toEqual([latest]);
 });
 
 test("run live authorization decisions update local list and refresh run", async () => {

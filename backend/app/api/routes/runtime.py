@@ -42,6 +42,7 @@ from app.runtime.schemas import (
     RunTraceResponse,
 )
 from app.runtime.service import RuntimeService
+from app.runtime.websocket import run_event_ws_message, run_ws_hub
 from app.pskills.exceptions import SkillValidationError, SkillsGatewayError
 from app.infra.object_store import ObjectStoreService
 
@@ -52,34 +53,6 @@ terminal_router = APIRouter(prefix="/terminal", tags=["terminal"])
 replay_router = APIRouter(prefix="/replay", tags=["replay"])
 runtime_router = APIRouter(prefix="/runtime", tags=["runtime"])
 ws_router = APIRouter(prefix="/ws", tags=["ws"])
-
-
-class RunWebSocketHub:
-    def __init__(self) -> None:
-        self._connections: dict[str, set[WebSocket]] = {}
-
-    async def connect(self, run_id: str, websocket: WebSocket) -> None:
-        await websocket.accept()
-        self._connections.setdefault(run_id, set()).add(websocket)
-
-    def disconnect(self, run_id: str, websocket: WebSocket) -> None:
-        connections = self._connections.get(run_id)
-        if not connections:
-            return
-        connections.discard(websocket)
-        if not connections:
-            self._connections.pop(run_id, None)
-
-    async def broadcast(self, run_id: str, event: dict) -> None:
-        connections = list(self._connections.get(run_id, set()))
-        for websocket in connections:
-            try:
-                await websocket.send_json(event)
-            except RuntimeError:
-                self.disconnect(run_id, websocket)
-
-
-run_ws_hub = RunWebSocketHub()
 
 
 @gateway_router.post("", response_model=InvocationResponse, status_code=201)
@@ -562,18 +535,7 @@ async def _broadcast_run_events_after(
 ) -> None:
     events = service.list_run_events(session, run_id, from_seq=previous_terminal_seq + 1)
     for event in events:
-        await run_ws_hub.broadcast(run_id, _run_event_ws_message(run_id, event))
-
-
-def _run_event_ws_message(run_id: str, event: RunEventResponse) -> dict:
-    return {
-        "event_type": "terminal.event.appended",
-        "run_id": run_id,
-        "invocation_id": None,
-        "seq_no": event.seq_no,
-        "occurred_at": event.occurred_at.isoformat(),
-        "payload": event.model_dump(mode="json"),
-    }
+        await run_ws_hub.broadcast(run_id, run_event_ws_message(run_id, event))
 
 
 def _validate_terminal_upload(*, settings: Settings, filename: str, content: bytes, mime_type: str) -> None:
