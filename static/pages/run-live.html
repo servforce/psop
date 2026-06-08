@@ -76,8 +76,15 @@
             </div>
             <div>
               <dt class="field-label">实时连接</dt>
-              <dd class="mt-1">
-                <span class="status-badge" :class="statusBadgeTone(liveRunWsStatus === 'open' ? 'succeeded' : liveRunWsStatus === 'connecting' ? 'running' : liveRunWsStatus)" x-text="wsStatusLabel(liveRunWsStatus)"></span>
+              <dd class="mt-1 flex flex-wrap gap-2">
+                <span class="status-badge" :class="statusBadgeTone(liveRunWsStatus === 'open' ? 'succeeded' : liveRunWsStatus === 'connecting' ? 'running' : liveRunWsStatus)" :title="`Runtime ${wsStatusLabel(liveRunWsStatus)}`">
+                  <span>Runtime</span>
+                  <span x-text="wsStatusLabel(liveRunWsStatus)"></span>
+                </span>
+                <span class="status-badge" :class="statusBadgeTone(liveRunToolAuthorizationWsStatus === 'open' ? 'succeeded' : liveRunToolAuthorizationWsStatus === 'connecting' ? 'running' : liveRunToolAuthorizationWsStatus)" :title="`授权 ${wsStatusLabel(liveRunToolAuthorizationWsStatus)}`">
+                  <span>授权</span>
+                  <span x-text="wsStatusLabel(liveRunToolAuthorizationWsStatus)"></span>
+                </span>
               </dd>
             </div>
             <div>

@@ -46,6 +46,57 @@ def run_event_ws_message(run_id: str, event: Any) -> dict[str, Any]:
     }
 
 
+def run_trace_ws_message(run_id: str, event: Any) -> dict[str, Any]:
+    return {
+        "event_type": "trace.event.appended",
+        "run_id": run_id,
+        "invocation_id": None,
+        "seq_no": event.seq_no,
+        "occurred_at": event.occurred_at.isoformat(),
+        "payload": event.model_dump(mode="json"),
+    }
+
+
+def session_token_snapshot_ws_message(run_id: str, snapshot: Any) -> dict[str, Any]:
+    return {
+        "event_type": "session_token.snapshot.appended",
+        "run_id": run_id,
+        "invocation_id": None,
+        "seq_no": snapshot.seq_no,
+        "occurred_at": snapshot.created_at.isoformat(),
+        "payload": snapshot.model_dump(mode="json"),
+    }
+
+
+def run_updated_ws_message(run_id: str, run: Any) -> dict[str, Any]:
+    return {
+        "event_type": "run.updated",
+        "run_id": run_id,
+        "invocation_id": getattr(run, "invocation_id", None),
+        "seq_no": max(
+            int(getattr(run, "latest_run_event_seq", 0) or 0),
+            int(getattr(run, "latest_trace_seq", 0) or 0),
+            int(getattr(run, "latest_snapshot_seq", 0) or 0),
+        ),
+        "occurred_at": run.updated_at.isoformat(),
+        "payload": run.model_dump(mode="json"),
+    }
+
+
+def run_bindings_ws_message(run_id: str, bindings: list[Any], *, action: str = "updated") -> dict[str, Any]:
+    event_type = "binding.resolved" if action == "resolved" else "binding.updated"
+    return {
+        "event_type": event_type,
+        "run_id": run_id,
+        "invocation_id": None,
+        "seq_no": 0,
+        "occurred_at": None,
+        "payload": {
+            "bindings": [binding.model_dump(mode="json") for binding in bindings],
+        },
+    }
+
+
 def tool_authorization_ws_message(authorization: Any, *, action: str) -> dict[str, Any]:
     event_type = {
         "requested": "tool.authorization_requested",

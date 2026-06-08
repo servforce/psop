@@ -1050,6 +1050,9 @@
       liveRunWs: null,
       liveRunWsRunId: "",
       liveRunWsStatus: "idle",
+      liveRunToolAuthorizationWs: null,
+      liveRunToolAuthorizationWsRunId: "",
+      liveRunToolAuthorizationWsStatus: "idle",
       replayDetail: null,
       invocationForm: {
         skill_key: "",

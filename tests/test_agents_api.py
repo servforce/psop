@@ -543,6 +543,9 @@ def test_runtime_cancel_cancels_open_tool_authorizations_and_agent_run() -> None
             with client.websocket_connect("/ws/tool-authorizations") as tool_authorization_ws:
                 tool_authorization_ws_connected = tool_authorization_ws.receive_json()
                 cancel_response = client.post(f"/api/v1/runs/{run_id}/cancel", json={"reason": "用户取消运行"})
+                cancelled_trace_ws_message = run_ws.receive_json()
+                cancelled_snapshot_ws_message = run_ws.receive_json()
+                cancelled_run_updated_ws_message = run_ws.receive_json()
                 cancelled_run_ws_message = run_ws.receive_json()
                 cancelled_tool_authorization_ws_message = tool_authorization_ws.receive_json()
 
@@ -572,6 +575,12 @@ def test_runtime_cancel_cancels_open_tool_authorizations_and_agent_run() -> None
     assert cancelled_agent_run_response.json()["error_message"] == "tool_authorization_cancelled"
     assert tool_calls_response.json()[0]["status"] == "denied"
 
+    assert cancelled_trace_ws_message["event_type"] == "trace.event.appended"
+    assert cancelled_trace_ws_message["payload"]["event_type"] == "runtime.cancelled"
+    assert cancelled_snapshot_ws_message["event_type"] == "session_token.snapshot.appended"
+    assert cancelled_snapshot_ws_message["payload"]["selection_summary"]["reason"] == "cancelled"
+    assert cancelled_run_updated_ws_message["event_type"] == "run.updated"
+    assert cancelled_run_updated_ws_message["payload"]["status"] == "cancelled"
     assert cancelled_run_ws_message["event_type"] == "terminal.event.appended"
     assert cancelled_run_ws_message["payload"]["event_kind"] == "tool_authorization_response"
     assert cancelled_run_ws_message["payload"]["payload_inline"]["decision"] == "cancelled"

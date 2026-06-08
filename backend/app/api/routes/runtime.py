@@ -45,8 +45,12 @@ from app.runtime.schemas import (
 from app.runtime.service import RuntimeService
 from app.runtime.websocket import (
     TOOL_AUTHORIZATION_WS_CHANNEL,
+    run_bindings_ws_message,
     run_event_ws_message,
+    run_trace_ws_message,
+    run_updated_ws_message,
     run_ws_hub,
+    session_token_snapshot_ws_message,
     tool_authorization_ws_hub,
     tool_authorization_ws_message,
 )
@@ -130,7 +134,23 @@ async def cancel_run(
 ) -> RunResponse:
     request = payload or CancelRunRequest()
     reason = request.reason.strip() or "cancelled by user"
+    previous_run = service.get_run(session, run_id)
+    previous_trace_seq = previous_run.latest_trace_seq
+    previous_snapshot_seq = previous_run.latest_snapshot_seq
     run = service.cancel_run(session, run_id, reason=reason)
+    await _broadcast_run_traces_after(
+        run_id,
+        previous_trace_seq,
+        session=session,
+        service=service,
+    )
+    await _broadcast_snapshots_after(
+        run_id,
+        previous_snapshot_seq,
+        session=session,
+        service=service,
+    )
+    await _broadcast_run_updated(run_id, session=session, service=service)
     cancelled_authorizations = agent_service.cancel_open_tool_authorizations_for_run(session, run_id, reason=reason)
     await _broadcast_cancelled_tool_authorizations(
         session=session,
@@ -178,13 +198,23 @@ def list_run_bindings(
 
 
 @runs_router.post("/{run_id}/bindings/resolve", response_model=list[RunCapabilityBindingResponse])
-def resolve_run_bindings(
+async def resolve_run_bindings(
     run_id: str,
     payload: ResolveRunBindingsRequest,
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
 ) -> list[RunCapabilityBindingResponse]:
-    return service.resolve_run_bindings(session, run_id, payload)
+    previous_trace_seq = service.get_run(session, run_id).latest_trace_seq
+    bindings = service.resolve_run_bindings(session, run_id, payload)
+    await _broadcast_run_traces_after(
+        run_id,
+        previous_trace_seq,
+        session=session,
+        service=service,
+    )
+    await run_ws_hub.broadcast(run_id, run_bindings_ws_message(run_id, bindings))
+    await _broadcast_run_updated(run_id, session=session, service=service)
+    return bindings
 
 
 @runs_router.get("/{run_id}/bindings/{binding_id}", response_model=RunCapabilityBindingResponse)
@@ -317,7 +347,10 @@ async def append_run_event(
         settings=settings,
         object_store=object_store,
     )
-    previous_terminal_seq = service.get_run(session, run_id).latest_run_event_seq
+    previous_run = service.get_run(session, run_id)
+    previous_terminal_seq = previous_run.latest_run_event_seq
+    previous_trace_seq = previous_run.latest_trace_seq
+    previous_snapshot_seq = previous_run.latest_snapshot_seq
     result = service.append_run_event(session, run_id, payload, idempotency_key=idempotency_key)
     await _broadcast_run_events_after(
         run_id,
@@ -325,6 +358,19 @@ async def append_run_event(
         session=session,
         service=service,
     )
+    await _broadcast_run_traces_after(
+        run_id,
+        previous_trace_seq,
+        session=session,
+        service=service,
+    )
+    await _broadcast_snapshots_after(
+        run_id,
+        previous_snapshot_seq,
+        session=session,
+        service=service,
+    )
+    await _broadcast_run_updated(run_id, session=session, service=service)
     return result
 
 
@@ -552,6 +598,41 @@ async def _broadcast_run_events_after(
     events = service.list_run_events(session, run_id, from_seq=previous_terminal_seq + 1)
     for event in events:
         await run_ws_hub.broadcast(run_id, run_event_ws_message(run_id, event))
+
+
+async def _broadcast_run_traces_after(
+    run_id: str,
+    previous_trace_seq: int,
+    *,
+    session: Session,
+    service: RuntimeService,
+) -> None:
+    traces = service.list_run_traces(session, run_id)
+    for trace in traces:
+        if trace.seq_no > previous_trace_seq:
+            await run_ws_hub.broadcast(run_id, run_trace_ws_message(run_id, trace))
+
+
+async def _broadcast_snapshots_after(
+    run_id: str,
+    previous_snapshot_seq: int,
+    *,
+    session: Session,
+    service: RuntimeService,
+) -> None:
+    snapshots = service.list_snapshots(session, run_id)
+    for snapshot in snapshots:
+        if snapshot.seq_no > previous_snapshot_seq:
+            await run_ws_hub.broadcast(run_id, session_token_snapshot_ws_message(run_id, snapshot))
+
+
+async def _broadcast_run_updated(
+    run_id: str,
+    *,
+    session: Session,
+    service: RuntimeService,
+) -> None:
+    await run_ws_hub.broadcast(run_id, run_updated_ws_message(run_id, service.get_run(session, run_id)))
 
 
 async def _broadcast_cancelled_tool_authorizations(

@@ -2,7 +2,54 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-function loadRuntimeMethods(locationSearch = "") {
+function createFakeWebSocketClass() {
+  const instances = [];
+
+  class FakeWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+
+    constructor(url) {
+      this.url = url;
+      this.readyState = FakeWebSocket.CONNECTING;
+      this.listeners = {};
+      instances.push(this);
+    }
+
+    addEventListener(type, handler) {
+      this.listeners[type] = this.listeners[type] || [];
+      this.listeners[type].push(handler);
+    }
+
+    close() {
+      this.readyState = FakeWebSocket.CLOSED;
+      this.emit("close", {});
+    }
+
+    open() {
+      this.readyState = FakeWebSocket.OPEN;
+      this.emit("open", {});
+    }
+
+    message(payload) {
+      this.emit("message", { data: JSON.stringify(payload) });
+    }
+
+    emit(type, event) {
+      for (const handler of this.listeners[type] || []) {
+        handler(event);
+      }
+    }
+  }
+
+  FakeWebSocket.instances = instances;
+  return FakeWebSocket;
+}
+
+function loadRuntimeHarness(locationSearch = "") {
+  const FakeWebSocket = createFakeWebSocketClass();
   const source = fs.readFileSync(path.join(__dirname, "../../app/runtime.js"), "utf8");
   const helperNames = [
     "normalizePath",
@@ -34,10 +81,38 @@ function loadRuntimeMethods(locationSearch = "") {
       location: { search: locationSearch },
       PSOPConsoleHelpers: Object.fromEntries(helperNames.map((name) => [name, jest.fn()])),
       PSOPRuntimeEvents: {
-        mergeBySeq: (_existing, incoming) => incoming || [],
-        mergeById: (existing, incoming) => [...(existing || []), ...(incoming || [])]
+        mergeBySeq: (existing = [], incoming = []) => {
+          const map = new Map();
+          for (const item of existing || []) {
+            if (item && Number.isFinite(Number(item.seq_no))) {
+              map.set(Number(item.seq_no), item);
+            }
+          }
+          for (const item of incoming || []) {
+            if (item && Number.isFinite(Number(item.seq_no))) {
+              const seq = Number(item.seq_no);
+              map.set(seq, { ...(map.get(seq) || {}), ...item });
+            }
+          }
+          return Array.from(map.values()).sort((left, right) => Number(left.seq_no) - Number(right.seq_no));
+        },
+        mergeById: (existing = [], incoming = []) => {
+          const map = new Map();
+          for (const item of existing || []) {
+            if (item?.id) {
+              map.set(item.id, item);
+            }
+          }
+          for (const item of incoming || []) {
+            if (item?.id) {
+              map.set(item.id, { ...(map.get(item.id) || {}), ...item });
+            }
+          }
+          return Array.from(map.values());
+        }
       }
     },
+    WebSocket: FakeWebSocket,
     Promise,
     Set,
     Date,
@@ -53,9 +128,14 @@ function loadRuntimeMethods(locationSearch = "") {
   context.window.PSOPConsoleHelpers.buildSkillRunEventsPath = (skillId, runId) => (
     `/admin/skills/${skillId}/runs/${runId}/events`
   );
+  context.window.PSOPConsoleHelpers.resolveWsUrl = (_apiBaseUrl, pathname) => `ws://localhost${pathname}`;
   vm.createContext(context);
   vm.runInContext(source, context);
-  return context.window.PSOPConsoleRuntimeMethods;
+  return { methods: context.window.PSOPConsoleRuntimeMethods, FakeWebSocket };
+}
+
+function loadRuntimeMethods(locationSearch = "") {
+  return loadRuntimeHarness(locationSearch).methods;
 }
 
 test("run live page exposes embedded tool authorization tab", () => {
@@ -65,10 +145,14 @@ test("run live page exposes embedded tool authorization tab", () => {
 
   expect(html).toContain("liveRunInteractionTab === 'authorizations'");
   expect(html).toContain("liveRunToolAuthorizations.length");
+  expect(html).toContain("liveRunToolAuthorizationWsStatus");
   expect(html).toContain("decideLiveRunToolAuthorization(authorization, 'approve')");
   expect(html).toContain("decideLiveRunToolAuthorization(authorization, 'reject')");
   expect(appJs).toContain("liveRunToolAuthorizations");
+  expect(appJs).toContain("liveRunToolAuthorizationWsStatus");
   expect(runtimeJs).toContain("/runs/${runId}/tool-authorizations");
+  expect(runtimeJs).toContain("/ws/tool-authorizations");
+  expect(runtimeJs).toContain("connectLiveRunToolAuthorizationWebSocket");
   expect(runtimeJs).toContain("isToolAuthorizationRunEvent");
   expect(runtimeJs).toContain("refreshLiveRunToolAuthorizations");
 });
@@ -184,6 +268,265 @@ test("run live websocket authorization events refresh authorization list", async
 
   expect(context.apiRequest).toHaveBeenCalledWith("/runs/run-1/tool-authorizations");
   expect(context.liveRunToolAuthorizations).toEqual([latest]);
+});
+
+test("run live websocket events update replay timeline evidence incrementally", () => {
+  const methods = loadRuntimeMethods();
+  const runEvent = {
+    id: "run-event-1",
+    run_id: "run-1",
+    direction: "output",
+    event_kind: "agent_output",
+    seq_no: 2,
+    payload_inline: "请检查连接件。",
+    parts: [],
+    occurred_at: "2026-06-08T00:00:02.000Z"
+  };
+  const traceEvent = {
+    id: "trace-1",
+    run_id: "run-1",
+    phase: "instruct_collect_context",
+    event_type: "runtime.wait_checkpoint.entered",
+    seq_no: 3,
+    payload: {
+      wait: { checkpoint_id: "collect_context_evidence" },
+      summary: "等待用户提交现场证据。"
+    },
+    agent_run_id: "agent-run-1",
+    occurred_at: "2026-06-08T00:00:03.000Z"
+  };
+  const binding = {
+    id: "binding-1",
+    requirement_key: "capture.image",
+    capability: "terminal.upload",
+    target_kind: "web"
+  };
+  const snapshot = {
+    id: "snapshot-2",
+    run_id: "run-1",
+    seq_no: 2,
+    token_payload: { phase: "instruct_collect_context" },
+    enabled_set: ["instruct_collect_context"],
+    selection_summary: { selected: "collect_context", next_phase: "instruct_collect_context" },
+    snapshot_hash: "hash-2",
+    created_at: "2026-06-08T00:00:04.000Z"
+  };
+  const updatedRun = {
+    id: "run-1",
+    status: "succeeded",
+    runtime_phase: "completed",
+    latest_snapshot_seq: 2,
+    latest_run_event_seq: 2,
+    latest_terminal_seq: 2,
+    latest_trace_seq: 3,
+    current_step: "",
+    wait_reason: "",
+    expected_inputs: [],
+    final_output: "测试任务已完成",
+    updated_at: "2026-06-08T00:00:05.000Z"
+  };
+  const context = {
+    ...methods,
+    liveRun: { id: "run-1", status: "waiting_input", latest_snapshot_seq: 1 },
+    liveRunTerminalEvents: [],
+    liveRunTraceEvents: [],
+    liveRunBindings: [],
+    liveRunToolAuthorizations: [],
+    replayDetail: {
+      run: { id: "run-1" },
+      timeline: [],
+      run_events: [],
+      terminal_events: [],
+      run_traces: [],
+      trace_events: [],
+      eg_node_path: [],
+      bindings: [],
+      snapshots: [
+        {
+          id: "snapshot-1",
+          run_id: "run-1",
+          seq_no: 1,
+          token_payload: { phase: "collect_context" },
+          enabled_set: ["collect_context"],
+          selection_summary: { selected: "start", next_phase: "collect_context" },
+          snapshot_hash: "hash-1",
+          created_at: "2026-06-08T00:00:01.000Z"
+        }
+      ]
+    },
+    selectedLiveRunSnapshotBaseSeq: "",
+    selectedLiveRunSnapshotTargetSeq: "",
+    ensureLiveRunProcessSelection: jest.fn(),
+    scrollTerminalTranscriptToBottom: jest.fn()
+  };
+
+  methods.handleRunWsEvent.call(context, {
+    event_type: "terminal.event.appended",
+    payload: runEvent
+  });
+  methods.handleRunWsEvent.call(context, {
+    event_type: "trace.event.appended",
+    payload: traceEvent
+  });
+  methods.handleRunWsEvent.call(context, {
+    event_type: "binding.updated",
+    payload: { bindings: [binding] }
+  });
+  methods.handleRunWsEvent.call(context, {
+    event_type: "session_token.snapshot.appended",
+    payload: snapshot
+  });
+  methods.handleRunWsEvent.call(context, {
+    event_type: "run.updated",
+    payload: updatedRun
+  });
+
+  expect(context.liveRunTerminalEvents).toEqual([runEvent]);
+  expect(context.liveRunTraceEvents).toEqual([traceEvent]);
+  expect(methods.liveRunReplayTerminalCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayTraceCount.call(context)).toBe(1);
+  expect(context.replayDetail.run_events).toEqual([runEvent]);
+  expect(context.replayDetail.terminal_events).toEqual([runEvent]);
+  expect(context.replayDetail.run_traces).toEqual([traceEvent]);
+  expect(context.replayDetail.trace_events).toEqual([traceEvent]);
+  expect(context.replayDetail.bindings).toEqual([binding]);
+  expect(methods.liveRunReplaySnapshots.call(context).map((item) => item.seq_no)).toEqual([1, 2]);
+  expect(context.liveRun.latest_snapshot_seq).toBe(2);
+  expect(context.liveRun.status).toBe("succeeded");
+  expect(context.liveRun.final_output).toBe("测试任务已完成");
+  expect(context.replayDetail.run.status).toBe("succeeded");
+  expect(context.selectedLiveRunSnapshotBaseSeq).toBe("1");
+  expect(context.selectedLiveRunSnapshotTargetSeq).toBe("2");
+  expect(methods.liveRunReplayTimeline.call(context).map((item) => item.source_kind)).toEqual([
+    "run_event",
+    "run_trace"
+  ]);
+  expect(methods.liveRunReplayTimeline.call(context).map((item) => item.title)).toEqual([
+    "终端输出",
+    "等待现场证据"
+  ]);
+  expect(methods.liveRunReplayEgNodePathCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayEgNodePath.call(context)[0]).toMatchObject({
+    trace_id: "trace-1",
+    node_id: "instruct_collect_context",
+    checkpoint_id: "collect_context_evidence",
+    agent_run_id: "agent-run-1"
+  });
+});
+
+test("run live listens for executed tool authorization updates scoped to the current run", async () => {
+  const { methods, FakeWebSocket } = loadRuntimeHarness();
+  const pending = {
+    id: "auth-1",
+    run_id: "run-1",
+    status: "pending",
+    tool_name: "psop.repository.commit_patch"
+  };
+  const executed = {
+    ...pending,
+    status: "executed",
+    executed_at: "2026-06-08T00:00:00Z"
+  };
+  const refreshedReplayDetail = {
+    run: { id: "run-1" },
+    agent_tool_authorizations: [executed],
+    agent_events: [
+      {
+        id: "agent-event-1",
+        agent_run_id: "agent-run-1",
+        event_type: "tool.authorization_executed",
+        phase: "tool_authorization",
+        seq_no: 7
+      }
+    ]
+  };
+  const context = {
+    ...methods,
+    apiBaseUrl: "/api/v1",
+    liveRun: { id: "run-1" },
+    liveRunToolAuthorizations: [pending],
+    replayDetail: {
+      run: { id: "run-1" },
+      agent_tool_authorizations: [pending],
+      agent_events: []
+    },
+    liveRunToolAuthorizationWs: null,
+    liveRunToolAuthorizationWsRunId: "",
+    liveRunToolAuthorizationWsStatus: "idle",
+    selectedLiveRunSnapshotBaseSeq: "",
+    selectedLiveRunSnapshotTargetSeq: "",
+    toolAuthorizations: [],
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/replay/runs/run-1") {
+        return refreshedReplayDetail;
+      }
+      return null;
+    }),
+    replaceToolAuthorization: jest.fn()
+  };
+
+  expect(methods.connectLiveRunToolAuthorizationWebSocket.call(context, "run-1")).toBe(true);
+
+  expect(FakeWebSocket.instances).toHaveLength(1);
+  expect(FakeWebSocket.instances[0].url).toBe("ws://localhost/ws/tool-authorizations");
+  expect(context.liveRunToolAuthorizationWsStatus).toBe("connecting");
+
+  FakeWebSocket.instances[0].open();
+  expect(context.liveRunToolAuthorizationWsStatus).toBe("open");
+
+  FakeWebSocket.instances[0].message({
+    event_type: "tool.authorization_executed",
+    run_id: "other-run",
+    payload: { ...executed, id: "auth-other", run_id: "other-run" }
+  });
+  expect(context.liveRunToolAuthorizations).toEqual([pending]);
+  expect(context.apiRequest).not.toHaveBeenCalled();
+
+  FakeWebSocket.instances[0].message({
+    event_type: "tool.authorization_executed",
+    run_id: "run-1",
+    payload: executed
+  });
+
+  expect(context.liveRunToolAuthorizations).toEqual([executed]);
+  expect(methods.liveRunReplayToolAuthorizations.call(context)).toEqual([executed]);
+  expect(context.replaceToolAuthorization).toHaveBeenCalledWith(executed);
+  expect(context.apiRequest).toHaveBeenCalledWith("/replay/runs/run-1");
+
+  await methods.refreshLiveRunReplayDetail.call(context, "run-1");
+
+  expect(context.replayDetail).toEqual(refreshedReplayDetail);
+  expect(methods.liveRunReplayAgentEventCount.call(context)).toBe(1);
+
+  methods.disconnectLiveRunToolAuthorizationWebSocket.call(context);
+
+  expect(context.liveRunToolAuthorizationWs).toBeNull();
+  expect(context.liveRunToolAuthorizationWsStatus).toBe("idle");
+});
+
+test("loadReplayDetail accepts replay detail without a live run context", async () => {
+  const methods = loadRuntimeMethods();
+  const replayDetail = { run: { id: "run-standalone" }, timeline: [] };
+  const context = {
+    ...methods,
+    busy: { replayDetail: false },
+    liveRun: null,
+    replayDetail: null,
+    selectedLiveRunSnapshotBaseSeq: "",
+    selectedLiveRunSnapshotTargetSeq: "",
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/replay/runs/run-standalone") {
+        return replayDetail;
+      }
+      return null;
+    })
+  };
+
+  await methods.loadReplayDetail.call(context, "run-standalone");
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/replay/runs/run-standalone");
+  expect(context.replayDetail).toEqual(replayDetail);
+  expect(context.busy.replayDetail).toBe(false);
 });
 
 test("run replay selection follows event id from location", () => {

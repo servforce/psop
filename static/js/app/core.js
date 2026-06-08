@@ -455,6 +455,7 @@
         this.clearNotice();
         if (!["run-live", "skill-run-live", "skill-debug-live"].includes(this.route.name)) {
           this.disconnectRunWebSocket();
+          this.disconnectLiveRunToolAuthorizationWebSocket?.();
           this.replayDetail = null;
         }
         if (this.route.name !== "skill-test-scenario-review") {

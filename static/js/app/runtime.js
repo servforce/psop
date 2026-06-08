@@ -148,6 +148,7 @@
           this.syncLiveRunInteractionTabFromRoute(isSameRun);
           this.syncLiveRunReplaySelectionFromLocation();
           this.connectRunWebSocket(runId);
+          this.connectLiveRunToolAuthorizationWebSocket(runId);
         } finally {
           this.busy.liveRun = false;
         }
@@ -323,22 +324,112 @@
       },
 
 
+      connectLiveRunToolAuthorizationWebSocket(runId = this.liveRun?.id) {
+        const id = String(runId || "").trim();
+        if (!id || typeof WebSocket === "undefined" || typeof resolveWsUrl !== "function") {
+          return false;
+        }
+        if (
+          this.liveRunToolAuthorizationWs &&
+          this.liveRunToolAuthorizationWsRunId === id &&
+          [WebSocket.CONNECTING, WebSocket.OPEN].includes(this.liveRunToolAuthorizationWs.readyState)
+        ) {
+          return true;
+        }
+
+        this.disconnectLiveRunToolAuthorizationWebSocket();
+        const socket = new WebSocket(resolveWsUrl(this.apiBaseUrl, "/ws/tool-authorizations"));
+        this.liveRunToolAuthorizationWs = socket;
+        this.liveRunToolAuthorizationWsRunId = id;
+        this.liveRunToolAuthorizationWsStatus = "connecting";
+        socket.addEventListener("open", () => {
+          if (this.liveRunToolAuthorizationWs === socket) {
+            this.liveRunToolAuthorizationWsStatus = "open";
+          }
+        });
+        socket.addEventListener("message", (event) => {
+          try {
+            this.handleLiveRunToolAuthorizationWsEvent(JSON.parse(event.data));
+          } catch {
+            // Ignore malformed authorization events; REST refresh remains the recovery path.
+          }
+        });
+        socket.addEventListener("close", () => {
+          if (this.liveRunToolAuthorizationWs === socket) {
+            this.liveRunToolAuthorizationWsStatus = "closed";
+          }
+        });
+        socket.addEventListener("error", () => {
+          if (this.liveRunToolAuthorizationWs === socket) {
+            this.liveRunToolAuthorizationWsStatus = "error";
+          }
+        });
+        return true;
+      },
+
+
+      disconnectLiveRunToolAuthorizationWebSocket() {
+        if (this.liveRunToolAuthorizationWs) {
+          this.liveRunToolAuthorizationWs.close();
+        }
+        this.liveRunToolAuthorizationWs = null;
+        this.liveRunToolAuthorizationWsRunId = "";
+        this.liveRunToolAuthorizationWsStatus = "idle";
+      },
+
+
+      handleLiveRunToolAuthorizationWsEvent(message) {
+        if (!String(message?.event_type || "").startsWith("tool.authorization_") || !message?.payload) {
+          return;
+        }
+        const currentRunId = String(this.liveRun?.id || this.liveRunToolAuthorizationWsRunId || "").trim();
+        const messageRunId = String(message.run_id || message.payload?.run_id || "").trim();
+        if (!currentRunId || messageRunId !== currentRunId) {
+          return;
+        }
+        this.replaceLiveRunToolAuthorization(message.payload);
+        this.replaceLiveRunReplayToolAuthorization(message.payload);
+        this.refreshLiveRunReplayDetail(currentRunId);
+      },
+
+
       handleRunWsEvent(event) {
         if (!event || event.event_type === "ws.connected") {
           return;
         }
+        if (event.event_type === "run.updated" && event.payload) {
+          this.applyLiveRunUpdate(event.payload);
+        }
         if (event.event_type === "terminal.event.appended" && event.payload) {
           this.mergeTerminalEvents([event.payload]);
+          this.mergeLiveRunReplayRunEvents([event.payload]);
           if (this.isToolAuthorizationRunEvent(event.payload)) {
             this.refreshLiveRunToolAuthorizations();
           }
         }
         if (event.event_type === "trace.event.appended" && event.payload) {
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq(this.liveRunTraceEvents, [event.payload]);
+          this.mergeLiveRunReplayRunTraces([event.payload]);
+        }
+        if (event.event_type === "session_token.snapshot.appended" && event.payload) {
+          this.mergeLiveRunReplaySnapshots([event.payload]);
         }
         if (["binding.resolved", "binding.updated"].includes(event.event_type) && event.payload?.bindings) {
           this.liveRunBindings = window.PSOPRuntimeEvents.mergeById(this.liveRunBindings, event.payload.bindings);
+          this.mergeLiveRunReplayBindings(event.payload.bindings);
         }
+      },
+
+      applyLiveRunUpdate(run) {
+        if (!run?.id || this.liveRun?.id !== run.id) {
+          return;
+        }
+        this.liveRun = { ...this.liveRun, ...run };
+        if (this.replayDetail?.run?.id === run.id) {
+          this.replayDetail.run = { ...this.replayDetail.run, ...run };
+        }
+        this.liveRunTerminalSession = this.liveRunTerminalSessionFromRun(this.liveRun);
+        this.updateLiveRunLatestTerminalSeq();
       },
 
 
@@ -1204,11 +1295,293 @@
       async loadReplayDetail(runId) {
         this.busy.replayDetail = true;
         try {
-          this.replayDetail = await this.apiRequest(`/replay/runs/${runId}`);
-          this.ensureLiveRunSnapshotCompareSelection();
+          await this.refreshLiveRunReplayDetail(runId);
         } finally {
           this.busy.replayDetail = false;
         }
+      },
+
+      async refreshLiveRunReplayDetail(runId = this.liveRun?.id) {
+        const id = String(runId || "").trim();
+        if (!id || typeof this.apiRequest !== "function") {
+          return null;
+        }
+        try {
+          const replayDetail = await this.apiRequest(`/replay/runs/${encodeURIComponent(id)}`);
+          const liveRunId = String(this.liveRun?.id || "").trim();
+          const replayRunId = String(replayDetail?.run?.id || "").trim();
+          if (!replayDetail || replayRunId !== id || (liveRunId && replayRunId !== liveRunId)) {
+            return null;
+          }
+          this.replayDetail = replayDetail;
+          this.ensureLiveRunSnapshotCompareSelection();
+          this.syncLiveRunReplaySelectionFromLocation();
+          return replayDetail;
+        } catch {
+          // Replay can recover on the next explicit Run Live refresh.
+          return null;
+        }
+      },
+
+      liveRunReplayCanMerge() {
+        return Boolean(this.replayDetail?.run?.id && this.liveRun?.id && this.replayDetail.run.id === this.liveRun.id);
+      },
+
+
+      liveRunReplayEventBelongsToCurrentRun(event) {
+        const runId = String(event?.run_id || "").trim();
+        return !runId || runId === this.liveRun?.id;
+      },
+
+
+      mergeLiveRunReplayRunEvents(events = []) {
+        if (!this.liveRunReplayCanMerge()) {
+          return;
+        }
+        const incoming = (events || []).filter((event) => event?.id && this.liveRunReplayEventBelongsToCurrentRun(event));
+        if (!incoming.length) {
+          return;
+        }
+        const merged = window.PSOPRuntimeEvents.mergeBySeq(
+          this.replayDetail.run_events || this.replayDetail.terminal_events || [],
+          incoming
+        );
+        this.replayDetail.run_events = merged;
+        this.replayDetail.terminal_events = merged;
+        this.mergeLiveRunReplayTimeline(incoming.map((event) => this.liveRunReplayRunEventTimelineItem(event)));
+      },
+
+
+      mergeLiveRunReplayRunTraces(traces = []) {
+        if (!this.liveRunReplayCanMerge()) {
+          return;
+        }
+        const incoming = (traces || []).filter((trace) => trace?.id && this.liveRunReplayEventBelongsToCurrentRun(trace));
+        if (!incoming.length) {
+          return;
+        }
+        const merged = window.PSOPRuntimeEvents.mergeBySeq(
+          this.replayDetail.run_traces || this.replayDetail.trace_events || [],
+          incoming
+        );
+        this.replayDetail.run_traces = merged;
+        this.replayDetail.trace_events = merged;
+        this.mergeLiveRunReplayTimeline(incoming.map((trace) => this.liveRunReplayTraceTimelineItem(trace)));
+        this.mergeLiveRunReplayEgNodePath(incoming);
+      },
+
+
+      mergeLiveRunReplayBindings(bindings = []) {
+        if (!this.liveRunReplayCanMerge() || !Array.isArray(bindings) || !bindings.length) {
+          return;
+        }
+        this.replayDetail.bindings = window.PSOPRuntimeEvents.mergeById(this.replayDetail.bindings || [], bindings);
+      },
+
+
+      mergeLiveRunReplaySnapshots(snapshots = []) {
+        if (!this.liveRunReplayCanMerge()) {
+          return;
+        }
+        const incoming = (snapshots || []).filter((snapshot) => (
+          snapshot?.id &&
+          (!snapshot.run_id || snapshot.run_id === this.liveRun?.id)
+        ));
+        if (!incoming.length) {
+          return;
+        }
+        this.replayDetail.snapshots = window.PSOPRuntimeEvents.mergeBySeq(this.replayDetail.snapshots || [], incoming);
+        if (this.liveRun) {
+          const latestSeq = Math.max(
+            Number(this.liveRun.latest_snapshot_seq || 0),
+            ...incoming.map((snapshot) => Number(snapshot.seq_no || 0))
+          );
+          this.liveRun.latest_snapshot_seq = latestSeq;
+        }
+        this.ensureLiveRunSnapshotCompareSelection();
+      },
+
+
+      mergeLiveRunReplayTimeline(items = []) {
+        if (!this.liveRunReplayCanMerge()) {
+          return;
+        }
+        const map = new Map();
+        for (const item of this.replayDetail.timeline || []) {
+          map.set(this.liveRunReplayTimelineMergeKey(item), item);
+        }
+        for (const item of items || []) {
+          if (!item) {
+            continue;
+          }
+          const key = this.liveRunReplayTimelineMergeKey(item);
+          map.set(key, { ...(map.get(key) || {}), ...item });
+        }
+        this.replayDetail.timeline = Array.from(map.values()).sort((left, right) => this.compareLiveRunReplayItems(left, right));
+      },
+
+
+      liveRunReplayTimelineMergeKey(item) {
+        if (item?.source_kind && item?.source_id) {
+          return `${item.source_kind}:${item.source_id}`;
+        }
+        return [item?.seq_no ?? "", item?.event_type || "", item?.occurred_at || ""].join(":");
+      },
+
+
+      compareLiveRunReplayItems(left, right) {
+        const leftTime = Date.parse(left?.occurred_at || "") || 0;
+        const rightTime = Date.parse(right?.occurred_at || "") || 0;
+        if (leftTime !== rightTime) {
+          return leftTime - rightTime;
+        }
+        const leftSeq = Number(left?.seq_no || 0);
+        const rightSeq = Number(right?.seq_no || 0);
+        if (leftSeq !== rightSeq) {
+          return leftSeq - rightSeq;
+        }
+        return String(left?.event_type || "").localeCompare(String(right?.event_type || ""));
+      },
+
+
+      liveRunReplayRunEventTimelineItem(event) {
+        return {
+          seq_no: Number(event?.seq_no || 0),
+          phase: "terminal",
+          event_type: "terminal.event.appended",
+          title: event?.direction === "input" ? "终端输入" : "终端输出",
+          summary: this.liveRunReplayRunEventSummary(event),
+          payload: event || {},
+          occurred_at: event?.occurred_at || event?.created_at || "",
+          source_kind: "run_event",
+          source_id: event?.id || ""
+        };
+      },
+
+
+      liveRunReplayRunEventSummary(event) {
+        const parts = Array.isArray(event?.parts) ? event.parts : [];
+        if (parts.length) {
+          return parts
+            .map((part) => part?.text || part?.metadata?.filename || part?.part_id || "")
+            .filter(Boolean)
+            .join("\n");
+        }
+        if (typeof event?.payload_inline === "string") {
+          return event.payload_inline;
+        }
+        if (event?.payload_inline === null || event?.payload_inline === undefined) {
+          return event?.event_kind || "";
+        }
+        try {
+          return JSON.stringify(event.payload_inline);
+        } catch {
+          return String(event.payload_inline);
+        }
+      },
+
+
+      liveRunReplayTraceTimelineItem(trace) {
+        const payload = trace?.payload && typeof trace.payload === "object" ? trace.payload : {};
+        const observation = payload.observation && typeof payload.observation === "object" ? payload.observation : {};
+        const summary = (
+          observation.final_response ||
+          observation.content ||
+          observation.result ||
+          observation.user_input ||
+          payload.summary ||
+          trace?.event_type ||
+          ""
+        );
+        return {
+          seq_no: Number(trace?.seq_no || 0),
+          phase: trace?.phase || "",
+          event_type: trace?.event_type || "",
+          title: this.liveRunReplayTraceTitle(trace),
+          summary: String(summary),
+          payload,
+          occurred_at: trace?.occurred_at || trace?.created_at || "",
+          source_kind: "run_trace",
+          source_id: trace?.id || ""
+        };
+      },
+
+
+      liveRunReplayTraceTitle(trace) {
+        const titles = {
+          "binding.resolved": "绑定解析",
+          "binding.updated": "绑定更新",
+          "runtime.input.accepted": "输入",
+          "runtime.wait_checkpoint.entered": "等待现场证据",
+          "gateway.inference.completed": "LLM 输出",
+          "gateway.tool.completed": "工具调用",
+          "runtime.final.completed": "最终结果",
+          "runtime.aborted": "已中止",
+          "runtime.message_processing.failed": "消息处理失败",
+          "runtime.failed": "运行失败"
+        };
+        return titles[trace?.event_type] || trace?.event_type || "";
+      },
+
+
+      mergeLiveRunReplayEgNodePath(traces = []) {
+        const incoming = (traces || [])
+          .map((trace) => this.liveRunReplayEgNodePathItemFromTrace(trace))
+          .filter(Boolean);
+        if (!incoming.length) {
+          return;
+        }
+        const map = new Map();
+        for (const item of this.replayDetail.eg_node_path || []) {
+          map.set(`${item.trace_id}:${item.node_id}`, item);
+        }
+        for (const item of incoming) {
+          const key = `${item.trace_id}:${item.node_id}`;
+          map.set(key, { ...(map.get(key) || {}), ...item });
+        }
+        this.replayDetail.eg_node_path = Array.from(map.values()).sort((left, right) => this.compareLiveRunReplayItems(left, right));
+      },
+
+
+      liveRunReplayEgNodePathItemFromTrace(trace) {
+        const nodeId = this.liveRunReplayEgNodeIdFromTrace(trace);
+        if (!nodeId) {
+          return null;
+        }
+        const timelineItem = this.liveRunReplayTraceTimelineItem(trace);
+        const payload = trace?.payload && typeof trace.payload === "object" ? trace.payload : {};
+        const wait = payload.wait && typeof payload.wait === "object" ? payload.wait : {};
+        return {
+          seq_no: Number(trace?.seq_no || 0),
+          trace_id: trace?.id || "",
+          node_id: nodeId,
+          node_kind: String(payload.node_kind || ""),
+          phase: trace?.phase || "",
+          event_type: trace?.event_type || "",
+          title: timelineItem.title,
+          summary: timelineItem.summary,
+          checkpoint_id: String(payload.checkpoint_id || wait.checkpoint_id || ""),
+          agent_run_id: trace?.agent_run_id || null,
+          occurred_at: trace?.occurred_at || trace?.created_at || ""
+        };
+      },
+
+
+      liveRunReplayEgNodeIdFromTrace(trace) {
+        const payload = trace?.payload && typeof trace.payload === "object" ? trace.payload : {};
+        const wait = payload.wait && typeof payload.wait === "object" ? payload.wait : {};
+        if (typeof payload.node_id === "string" && payload.node_id) {
+          return payload.node_id;
+        }
+        if (typeof wait.entered_by_node === "string" && wait.entered_by_node) {
+          return wait.entered_by_node;
+        }
+        const phase = String(trace?.phase || "");
+        const eventType = String(trace?.event_type || "");
+        if (phase && !["binding", "fork", "failed", "cancelled"].includes(phase) && /^(runtime|gateway)\./.test(eventType)) {
+          return phase;
+        }
+        return "";
       },
 
 
@@ -1646,6 +2019,29 @@
           return [];
         }
         return this.replayDetail.agent_tool_authorizations || this.replayDetail.tool_authorizations || [];
+      },
+
+      replaceLiveRunReplayToolAuthorization(authorization) {
+        if (!authorization?.id || this.replayDetail?.run?.id !== this.liveRun?.id) {
+          return;
+        }
+        const listKeys = ["agent_tool_authorizations", "tool_authorizations"];
+        let mergedAny = false;
+        for (const key of listKeys) {
+          if (!Array.isArray(this.replayDetail[key])) {
+            continue;
+          }
+          const index = this.replayDetail[key].findIndex((item) => item.id === authorization.id);
+          if (index >= 0) {
+            this.replayDetail[key].splice(index, 1, authorization);
+          } else {
+            this.replayDetail[key].unshift(authorization);
+          }
+          mergedAny = true;
+        }
+        if (!mergedAny) {
+          this.replayDetail.agent_tool_authorizations = [authorization];
+        }
       },
 
 

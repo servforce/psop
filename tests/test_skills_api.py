@@ -2681,6 +2681,9 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
 
         with client.websocket_connect(f"/ws/runs/{run_id}") as websocket:
             connected = websocket.receive_json()
+            previous_run = client.get(f"/api/v1/runs/{run_id}").json()
+            previous_trace_seq = previous_run["latest_trace_seq"]
+            previous_snapshot_seq = previous_run["latest_snapshot_seq"]
             append_response = client.post(
                 f"/api/v1/terminal/sessions/{run_id}/events",
                 json={
@@ -2697,18 +2700,118 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
                 for event in terminal_events_response.json()
                 if event["seq_no"] >= append_response.json()["seq_no"]
             ]
-            messages = [websocket.receive_json() for _ in appended_events]
+            run_traces_response = client.get(f"/api/v1/runs/{run_id}/traces")
+            appended_traces = [
+                trace
+                for trace in run_traces_response.json()
+                if trace["seq_no"] > previous_trace_seq
+            ]
+            snapshots_response = client.get(f"/api/v1/runs/{run_id}/snapshots")
+            appended_snapshots = [
+                snapshot
+                for snapshot in snapshots_response.json()
+                if snapshot["seq_no"] > previous_snapshot_seq
+            ]
+            messages = [
+                websocket.receive_json()
+                for _ in range(len(appended_events) + len(appended_traces) + len(appended_snapshots) + 1)
+            ]
 
     assert invocation_response.status_code == 201
     assert connected["event_type"] == "ws.connected"
     assert append_response.status_code == 202
     assert terminal_events_response.status_code == 200
-    assert [message["event_type"] for message in messages] == ["terminal.event.appended"] * len(appended_events)
-    assert [message["seq_no"] for message in messages] == [event["seq_no"] for event in appended_events]
-    assert messages[0]["payload"]["payload_inline"] == "WS 输入"
-    assert messages[0]["seq_no"] == append_response.json()["seq_no"]
-    assert [message["payload"]["direction"] for message in messages] == ["input", "output", "output", "output"]
-    assert any("测试任务已完成" in str(message["payload"]["payload_inline"]) for message in messages)
+    assert run_traces_response.status_code == 200
+    assert snapshots_response.status_code == 200
+    terminal_messages = [message for message in messages if message["event_type"] == "terminal.event.appended"]
+    trace_messages = [message for message in messages if message["event_type"] == "trace.event.appended"]
+    snapshot_messages = [
+        message for message in messages if message["event_type"] == "session_token.snapshot.appended"
+    ]
+    run_updated_messages = [message for message in messages if message["event_type"] == "run.updated"]
+    assert len(terminal_messages) == len(appended_events)
+    assert len(trace_messages) == len(appended_traces)
+    assert len(snapshot_messages) == len(appended_snapshots)
+    assert len(run_updated_messages) == 1
+    assert [message["seq_no"] for message in terminal_messages] == [event["seq_no"] for event in appended_events]
+    assert [message["seq_no"] for message in trace_messages] == [trace["seq_no"] for trace in appended_traces]
+    assert [message["seq_no"] for message in snapshot_messages] == [
+        snapshot["seq_no"] for snapshot in appended_snapshots
+    ]
+    assert terminal_messages[0]["payload"]["payload_inline"] == "WS 输入"
+    assert terminal_messages[0]["seq_no"] == append_response.json()["seq_no"]
+    assert [message["payload"]["direction"] for message in terminal_messages] == ["input", "output", "output", "output"]
+    assert any("测试任务已完成" in str(message["payload"]["payload_inline"]) for message in terminal_messages)
+    assert "runtime.final.completed" in {message["payload"]["event_type"] for message in trace_messages}
+    assert snapshot_messages[-1]["payload"]["snapshot_hash"]
+    assert run_updated_messages[0]["payload"]["status"] == "succeeded"
+    assert "测试任务已完成" in run_updated_messages[0]["payload"]["final_output"]
+
+
+def test_run_websocket_broadcasts_binding_updates() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "ws-binding-demo",
+                "name": "WS Binding Demo",
+                "description": "Validate binding websocket broadcast.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{created['id']}/publish",
+            json={"publish_reason": "WS binding publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/gateway/invocations",
+            json={
+                "skill_key": "ws-binding-demo",
+                "input_envelope": {"user_input": "启动 binding WS 验证"},
+                "gateway_type": "terminal",
+                "terminal_context": {"terminal_kind": "web"},
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+
+        with client.websocket_connect(f"/ws/runs/{run_id}") as websocket:
+            connected = websocket.receive_json()
+            previous_trace_seq = client.get(f"/api/v1/runs/{run_id}").json()["latest_trace_seq"]
+            resolve_response = client.post(
+                f"/api/v1/runs/{run_id}/bindings/resolve",
+                json={
+                    "bindings": [
+                        {
+                            "requirement_key": "terminal.input",
+                            "target_kind": "web_terminal",
+                            "target_ref": "custom-terminal-target",
+                            "channel": "input",
+                        }
+                    ]
+                },
+            )
+            messages = [websocket.receive_json() for _ in range(3)]
+            run_traces_response = client.get(f"/api/v1/runs/{run_id}/traces")
+            appended_traces = [
+                trace
+                for trace in run_traces_response.json()
+                if trace["seq_no"] > previous_trace_seq
+            ]
+
+    assert invocation_response.status_code == 201
+    assert connected["event_type"] == "ws.connected"
+    assert resolve_response.status_code == 200
+    assert run_traces_response.status_code == 200
+    event_types = [message["event_type"] for message in messages]
+    assert event_types == ["trace.event.appended", "binding.updated", "run.updated"]
+    assert [trace["event_type"] for trace in appended_traces] == ["binding.updated"]
+    assert messages[0]["payload"]["event_type"] == "binding.updated"
+    assert messages[1]["payload"]["bindings"]
+    assert messages[1]["payload"]["bindings"][0]["target_ref"] == "custom-terminal-target"
+    assert messages[2]["payload"]["binding_summary"][0]["target_ref"] == "custom-terminal-target"
 
 
 def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:

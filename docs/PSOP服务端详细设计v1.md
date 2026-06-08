@@ -494,6 +494,10 @@ Claim 规则：
 - 连接后发送 `ws.connected`。
 - 服务端不接收业务输入；循环中只等待客户端消息以维持连接。
 - REST 成功追加 run event 后，当前进程内 hub 广播 `terminal.event.appended`。
+- REST 触发 Runtime Kernel 推进并新增 run trace 后，当前进程内 hub 广播 `trace.event.appended`。
+- REST 触发 Runtime Kernel 推进并新增 session token snapshot 后，当前进程内 hub 广播 `session_token.snapshot.appended`。
+- REST 触发 Runtime Kernel 改变 run 元数据后，当前进程内 hub 广播 `run.updated`。
+- REST 解析或更新 run capability binding 后，当前进程内 hub 广播 `binding.updated`。
 - WebSocket 不是状态源；客户端必须通过 REST 补齐缺失事件。
 
 ## 11. 可观测
