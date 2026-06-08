@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_pskill_draft_service, get_skill_test_service, get_skills_service
-from app.pskills.exceptions import SkillValidationError
+from app.pskills.activity import PSkillActivityService
+from app.pskills.exceptions import SkillsError, SkillValidationError
 from app.pskills.draft import PSkillDraftService
 from app.pskills.schemas import (
     ApplyPSkillDraftPatchRequest,
@@ -44,6 +47,7 @@ from app.testing.service import SkillTestService
 
 
 router = APIRouter(tags=["pskills"])
+pskill_activity_ws_router = APIRouter(prefix="/ws", tags=["ws"])
 
 
 @router.get("", response_model=list[SkillSummaryResponse])
@@ -226,6 +230,53 @@ def list_publish_records(
     service: SkillsService = Depends(get_skills_service),
 ) -> list[PSkillPublishRecordResponse]:
     return service.list_publish_records(session, skill_id=skill_id)
+
+
+@pskill_activity_ws_router.websocket("/pskills/{skill_id}/activity")
+async def pskill_activity_websocket(websocket: WebSocket, skill_id: str) -> None:
+    await websocket.accept()
+    await websocket.send_json(
+        {
+            "event_type": "ws.connected",
+            "pskill_id": skill_id,
+            "occurred_at": None,
+            "payload": {"message": "connected"},
+        }
+    )
+    service = PSkillActivityService()
+    last_payload = ""
+    try:
+        while True:
+            with websocket.app.state.db_manager.session() as session:
+                snapshot = service.build_snapshot(session, skill_id)
+            encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
+            if encoded != last_payload:
+                await websocket.send_json(
+                    {
+                        "event_type": "pskill.activity.snapshot",
+                        "pskill_id": skill_id,
+                        "occurred_at": snapshot["pskill"]["updated_at"],
+                        "payload": snapshot,
+                    }
+                )
+                last_payload = encoded
+            await asyncio.sleep(1)
+    except SkillsError as exc:
+        await websocket.send_json(
+            {
+                "event_type": "pskill.activity.error",
+                "pskill_id": skill_id,
+                "occurred_at": None,
+                "payload": {
+                    "code": exc.error_code,
+                    "message": exc.message,
+                    "details": exc.details,
+                },
+            }
+        )
+        await websocket.close(code=1008)
+    except (RuntimeError, WebSocketDisconnect):
+        return
 
 
 @router.post("/{skill_id}/raw-materials", response_model=PSkillMaterialDetailResponse, status_code=201)

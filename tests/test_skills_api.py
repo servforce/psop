@@ -1746,6 +1746,58 @@ def test_publish_skill_creates_published_version_and_record() -> None:
     assert versions_payload[1]["id"] == created["current_draft_version"]["id"]
 
 
+def test_pskill_activity_websocket_streams_publish_compile_snapshot() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "pskill-activity-ws",
+                "name": "PSkill Activity WS",
+                "description": "Validate PSkill activity websocket.",
+            },
+        ).json()
+        skill_id = created["id"]
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill_id}/publish",
+            json={"publish_reason": "Activity websocket publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+
+        with client.websocket_connect(f"/ws/pskills/{skill_id}/activity") as websocket:
+            connected = websocket.receive_json()
+            pending_snapshot = websocket.receive_json()
+            compile_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+            terminal_snapshot = websocket.receive_json()
+
+    assert publish_response.status_code == 202
+    assert connected["event_type"] == "ws.connected"
+    assert connected["pskill_id"] == skill_id
+
+    assert pending_snapshot["event_type"] == "pskill.activity.snapshot"
+    pending_payload = pending_snapshot["payload"]
+    assert pending_payload["pskill"]["id"] == skill_id
+    assert pending_payload["active"] is True
+    assert pending_payload["terminal"] is False
+    assert pending_payload["publishes"][0]["publish_status"] == "compiling"
+    assert pending_payload["compile_requests"][0]["id"] == compile_request_id
+    assert pending_payload["compile_requests"][0]["status"] == "pending"
+    assert pending_payload["compile_requests"][0]["progress"]["terminal"] is False
+
+    assert compile_response.status_code == 200
+    assert terminal_snapshot["event_type"] == "pskill.activity.snapshot"
+    terminal_payload = terminal_snapshot["payload"]
+    assert terminal_payload["active"] is False
+    assert terminal_payload["terminal"] is True
+    assert terminal_payload["pskill"]["latest_published_version_id"] == publish_response.json()["published_version"]["id"]
+    assert terminal_payload["publishes"][0]["publish_status"] == "published"
+    assert terminal_payload["compile_requests"][0]["status"] == "succeeded"
+    assert terminal_payload["compile_requests"][0]["artifact_id"]
+    assert terminal_payload["compile_requests"][0]["progress"]["terminal"] is True
+    assert terminal_payload["compile_requests"][0]["progress"]["terminal_status"] == "succeeded"
+
+
 def test_publish_gate_runs_after_publish_compile() -> None:
     client, _, _ = create_test_client()
 
