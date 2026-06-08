@@ -39,6 +39,7 @@ from app.agents.schemas import (
 )
 from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
+from app.runtime.tool_authorization_events import RunToolAuthorizationEventWriter
 
 
 DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
@@ -121,8 +122,13 @@ DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
 
 
 class AgentService:
-    def __init__(self, repository: AgentRepository | None = None) -> None:
+    def __init__(
+        self,
+        repository: AgentRepository | None = None,
+        run_tool_authorization_events: RunToolAuthorizationEventWriter | None = None,
+    ) -> None:
         self.repository = repository or AgentRepository()
+        self.run_tool_authorization_events = run_tool_authorization_events or RunToolAuthorizationEventWriter()
 
     def ensure_seed_data(self, session: Session) -> bool:
         changed = False
@@ -518,6 +524,9 @@ class AgentService:
             tool_call.status = "waiting_authorization"
         agent_run.status = "waiting_tool_authorization"
         session.flush()
+        if not authorization.run_event_id:
+            authorization.run_event_id = self.run_tool_authorization_events.append_request_event(session, authorization)
+            session.flush()
         self.append_event(
             session,
             agent_run.id,
@@ -580,6 +589,7 @@ class AgentService:
         tool_call = self.repository.get_tool_call(session, authorization.agent_tool_call_id)
         if tool_call:
             tool_call.status = "authorized"
+        self.run_tool_authorization_events.append_decision_event(session, authorization, decision="approved")
         self.append_event(
             session,
             agent_run.id,
@@ -624,6 +634,7 @@ class AgentService:
         tool_call = self.repository.get_tool_call(session, authorization.agent_tool_call_id)
         if tool_call:
             tool_call.status = "denied"
+        self.run_tool_authorization_events.append_decision_event(session, authorization, decision="rejected")
         self.append_event(
             session,
             agent_run.id,

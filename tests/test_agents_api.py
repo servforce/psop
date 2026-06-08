@@ -160,6 +160,99 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert [item["id"] for item in activate_authorizations_response.json()] == [reject_authorization["id"]]
 
 
+def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        skill = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "runtime-tool-auth-events",
+                "name": "Runtime Tool Auth Events",
+                "description": "Validate tool authorization events in Run Live.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill['id']}/publish",
+            json={"publish_reason": "Runtime tool authorization event test"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/runtime/invocations",
+            json={
+                "skill_key": "runtime-tool-auth-events",
+                "gateway_type": "web",
+                "terminal_context": {"terminal_kind": "web"},
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+        agent_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.runner",
+                "owner_type": "runtime_run",
+                "owner_id": run_id,
+                "run_id": run_id,
+                "input_payload": {"node_id": "commit-patch"},
+            },
+        )
+        agent_run = agent_run_response.json()
+        authorization_response = client.post(
+            "/api/v1/tool-authorizations",
+            json={
+                "agent_run_id": agent_run["id"],
+                "run_id": run_id,
+                "tool_name": "psop.repository.commit_patch",
+                "side_effect_level": "high_write",
+                "risk_level": "high",
+                "authorization_reason": "写 Git commit 属于高副作用操作。",
+                "tool_arguments_summary": {"path": "SKILL.md", "change": "append section"},
+                "expected_effect_summary": "提交 PSkill 源码 patch。",
+                "reversible": True,
+            },
+        )
+        authorization = authorization_response.json()
+        request_events_response = client.get(f"/api/v1/runs/{run_id}/events")
+        approve_response = client.post(
+            f"/api/v1/tool-authorizations/{authorization['id']}/approve",
+            json={"response_payload": {"approved_by": "tester"}},
+        )
+        response_events_response = client.get(f"/api/v1/runs/{run_id}/events")
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+
+    assert invocation_response.status_code == 201
+    assert agent_run_response.status_code == 201
+    assert authorization_response.status_code == 201
+    assert authorization["run_event_id"]
+    request_events = [
+        event for event in request_events_response.json() if event["event_kind"] == "tool_authorization_request"
+    ]
+    assert [event["id"] for event in request_events] == [authorization["run_event_id"]]
+    assert request_events[0]["agent_run_id"] == agent_run["id"]
+    assert request_events[0]["source_ref"] == {
+        "kind": "agent_tool_authorization",
+        "agent_run_id": agent_run["id"],
+        "authorization_id": authorization["id"],
+    }
+    assert request_events[0]["payload_inline"]["tool_name"] == "psop.repository.commit_patch"
+    assert request_events[0]["payload_inline"]["status"] == "pending"
+
+    assert approve_response.status_code == 200
+    response_events = [
+        event for event in response_events_response.json() if event["event_kind"] == "tool_authorization_response"
+    ]
+    assert len(response_events) == 1
+    assert response_events[0]["payload_inline"]["authorization_id"] == authorization["id"]
+    assert response_events[0]["payload_inline"]["decision"] == "approved"
+    assert response_events[0]["payload_inline"]["request_run_event_id"] == authorization["run_event_id"]
+
+    replay_run_events = replay_response.json()["run_events"]
+    replay_event_kinds = [event["event_kind"] for event in replay_run_events]
+    assert "tool_authorization_request" in replay_event_kinds
+    assert "tool_authorization_response" in replay_event_kinds
+
+
 def test_agent_version_api_creates_publishes_and_activates_draft() -> None:
     client, _, _ = create_test_client()
 
