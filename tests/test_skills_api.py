@@ -2182,8 +2182,16 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         )
         run_response = client.get(f"/api/v1/runs/{run_id}")
         trace_response = client.get(f"/api/v1/runs/{run_id}/traces")
+        trace_payload = trace_response.json()
+        replay_trace_id = next(
+            trace["id"]
+            for trace in trace_payload
+            if trace["event_type"] == "runtime.wait_checkpoint.entered"
+        )
         terminal_events_after_append_response = client.get(f"/api/v1/runs/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+        replay_trace_response = client.get(f"/api/v1/replay/traces/{replay_trace_id}")
+        missing_replay_trace_response = client.get("/api/v1/replay/traces/not-a-trace")
         jobs_response = client.get("/api/v1/runtime/jobs")
         job_stats_response = client.get("/api/v1/runtime/jobs/stats")
 
@@ -2245,7 +2253,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert "测试任务已完成" in run_payload["final_output"]
     assert "final_verify" in fake_inference.calls[-1]["system_prompt"]
 
-    event_types = [event["event_type"] for event in trace_response.json()]
+    event_types = [event["event_type"] for event in trace_payload]
     assert event_types == [
         "binding.resolved",
         "runtime.start.completed",
@@ -2272,6 +2280,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3, 4, 5, 6]
 
     replay_payload = replay_response.json()
+    replay_trace_payload = replay_trace_response.json()
     assert [item["title"] for item in replay_payload["timeline"]][:6] == [
         "终端输入",
         "绑定解析",
@@ -2296,6 +2305,16 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert eg_node_path[1]["checkpoint_id"] == "collect_context_evidence"
     assert eg_node_path[1]["event_type"] == "runtime.wait_checkpoint.entered"
     assert {item["trace_id"] for item in eg_node_path} <= {item["id"] for item in replay_payload["run_traces"]}
+    assert replay_trace_response.status_code == 200
+    assert replay_trace_payload["trace"]["id"] == replay_trace_id
+    assert replay_trace_payload["trace"]["run_id"] == run_id
+    assert replay_trace_payload["run"]["id"] == run_id
+    assert replay_trace_payload["timeline_item"]["source_kind"] == "run_trace"
+    assert replay_trace_payload["timeline_item"]["source_id"] == replay_trace_id
+    assert replay_trace_payload["timeline_item"]["event_type"] == "runtime.wait_checkpoint.entered"
+    assert replay_trace_payload["replay"]["run"]["id"] == run_id
+    assert replay_trace_payload["replay"]["eg_node_path"][1]["trace_id"] == replay_trace_id
+    assert missing_replay_trace_response.status_code == 404
 
     jobs = jobs_response.json()
     assert {job["job_type"] for job in jobs} >= {PSKILL_COMPILE_JOB_TYPE, RUNTIME_STEP_JOB_TYPE}

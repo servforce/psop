@@ -39,11 +39,18 @@ function loadObservabilityMethods() {
           const query = params.toString();
           return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
         },
+        buildEvaluationReportsPath: () => "/admin/evaluations",
+        buildEvaluationFindingsPath: () => "/admin/evaluations/findings",
+        buildGovernanceProposalsPath: () => "/admin/governance/proposals",
+        buildGovernanceExperimentsPath: () => "/admin/governance/experiments",
         buildRunLivePath: (runId) => `/admin/runs/${runId}/live`,
         buildReplayPath: (runId, focus = {}) => {
           const params = new URLSearchParams();
           if (focus.event_id) {
             params.set("event_id", focus.event_id);
+          }
+          if (focus.trace_id) {
+            params.set("trace_id", focus.trace_id);
           }
           if (focus.seq_no) {
             params.set("seq_no", focus.seq_no);
@@ -75,6 +82,15 @@ test("observability methods load global metrics with the selected window", async
     since: "2026-06-04T00:00:00Z",
     runtime: { run_trace_event_type_counts: {} },
     agents: {},
+    evaluations: {
+      outcome_counts: { failed: 1 },
+      finding_status_counts: { open: 1 },
+      finding_category_counts: { runner_issue: 1 }
+    },
+    governance: {
+      status_counts: { canary: 1 },
+      proposal_type_counts: { agent_skill_update: 1 }
+    },
     open_telemetry: { configured: true }
   };
   const context = {
@@ -101,6 +117,15 @@ test("observability methods load global metrics with the selected window", async
   expect(methods.observabilityToolAuthorizationsStatusPath("pending")).toBe(
     "/admin/platform/tool-authorizations?status=pending"
   );
+  expect(methods.observabilityEvaluationReportsPath()).toBe("/admin/evaluations");
+  expect(methods.observabilityEvaluationFindingsPath()).toBe("/admin/evaluations/findings");
+  expect(methods.observabilityGovernanceProposalsPath()).toBe("/admin/governance/proposals");
+  expect(methods.observabilityGovernanceExperimentsPath()).toBe("/admin/governance/experiments");
+  expect(methods.observabilityEvaluationOutcomeOptions.call(context)).toEqual(["failed"]);
+  expect(methods.observabilityFindingStatusOptions.call(context)).toEqual(["open"]);
+  expect(methods.observabilityFindingCategoryOptions.call(context)).toEqual(["runner_issue"]);
+  expect(methods.observabilityGovernanceStatusOptions.call(context)).toEqual(["canary"]);
+  expect(methods.observabilityGovernanceTypeOptions.call(context)).toEqual(["agent_skill_update"]);
 });
 
 test("observability methods query run traces with optional event type", async () => {
@@ -126,6 +151,9 @@ test("observability methods query run traces with optional event type", async ()
   expect(context.observabilityRunTraces).toEqual(traces);
   expect(context.observabilityTraceLookupRunId).toBe("run 1");
   expect(methods.observabilityRunLivePath("run-1")).toBe("/admin/runs/run-1/live");
+  expect(methods.observabilityRunReplayPath.call(context, { id: "trace-1", run_id: "run 1", seq_no: 7 })).toBe(
+    "/admin/runs/run 1/live/replay?trace_id=trace-1"
+  );
   expect(methods.observabilityRunReplayPath.call(context, { run_id: "run 1", seq_no: 7 })).toBe(
     "/admin/runs/run 1/live/replay?seq_no=7"
   );

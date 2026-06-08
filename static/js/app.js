@@ -394,7 +394,7 @@
 
   function buildReplayPath(runId, focus = {}) {
     const params = new URLSearchParams();
-    for (const key of ["event_id", "seq_no", "snapshot_seq"]) {
+    for (const key of ["event_id", "trace_id", "seq_no", "snapshot_seq"]) {
       const value = String(focus?.[key] || "").trim();
       if (value) {
         params.set(key, value);

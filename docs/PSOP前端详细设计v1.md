@@ -263,7 +263,7 @@ static/
 | Platform Skill Packages | `/api/v1/skills*` |
 | Platform Tools | `/api/v1/tools*` |
 | Platform Memory | `/api/v1/memory*` |
-| Platform Observability | `/api/v1/observability/*` |
+| Platform Observability | `/api/v1/observability/*`；metrics 面板展示 Runtime、Agent、Evaluation、Governance 与 OTel 状态 |
 
 当前前端不应调用以下未实现接口：
 
@@ -287,7 +287,7 @@ static/
 | Run Live binding | WebSocket `/ws/runs/{run_id}` 接收 `binding.updated`，增量更新 Binding 列表和 Replay binding evidence，REST 补齐 |
 | Tasks | 轮询 runtime jobs 和 stats |
 | Skill Test Review | REST 拉取 review DTO，必要时轮询运行状态 |
-| Replay | REST 一次性拉取 replay detail |
+| Replay | REST 一次性拉取 replay detail；deep link 支持 `event_id`、`trace_id`、`seq_no`、`snapshot_seq` 定位证据 |
 | Evaluation / Governance activity | WebSocket 活动快照 + REST 补齐 |
 | Tool Authorizations | WebSocket `/ws/tool-authorizations` 接收授权变更，REST 补齐 |
 | Observability | REST 查询 dashboard、metrics、run events、run traces、agent/tool/model facts |

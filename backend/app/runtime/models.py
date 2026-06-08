@@ -111,6 +111,7 @@ class RunTrace(Base):
     __tablename__ = "run_trace"
     __table_args__ = (
         Index("idx_run_trace_run_phase_seq", "run_id", "phase", "seq_no"),
+        Index("idx_run_trace_trace_id", "trace_id"),
         Index("idx_run_trace_span_id", "span_id"),
         Index("idx_run_trace_agent_run", "agent_run_id"),
     )
@@ -121,6 +122,7 @@ class RunTrace(Base):
     seq_no: Mapped[int] = mapped_column(nullable=False)
     phase: Mapped[str] = mapped_column(String(64), nullable=False)
     event_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     span_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     parent_span_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)

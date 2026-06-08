@@ -23,7 +23,7 @@ from app.agents.schemas import (
 from app.agents.service import AgentService
 from app.core.config import Settings
 from app.core.logging import log_context
-from app.core.observability import record_span_exception, start_span
+from app.core.observability import current_trace_context, record_span_exception, start_span
 from app.agent_prompts.service import AgentPromptService
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
 from app.evaluations.schemas import RunEvaluationFindingResponse, RunEvaluationResponse
@@ -49,6 +49,7 @@ from app.runtime.schemas import (
     InvocationResponse,
     ReplayDetailResponse,
     ReplayEgNodePathItem,
+    ReplayTraceLookupResponse,
     ReplayTimelineItem,
     ResolveRunBindingsRequest,
     RunCapabilityBindingResponse,
@@ -1014,6 +1015,27 @@ class RuntimeService:
             ],
         )
 
+    def build_replay_for_trace(self, session: Session, trace_id: str) -> ReplayTraceLookupResponse:
+        trace = self.repository.get_run_trace(session, trace_id)
+        if not trace:
+            raise SkillNotFoundError("未找到 RunTrace。", details={"trace_id": trace_id})
+        trace_response = self._build_run_trace_response(trace)
+        replay = self.build_replay(session, trace.run_id)
+        timeline_item = next(
+            (
+                item
+                for item in replay.timeline
+                if item.source_kind == "run_trace" and item.source_id == trace.id
+            ),
+            self._build_timeline_item(trace_response),
+        )
+        return ReplayTraceLookupResponse(
+            trace=trace_response,
+            run=replay.run,
+            timeline_item=timeline_item,
+            replay=replay,
+        )
+
     def _build_eg_node_path(self, run_traces: list[RunTraceResponse]) -> list[ReplayEgNodePathItem]:
         path: list[ReplayEgNodePathItem] = []
         for trace in run_traces:
@@ -1842,13 +1864,15 @@ class RuntimeService:
     ) -> RunTrace:
         seq_no = run.latest_trace_seq + 1
         run.latest_trace_seq = seq_no
+        trace_context = current_trace_context()
         event = RunTrace(
             run_id=run.id,
             agent_run_id=agent_run_id,
             seq_no=seq_no,
             phase=phase,
             event_type=event_type,
-            span_id=f"{run.id[:8]}-{seq_no:04d}",
+            trace_id=trace_context.get("trace_id", ""),
+            span_id=trace_context.get("span_id") or f"{run.id[:8]}-{seq_no:04d}",
             parent_span_id="",
             payload=payload,
         )
@@ -3180,6 +3204,7 @@ class RuntimeService:
             seq_no=event.seq_no,
             phase=event.phase,
             event_type=event.event_type,
+            trace_id=event.trace_id,
             span_id=event.span_id,
             parent_span_id=event.parent_span_id,
             payload=event.payload,

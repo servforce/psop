@@ -151,6 +151,21 @@ def record_span_exception(span: Any, exc: Exception) -> None:
         return
 
 
+def current_trace_context() -> dict[str, str]:
+    try:
+        from opentelemetry import trace
+
+        span_context = trace.get_current_span().get_span_context()
+    except Exception:
+        return {}
+    if not getattr(span_context, "is_valid", False):
+        return {}
+    return {
+        "trace_id": f"{span_context.trace_id:032x}",
+        "span_id": f"{span_context.span_id:016x}",
+    }
+
+
 def _configure_traces(*, settings: Settings, resource: Any, trace_module: Any) -> Any | None:
     try:
         from opentelemetry.sdk.trace import TracerProvider

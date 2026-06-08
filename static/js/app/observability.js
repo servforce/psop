@@ -4,6 +4,10 @@
     buildPlatformAgentRunsPath,
     buildPlatformAgentRunPath,
     buildToolAuthorizationsPath,
+    buildEvaluationReportsPath,
+    buildEvaluationFindingsPath,
+    buildGovernanceProposalsPath,
+    buildGovernanceExperimentsPath,
     buildRunLivePath,
     buildReplayPath
   } = window.PSOPConsoleHelpers;
@@ -495,6 +499,22 @@
       return buildToolAuthorizationsPath();
     },
 
+    observabilityEvaluationReportsPath() {
+      return buildEvaluationReportsPath();
+    },
+
+    observabilityEvaluationFindingsPath() {
+      return buildEvaluationFindingsPath();
+    },
+
+    observabilityGovernanceProposalsPath() {
+      return buildGovernanceProposalsPath();
+    },
+
+    observabilityGovernanceExperimentsPath() {
+      return buildGovernanceExperimentsPath();
+    },
+
     observabilityToolAuthorizationsStatusPath(status) {
       return buildToolAuthorizationsPath({ status });
     },
@@ -526,7 +546,8 @@
       if (!runId) {
         return buildPlatformObservabilityPath();
       }
-      return buildReplayPath(runId, { seq_no: trace?.seq_no });
+      const traceId = String(trace?.id || trace?.trace_id || "").trim();
+      return traceId ? buildReplayPath(runId, { trace_id: traceId }) : buildReplayPath(runId, { seq_no: trace?.seq_no });
     },
 
     observabilityRunEventReplayPath(event) {
@@ -665,6 +686,26 @@
 
     observabilityToolAuthorizationRiskOptions() {
       return Object.keys(this.observabilityMetrics?.agents?.tool_authorization_risk_counts || {}).sort();
+    },
+
+    observabilityEvaluationOutcomeOptions() {
+      return Object.keys(this.observabilityMetrics?.evaluations?.outcome_counts || {}).sort();
+    },
+
+    observabilityFindingStatusOptions() {
+      return Object.keys(this.observabilityMetrics?.evaluations?.finding_status_counts || {}).sort();
+    },
+
+    observabilityFindingCategoryOptions() {
+      return Object.keys(this.observabilityMetrics?.evaluations?.finding_category_counts || {}).sort();
+    },
+
+    observabilityGovernanceStatusOptions() {
+      return Object.keys(this.observabilityMetrics?.governance?.status_counts || {}).sort();
+    },
+
+    observabilityGovernanceTypeOptions() {
+      return Object.keys(this.observabilityMetrics?.governance?.proposal_type_counts || {}).sort();
     },
 
     observabilityOtelTone(value) {

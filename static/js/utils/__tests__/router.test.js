@@ -255,6 +255,9 @@ test("runtime route builders create live and replay locations", () => {
   expect(buildReplayPath("run-123", { event_id: "event-1" })).toBe(
     "/admin/runs/run-123/live/replay?event_id=event-1"
   );
+  expect(buildReplayPath("run-123", { trace_id: "trace-1" })).toBe(
+    "/admin/runs/run-123/live/replay?trace_id=trace-1"
+  );
   expect(buildSkillReplayPath("skill-123", "run-123")).toBe("/admin/skills/skill-123/runs/run-123/live/replay");
   expect(buildSkillTestScenarioNewPath("skill-123")).toBe("/admin/skills/skill-123/tests/new");
   expect(buildSkillTestScenarioPath("skill-123", "scenario-123")).toBe("/admin/skills/skill-123/tests/scenario-123");

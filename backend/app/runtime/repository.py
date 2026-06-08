@@ -195,3 +195,6 @@ class RuntimeRepository:
             query = query.where(RunTrace.event_type == event_type)
         query = query.order_by(RunTrace.seq_no.asc())
         return list(session.scalars(query).all())
+
+    def get_run_trace(self, session: Session, trace_id: str) -> RunTrace | None:
+        return session.get(RunTrace, trace_id)

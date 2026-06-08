@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from app.agents.models import AgentEvent, AgentModelCall, AgentRun, AgentToolAuthorization, AgentToolCall
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
-from app.governance.models import PsopImprovementProposal
+from app.governance.models import PsopImprovementExperiment, PsopImprovementProposal
 from app.pskills.models import PSkillDefinition, PSkillVersion, now_utc
 from app.runtime.models import Run, RunEvent, RunEventPart, RunTrace, TerminalSession
 from app.skills.models import SkillActivation, SkillPackage, SkillVersion
@@ -260,6 +260,7 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
                         seq_no=1,
                         phase="runtime",
                         event_type="runtime.failed",
+                        trace_id="trace-metrics-otel-1",
                         span_id="span-1",
                         payload={"error": "failed"},
                         occurred_at=now - timedelta(minutes=1),
@@ -364,6 +365,53 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
                         created_at=now - timedelta(minutes=1),
                         executed_at=now - timedelta(seconds=30),
                     ),
+                    RunEvaluation(
+                        id="evaluation-metrics-1",
+                        run_id=runtime_run.id,
+                        pskill_definition_id=pskill.id,
+                        pskill_version_id=version.id,
+                        artifact_id="artifact-metrics-1",
+                        agent_run_id=agent_run.id,
+                        overall_outcome="failed",
+                        quality_score=38,
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    RunEvaluationFinding(
+                        id="evaluation-finding-metrics-1",
+                        evaluation_id="evaluation-metrics-1",
+                        category="runner_issue",
+                        severity="high",
+                        confidence=88,
+                        description="runtime failure needs replay review",
+                        evidence_refs=[{"kind": "run_trace", "id": "run-trace-metrics-1"}],
+                        recommended_action="repair runner fallback",
+                        status="open",
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    PsopImprovementProposal(
+                        id="proposal-metrics-1",
+                        agent_run_id=agent_run.id,
+                        source_finding_ids=["evaluation-finding-metrics-1"],
+                        source_evaluation_id="evaluation-metrics-1",
+                        source_run_id=runtime_run.id,
+                        proposal_type="agent_skill_update",
+                        target_json={"kind": "run_evaluation_finding"},
+                        problem_statement="repair runtime runner failure",
+                        status="canary",
+                        created_at=now - timedelta(minutes=1),
+                        updated_at=now - timedelta(minutes=1),
+                    ),
+                    PsopImprovementExperiment(
+                        id="experiment-metrics-1",
+                        proposal_id="proposal-metrics-1",
+                        experiment_type="canary",
+                        status="running",
+                        summary="canary running",
+                        before_metrics={},
+                        after_metrics={},
+                        result_json={},
+                        created_at=now - timedelta(minutes=1),
+                    ),
                 ]
             )
             session.commit()
@@ -389,6 +437,26 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
     assert payload["agents"]["tool_authorization_status_counts"]["pending"] == 1
     assert payload["agents"]["tool_authorization_status_counts"]["executed"] == 1
     assert payload["agents"]["tool_authorization_risk_counts"]["high"] == 2
+    assert payload["evaluations"]["evaluation_count"] == 1
+    assert payload["evaluations"]["average_quality_score"] == 38.0
+    assert payload["evaluations"]["outcome_counts"]["failed"] == 1
+    assert payload["evaluations"]["finding_count"] == 1
+    assert payload["evaluations"]["high_severity_finding_count"] == 1
+    assert payload["evaluations"]["unresolved_finding_count"] == 1
+    assert payload["evaluations"]["finding_status_counts"]["open"] == 1
+    assert payload["evaluations"]["finding_category_counts"]["runner_issue"] == 1
+    assert payload["evaluations"]["finding_severity_counts"]["high"] == 1
+    assert payload["governance"]["proposal_count"] == 1
+    assert payload["governance"]["open_proposal_count"] == 1
+    assert payload["governance"]["canary_proposal_count"] == 1
+    assert payload["governance"]["status_counts"]["canary"] == 1
+    assert payload["governance"]["proposal_type_counts"]["agent_skill_update"] == 1
+    assert payload["governance"]["source_run_linked_count"] == 1
+    assert payload["governance"]["source_evaluation_linked_count"] == 1
+    assert payload["governance"]["source_finding_linked_count"] == 1
+    assert payload["governance"]["experiment_count"] == 1
+    assert payload["governance"]["experiment_status_counts"]["running"] == 1
+    assert payload["governance"]["experiment_type_counts"]["canary"] == 1
     assert payload["open_telemetry"]["enabled"] is True
     assert payload["open_telemetry"]["configured"] is True
     assert payload["open_telemetry"]["service_name"] == expected_otel_service_name
@@ -450,6 +518,7 @@ def test_observability_run_trace_query_filters_recent_runtime_traces() -> None:
                         seq_no=2,
                         phase="runtime",
                         event_type="runtime.failed",
+                        trace_id="trace-observe-otel-newer",
                         span_id="span-newer",
                         payload={"error": "newer"},
                         occurred_at=now - timedelta(minutes=1),
@@ -461,6 +530,7 @@ def test_observability_run_trace_query_filters_recent_runtime_traces() -> None:
                         seq_no=1,
                         phase="runtime",
                         event_type="runtime.failed",
+                        trace_id="trace-observe-otel-older",
                         span_id="span-older",
                         payload={"error": "older"},
                         occurred_at=now - timedelta(minutes=2),
@@ -471,6 +541,7 @@ def test_observability_run_trace_query_filters_recent_runtime_traces() -> None:
                         seq_no=3,
                         phase="runtime",
                         event_type="runtime.completed",
+                        trace_id="trace-observe-otel-completed",
                         span_id="span-completed",
                         payload={},
                         occurred_at=now - timedelta(minutes=1),
@@ -481,6 +552,7 @@ def test_observability_run_trace_query_filters_recent_runtime_traces() -> None:
                         seq_no=4,
                         phase="runtime",
                         event_type="runtime.failed",
+                        trace_id="trace-observe-otel-old",
                         span_id="span-old-window",
                         payload={"error": "old"},
                         occurred_at=now - timedelta(days=2),
@@ -504,6 +576,8 @@ def test_observability_run_trace_query_filters_recent_runtime_traces() -> None:
     assert payload[0]["run_id"] == run.id
     assert payload[0]["agent_run_id"] == agent_run.id
     assert payload[0]["event_type"] == "runtime.failed"
+    assert payload[0]["trace_id"] == "trace-observe-otel-newer"
+    assert payload[0]["span_id"] == "span-newer"
     assert payload[0]["payload"] == {"error": "newer"}
 
     assert run_response.status_code == 200

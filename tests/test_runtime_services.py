@@ -680,6 +680,50 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert "runtime.final.completed" in [item.event_type for item in replay.timeline]
 
 
+def test_runtime_run_traces_capture_current_otel_context(runtime_stack, monkeypatch) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+    monkeypatch.setattr(
+        "app.runtime.service.current_trace_context",
+        lambda: {
+            "trace_id": "1" * 32,
+            "span_id": "2" * 16,
+        },
+    )
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-otel-context",
+                name="Runtime OTel Context",
+                description="Validate RunTrace OTel correlation.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime OTel context publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="runtime-otel-context",
+                input_envelope={"user_input": "请检查现场任务。"},
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        traces = runtime_service.list_run_traces(session, invocation.run_id or "")
+        replay = runtime_service.build_replay(session, invocation.run_id or "")
+
+    assert traces
+    assert {trace.trace_id for trace in traces} == {"1" * 32}
+    assert {trace.span_id for trace in traces} == {"2" * 16}
+    assert {trace.trace_id for trace in replay.run_traces} == {"1" * 32}
+    assert {trace.span_id for trace in replay.run_traces} == {"2" * 16}
+
+
 def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
     settings = create_test_settings()
     database_manager = DatabaseManager(settings.sqlalchemy_database_url)

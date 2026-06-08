@@ -97,6 +97,34 @@ class AgentObservabilityMetrics(BaseModel):
     tool_authorization_risk_counts: dict[str, int] = Field(default_factory=dict)
 
 
+class EvaluationObservabilityMetrics(BaseModel):
+    evaluation_count: int = 0
+    average_quality_score: float = 0.0
+    outcome_counts: dict[str, int] = Field(default_factory=dict)
+    finding_count: int = 0
+    high_severity_finding_count: int = 0
+    unresolved_finding_count: int = 0
+    finding_status_counts: dict[str, int] = Field(default_factory=dict)
+    finding_category_counts: dict[str, int] = Field(default_factory=dict)
+    finding_severity_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class GovernanceObservabilityMetrics(BaseModel):
+    proposal_count: int = 0
+    open_proposal_count: int = 0
+    testing_proposal_count: int = 0
+    canary_proposal_count: int = 0
+    rollback_proposal_count: int = 0
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    proposal_type_counts: dict[str, int] = Field(default_factory=dict)
+    source_run_linked_count: int = 0
+    source_evaluation_linked_count: int = 0
+    source_finding_linked_count: int = 0
+    experiment_count: int = 0
+    experiment_status_counts: dict[str, int] = Field(default_factory=dict)
+    experiment_type_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class OpenTelemetryStatus(BaseModel):
     enabled: bool = False
     configured: bool = False
@@ -114,6 +142,8 @@ class ObservabilityMetricsResponse(BaseModel):
     window_hours: int
     runtime: RuntimeObservabilityMetrics
     agents: AgentObservabilityMetrics
+    evaluations: EvaluationObservabilityMetrics
+    governance: GovernanceObservabilityMetrics
     open_telemetry: OpenTelemetryStatus
 
 

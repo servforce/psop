@@ -562,7 +562,7 @@ test("run replay selection follows event id from location", () => {
 });
 
 test("run replay selection follows trace source id from location", () => {
-  const methods = loadRuntimeMethods("?event_id=trace-1");
+  const methods = loadRuntimeMethods("?trace_id=trace-1");
   const traceEvent = {
     seq_no: 1,
     event_type: "runtime.failed",

@@ -92,6 +92,7 @@ class RunTraceResponse(BaseModel):
     seq_no: int
     phase: str
     event_type: str
+    trace_id: str = ""
     span_id: str
     parent_span_id: str
     payload: dict[str, Any]
@@ -279,6 +280,13 @@ class ReplayDetailResponse(BaseModel):
     tool_authorizations: list[AgentToolAuthorizationResponse] = Field(default_factory=list)
     run_evaluations: list[RunEvaluationResponse] = Field(default_factory=list)
     run_evaluation_findings: list[RunEvaluationFindingResponse] = Field(default_factory=list)
+
+
+class ReplayTraceLookupResponse(BaseModel):
+    trace: RunTraceResponse
+    run: RunResponse
+    timeline_item: ReplayTimelineItem
+    replay: ReplayDetailResponse
 
 
 TraceEventResponse = RunTraceResponse

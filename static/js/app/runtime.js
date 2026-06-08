@@ -1653,8 +1653,9 @@
         }
         const params = new URLSearchParams(window.location.search || "");
         const eventId = String(params.get("event_id") || "").trim();
+        const traceId = String(params.get("trace_id") || "").trim();
         const seqNo = String(params.get("seq_no") || "").trim();
-        if (!eventId && !seqNo) {
+        if (!eventId && !traceId && !seqNo) {
           return;
         }
         const timeline = this.liveRunReplayTimeline();
@@ -1667,9 +1668,10 @@
               payload.run_event_id ||
               payload.run_trace_id ||
               payload.trace_event_id ||
+              payload.trace_id ||
               ""
           ).trim();
-          return Boolean(eventId && payloadEventId === eventId);
+          return Boolean((eventId && payloadEventId === eventId) || (traceId && payloadEventId === traceId));
         }) || timeline.find((item) => Boolean(seqNo && String(item?.seq_no ?? "") === seqNo));
         if (selected) {
           this.selectedLiveRunReplayItemKey = this.liveRunReplayItemKey(selected);

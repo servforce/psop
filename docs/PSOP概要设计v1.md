@@ -244,5 +244,5 @@ flowchart TB
 - 独立 `MCPGateway`、MCP server/tool 表和 API。
 - 独立 `CapabilityHost`、artifact 级 capability binding 表。
 - 独立 sandbox lease 表和 Sandbox Manager。
-- `/api/v1/replay/traces/{trace_id}`、`/api/v1/runtime/workers`、`/api/v1/runtime/sandboxes` 等规划接口。
+- `/api/v1/runtime/workers`、`/api/v1/runtime/sandboxes` 等规划接口。
 - FastAPI 直接托管 `static/`；当前静态控制台由 `static/scripts/dev-server.cjs` 或其他静态宿主提供。

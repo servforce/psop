@@ -31,6 +31,7 @@ from app.runtime.schemas import (
     CreateInvocationRequest,
     InvocationResponse,
     ReplayDetailResponse,
+    ReplayTraceLookupResponse,
     ResolveRunBindingsRequest,
     RunCapabilityBindingResponse,
     RunResponse,
@@ -815,6 +816,15 @@ def get_replay(
     service: RuntimeService = Depends(get_runtime_service),
 ) -> ReplayDetailResponse:
     return service.build_replay(session, run_id)
+
+
+@replay_router.get("/traces/{trace_id}", response_model=ReplayTraceLookupResponse)
+def get_replay_trace(
+    trace_id: str,
+    session: Session = Depends(get_db_session),
+    service: RuntimeService = Depends(get_runtime_service),
+) -> ReplayTraceLookupResponse:
+    return service.build_replay_for_trace(session, trace_id)
 
 
 @runtime_router.get("/jobs/stats", response_model=RuntimeJobStatsResponse)

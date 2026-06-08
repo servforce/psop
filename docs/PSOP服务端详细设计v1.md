@@ -305,7 +305,7 @@ Claim 规则：
 | `skill_invocation` | `pskill_definition_id`、`pskill_version_id`、`compile_artifact_id`、`gateway_type`、`input_envelope`、`terminal_context`、`binding_preferences`、`status`、`idempotency_key` | Gateway 调用对象 |
 | `run` | `invocation_id`、`pskill_definition_id`、`pskill_version_id`、`compile_artifact_id`、`terminal_session_id`、`status`、`runtime_phase`、`latest_*_seq`、`final_output`、`exit_reason` | 逻辑运行实例 |
 | `session_token_snapshot` | `run_id`、`seq_no`、`token_payload`、`enabled_set`、`selection_summary`、`snapshot_hash` | 正式状态快照 |
-| `run_trace` | `run_id`、`seq_no`、`phase`、`event_type`、`span_id`、`payload` | replay/observability 事件 |
+| `run_trace` | `run_id`、`seq_no`、`phase`、`event_type`、`trace_id`、`span_id`、`payload` | replay/observability/OTel 关联事件 |
 | `terminal_session` | `run_id`、`mode`、`status`、`opened_at`、`closed_at` | Run 的 I/O 会话 |
 | `run_capability_binding` | `run_id`、`compile_artifact_id`、`requirement_key`、`binding_type`、`capability`、`target_kind`、`target_ref`、`channel`、`schema_ref`、`policy_snapshot` | 当前 run 的 terminal binding |
 | `run_event` | `terminal_session_id`、`run_id`、`run_trace_id`、`artifact_object_id`、`run_capability_binding_id`、`direction`、`event_kind`、`payload_inline`、`seq_no`、`external_event_id` | append-only transcript |
@@ -404,6 +404,7 @@ Claim 规则：
 | `GET` | `/api/v1/runs/{run_id}/events/{event_id}/parts/{part_id}/content` | part 内容，支持 Range |
 | `GET` | `/api/v1/replay/runs` | replay run 列表 |
 | `GET` | `/api/v1/replay/runs/{run_id}` | replay detail |
+| `GET` | `/api/v1/replay/traces/{trace_id}` | 按 run trace 定位 replay detail 和选中 timeline item |
 | `GET` | `/api/v1/runtime/jobs/stats` | job 统计；支持 `window_hours` |
 | `GET` | `/api/v1/runtime/jobs` | job 列表；支持状态、类型、关键字、时间和分页 |
 
@@ -529,6 +530,13 @@ Claim 规则：
 
 运行时 trace 事件写入数据库 `run_trace`，Replay 直接读取持久化事件，不推断未落库状态。
 
+`/api/v1/observability/metrics` 返回窗口内 Runtime、Agent、Evaluation、Governance 与 OpenTelemetry 状态聚合：
+
+- Runtime：run、run event、run trace 数量和分布。
+- Agent：AgentRun、AgentEvent、ModelCall、ToolCall、SkillActivation、ToolAuthorization 数量和分布。
+- Evaluation：RunEvaluation、RunEvaluationFinding、quality score、outcome、finding status/category/severity 分布。
+- Governance：Proposal、Experiment、source run/evaluation/finding 关联数量和状态/type 分布。
+
 ## 12. 当前实现缺口
 
 下列条目是当前代码缺口，不应在接口文档中作为已实现能力使用：
@@ -539,6 +547,5 @@ Claim 规则：
 - 无 MCP Gateway REST API。
 - 无独立 CapabilityHost 类；当前由 RuntimeService 内聚执行。
 - 无 sandbox 执行。
-- 无 `/api/v1/replay/traces/{trace_id}`。
 - 无 `/api/v1/runtime/workers` 或 `/api/v1/runtime/sandboxes`。
 - 无 FastAPI 静态文件挂载；Web 控制台由独立静态宿主运行。

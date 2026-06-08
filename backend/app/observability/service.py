@@ -14,7 +14,7 @@ from app.agents.schemas import (
 )
 from app.core.config import Settings
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
-from app.governance.models import PsopImprovementProposal
+from app.governance.models import PsopImprovementExperiment, PsopImprovementProposal
 from app.pskills.models import PSkillDefinition, PSkillVersion, now_utc
 from app.runtime.models import Run, RunEvent, RunEventPart, RunTrace
 from app.runtime.schemas import RunEventPartResponse, RunEventResponse, RunTraceResponse
@@ -26,7 +26,9 @@ from app.observability.schemas import (
     AgentObservabilityMetrics,
     DashboardMetricsResponse,
     EvaluationDashboardMetrics,
+    EvaluationObservabilityMetrics,
     GlobalObservabilityMetrics,
+    GovernanceObservabilityMetrics,
     GovernanceDashboardMetrics,
     ObservabilityMetricsResponse,
     OpenTelemetryStatus,
@@ -92,6 +94,8 @@ class ObservabilityService:
             window_hours=resolved_window_hours,
             runtime=self._runtime_observability_metrics(session, since=since),
             agents=self._agent_observability_metrics(session, since=since),
+            evaluations=self._evaluation_observability_metrics(session, since=since),
+            governance=self._governance_observability_metrics(session, since=since),
             open_telemetry=self._open_telemetry_status(settings=settings, configured=otel_configured),
         )
 
@@ -536,6 +540,92 @@ class ObservabilityService:
             ),
         )
 
+    def _evaluation_observability_metrics(
+        self,
+        session: Session,
+        *,
+        since: datetime,
+    ) -> EvaluationObservabilityMetrics:
+        evaluations = list(session.scalars(select(RunEvaluation).where(RunEvaluation.created_at >= since)).all())
+        findings = list(
+            session.scalars(select(RunEvaluationFinding).where(RunEvaluationFinding.created_at >= since)).all()
+        )
+        scores = [evaluation.quality_score for evaluation in evaluations]
+        return EvaluationObservabilityMetrics(
+            evaluation_count=len(evaluations),
+            average_quality_score=round(sum(scores) / len(scores), 2) if scores else 0.0,
+            outcome_counts=self._count_by(
+                session,
+                RunEvaluation.overall_outcome,
+                RunEvaluation.created_at >= since,
+            ),
+            finding_count=len(findings),
+            high_severity_finding_count=sum(1 for finding in findings if finding.severity in HIGH_SEVERITY_VALUES),
+            unresolved_finding_count=sum(1 for finding in findings if finding.status in UNRESOLVED_FINDING_STATUSES),
+            finding_status_counts=self._count_by(
+                session,
+                RunEvaluationFinding.status,
+                RunEvaluationFinding.created_at >= since,
+            ),
+            finding_category_counts=self._count_by(
+                session,
+                RunEvaluationFinding.category,
+                RunEvaluationFinding.created_at >= since,
+            ),
+            finding_severity_counts=self._count_by(
+                session,
+                RunEvaluationFinding.severity,
+                RunEvaluationFinding.created_at >= since,
+            ),
+        )
+
+    def _governance_observability_metrics(
+        self,
+        session: Session,
+        *,
+        since: datetime,
+    ) -> GovernanceObservabilityMetrics:
+        proposals = list(
+            session.scalars(select(PsopImprovementProposal).where(PsopImprovementProposal.updated_at >= since)).all()
+        )
+        status_counts = self._status_counts_from_items(proposals)
+        source_finding_linked_count = sum(
+            len(proposal.source_finding_ids or [])
+            for proposal in proposals
+            if isinstance(proposal.source_finding_ids, list)
+        )
+        return GovernanceObservabilityMetrics(
+            proposal_count=len(proposals),
+            open_proposal_count=sum(status_counts.get(status, 0) for status in OPEN_PROPOSAL_STATUSES),
+            testing_proposal_count=status_counts.get("testing", 0),
+            canary_proposal_count=status_counts.get("canary", 0),
+            rollback_proposal_count=status_counts.get("rolled_back", 0),
+            status_counts=status_counts,
+            proposal_type_counts=self._count_by(
+                session,
+                PsopImprovementProposal.proposal_type,
+                PsopImprovementProposal.updated_at >= since,
+            ),
+            source_run_linked_count=sum(1 for proposal in proposals if proposal.source_run_id),
+            source_evaluation_linked_count=sum(1 for proposal in proposals if proposal.source_evaluation_id),
+            source_finding_linked_count=source_finding_linked_count,
+            experiment_count=self._count(
+                session,
+                PsopImprovementExperiment,
+                PsopImprovementExperiment.created_at >= since,
+            ),
+            experiment_status_counts=self._count_by(
+                session,
+                PsopImprovementExperiment.status,
+                PsopImprovementExperiment.created_at >= since,
+            ),
+            experiment_type_counts=self._count_by(
+                session,
+                PsopImprovementExperiment.experiment_type,
+                PsopImprovementExperiment.created_at >= since,
+            ),
+        )
+
     @staticmethod
     def _build_run_trace_response(trace: RunTrace) -> RunTraceResponse:
         return RunTraceResponse(
@@ -545,6 +635,7 @@ class ObservabilityService:
             seq_no=trace.seq_no,
             phase=trace.phase,
             event_type=trace.event_type,
+            trace_id=trace.trace_id,
             span_id=trace.span_id,
             parent_span_id=trace.parent_span_id,
             payload=trace.payload,
