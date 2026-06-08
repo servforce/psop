@@ -120,6 +120,11 @@
                 <span>输入输出</span>
                 <span class="mono-field" x-text="`${liveRunProcessTerminalEvents().length} nodes`"></span>
               </button>
+              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'authorizations' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'authorizations'">
+                <span class="material-symbols-outlined text-[18px]">verified_user</span>
+                <span>授权</span>
+                <span class="mono-field" x-text="`${liveRunAuthorizationCountByStatus('pending')}/${liveRunToolAuthorizations.length}`"></span>
+              </button>
             </div>
 
             <section x-show="liveRunInteractionTab === 'terminal'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -291,6 +296,100 @@
                     </div>
                   </div>
               </section>
+            </section>
+
+            <section x-show="liveRunInteractionTab === 'authorizations'" class="min-h-0 flex-1 overflow-hidden">
+              <div class="flex h-full min-h-0 flex-col bg-slate-950/40">
+                <header class="shrink-0 border-b border-slate-800 bg-slate-950/95 px-4 py-3">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p class="text-sm font-semibold text-slate-100">Tool Authorizations</p>
+                      <p class="mt-1 text-xs text-slate-500">AgentRun 内高副作用工具授权会在这里恢复或拒绝。</p>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 text-[11px]">
+                      <span class="rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-amber-200" x-text="`${liveRunAuthorizationCountByStatus('pending')} pending`"></span>
+                      <span class="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-emerald-200" x-text="`${liveRunAuthorizationCountByStatus('approved')} approved`"></span>
+                      <span class="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-rose-200" x-text="`${liveRunAuthorizationCountByStatus('rejected')} rejected`"></span>
+                    </div>
+                  </div>
+                </header>
+
+                <template x-if="liveRunToolAuthorizations.length === 0">
+                  <div class="empty-state h-full min-h-80">
+                    <span class="material-symbols-outlined text-[30px] text-slate-500">verified_user</span>
+                    <p class="mt-3 text-sm text-slate-400">当前 Run 暂无工具授权请求。</p>
+                  </div>
+                </template>
+
+                <div class="min-h-0 flex-1 overflow-auto divide-y divide-slate-800">
+                  <template x-for="authorization in liveRunToolAuthorizations" :key="authorization.id">
+                    <article class="px-4 py-4">
+                      <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
+                        <div class="min-w-0">
+                          <div class="flex flex-wrap items-center gap-2">
+                            <span class="status-badge" :class="statusBadgeTone(authorization.status)" x-text="toolAuthorizationStatusLabel(authorization.status)"></span>
+                            <span class="status-badge" :class="toolAuthorizationSideEffectTone(authorization.side_effect_level)" x-text="authorization.side_effect_level || 'unknown'"></span>
+                            <span class="status-badge" :class="toolAuthorizationRiskTone(authorization.risk_level)" x-text="authorization.risk_level || 'medium'"></span>
+                          </div>
+                          <p class="mt-3 truncate text-base font-semibold text-slate-100" x-text="authorization.tool_name"></p>
+                          <p class="mt-1 truncate text-xs text-slate-500" x-text="authorization.tool_provider + (authorization.mcp_server_name ? ` / ${authorization.mcp_server_name}` : '')"></p>
+
+                          <div class="mt-4 grid gap-3 text-sm md:grid-cols-2">
+                            <div class="min-w-0">
+                              <p class="field-label">AgentRun</p>
+                              <p class="mono-field mt-1 break-all" x-text="authorization.agent_run_id"></p>
+                            </div>
+                            <div class="min-w-0">
+                              <p class="field-label">ToolCall</p>
+                              <p class="mono-field mt-1 break-all" x-text="authorization.agent_tool_call_id || 'N/A'"></p>
+                            </div>
+                            <div>
+                              <p class="field-label">Rollback</p>
+                              <p class="mt-1 text-slate-300" x-text="toolAuthorizationReversibleLabel(authorization)"></p>
+                            </div>
+                            <div>
+                              <p class="field-label">Created</p>
+                              <p class="mono-field mt-1" x-text="formatDateTime(authorization.created_at)"></p>
+                            </div>
+                          </div>
+
+                          <section class="mt-4">
+                            <p class="field-label">影响摘要</p>
+                            <p class="mt-2 text-sm leading-6 text-slate-200" x-text="authorization.expected_effect_summary || 'N/A'"></p>
+                          </section>
+                          <section class="mt-4">
+                            <p class="field-label">风险说明</p>
+                            <p class="mt-2 text-sm leading-6 text-slate-300" x-text="authorization.authorization_reason || 'N/A'"></p>
+                          </section>
+                        </div>
+
+                        <aside class="min-w-0 space-y-3">
+                          <div>
+                            <p class="field-label">参数摘要</p>
+                            <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="governanceJsonPreview(authorization.tool_arguments_summary)"></pre>
+                          </div>
+                          <template x-if="toolAuthorizationHasDiff(authorization)">
+                            <div>
+                              <p class="field-label">Diff</p>
+                              <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="toolAuthorizationDiffText(authorization)"></pre>
+                            </div>
+                          </template>
+                          <div class="flex flex-wrap justify-end gap-2">
+                            <button type="button" class="button-secondary h-9 px-3" :disabled="busy.toolAuthorizationAction || authorization.status !== 'pending'" @click="decideLiveRunToolAuthorization(authorization, 'approve')">
+                              <span class="material-symbols-outlined text-[18px]">check_circle</span>
+                              <span>批准</span>
+                            </button>
+                            <button type="button" class="button-danger h-9 px-3" :disabled="busy.toolAuthorizationAction || authorization.status !== 'pending'" @click="decideLiveRunToolAuthorization(authorization, 'reject')">
+                              <span class="material-symbols-outlined text-[18px]">block</span>
+                              <span>拒绝</span>
+                            </button>
+                          </div>
+                        </aside>
+                      </div>
+                    </article>
+                  </template>
+                </div>
+              </div>
             </section>
 
             <section x-show="liveRunInteractionTab === 'replay'" class="min-h-0 flex-1 overflow-hidden">

@@ -887,6 +887,7 @@
       liveRunTerminalSession: null,
       liveRunTerminalEvents: [],
       liveRunTraceEvents: [],
+      liveRunToolAuthorizations: [],
       liveRunInteractionTab: "terminal",
       liveRunLoadedRunId: "",
       selectedLiveRunReplayItemKey: "",

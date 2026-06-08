@@ -121,19 +121,21 @@
             this.selectedLiveRunReplayItemKey = "";
             this.selectedLiveRunProcessEventKey = "";
           }
-          const [run, bindings, terminalSession, terminalEvents, traceEvents, replayDetail] = await Promise.all([
+          const [run, bindings, terminalSession, terminalEvents, traceEvents, replayDetail, toolAuthorizations] = await Promise.all([
             this.apiRequest(`/runs/${runId}`),
             this.apiRequest(`/runs/${runId}/bindings`),
             this.apiRequest(`/terminal/sessions/${runId}`),
             this.apiRequest(`/runs/${runId}/events`),
             this.apiRequest(`/runs/${runId}/traces`),
-            this.apiRequest(`/replay/runs/${runId}`)
+            this.apiRequest(`/replay/runs/${runId}`),
+            this.apiRequest(`/runs/${runId}/tool-authorizations`).catch(() => [])
           ]);
           this.liveRun = run;
           this.liveRunLoadedRunId = runId;
           this.liveRunBindings = bindings;
           this.liveRunTerminalSession = terminalSession.terminal_session;
           this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq([], terminalEvents);
+          this.liveRunToolAuthorizations = Array.isArray(toolAuthorizations) ? toolAuthorizations : [];
           this.updateLiveRunLatestTerminalSeq();
           this.ensureLiveRunProcessSelection();
           this.scrollTerminalTranscriptToBottom();
@@ -148,7 +150,7 @@
 
 
       syncLiveRunInteractionTabFromRoute(isSameRun = false) {
-        const allowedTabs = new Set(["terminal", "io", "replay"]);
+        const allowedTabs = new Set(["terminal", "io", "replay", "authorizations"]);
         if (this.route?.params?.view === "replay") {
           this.liveRunInteractionTab = "replay";
           return;
@@ -345,6 +347,55 @@
         this.updateLiveRunLatestTerminalSeq();
         this.ensureLiveRunProcessSelection();
         this.scrollTerminalTranscriptToBottom();
+      },
+
+      liveRunAuthorizationCountByStatus(status) {
+        return (this.liveRunToolAuthorizations || []).filter((authorization) => authorization.status === status).length;
+      },
+
+      liveRunPendingToolAuthorizations() {
+        return (this.liveRunToolAuthorizations || []).filter((authorization) => authorization.status === "pending");
+      },
+
+      replaceLiveRunToolAuthorization(authorization) {
+        if (!authorization?.id) {
+          return;
+        }
+        const index = this.liveRunToolAuthorizations.findIndex((item) => item.id === authorization.id);
+        if (index >= 0) {
+          this.liveRunToolAuthorizations.splice(index, 1, authorization);
+        } else {
+          this.liveRunToolAuthorizations.unshift(authorization);
+        }
+        if (typeof this.replaceToolAuthorization === "function") {
+          this.replaceToolAuthorization(authorization);
+        }
+      },
+
+      async decideLiveRunToolAuthorization(authorization, decision) {
+        if (!authorization?.id || !["approve", "reject"].includes(decision)) {
+          return;
+        }
+        this.busy.toolAuthorizationAction = true;
+        try {
+          const updated = await this.apiRequest(`/tool-authorizations/${encodeURIComponent(authorization.id)}/${decision}`, {
+            method: "POST",
+            body: JSON.stringify({
+              response_payload: {
+                decision_source: "run_live_ui"
+              }
+            })
+          });
+          this.replaceLiveRunToolAuthorization(updated);
+          this.showNotice("success", decision === "approve" ? "工具授权已批准。" : "工具授权已拒绝。");
+          if (this.liveRun?.id) {
+            await this.loadRunLive(this.liveRun.id);
+          }
+        } catch (error) {
+          this.showNotice("error", error.message || "工具授权处理失败。");
+        } finally {
+          this.busy.toolAuthorizationAction = false;
+        }
       },
 
 

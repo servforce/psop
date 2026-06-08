@@ -3022,6 +3022,11 @@
       grid-template-columns: minmax(0,1.08fr) minmax(28rem,0.92fr);
     }
   }
+  .xl\:grid-cols-\[minmax\(0\,1fr\)_18rem\] {
+    @media (width >= 80rem) {
+      grid-template-columns: minmax(0,1fr) 18rem;
+    }
+  }
   .xl\:grid-cols-\[minmax\(0\,1fr\)_26rem\] {
     @media (width >= 80rem) {
       grid-template-columns: minmax(0,1fr) 26rem;
