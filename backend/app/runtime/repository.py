@@ -100,6 +100,15 @@ class RuntimeRepository:
             ).all()
         )
 
+    def list_run_event_parts_for_run(self, session: Session, run_id: str) -> list[RunEventPart]:
+        return list(
+            session.scalars(
+                select(RunEventPart)
+                .where(RunEventPart.run_id == run_id)
+                .order_by(RunEventPart.created_at.asc(), RunEventPart.order_index.asc())
+            ).all()
+        )
+
     def get_run_event_part(self, session: Session, part_id: str) -> RunEventPart | None:
         return session.get(RunEventPart, part_id)
 

@@ -35,6 +35,7 @@ from app.runtime.schemas import (
     SessionTokenSnapshotResponse,
     RunEventAppendResponse,
     RunEventPartInput,
+    RunEventPartResponse,
     RunEventResponse,
     TerminalSessionDetailResponse,
     RunTraceResponse,
@@ -82,6 +83,15 @@ run_ws_hub = RunWebSocketHub()
 
 @gateway_router.post("", response_model=InvocationResponse, status_code=201)
 def create_invocation(
+    payload: CreateInvocationRequest,
+    session: Session = Depends(get_db_session),
+    service: RuntimeService = Depends(get_runtime_service),
+) -> InvocationResponse:
+    return service.create_invocation(session, payload)
+
+
+@runtime_router.post("/invocations", response_model=InvocationResponse, status_code=201)
+def create_runtime_invocation(
     payload: CreateInvocationRequest,
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
@@ -204,6 +214,15 @@ def list_run_events(
     service: RuntimeService = Depends(get_runtime_service),
 ) -> list[RunEventResponse]:
     return service.list_run_events(session, run_id, from_seq=from_seq, to_seq=to_seq)
+
+
+@runs_router.get("/{run_id}/event-parts", response_model=list[RunEventPartResponse])
+def list_run_event_parts(
+    run_id: str,
+    session: Session = Depends(get_db_session),
+    service: RuntimeService = Depends(get_runtime_service),
+) -> list[RunEventPartResponse]:
+    return service.list_run_event_parts(session, run_id)
 
 
 @runs_router.get("/{run_id}/events/{event_id}/content")

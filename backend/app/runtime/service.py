@@ -714,6 +714,14 @@ class RuntimeService:
             raise SkillNotFoundError("未找到 Terminal Event。", details={"run_id": run_id, "event_id": event_id})
         return self._build_run_event_response(session, event)
 
+    def list_run_event_parts(self, session: Session, run_id: str) -> list[RunEventPartResponse]:
+        if not self.repository.get_run(session, run_id):
+            raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        return [
+            self._build_run_event_part_response(part)
+            for part in self.repository.list_run_event_parts_for_run(session, run_id)
+        ]
+
     def get_run_event_part(
         self,
         session: Session,

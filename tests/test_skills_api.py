@@ -2069,7 +2069,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
             json={"artifact": invalid_artifact},
         )
         invocation_response = client.post(
-            "/api/v1/gateway/invocations",
+            "/api/v1/runtime/invocations",
             json={
                 "skill_key": "issue-one-demo",
                 "input_envelope": {"user_input": "请检查泵站压力异常？"},
@@ -2288,6 +2288,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
 
     assert invocation_response.status_code == 201
     assert invocation["run_id"]
+    assert invocation["gateway_type"] == "terminal"
     assert invocation["terminal_context"]["operator_mode"] == "debug"
     assert invocation["terminal_context"]["debug_context"] == {
         "kind": "skill_debug",
@@ -2368,6 +2369,7 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
         final_run_response = client.get(f"/api/v1/runs/{run_id}")
         snapshots_response = client.get(f"/api/v1/runs/{run_id}/snapshots")
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+        event_parts_response = client.get(f"/api/v1/runs/{run_id}/event-parts")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
 
     assert append_response.status_code == 202
@@ -2404,6 +2406,9 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
     terminal_events = terminal_events_response.json()
     persisted_event = next(event for event in terminal_events if event["id"] == appended_event["id"])
     assert [part["kind"] for part in persisted_event["parts"]] == ["text", "image", "video", "audio"]
+    assert event_parts_response.status_code == 200
+    event_parts = [part for part in event_parts_response.json() if part["run_event_id"] == appended_event["id"]]
+    assert [part["part_id"] for part in event_parts] == ["text_1", "image_1", "video_1", "audio_1"]
     replay_event = next(event for event in replay_response.json()["terminal_events"] if event["id"] == appended_event["id"])
     assert [part["part_id"] for part in replay_event["parts"]] == ["text_1", "image_1", "video_1", "audio_1"]
 
