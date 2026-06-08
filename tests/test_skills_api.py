@@ -2309,7 +2309,8 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         "LLM 输出",
     ]
     assert len(replay_payload["run_events"]) == 6
-    assert replay_payload["terminal_events"] == replay_payload["run_events"]
+    assert "terminal_events" not in replay_payload
+    assert "trace_events" not in replay_payload
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
     assert replay_payload["provenance"]["invocation_id"] == invocation_payload["id"]
@@ -2537,7 +2538,9 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert any(event["event_kind"] == "terminal.multimodal.input.v1" for event in terminal_events_response.json())
     assert replay_response.status_code == 200
     assert replay_response.json()["run"]["id"] == run_id
-    assert len(replay_response.json()["terminal_events"]) >= 3
+    assert len(replay_response.json()["run_events"]) >= 3
+    assert "terminal_events" not in replay_response.json()
+    assert "trace_events" not in replay_response.json()
     assert old_cases_response.status_code == 404
     assert test_jobs_response.status_code == 200
     assert test_jobs_response.json() == []
@@ -2642,7 +2645,7 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
     assert event_parts_response.status_code == 200
     event_parts = [part for part in event_parts_response.json() if part["run_event_id"] == appended_event["id"]]
     assert [part["part_id"] for part in event_parts] == ["text_1", "image_1", "video_1", "audio_1"]
-    replay_event = next(event for event in replay_response.json()["terminal_events"] if event["id"] == appended_event["id"])
+    replay_event = next(event for event in replay_response.json()["run_events"] if event["id"] == appended_event["id"])
     assert [part["part_id"] for part in replay_event["parts"]] == ["text_1", "image_1", "video_1", "audio_1"]
 
 
@@ -3191,7 +3194,7 @@ def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> No
 
     assert review_response.status_code == 200
     review_terminal_event = next(
-        event for event in review_response.json()["replay"]["terminal_events"] if event["id"] == bundled_event["id"]
+        event for event in review_response.json()["replay"]["run_events"] if event["id"] == bundled_event["id"]
     )
     assert [part["part_id"] for part in review_terminal_event["parts"]] == ["text_1", "image_1", "video_1"]
 

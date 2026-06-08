@@ -30,3 +30,11 @@ def test_runtime_schema_exports_use_run_event_and_run_trace_names() -> None:
 
     assert {"RunTraceResponse", "RunEventResponse", "AppendRunEventRequest"} <= set(dir(runtime_schemas))
     assert legacy_schema_aliases.isdisjoint(dir(runtime_schemas))
+
+
+def test_replay_detail_response_uses_run_event_and_run_trace_fields() -> None:
+    fields = set(runtime_schemas.ReplayDetailResponse.model_fields)
+
+    assert {"run_events", "run_traces"} <= fields
+    assert "terminal_events" not in fields
+    assert "trace_events" not in fields

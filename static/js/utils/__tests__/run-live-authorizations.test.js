@@ -430,9 +430,7 @@ test("run live websocket events update replay timeline evidence incrementally", 
       run: { id: "run-1" },
       timeline: [],
       run_events: [],
-      terminal_events: [],
       run_traces: [],
-      trace_events: [],
       eg_node_path: [],
       bindings: [],
       snapshots: [
@@ -480,9 +478,9 @@ test("run live websocket events update replay timeline evidence incrementally", 
   expect(methods.liveRunReplayRunEventCount.call(context)).toBe(1);
   expect(methods.liveRunReplayTraceCount.call(context)).toBe(1);
   expect(context.replayDetail.run_events).toEqual([runEvent]);
-  expect(context.replayDetail.terminal_events).toEqual([runEvent]);
+  expect(context.replayDetail.terminal_events).toBeUndefined();
   expect(context.replayDetail.run_traces).toEqual([traceEvent]);
-  expect(context.replayDetail.trace_events).toEqual([traceEvent]);
+  expect(context.replayDetail.trace_events).toBeUndefined();
   expect(context.replayDetail.bindings).toEqual([binding]);
   expect(methods.liveRunReplaySnapshots.call(context).map((item) => item.seq_no)).toEqual([1, 2]);
   expect(context.liveRun.latest_snapshot_seq).toBe(2);

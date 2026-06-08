@@ -1346,11 +1346,10 @@
           return;
         }
         const merged = window.PSOPRuntimeEvents.mergeBySeq(
-          this.replayDetail.run_events || this.replayDetail.terminal_events || [],
+          this.replayDetail.run_events || [],
           incoming
         );
         this.replayDetail.run_events = merged;
-        this.replayDetail.terminal_events = merged;
         this.mergeLiveRunReplayTimeline(incoming.map((event) => this.liveRunReplayRunEventTimelineItem(event)));
       },
 
@@ -1364,11 +1363,10 @@
           return;
         }
         const merged = window.PSOPRuntimeEvents.mergeBySeq(
-          this.replayDetail.run_traces || this.replayDetail.trace_events || [],
+          this.replayDetail.run_traces || [],
           incoming
         );
         this.replayDetail.run_traces = merged;
-        this.replayDetail.trace_events = merged;
         this.mergeLiveRunReplayTimeline(incoming.map((trace) => this.liveRunReplayTraceTimelineItem(trace)));
         this.mergeLiveRunReplayEgNodePath(incoming);
       },
@@ -1954,14 +1952,14 @@
 
       liveRunReplayRunEventCount() {
         return this.replayDetail?.run?.id === this.liveRun?.id
-          ? (this.replayDetail.run_events || this.replayDetail.terminal_events || []).length
+          ? (this.replayDetail.run_events || []).length
           : 0;
       },
 
 
       liveRunReplayTraceCount() {
         return this.replayDetail?.run?.id === this.liveRun?.id
-          ? (this.replayDetail.run_traces || this.replayDetail.trace_events || []).length
+          ? (this.replayDetail.run_traces || []).length
           : 0;
       },
 

@@ -280,9 +280,7 @@ class ReplayDetailResponse(BaseModel):
     eg_node_path: list[ReplayEgNodePathItem] = Field(default_factory=list)
     snapshots: list[SessionTokenSnapshotResponse]
     run_traces: list[RunTraceResponse]
-    trace_events: list[RunTraceResponse] = Field(default_factory=list)
     run_events: list[RunEventResponse] = Field(default_factory=list)
-    terminal_events: list[RunEventResponse] = Field(default_factory=list)
     bindings: list[RunCapabilityBindingResponse] = Field(default_factory=list)
     agent_runs: list[AgentRunResponse] = Field(default_factory=list)
     agent_events: list[AgentEventResponse] = Field(default_factory=list)

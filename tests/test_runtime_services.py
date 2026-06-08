@@ -765,7 +765,8 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert run_events[1].agent_run_id is None
     assert {binding.requirement_key for binding in bindings} == {"terminal.input", "terminal.output"}
     assert len(replay.run_events) == 5
-    assert replay.terminal_events == replay.run_events
+    assert not hasattr(replay, "terminal_events")
+    assert not hasattr(replay, "trace_events")
     assert len(replay.bindings) == 2
     assert [item.event_type for item in replay.timeline][:5] == [
         "binding.resolved",
