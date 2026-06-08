@@ -5,15 +5,20 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db_session, get_skills_service
+from app.api.dependencies import get_db_session, get_pskill_draft_service, get_skills_service
 from app.pskills.exceptions import SkillValidationError
+from app.pskills.draft import PSkillDraftService
 from app.pskills.schemas import (
+    ApplyPSkillDraftPatchRequest,
     CreateSkillRepositoryFileRequest,
     CreateSkillRepositoryFolderRequest,
     CreateSkillRequest,
     DeleteSkillRequest,
     DeletePSkillMaterialResponse,
+    GeneratePSkillDraftPatchRequest,
     GenerateSkillDraftRequest,
+    PSkillDraftApplyPatchResponse,
+    PSkillDraftGenerateResponse,
     PublishSkillRequest,
     PublishSkillResponse,
     SaveSkillRepositoryFileRequest,
@@ -102,6 +107,26 @@ def save_skill_source(
     service: SkillsService = Depends(get_skills_service),
 ) -> SkillSourceResponse:
     return service.save_skill_source(session, skill_id=skill_id, payload=payload)
+
+
+@router.post("/{skill_id}/draft/generate", response_model=PSkillDraftGenerateResponse, status_code=201)
+def generate_draft_patch(
+    skill_id: str,
+    payload: GeneratePSkillDraftPatchRequest,
+    session: Session = Depends(get_db_session),
+    service: PSkillDraftService = Depends(get_pskill_draft_service),
+) -> PSkillDraftGenerateResponse:
+    return service.generate_draft_patch(session, skill_id=skill_id, payload=payload)
+
+
+@router.post("/{skill_id}/draft/apply-patch", response_model=PSkillDraftApplyPatchResponse)
+def apply_draft_patch(
+    skill_id: str,
+    payload: ApplyPSkillDraftPatchRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> PSkillDraftApplyPatchResponse:
+    return service.apply_draft_patch(session, skill_id=skill_id, payload=payload)
 
 
 @router.get("/{skill_id}/repository/tree", response_model=SkillRepositoryTreeResponse)

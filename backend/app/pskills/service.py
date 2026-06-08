@@ -51,12 +51,14 @@ from app.pskills.materials import (
 )
 from app.pskills.repository import SkillsRepository
 from app.pskills.schemas import (
+    ApplyPSkillDraftPatchRequest,
     CreateSkillRepositoryFileRequest,
     CreateSkillRepositoryFolderRequest,
     CreateSkillRequest,
     DeleteSkillRequest,
     DeletePSkillMaterialResponse,
     GenerateSkillDraftRequest,
+    PSkillDraftApplyPatchResponse,
     PublishSkillRequest,
     PublishSkillResponse,
     SaveSkillRepositoryFileRequest,
@@ -998,6 +1000,60 @@ class SkillsService:
             return self._build_material_generation_response(refreshed or generation)
 
         return self._build_material_generation_response(generation)
+
+    def apply_draft_patch(
+        self,
+        session: Session,
+        *,
+        skill_id: str,
+        payload: ApplyPSkillDraftPatchRequest,
+    ) -> PSkillDraftApplyPatchResponse:
+        definition = self._require_definition(session, skill_id)
+        draft_version = self._require_draft_version(session, definition)
+        current_head = self.gitlab_gateway.get_branch_head(definition.gitlab_project_id, draft_version.source_ref)
+        if current_head != payload.base_commit_sha:
+            raise SkillSourceConflictError(
+                "source 已变更，请刷新后重试。",
+                details={"expected": payload.base_commit_sha, "actual": current_head},
+            )
+        if not payload.files:
+            raise SkillValidationError("draft patch 至少需要包含一个文件。")
+
+        files_to_commit: dict[str, str] = {}
+        readme_content: str | None = None
+        skill_md_content: str | None = None
+        for raw_path, content in payload.files.items():
+            file_path = self._normalize_repository_path(str(raw_path))
+            self._validate_repository_manifest_change(definition, file_path, content)
+            files_to_commit[file_path] = content
+            if file_path == "README.md":
+                readme_content = content
+            if file_path == "SKILL.md":
+                skill_md_content = content
+        if not files_to_commit:
+            raise SkillValidationError("draft patch 至少需要包含一个有效文件。")
+
+        commit_message = payload.commit_message.strip() or "Apply PSkill draft patch via PSOP WEB IDE"
+        new_commit_sha = self.gitlab_gateway.commit_repository_files(
+            project_id=definition.gitlab_project_id,
+            branch=draft_version.source_ref,
+            files=files_to_commit,
+            commit_message=commit_message,
+        )
+        self._sync_draft_after_repository_commit(
+            definition,
+            draft_version,
+            new_commit_sha,
+            readme_content=readme_content,
+            skill_md_content=skill_md_content,
+        )
+        session.commit()
+        return PSkillDraftApplyPatchResponse(
+            applied=True,
+            changed_files=sorted(files_to_commit),
+            committed_commit_sha=new_commit_sha,
+            source=self.get_skill_source(session, skill_id),
+        )
 
     def process_pskill_build_job(
         self,

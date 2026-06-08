@@ -916,6 +916,102 @@ def test_get_and_save_skill_source() -> None:
     assert after_detail["updated_at"] != before_detail["updated_at"]
 
 
+def test_pskill_draft_generate_invokes_builder_and_apply_patch_updates_source() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "builder-draft-api",
+                "name": "Builder Draft API",
+                "description": "Generate reviewable draft patches.",
+            },
+        ).json()
+        skill_id = created["id"]
+        material_response = client.post(
+            f"/api/v1/pskills/{skill_id}/materials",
+            data={
+                "name": "Draft notes",
+                "description": "Builder draft source note",
+                "material_kind": "markdown",
+                "source_note": "operator note",
+            },
+            files={"file": ("notes.md", b"# Notes\n\nCheck voltage evidence.\n", "text/markdown")},
+        )
+        material_id = material_response.json()["id"]
+        source_response = client.get(f"/api/v1/pskills/{skill_id}/source")
+        source_payload = source_response.json()
+        generate_response = client.post(
+            f"/api/v1/pskills/{skill_id}/draft/generate",
+            json={
+                "user_description": "Add evidence handling steps for voltage checks.",
+                "material_ids": [material_id],
+                "base_commit_sha": source_payload["head_commit_sha"],
+            },
+        )
+        generated_payload = generate_response.json()
+        agent_run_id = generated_payload["agent_run"]["id"]
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        after_generate_source_response = client.get(f"/api/v1/pskills/{skill_id}/source")
+
+        file_changes = generated_payload["patch"]["file_changes"]
+        apply_response = client.post(
+            f"/api/v1/pskills/{skill_id}/draft/apply-patch",
+            json={
+                "base_commit_sha": source_payload["head_commit_sha"],
+                "files": {item["path"]: item["proposed_content"] for item in file_changes},
+                "commit_message": "Apply builder draft API patch",
+            },
+        )
+        after_apply_detail_response = client.get(f"/api/v1/pskills/{skill_id}")
+
+    assert material_response.status_code == 201
+    assert material_response.json()["status"] == "ready"
+    assert source_response.status_code == 200
+
+    assert generate_response.status_code == 201
+    assert generated_payload["status"] == "patch_proposed"
+    assert generated_payload["agent_run"]["agent_key"] == "pskill.builder"
+    assert generated_payload["agent_run"]["status"] == "succeeded"
+    assert generated_payload["material_ids"] == [material_id]
+    assert generated_payload["base_commit_sha"] == source_payload["head_commit_sha"]
+
+    patch = generated_payload["patch"]
+    assert patch["status"] == "patch_proposed"
+    assert patch["committed"] is False
+    assert patch["requires_human_apply"] is True
+    assert patch["file_changes"][0]["path"] == "SKILL.md"
+    assert patch["file_changes"][0]["changed"] is True
+    assert "+## Builder Draft Proposal" in patch["diff"]
+    assert "Draft notes" in patch["file_changes"][0]["proposed_content"]
+
+    assert authorizations_response.status_code == 200
+    assert authorizations_response.json() == []
+    assert tool_calls_response.status_code == 200
+    assert tool_calls_response.json()[0]["tool_name"] == "psop.repository.propose_patch"
+    assert tool_calls_response.json()[0]["status"] == "succeeded"
+
+    assert after_generate_source_response.status_code == 200
+    assert after_generate_source_response.json()["head_commit_sha"] == source_payload["head_commit_sha"]
+    assert after_generate_source_response.json()["skill_md_content"] == source_payload["skill_md_content"]
+
+    assert apply_response.status_code == 200
+    applied_payload = apply_response.json()
+    assert applied_payload["applied"] is True
+    assert applied_payload["changed_files"] == ["SKILL.md"]
+    assert applied_payload["committed_commit_sha"] != source_payload["head_commit_sha"]
+    assert "## Builder Draft Proposal" in applied_payload["source"]["skill_md_content"]
+
+    after_apply_detail = after_apply_detail_response.json()
+    assert after_apply_detail_response.status_code == 200
+    assert after_apply_detail["latest_draft_head_sha"] == applied_payload["committed_commit_sha"]
+    assert "## Builder Draft Proposal" in after_apply_detail["current_draft_version"]["manifest_snapshot"][
+        "prompt_material"
+    ]["skill_md"]
+
+
 def test_pskill_material_upload_list_detail_content_and_delete() -> None:
     client, _, fake_inference = create_test_client()
 

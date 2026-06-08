@@ -18,6 +18,7 @@ from app.observability.service import ObservabilityService
 from app.runtime.service import RuntimeService
 from app.testing.service import SkillTestService
 from app.tools.service import ToolService
+from app.pskills.draft import PSkillDraftService
 from app.pskills.service import SkillsService
 from app.skills.service import SkillPackageService
 from app.gateway.asr import AsrGateway
@@ -79,6 +80,15 @@ def get_skills_service(request: Request) -> SkillsService:
         asr_gateway=get_asr_gateway(request),
         object_store=get_object_store(request),
         agent_prompt_service=get_agent_prompt_service(request),
+    )
+
+
+def get_pskill_draft_service(request: Request) -> PSkillDraftService:
+    skills_service = get_skills_service(request)
+    return PSkillDraftService(
+        skills_service=skills_service,
+        agent_service=get_agent_service(request),
+        agent_runner=AgentRunner(pskills_service=skills_service),
     )
 
 

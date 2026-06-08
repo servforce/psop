@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agents.schemas import AgentRunResponse
 from app.compiler.schemas import CompileRequestResponse
 
 
@@ -188,6 +189,38 @@ class GenerateSkillDraftRequest(BaseModel):
 
     user_description: str = Field(min_length=1, max_length=10000)
     base_commit_sha: str | None = Field(default=None, min_length=1)
+
+
+class GeneratePSkillDraftPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_description: str = Field(min_length=1, max_length=10000)
+    material_ids: list[str] = Field(default_factory=list)
+    base_commit_sha: str | None = Field(default=None, min_length=1)
+    proposed_files: dict[str, str] = Field(default_factory=dict)
+
+
+class PSkillDraftGenerateResponse(BaseModel):
+    status: str
+    agent_run: AgentRunResponse
+    base_commit_sha: str
+    material_ids: list[str] = Field(default_factory=list)
+    patch: dict[str, Any]
+
+
+class ApplyPSkillDraftPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_commit_sha: str = Field(min_length=1)
+    files: dict[str, str] = Field(default_factory=dict)
+    commit_message: str = Field(default="Apply PSkill draft patch via PSOP WEB IDE", max_length=500)
+
+
+class PSkillDraftApplyPatchResponse(BaseModel):
+    applied: bool
+    changed_files: list[str]
+    committed_commit_sha: str
+    source: SkillSourceResponse
 
 
 class PSkillMaterialGenerationResponse(BaseModel):
