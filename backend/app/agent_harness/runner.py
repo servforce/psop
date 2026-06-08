@@ -20,6 +20,7 @@ from app.agents.schemas import (
 from app.agents.service import AgentService
 from app.compiler.formal_v5 import validate_and_normalize_artifact
 from app.compiler.service import CompilerService
+from app.evaluations.service import EvaluationService
 from app.governance.schemas import GovernanceProposalCreateRequest
 from app.governance.service import GovernanceService
 from app.memory.schemas import MemorySearchRequest
@@ -56,6 +57,7 @@ class AgentRunner:
         pskills_service: SkillsService | None = None,
         compiler_service: CompilerService | None = None,
         runtime_service: RuntimeService | None = None,
+        evaluation_service: EvaluationService | None = None,
         governance_service: GovernanceService | None = None,
         output_guardrail: OutputGuardrail | None = None,
         planner: AgentPlanner | None = None,
@@ -68,6 +70,7 @@ class AgentRunner:
         self.pskills_service = pskills_service
         self.compiler_service = compiler_service
         self.runtime_service = runtime_service
+        self.evaluation_service = evaluation_service or EvaluationService()
         self.governance_service = governance_service or GovernanceService()
         self.output_guardrail = output_guardrail or OutputGuardrail()
         self.planner = planner or AgentPlanner()
@@ -473,6 +476,8 @@ class AgentRunner:
             }
         if tool_call.tool_name == "psop.runtime.read":
             return {"result": self._read_runtime_facts(session, tool_call=tool_call, arguments=arguments)}
+        if tool_call.tool_name == "psop.evaluations.read":
+            return {"result": self._read_evaluation_facts(session, arguments)}
         if tool_call.tool_name == "psop.governance.write_proposal":
             proposal_arguments = arguments.get("proposal", arguments)
             if not isinstance(proposal_arguments, dict):
@@ -660,6 +665,46 @@ class AgentRunner:
         )
         return result
 
+    def _read_evaluation_facts(self, session: Session, arguments: dict[str, Any]) -> dict[str, Any]:
+        evaluation_id = str(arguments.get("evaluation_id") or "").strip()
+        finding_id = str(arguments.get("finding_id") or "").strip()
+        if evaluation_id:
+            evaluation = self.evaluation_service.get_evaluation(session, evaluation_id)
+            return {
+                "mode": "evaluation",
+                "evaluation": evaluation.model_dump(mode="json"),
+                "finding_count": len(evaluation.findings),
+            }
+        if finding_id:
+            finding = self.evaluation_service.get_finding(session, finding_id)
+            return {
+                "mode": "finding",
+                "finding": finding.model_dump(mode="json"),
+            }
+        findings = self.evaluation_service.list_findings(
+            session,
+            status=self._optional_tool_string(arguments.get("status")),
+            category=self._optional_tool_string(arguments.get("category")),
+            severity=self._optional_tool_string(arguments.get("severity")),
+            run_id=self._optional_tool_string(arguments.get("run_id")),
+            pskill_definition_id=self._optional_tool_string(arguments.get("pskill_definition_id")),
+        )
+        limit = self._bounded_tool_limit(arguments.get("limit"), default=25, maximum=100)
+        selected = findings[:limit] if limit else []
+        return {
+            "mode": "findings",
+            "finding_count": len(findings),
+            "findings": [item.model_dump(mode="json") for item in selected],
+            "filters": {
+                "status": self._optional_tool_string(arguments.get("status")),
+                "category": self._optional_tool_string(arguments.get("category")),
+                "severity": self._optional_tool_string(arguments.get("severity")),
+                "run_id": self._optional_tool_string(arguments.get("run_id")),
+                "pskill_definition_id": self._optional_tool_string(arguments.get("pskill_definition_id")),
+                "limit": limit,
+            },
+        }
+
     def _read_runtime_facts(self, session: Session, *, tool_call: Any, arguments: dict[str, Any]) -> dict[str, Any]:
         runtime_service = self._require_runtime_service()
         run_id = str(arguments.get("run_id") or "").strip()
@@ -741,6 +786,12 @@ class AgentRunner:
         except (TypeError, ValueError) as error:
             raise SkillValidationError("工具 limit 参数必须是整数。", details={"value": value}) from error
         return max(0, min(parsed, maximum))
+
+    @staticmethod
+    def _optional_tool_string(value: Any) -> str | None:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
 
     @staticmethod
     def _document_from_tool_manifest(manifest: dict[str, Any]) -> SkillDocument:

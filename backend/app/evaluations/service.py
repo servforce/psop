@@ -111,6 +111,12 @@ class EvaluationService:
             raise SkillNotFoundError("未找到 RunEvaluation。", details={"evaluation_id": evaluation_id})
         return [self._build_finding_response(item) for item in self.repository.list_evaluation_findings(session, evaluation_id)]
 
+    def get_finding(self, session: Session, finding_id: str) -> RunEvaluationFindingResponse:
+        finding = self.repository.get_finding(session, finding_id)
+        if not finding:
+            raise SkillNotFoundError("未找到 RunEvaluationFinding。", details={"finding_id": finding_id})
+        return self._build_finding_response(finding)
+
     def list_findings(
         self,
         session: Session,

@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from app.gateway.inference import LlmCompletion
 from app.memory.models import AgentMemoryEntry
 from app.skills.models import SkillPackage, SkillVersion
 from tests.test_skills_api import create_test_client
+
+
+class FailingRuntimeInferenceGateway:
+    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "text") -> LlmCompletion:
+        raise RuntimeError("runtime provider failed during agent tool test")
 
 
 BUILDER_ALLOWED_TOOLS = [
@@ -839,6 +845,94 @@ def test_agent_runner_executes_governance_write_proposal_tool_without_hitl() -> 
     event_types = [item["event_type"] for item in events_response.json()]
     assert "tool.execution_started" in event_types
     assert "governance.proposal.created" in event_types
+    assert "tool.execution_succeeded" in event_types
+    assert "agent.tool_call.succeeded" in event_types
+
+
+def test_agent_runner_executes_governance_evaluations_read_tool() -> None:
+    client, _, original_inference = create_test_client()
+
+    with client:
+        skill = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "governance-evaluation-read-tool",
+                "name": "Governance Evaluation Read Tool",
+                "description": "Validate governance Agent can read evaluations.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill['id']}/publish",
+            json={"publish_reason": "Governance evaluation read tool test"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+
+        client.app.state.inference_gateway = FailingRuntimeInferenceGateway()
+        try:
+            invocation_response = client.post(
+                "/api/v1/gateway/invocations",
+                json={
+                    "skill_key": "governance-evaluation-read-tool",
+                    "input_envelope": {"user_input": "触发 evaluation finding"},
+                    "gateway_type": "web",
+                },
+            )
+            run_id = invocation_response.json()["run_id"]
+        finally:
+            client.app.state.inference_gateway = original_inference
+
+        evaluation_response = client.post(f"/api/v1/evaluations/runs/{run_id}")
+        evaluation = evaluation_response.json()
+        finding = evaluation["findings"][0]
+        agent_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "psop.governance",
+                "owner_type": "governance",
+                "owner_id": "evaluation-read-tool",
+                "run_id": run_id,
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.evaluations.read",
+                        "side_effect_level": "read",
+                        "arguments_summary": {"evaluation_id": evaluation["id"]},
+                    }
+                },
+            },
+        )
+        agent_run_id = agent_run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert invocation_response.status_code == 201
+    assert evaluation_response.status_code == 201
+    assert evaluation["overall_outcome"] == "failed"
+    assert finding["category"] == "runner_issue"
+    assert agent_run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    payload = run_once_response.json()
+    assert payload["status"] == "succeeded"
+    result = payload["output_payload"]["tool_result"]["result"]
+    assert result["mode"] == "evaluation"
+    assert result["evaluation"]["id"] == evaluation["id"]
+    assert result["evaluation"]["run_id"] == run_id
+    assert result["finding_count"] == len(evaluation["findings"])
+    assert result["evaluation"]["findings"][0]["id"] == finding["id"]
+    assert authorizations_response.json() == []
+
+    tool_call = tool_calls_response.json()[0]
+    assert tool_call["tool_name"] == "psop.evaluations.read"
+    assert tool_call["status"] == "succeeded"
+    assert tool_call["result_summary"]["executed"] is True
+    assert tool_call["result_summary"]["result"]["evaluation"]["id"] == evaluation["id"]
+    assert "native_execution" not in tool_call["result_summary"]["result"]
+
+    event_types = [item["event_type"] for item in events_response.json()]
+    assert "tool.execution_started" in event_types
     assert "tool.execution_succeeded" in event_types
     assert "agent.tool_call.succeeded" in event_types
 

@@ -71,6 +71,7 @@ def get_agent_runner(request: Request) -> AgentRunner:
         pskills_service=get_skills_service(request),
         compiler_service=get_compiler_service(request),
         runtime_service=get_runtime_service(request),
+        evaluation_service=get_evaluation_service(request),
     )
 
 
