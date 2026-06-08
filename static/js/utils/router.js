@@ -298,8 +298,16 @@ export function buildPlatformAgentPath(agentKey) {
   return `/admin/platform/agents/${agentKey}`;
 }
 
-export function buildPlatformAgentRunsPath() {
-  return "/admin/platform/agent-runs";
+export function buildPlatformAgentRunsPath(filters = {}) {
+  const params = new URLSearchParams();
+  for (const key of ["agent_key", "status", "owner_type", "owner_id"]) {
+    const value = String(filters?.[key] || "").trim();
+    if (value) {
+      params.set(key, value);
+    }
+  }
+  const query = params.toString();
+  return query ? `/admin/platform/agent-runs?${query}` : "/admin/platform/agent-runs";
 }
 
 export function buildPlatformAgentRunPath(agentRunId, focus = {}) {

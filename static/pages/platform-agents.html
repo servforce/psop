@@ -21,7 +21,7 @@
           <span class="material-symbols-outlined text-[18px]">manage_history</span>
           <span>Agent Runs</span>
         </button>
-        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformAgentsToolAuthorizationsPath())">
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformAgentsToolAuthorizationsPath({ status: 'pending' }))">
           <span class="material-symbols-outlined text-[18px]">admin_panel_settings</span>
           <span>授权</span>
         </button>
@@ -269,7 +269,7 @@
                   <p class="p-4 text-sm text-slate-400">暂无 AgentRun</p>
                 </template>
                 <template x-for="run in platformAgentRuns" :key="run.id">
-                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[minmax(13rem,0.45fr)_minmax(0,1fr)_9rem]">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[minmax(13rem,0.45fr)_minmax(0,1fr)_12rem]">
                     <div class="min-w-0">
                       <div class="flex flex-wrap gap-2">
                         <span class="status-badge" :class="agentRunStatusTone(run.status)" x-text="agentRunStatusLabel(run.status)"></span>
@@ -281,10 +281,16 @@
                       <p class="truncate text-slate-300" x-text="run.owner_type || 'N/A'"></p>
                       <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="run.owner_id || 'N/A'"></p>
                     </div>
-                    <button type="button" class="button-secondary h-8 px-3" @click="navigate(platformAgentsRunPath(run.id))">
-                      <span class="material-symbols-outlined text-[17px]">open_in_new</span>
-                      <span>打开</span>
-                    </button>
+                    <div class="flex flex-wrap justify-end gap-2">
+                      <button type="button" class="button-secondary h-8 px-3" @click="navigate(platformAgentsRunPath(run.id))">
+                        <span class="material-symbols-outlined text-[17px]">open_in_new</span>
+                        <span>打开</span>
+                      </button>
+                      <button type="button" class="button-primary h-8 px-3" x-show="run.status === 'waiting_tool_authorization'" @click="navigate(platformAgentWaitingAuthorizationPath(run))">
+                        <span class="material-symbols-outlined text-[17px]">admin_panel_settings</span>
+                        <span>授权</span>
+                      </button>
+                    </div>
                   </article>
                 </template>
               </div>
@@ -294,7 +300,7 @@
                   <p class="p-4 text-sm text-slate-400">暂无工具授权请求</p>
                 </template>
                 <template x-for="authorization in platformAgentToolAuthorizations" :key="authorization.id">
-                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[minmax(13rem,0.45fr)_minmax(0,1fr)_9rem]">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[minmax(13rem,0.45fr)_minmax(0,1fr)_12rem]">
                     <div class="min-w-0">
                       <div class="flex flex-wrap gap-2">
                         <span class="status-badge" :class="statusBadgeTone(authorization.status)" x-text="toolAuthorizationStatusLabel(authorization.status)"></span>
@@ -304,10 +310,16 @@
                       <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="authorization.id"></p>
                     </div>
                     <p class="min-w-0 text-sm leading-6 text-slate-300" x-text="authorization.authorization_reason || authorization.expected_effect_summary || 'N/A'"></p>
-                    <button type="button" class="button-secondary h-8 px-3" @click="navigate(platformAgentsToolAuthorizationsPath())">
-                      <span class="material-symbols-outlined text-[17px]">open_in_new</span>
-                      <span>授权</span>
-                    </button>
+                    <div class="flex flex-wrap justify-end gap-2">
+                      <button type="button" class="button-secondary h-8 px-3" @click="navigate(platformAgentAuthorizationPath(authorization))">
+                        <span class="material-symbols-outlined text-[17px]">manage_history</span>
+                        <span>AgentRun</span>
+                      </button>
+                      <button type="button" class="button-secondary h-8 px-3" @click="navigate(platformAgentsToolAuthorizationsPath(authorization))">
+                        <span class="material-symbols-outlined text-[17px]">open_in_new</span>
+                        <span>授权页</span>
+                      </button>
+                    </div>
                   </article>
                 </template>
               </div>

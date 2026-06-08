@@ -3068,9 +3068,9 @@
       grid-template-columns: minmax(0,1fr) minmax(0,1fr);
     }
   }
-  .xl\:grid-cols-\[minmax\(13rem\,0\.45fr\)_minmax\(0\,1fr\)_9rem\] {
+  .xl\:grid-cols-\[minmax\(13rem\,0\.45fr\)_minmax\(0\,1fr\)_12rem\] {
     @media (width >= 80rem) {
-      grid-template-columns: minmax(13rem,0.45fr) minmax(0,1fr) 9rem;
+      grid-template-columns: minmax(13rem,0.45fr) minmax(0,1fr) 12rem;
     }
   }
   .xl\:grid-cols-\[minmax\(16rem\,0\.5fr\)_minmax\(0\,1fr\)\] {

@@ -307,8 +307,16 @@
     return `/admin/platform/agents/${agentKey}`;
   }
 
-  function buildPlatformAgentRunsPath() {
-    return "/admin/platform/agent-runs";
+  function buildPlatformAgentRunsPath(filters = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["agent_key", "status", "owner_type", "owner_id"]) {
+      const value = String(filters?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `/admin/platform/agent-runs?${query}` : "/admin/platform/agent-runs";
   }
 
   function buildPlatformAgentRunPath(agentRunId, focus = {}) {
@@ -854,6 +862,7 @@
       },
       platformTools: [],
       currentPlatformTool: null,
+      currentPlatformToolCalls: [],
       platformToolTestResult: null,
       platformToolFilters: {
         side_effect_level: "",

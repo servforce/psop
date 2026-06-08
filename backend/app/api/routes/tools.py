@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_tool_service
+from app.agents.schemas import AgentToolCallResponse
 from app.tools.schemas import ToolDefinitionResponse, ToolTestRequest, ToolTestResponse
 from app.tools.service import ToolService
 
@@ -34,6 +35,16 @@ def get_tool(
     service: ToolService = Depends(get_tool_service),
 ) -> ToolDefinitionResponse:
     return service.get_tool(session, tool_name)
+
+
+@router.get("/{tool_name}/calls", response_model=list[AgentToolCallResponse])
+def list_tool_calls(
+    tool_name: str,
+    limit: int = Query(default=10, ge=1, le=50),
+    session: Session = Depends(get_db_session),
+    service: ToolService = Depends(get_tool_service),
+) -> list[AgentToolCallResponse]:
+    return service.list_recent_tool_calls(session, tool_name, limit=limit)
 
 
 @router.post("/{tool_name}/test", response_model=ToolTestResponse)

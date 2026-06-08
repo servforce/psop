@@ -65,7 +65,17 @@ function loadPlatformHarness(locationSearch = "") {
           const query = params.toString();
           return query ? `/admin/tasks?${query}` : "/admin/tasks";
         },
-        buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
+        buildPlatformAgentPath: (agentKey) => `/admin/platform/agents/${agentKey}`,
+        buildPlatformAgentRunsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["agent_key", "status", "owner_type", "owner_id"]) {
+            if (filters[key]) {
+              params.set(key, filters[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/agent-runs?${query}` : "/admin/platform/agent-runs";
+        },
         buildPlatformAgentRunPath: (agentRunId, focus = {}) => {
           const params = new URLSearchParams();
           for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
@@ -95,6 +105,16 @@ function loadPlatformHarness(locationSearch = "") {
         },
         buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
         buildRunLivePath: (runId) => `/admin/runs/${runId}/live`,
+        buildReplayPath: (runId, focus = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["event_id", "seq_no", "snapshot_seq"]) {
+            if (focus[key]) {
+              params.set(key, focus[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
+        },
         resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`
       }
     },
@@ -158,6 +178,10 @@ test("platform methods build filters, labels, and paths", () => {
   expect(methods.platformToolSideEffectLabel.call(context, "low_write")).toBe("Low Write");
   expect(methods.memoryStatusLabel.call(context, "pending_review")).toBe("待审核");
   expect(methods.platformAgentRunPath("run-1")).toBe("/admin/platform/agent-runs/run-1");
+  expect(methods.platformAgentDefinitionPath("pskill.builder")).toBe("/admin/platform/agents/pskill.builder");
+  expect(methods.platformAgentRunsPath({ status: "waiting_tool_authorization" })).toBe(
+    "/admin/platform/agent-runs?status=waiting_tool_authorization"
+  );
   expect(methods.agentRunToolCallPath("agent-run-1", "tool-call-1")).toBe(
     "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-call-1"
   );
@@ -172,6 +196,54 @@ test("platform methods build filters, labels, and paths", () => {
   expect(methods.platformRunLivePath("runtime-run-1")).toBe("/admin/runs/runtime-run-1/live");
   expect(methods.platformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
   expect(methods.platformMemoryEntryPath("mem-1")).toBe("/admin/platform/memory/mem-1");
+});
+
+test("platform methods sync agent run filters from location", async () => {
+  const methods = loadPlatformMethods("?agent_key=pskill.runner&status=waiting_tool_authorization");
+  const run = {
+    id: "agent-run-waiting",
+    agent_key: "pskill.runner",
+    status: "waiting_tool_authorization",
+    owner_type: "runtime",
+    owner_id: "run-1"
+  };
+  const context = {
+    ...methods,
+    apiBaseUrl: "/api/v1",
+    busy: { agentRuns: false, agentRunDetail: false },
+    agentRunFilters: { agent_key: "", status: "", owner_type: "", owner_id: "" },
+    agentRuns: [],
+    currentAgentRun: null,
+    currentAgentRunEvents: [],
+    currentAgentRunModelCalls: [],
+    currentAgentRunToolCalls: [],
+    currentAgentRunSkillActivations: [],
+    currentAgentRunToolAuthorizations: [],
+    currentAgentRunMemoryEntries: [],
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/agent-runs?agent_key=pskill.runner&status=waiting_tool_authorization") {
+        return [run];
+      }
+      if (url === "/agent-runs/agent-run-waiting") {
+        return run;
+      }
+      return [];
+    }),
+    connectAgentRunActivityWebSocket: jest.fn(),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadPlatformAgentRunsPage.call(context);
+
+  expect(context.agentRunFilters).toEqual({
+    agent_key: "pskill.runner",
+    status: "waiting_tool_authorization",
+    owner_type: "",
+    owner_id: ""
+  });
+  expect(context.apiRequest).toHaveBeenCalledWith(
+    "/agent-runs?agent_key=pskill.runner&status=waiting_tool_authorization"
+  );
 });
 
 test("platform methods sync agent run detail focus from location", () => {
@@ -498,6 +570,16 @@ test("platform methods sync, load, create, validate, and activate skill packages
   expect(context.currentSkillPackage.name).toBe("pskill-builder");
   expect(context.currentSkillPackage.versions.find((version) => version.id === "ver-1").validation_diagnostics).toHaveLength(1);
   expect(methods.skillPackageUsedByAgents.call(context, context.currentSkillPackage).map((agent) => agent.key)).toEqual(["pskill.builder"]);
+  expect(methods.skillPackageAgentRunsPath("pskill.builder")).toBe(
+    "/admin/platform/agent-runs?agent_key=pskill.builder"
+  );
+});
+
+test("platform skills page exposes used-by agent navigation", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/platform-skills.html"), "utf8");
+
+  expect(html).toContain("platformAgentDefinitionPath(agent.key)");
+  expect(html).toContain("skillPackageAgentRunsPath(agent.key)");
 });
 
 test("platform methods load tools and select the first row", async () => {
@@ -526,14 +608,27 @@ test("platform methods load tools and select the first row", async () => {
     output_preview: { status: "dry_run_succeeded" },
     policy_decision: { allowed: true, reason: "auto_allowed" }
   };
+  const toolCalls = [
+    {
+      id: "tool-call-1",
+      agent_run_id: "agent-run-1",
+      tool_name: "psop.memory.search",
+      status: "succeeded",
+      updated_at: "2026-06-05T00:00:00Z"
+    }
+  ];
   const context = {
     ...methods,
     busy: { platformTools: false, platformToolAction: false },
     platformToolFilters: { side_effect_level: "read", requires_authorization: "false" },
     platformTools: [],
     currentPlatformTool: null,
+    currentPlatformToolCalls: [],
     platformToolTestResult: null,
     apiRequest: jest.fn(async (url) => {
+      if (url === "/tools/psop.memory.search/calls?limit=10") {
+        return toolCalls;
+      }
       if (url === "/tools/psop.memory.search/test") {
         return dryRun;
       }
@@ -546,6 +641,7 @@ test("platform methods load tools and select the first row", async () => {
   await methods.testPlatformTool.call(context, context.currentPlatformTool);
 
   expect(context.apiRequest).toHaveBeenCalledWith("/tools?side_effect_level=read&requires_authorization=false");
+  expect(context.apiRequest).toHaveBeenCalledWith("/tools/psop.memory.search/calls?limit=10");
   expect(context.apiRequest).toHaveBeenCalledWith("/tools/psop.memory.search/test", {
     method: "POST",
     body: JSON.stringify({
@@ -555,6 +651,10 @@ test("platform methods load tools and select the first row", async () => {
   });
   expect(context.platformTools).toEqual(tools);
   expect(context.currentPlatformTool.name).toBe("psop.memory.search");
+  expect(context.currentPlatformToolCalls).toEqual(toolCalls);
+  expect(methods.platformToolCallPath(toolCalls[0])).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-call-1"
+  );
   expect(methods.platformToolAuthorizationsPath.call(context, context.currentPlatformTool.name)).toBe(
     "/admin/platform/tool-authorizations?tool_name=psop.memory.search"
   );
@@ -573,6 +673,8 @@ test("platform tools page exposes default ToolPolicy reason", () => {
   expect(html).toContain("Policy Reason");
   expect(html).toContain("currentPlatformTool.policy_summary?.policy_reason");
   expect(html).toContain("currentPlatformTool.policy_summary?.policy_decision?.reason");
+  expect(html).toContain("currentPlatformToolCalls.length");
+  expect(html).toContain("platformToolCallPath(call)");
 });
 
 test("platform methods search and save memory entries", async () => {
@@ -588,7 +690,18 @@ test("platform methods search and save memory entries", async () => {
     content: "A regression finding pattern.",
     source_refs: [
       { kind: "run", id: "runtime-run-1" },
-      { kind: "governance_proposal", proposal_id: "proposal-1" }
+      { kind: "governance_proposal", proposal_id: "proposal-1" },
+      { kind: "agent_memory_entry", id: "memory-source-1" },
+      { kind: "run_trace", id: "trace-1", run_id: "runtime-run-1", seq_no: 7 },
+      { kind: "run_event", id: "run-event-1", run_id: "runtime-run-1" },
+      { kind: "tool_call", id: "tool-call-1", agent_run_id: "agent-run-1" },
+      {
+        kind: "tool_authorization",
+        id: "auth-1",
+        agent_run_id: "agent-run-1",
+        tool_name: "psop.repository.commit_patch",
+        status: "pending"
+      }
     ],
     created_by_agent_run_id: "agent-run-1",
     tags: ["finding"],
@@ -694,6 +807,31 @@ test("platform methods search and save memory entries", async () => {
       key: "proposal-proposal-1",
       label: "Proposal proposal-1",
       href: "/admin/governance/proposals/proposal-1"
+    },
+    {
+      key: "memory-memory-source-1",
+      label: "Memory memory-source-1",
+      href: "/admin/platform/memory/memory-source-1"
+    },
+    {
+      key: "run-trace-trace-1",
+      label: "RunTrace trace-1",
+      href: "/admin/runs/runtime-run-1/live/replay?seq_no=7"
+    },
+    {
+      key: "run-event-run-event-1",
+      label: "RunEvent run-event-1",
+      href: "/admin/runs/runtime-run-1/live/replay?event_id=run-event-1"
+    },
+    {
+      key: "tool-call-tool-call-1",
+      label: "ToolCall tool-call-1",
+      href: "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-call-1"
+    },
+    {
+      key: "tool-auth-auth-1",
+      label: "ToolAuth auth-1",
+      href: "/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-1"
     }
   ]);
   expect(context.busy.memoryUpdate).toBe(false);

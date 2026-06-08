@@ -8,9 +8,46 @@ function loadObservabilityMethods() {
     window: {
       PSOPConsoleHelpers: {
         buildPlatformObservabilityPath: () => "/admin/platform/observability",
-        buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
-        buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations",
-        buildRunLivePath: (runId) => `/admin/runs/${runId}/live`
+        buildPlatformAgentRunsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["agent_key", "status", "owner_type", "owner_id"]) {
+            if (filters[key]) {
+              params.set(key, filters[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/agent-runs?${query}` : "/admin/platform/agent-runs";
+        },
+        buildPlatformAgentRunPath: (agentRunId, focus = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+            if (focus[key]) {
+              params.set(key, focus[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
+        },
+        buildToolAuthorizationsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          if (filters.status) {
+            params.set("status", filters.status);
+          }
+          if (filters.tool_name) {
+            params.set("tool_name", filters.tool_name);
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
+        },
+        buildRunLivePath: (runId) => `/admin/runs/${runId}/live`,
+        buildReplayPath: (runId, focus = {}) => {
+          const params = new URLSearchParams();
+          if (focus.seq_no) {
+            params.set("seq_no", focus.seq_no);
+          }
+          const query = params.toString();
+          return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
+        }
       }
     },
     URLSearchParams,
@@ -52,6 +89,15 @@ test("observability methods load global metrics with the selected window", async
   expect(context.observabilityMetrics).toBe(payload);
   expect(context.busy.observabilityMetrics).toBe(false);
   expect(methods.platformObservabilityPath()).toBe("/admin/platform/observability");
+  expect(methods.observabilityAgentRunsAgentPath("pskill.runner")).toBe(
+    "/admin/platform/agent-runs?agent_key=pskill.runner"
+  );
+  expect(methods.observabilityAgentRunsStatusPath("waiting_tool_authorization")).toBe(
+    "/admin/platform/agent-runs?status=waiting_tool_authorization"
+  );
+  expect(methods.observabilityToolAuthorizationsStatusPath("pending")).toBe(
+    "/admin/platform/tool-authorizations?status=pending"
+  );
 });
 
 test("observability methods query run traces with optional event type", async () => {
@@ -77,6 +123,9 @@ test("observability methods query run traces with optional event type", async ()
   expect(context.observabilityRunTraces).toEqual(traces);
   expect(context.observabilityTraceLookupRunId).toBe("run 1");
   expect(methods.observabilityRunLivePath("run-1")).toBe("/admin/runs/run-1/live");
+  expect(methods.observabilityRunReplayPath.call(context, { run_id: "run 1", seq_no: 7 })).toBe(
+    "/admin/runs/run 1/live/replay?seq_no=7"
+  );
 });
 
 test("observability methods query agent run observability streams", async () => {
@@ -148,6 +197,15 @@ test("observability methods query agent run observability streams", async () => 
   expect(context.observabilityToolAuthorizations).toEqual(authorizations);
   expect(context.observabilityMemoryEntries).toEqual(memoryEntries);
   expect(methods.observabilityAgentRunPath("agent-run-1")).toBe("/admin/platform/agent-runs/agent-run-1");
+  expect(methods.observabilityAgentRunToolCallPath.call(context, toolCalls[0])).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-1"
+  );
+  expect(methods.observabilityAgentRunAuthorizationPath.call(context, authorizations[0])).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-1"
+  );
+  expect(methods.observabilityToolAuthorizationHistoryPath(authorizations[0])).toBe(
+    "/admin/platform/tool-authorizations?status=pending&tool_name=psop.repository.commit_patch"
+  );
 
   methods.resetObservabilityAgentRunQuery.call(context);
 
@@ -178,4 +236,16 @@ test("observability methods sort distribution entries and derive trace event opt
   expect(methods.observabilityTraceEventTypeOptions.call(context)).toEqual(["runtime.completed", "runtime.failed"]);
   expect(methods.observabilityOtelTone(true)).toContain("emerald");
   expect(methods.observabilityOtelTone(false)).toContain("amber");
+});
+
+test("observability page exposes linked distribution filters", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/platform-observability.html"), "utf8");
+
+  expect(html).toContain("observabilityAgentRunsAgentPath(item.key)");
+  expect(html).toContain("observabilityAgentRunsStatusPath(item.key)");
+  expect(html).toContain("observabilityToolAuthorizationsStatusPath(item.key)");
+  expect(html).toContain("observabilityMetrics.agents.agent_run_status_counts");
+  expect(html).toContain("observabilityRunReplayPath(trace)");
+  expect(html).toContain("observabilityAgentRunToolCallPath(call)");
+  expect(html).toContain("observabilityAgentRunAuthorizationPath(authorization)");
 });

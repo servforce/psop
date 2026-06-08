@@ -5,6 +5,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.agent_harness.tools import AUTH_REQUIRED_LEVELS, DEFAULT_TOOL_SIDE_EFFECTS, NATIVE_TOOL_EXECUTORS, ToolPolicy
+from app.agents.models import AgentToolCall
+from app.agents.schemas import AgentToolCallResponse
 from app.agents.service import AgentService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
@@ -205,6 +207,19 @@ class ToolService:
             },
         )
 
+    def list_recent_tool_calls(self, session: Session, tool_name: str, *, limit: int = 10) -> list[AgentToolCallResponse]:
+        changed = self.ensure_seed_data(session)
+        changed = self.agent_service.ensure_seed_data(session) or changed
+        if changed:
+            session.commit()
+        tool = self.repository.get_tool_by_name(session, tool_name)
+        if not tool:
+            raise SkillNotFoundError("未找到工具定义。", details={"tool_name": tool_name})
+        return [
+            self._build_tool_call_response(item)
+            for item in self.repository.list_recent_tool_calls(session, tool.name, limit=limit)
+        ]
+
     def _build_tool_response(self, session: Session, tool: ToolDefinition) -> ToolDefinitionResponse:
         recent_call_count = self.repository.count_tool_calls(session, tool.name)
         failed_call_count = self.repository.count_failed_tool_calls(session, tool.name)
@@ -332,6 +347,22 @@ class ToolService:
             if tool_name in agent_allowed_tools and tool_name in skill_allowed_tools:
                 keys.append(definition.key)
         return keys
+
+    @staticmethod
+    def _build_tool_call_response(tool_call: AgentToolCall) -> AgentToolCallResponse:
+        return AgentToolCallResponse(
+            id=tool_call.id,
+            agent_run_id=tool_call.agent_run_id,
+            tool_name=tool_call.tool_name,
+            tool_provider=tool_call.tool_provider,
+            status=tool_call.status,
+            arguments_summary=tool_call.arguments_summary,
+            result_summary=tool_call.result_summary,
+            side_effect_level=tool_call.side_effect_level,
+            idempotency_key=tool_call.idempotency_key,
+            created_at=tool_call.created_at,
+            updated_at=tool_call.updated_at,
+        )
 
     def _active_skill_allowed_tools(self, session: Session, skill_names: list[Any]) -> set[str]:
         allowed_tools: set[str] = set()

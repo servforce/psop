@@ -173,8 +173,27 @@
       return buildPlatformAgentRunsPath();
     },
 
-    platformAgentsRunPath(agentRunId) {
-      return buildPlatformAgentRunPath(agentRunId);
+    platformAgentsRunPath(agentRunId, focus = {}) {
+      return buildPlatformAgentRunPath(agentRunId, focus);
+    },
+
+    platformAgentWaitingAuthorizationPath(run) {
+      const agentRunId = String(run?.id || run || "").trim();
+      return agentRunId
+        ? buildPlatformAgentRunPath(agentRunId, { tab: "authorizations" })
+        : buildToolAuthorizationsPath({ status: "pending" });
+    },
+
+    platformAgentAuthorizationPath(authorization) {
+      const agentRunId = String(authorization?.agent_run_id || "").trim();
+      const authorizationId = String(authorization?.id || "").trim();
+      if (agentRunId) {
+        return buildPlatformAgentRunPath(agentRunId, {
+          tab: "authorizations",
+          authorization_id: authorizationId
+        });
+      }
+      return this.platformAgentsToolAuthorizationsPath(authorization);
     },
 
     platformAgentsSkillsPath() {
@@ -185,8 +204,13 @@
       return buildPlatformSkillPath(packageName);
     },
 
-    platformAgentsToolAuthorizationsPath() {
-      return buildToolAuthorizationsPath();
+    platformAgentsToolAuthorizationsPath(filters = {}) {
+      const toolName = typeof filters === "string" ? filters : filters?.tool_name;
+      const status = typeof filters === "object" ? filters?.status : "";
+      return buildToolAuthorizationsPath({
+        status,
+        tool_name: toolName
+      });
     },
 
     platformAgentDetailTabs() {

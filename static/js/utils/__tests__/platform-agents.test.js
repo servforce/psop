@@ -10,10 +10,29 @@ function loadPlatformAgentMethods() {
         buildPlatformAgentsPath: () => "/admin/platform/agents",
         buildPlatformAgentPath: (agentKey) => `/admin/platform/agents/${agentKey}`,
         buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
-        buildPlatformAgentRunPath: (agentRunId) => `/admin/platform/agent-runs/${agentRunId}`,
+        buildPlatformAgentRunPath: (agentRunId, focus = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+            if (focus[key]) {
+              params.set(key, focus[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
+        },
         buildPlatformSkillsPath: () => "/admin/platform/skills",
         buildPlatformSkillPath: (packageName) => `/admin/platform/skills/${packageName}`,
-        buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations"
+        buildToolAuthorizationsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          if (filters.status) {
+            params.set("status", filters.status);
+          }
+          if (filters.tool_name) {
+            params.set("tool_name", filters.tool_name);
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
+        }
       }
     },
     Promise,
@@ -161,6 +180,26 @@ test("platform agent methods derive spec labels, bindings, paths, and diff previ
   expect(methods.platformAgentsPath()).toBe("/admin/platform/agents");
   expect(methods.platformAgentPath("pskill.runner")).toBe("/admin/platform/agents/pskill.runner");
   expect(methods.platformAgentsRunPath("agent-run-1")).toBe("/admin/platform/agent-runs/agent-run-1");
+  expect(methods.platformAgentsRunPath("agent-run-1", { tab: "authorizations" })).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=authorizations"
+  );
+  expect(methods.platformAgentWaitingAuthorizationPath({ id: "agent-run-1" })).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=authorizations"
+  );
+  expect(
+    methods.platformAgentAuthorizationPath.call(context, {
+      id: "auth-1",
+      agent_run_id: "agent-run-1",
+      tool_name: "psop.agent_version.activate",
+      status: "pending"
+    })
+  ).toBe("/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-1");
+  expect(
+    methods.platformAgentsToolAuthorizationsPath({
+      status: "pending",
+      tool_name: "psop.agent_version.activate"
+    })
+  ).toBe("/admin/platform/tool-authorizations?status=pending&tool_name=psop.agent_version.activate");
   expect(methods.platformAgentsSkillPath("pskill-runner-field-assistant")).toBe(
     "/admin/platform/skills/pskill-runner-field-assistant"
   );
@@ -172,6 +211,14 @@ test("platform agent methods derive spec labels, bindings, paths, and diff previ
   expect(methods.platformAgentVersionChanged.call(context, detail.versions[1])).toBe(false);
   expect(methods.platformAgentSpecDiffPreview.call(context, detail.versions[0])).toContain('"changed": true');
   expect(methods.platformAgentShortHash("abcdef1234567890")).toBe("abcdef123456");
+});
+
+test("platform agents page exposes precise waiting authorization navigation", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/platform-agents.html"), "utf8");
+
+  expect(html).toContain("platformAgentWaitingAuthorizationPath(run)");
+  expect(html).toContain("platformAgentAuthorizationPath(authorization)");
+  expect(html).toContain("platformAgentsToolAuthorizationsPath(authorization)");
 });
 
 test("platform agent actions create drafts and activate published versions", async () => {

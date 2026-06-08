@@ -50,3 +50,13 @@ class ToolRepository:
             )
             or 0
         )
+
+    def list_recent_tool_calls(self, session: Session, tool_name: str, *, limit: int = 10) -> list[AgentToolCall]:
+        return list(
+            session.scalars(
+                select(AgentToolCall)
+                .where(AgentToolCall.tool_name == tool_name)
+                .order_by(AgentToolCall.updated_at.desc(), AgentToolCall.created_at.desc())
+                .limit(max(1, min(limit, 50)))
+            ).all()
+        )

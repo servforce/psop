@@ -2,8 +2,10 @@
   const {
     buildPlatformObservabilityPath,
     buildPlatformAgentRunsPath,
+    buildPlatformAgentRunPath,
     buildToolAuthorizationsPath,
-    buildRunLivePath
+    buildRunLivePath,
+    buildReplayPath
   } = window.PSOPConsoleHelpers;
 
   const OBSERVABILITY_WINDOW_OPTIONS = [
@@ -142,16 +144,62 @@
       return buildPlatformAgentRunsPath();
     },
 
+    observabilityAgentRunsAgentPath(agentKey) {
+      return buildPlatformAgentRunsPath({ agent_key: agentKey });
+    },
+
+    observabilityAgentRunsStatusPath(status) {
+      return buildPlatformAgentRunsPath({ status });
+    },
+
     observabilityToolAuthorizationsPath() {
       return buildToolAuthorizationsPath();
+    },
+
+    observabilityToolAuthorizationsStatusPath(status) {
+      return buildToolAuthorizationsPath({ status });
+    },
+
+    observabilityToolAuthorizationHistoryPath(authorization) {
+      return buildToolAuthorizationsPath({
+        status: authorization?.status || "",
+        tool_name: authorization?.tool_name || ""
+      });
     },
 
     observabilityRunLivePath(runId) {
       return buildRunLivePath(runId);
     },
 
+    observabilityRunReplayPath(trace) {
+      const runId = String(trace?.run_id || this.observabilityTraceLookupRunId || "").trim();
+      if (!runId) {
+        return buildPlatformObservabilityPath();
+      }
+      return buildReplayPath(runId, { seq_no: trace?.seq_no });
+    },
+
     observabilityAgentRunPath(agentRunId) {
       return `${buildPlatformAgentRunsPath()}/${encodeURIComponent(agentRunId)}`;
+    },
+
+    observabilityAgentRunToolCallPath(call) {
+      const agentRunId = String(call?.agent_run_id || this.observabilityAgentRunDetail?.id || "").trim();
+      if (!agentRunId) {
+        return buildPlatformAgentRunsPath();
+      }
+      return buildPlatformAgentRunPath(agentRunId, { tab: "tools", tool_call_id: call?.id || "" });
+    },
+
+    observabilityAgentRunAuthorizationPath(authorization) {
+      const agentRunId = String(authorization?.agent_run_id || this.observabilityAgentRunDetail?.id || "").trim();
+      if (!agentRunId) {
+        return this.observabilityToolAuthorizationHistoryPath(authorization);
+      }
+      return buildPlatformAgentRunPath(agentRunId, {
+        tab: "authorizations",
+        authorization_id: authorization?.id || ""
+      });
     },
 
     observabilityGeneratedAt() {

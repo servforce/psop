@@ -87,8 +87,19 @@
       return buildGovernanceProposalsPath();
     },
 
-    dashboardAgentRunsPath() {
-      return buildPlatformAgentRunsPath();
+    dashboardAgentRunsPath(filters = {}) {
+      return buildPlatformAgentRunsPath(filters);
+    },
+
+    dashboardAgentRunsForAgentPath(agentKey) {
+      return buildPlatformAgentRunsPath({ agent_key: agentKey });
+    },
+
+    dashboardWaitingAuthorizationsForAgentPath(agentKey) {
+      return buildPlatformAgentRunsPath({
+        agent_key: agentKey,
+        status: "waiting_tool_authorization"
+      });
     },
 
     dashboardSkillPackagesPath() {
@@ -103,8 +114,8 @@
       return buildPlatformMemoryPath();
     },
 
-    dashboardToolAuthorizationsPath() {
-      return buildToolAuthorizationsPath();
+    dashboardToolAuthorizationsPath(filters = {}) {
+      return buildToolAuthorizationsPath(filters);
     },
 
     dashboardGeneratedAt() {

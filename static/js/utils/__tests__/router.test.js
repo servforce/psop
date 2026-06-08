@@ -122,6 +122,9 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
   expect(buildPlatformAgentsPath()).toBe("/admin/platform/agents");
   expect(buildPlatformAgentPath("pskill.runner")).toBe("/admin/platform/agents/pskill.runner");
   expect(buildPlatformAgentRunsPath()).toBe("/admin/platform/agent-runs");
+  expect(buildPlatformAgentRunsPath({ agent_key: "pskill.runner", status: "waiting_tool_authorization" })).toBe(
+    "/admin/platform/agent-runs?agent_key=pskill.runner&status=waiting_tool_authorization"
+  );
   expect(buildPlatformAgentRunPath("agent-run-123")).toBe("/admin/platform/agent-runs/agent-run-123");
   expect(buildPlatformAgentRunPath("agent-run-123", { tab: "tools", tool_call_id: "tool-call-1" })).toBe(
     "/admin/platform/agent-runs/agent-run-123?tab=tools&tool_call_id=tool-call-1"

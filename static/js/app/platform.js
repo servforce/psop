@@ -1,6 +1,7 @@
 (function () {
   const {
     buildTasksPath,
+    buildPlatformAgentPath,
     buildPlatformAgentRunsPath,
     buildPlatformAgentRunPath,
     buildPlatformSkillsPath,
@@ -12,6 +13,7 @@
     buildToolAuthorizationsPath,
     buildGovernanceProposalPath,
     buildRunLivePath,
+    buildReplayPath,
     resolveWsUrl
   } = window.PSOPConsoleHelpers;
 
@@ -74,6 +76,7 @@
 
   window.PSOPConsolePlatformMethods = {
     async loadPlatformAgentRunsPage() {
+      this.syncAgentRunFiltersFromLocation();
       await this.loadAgentRuns();
       if (!this.currentAgentRun && this.agentRuns.length) {
         await this.loadPlatformAgentRunDetail(this.agentRuns[0].id);
@@ -514,6 +517,9 @@
       if (!this.currentPlatformTool && this.platformTools.length) {
         this.currentPlatformTool = this.platformTools[0];
       }
+      if (this.currentPlatformTool?.name) {
+        await this.loadPlatformToolCalls(this.currentPlatformTool.name);
+      }
     },
 
     async loadPlatformTools() {
@@ -541,12 +547,31 @@
       }
       this.busy.platformTools = true;
       try {
-        this.currentPlatformTool = await this.apiRequest(`/tools/${encodeURIComponent(name)}`);
+        const [tool, calls] = await Promise.all([
+          this.apiRequest(`/tools/${encodeURIComponent(name)}`),
+          this.apiRequest(`/tools/${encodeURIComponent(name)}/calls?limit=10`)
+        ]);
+        this.currentPlatformTool = tool;
+        this.currentPlatformToolCalls = Array.isArray(calls) ? calls : [];
         this.platformToolTestResult = null;
       } catch (error) {
         this.showNotice("error", error.message || "工具详情加载失败。");
       } finally {
         this.busy.platformTools = false;
+      }
+    },
+
+    async loadPlatformToolCalls(toolName) {
+      const name = String(toolName || "").trim();
+      if (!name) {
+        this.currentPlatformToolCalls = [];
+        return;
+      }
+      try {
+        const calls = await this.apiRequest(`/tools/${encodeURIComponent(name)}/calls?limit=10`);
+        this.currentPlatformToolCalls = Array.isArray(calls) ? calls : [];
+      } catch {
+        this.currentPlatformToolCalls = [];
       }
     },
 
@@ -580,6 +605,7 @@
         return;
       }
       this.currentPlatformTool = tool;
+      this.loadPlatformToolCalls(tool.name);
       this.platformToolTestResult = null;
     },
 
@@ -839,8 +865,16 @@
       return Math.max(0, Math.min(100, Math.round(confidence)));
     },
 
-    platformAgentRunsPath() {
-      return buildPlatformAgentRunsPath();
+    platformAgentRunsPath(filters = {}) {
+      return buildPlatformAgentRunsPath(filters);
+    },
+
+    platformAgentDefinitionPath(agentKey) {
+      return buildPlatformAgentPath(agentKey);
+    },
+
+    skillPackageAgentRunsPath(agentKey) {
+      return buildPlatformAgentRunsPath({ agent_key: agentKey });
     },
 
     platformTasksPath() {
@@ -884,6 +918,10 @@
 
     platformToolPath(toolName) {
       return buildPlatformToolPath(toolName);
+    },
+
+    platformToolCallPath(call) {
+      return buildPlatformAgentRunPath(call?.agent_run_id || "", { tab: "tools", tool_call_id: call?.id || "" });
     },
 
     platformMemoryPath() {
@@ -1207,9 +1245,60 @@
         return null;
       }
       const kind = String(ref.kind || ref.type || "").trim().toLowerCase().replace(/-/g, "_");
-      const id = String(ref.id || ref.run_id || ref.agent_run_id || ref.proposal_id || ref.authorization_id || "").trim();
-      if (!id && !ref.run_id && !ref.agent_run_id && !ref.proposal_id) {
+      const id = String(
+        ref.id ||
+        ref.authorization_id ||
+        ref.agent_tool_call_id ||
+        ref.tool_call_id ||
+        ref.run_trace_id ||
+        ref.trace_id ||
+        ref.run_event_id ||
+        ref.event_id ||
+        ref.memory_entry_id ||
+        ref.memory_id ||
+        ref.run_id ||
+        ref.agent_run_id ||
+        ref.proposal_id ||
+        ""
+      ).trim();
+      if (!id && !ref.run_id && !ref.agent_run_id && !ref.proposal_id && !ref.memory_entry_id && !ref.memory_id) {
         return null;
+      }
+      if (["agent_memory_entry", "memory_entry", "memory"].includes(kind) || ref.memory_entry_id || ref.memory_id) {
+        const memoryId = String(ref.memory_entry_id || ref.memory_id || id).trim();
+        return { key: `memory-${memoryId}`, label: `Memory ${memoryId}`, href: this.platformMemoryEntryPath(memoryId) };
+      }
+      if (["agent_tool_call", "tool_call"].includes(kind)) {
+        const toolCallId = String(ref.agent_tool_call_id || ref.tool_call_id || ref.id || "").trim();
+        const agentRunId = String(ref.agent_run_id || "").trim();
+        const href = agentRunId
+          ? buildPlatformAgentRunPath(agentRunId, { tab: "tools", tool_call_id: toolCallId })
+          : buildPlatformAgentRunsPath();
+        return { key: `tool-call-${toolCallId}`, label: `ToolCall ${toolCallId}`, href };
+      }
+      if (["agent_tool_authorization", "tool_authorization"].includes(kind)) {
+        const authorizationId = String(ref.authorization_id || ref.id || "").trim();
+        const agentRunId = String(ref.agent_run_id || "").trim();
+        const href = agentRunId
+          ? buildPlatformAgentRunPath(agentRunId, { tab: "authorizations", authorization_id: authorizationId })
+          : buildToolAuthorizationsPath({ status: ref.status || "", tool_name: ref.tool_name || "" });
+        return { key: `tool-auth-${authorizationId}`, label: `ToolAuth ${authorizationId}`, href };
+      }
+      if (["run_trace", "trace"].includes(kind)) {
+        const runId = String(ref.run_id || "").trim();
+        const seqNo = String(ref.seq_no || ref.trace_seq_no || "").trim();
+        const href = runId
+          ? buildReplayPath(runId, { seq_no: seqNo })
+          : this.platformMemoryPath();
+        return { key: `run-trace-${id || `${runId}-${seqNo}`}`, label: `RunTrace ${id || seqNo || runId}`, href };
+      }
+      if (["run_event", "event"].includes(kind)) {
+        const runId = String(ref.run_id || "").trim();
+        const eventId = String(ref.run_event_id || ref.event_id || id).trim();
+        const href = runId
+          ? buildReplayPath(runId, { event_id: eventId })
+          : this.platformMemoryPath();
+        return { key: `run-event-${eventId}`, label: `RunEvent ${eventId}`, href };
       }
       if (["agent_run", "agentrun"].includes(kind) || ref.agent_run_id) {
         const agentRunId = String(ref.agent_run_id || id).trim();
@@ -1222,9 +1311,6 @@
       if (["governance_proposal", "proposal"].includes(kind) || ref.proposal_id) {
         const proposalId = String(ref.proposal_id || id).trim();
         return { key: `proposal-${proposalId}`, label: `Proposal ${proposalId}`, href: buildGovernanceProposalPath(proposalId) };
-      }
-      if (["agent_tool_authorization", "tool_authorization"].includes(kind)) {
-        return { key: `tool-auth-${id}`, label: `ToolAuth ${id}`, href: buildToolAuthorizationsPath() };
       }
       return null;
     },
@@ -1262,6 +1348,24 @@
       if (params.get("event_id")) {
         this.agentRunDetailTab = "events";
       }
+    },
+
+    syncAgentRunFiltersFromLocation() {
+      if (typeof window === "undefined" || !window.location) {
+        return;
+      }
+      const params = new URLSearchParams(window.location.search || "");
+      const fields = ["agent_key", "status", "owner_type", "owner_id"];
+      if (!fields.some((field) => params.has(field))) {
+        return;
+      }
+      this.agentRunFilters = {
+        ...this.agentRunFilters,
+        agent_key: params.get("agent_key") || "",
+        status: params.get("status") || "",
+        owner_type: params.get("owner_type") || "",
+        owner_id: params.get("owner_id") || ""
+      };
     },
 
     agentRunFocusedToolCallId() {

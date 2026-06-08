@@ -116,6 +116,7 @@ def test_tools_api_reports_recent_tool_call_failure_stats() -> None:
         agent_run_id = run_response.json()["id"]
         run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
         detail_response = client.get("/api/v1/tools/psop.repository.commit_patch")
+        calls_response = client.get("/api/v1/tools/psop.repository.commit_patch/calls")
 
     assert run_response.status_code == 201
     assert run_once_response.status_code == 200
@@ -127,6 +128,13 @@ def test_tools_api_reports_recent_tool_call_failure_stats() -> None:
     assert detail["recent_call_count"] == 1
     assert detail["failed_call_count"] == 1
     assert detail["failure_rate"] == 1.0
+
+    calls = calls_response.json()
+    assert calls_response.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["agent_run_id"] == agent_run_id
+    assert calls[0]["tool_name"] == "psop.repository.commit_patch"
+    assert calls[0]["status"] == "blocked"
 
 
 def test_tools_api_dry_runs_read_compute_and_explains_authorization_policy() -> None:

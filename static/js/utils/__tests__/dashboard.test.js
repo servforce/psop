@@ -11,11 +11,30 @@ function loadDashboardMethods() {
         buildEvaluationReportsPath: () => "/admin/evaluations",
         buildEvaluationFindingsPath: () => "/admin/evaluations/findings",
         buildGovernanceProposalsPath: () => "/admin/governance/proposals",
-        buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
+        buildPlatformAgentRunsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["agent_key", "status", "owner_type", "owner_id"]) {
+            if (filters[key]) {
+              params.set(key, filters[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/agent-runs?${query}` : "/admin/platform/agent-runs";
+        },
         buildPlatformSkillsPath: () => "/admin/platform/skills",
         buildPlatformToolsPath: () => "/admin/platform/tools",
         buildPlatformMemoryPath: () => "/admin/platform/memory",
-        buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations"
+        buildToolAuthorizationsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          if (filters.status) {
+            params.set("status", filters.status);
+          }
+          if (filters.tool_name) {
+            params.set("tool_name", filters.tool_name);
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
+        }
       }
     },
     URLSearchParams,
@@ -67,6 +86,15 @@ test("dashboard methods load metrics through the observability API", async () =>
   expect(context.dashboardMetrics).toBe(payload);
   expect(context.busy.dashboard).toBe(false);
   expect(methods.dashboardPath()).toBe("/admin/dashboard");
+  expect(methods.dashboardAgentRunsForAgentPath("pskill.runner")).toBe(
+    "/admin/platform/agent-runs?agent_key=pskill.runner"
+  );
+  expect(methods.dashboardWaitingAuthorizationsForAgentPath("pskill.runner")).toBe(
+    "/admin/platform/agent-runs?agent_key=pskill.runner&status=waiting_tool_authorization"
+  );
+  expect(methods.dashboardToolAuthorizationsPath({ status: "pending" })).toBe(
+    "/admin/platform/tool-authorizations?status=pending"
+  );
 });
 
 test("dashboard methods format metrics and preserve the six-agent row order", () => {
@@ -111,4 +139,12 @@ test("dashboard methods format metrics and preserve the six-agent row order", ()
   expect(methods.dashboardDuration.call(context, 3000)).toBe("3000 ms");
   expect(methods.dashboardOutcomeCount.call(context, "success")).toBe(1);
   expect(methods.dashboardFindingStatusCount.call(context, "open")).toBe(2);
+});
+
+test("dashboard page exposes agent and pending authorization drilldown links", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/dashboard.html"), "utf8");
+
+  expect(html).toContain("dashboardAgentRunsForAgentPath(agent.agent_key)");
+  expect(html).toContain("dashboardWaitingAuthorizationsForAgentPath(agent.agent_key)");
+  expect(html).toContain("dashboardToolAuthorizationsPath({ status: 'pending' })");
 });
