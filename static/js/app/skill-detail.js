@@ -1211,6 +1211,7 @@
 
 
       stopPublishProgressWatchers() {
+        this.disconnectPublishActivityWebSocket();
         if (this.publishEventSource) {
           this.publishEventSource.close();
           this.publishEventSource = null;
@@ -1219,6 +1220,85 @@
           window.clearInterval(this.publishPollTimer);
           this.publishPollTimer = null;
         }
+      },
+
+
+      connectPublishActivityWebSocket(skillId, compileRequestId = "") {
+        if (!skillId) {
+          return false;
+        }
+        if (typeof WebSocket === "undefined") {
+          return false;
+        }
+        if (this.publishActivityWs && this.publishActivityWsSkillId === skillId && this.publishActivityWs.readyState === WebSocket.OPEN) {
+          return true;
+        }
+
+        this.disconnectPublishActivityWebSocket();
+        const socket = new WebSocket(resolveWsUrl(this.apiBaseUrl, `/ws/pskills/${encodeURIComponent(skillId)}/activity`));
+        this.publishActivityWs = socket;
+        this.publishActivityWsSkillId = skillId;
+        socket.addEventListener("message", (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            if (message.event_type === "pskill.activity.snapshot") {
+              this.applyPublishActivitySnapshot(message.payload, compileRequestId);
+            }
+            if (message.event_type === "pskill.activity.error") {
+              this.showNotice("error", message.payload?.message || "获取 Skill 活动流失败。");
+              this.disconnectPublishActivityWebSocket();
+              if (compileRequestId) {
+                this.startPublishProgressPolling(compileRequestId);
+              }
+            }
+          } catch {
+            // Ignore malformed activity messages; polling/SSE remains the recovery path.
+          }
+        });
+        socket.addEventListener("error", () => {
+          this.disconnectPublishActivityWebSocket();
+          if (compileRequestId) {
+            this.startPublishProgressPolling(compileRequestId);
+          }
+        });
+        return true;
+      },
+
+
+      disconnectPublishActivityWebSocket() {
+        if (this.publishActivityWs) {
+          this.publishActivityWs.close();
+        }
+        this.publishActivityWs = null;
+        this.publishActivityWsSkillId = "";
+      },
+
+
+      applyPublishActivitySnapshot(snapshot, expectedCompileRequestId = "") {
+        if (!snapshot || typeof snapshot !== "object") {
+          return;
+        }
+        if (Array.isArray(snapshot.versions)) {
+          this.pskillVersions = snapshot.versions;
+          this.pskillVersionsLoadedSkillId = snapshot.pskill?.id || this.pskillVersionsLoadedSkillId;
+        }
+        if (Array.isArray(snapshot.publishes)) {
+          this.publishRecords = snapshot.publishes;
+          this.publishRecordsLoadedSkillId = snapshot.pskill?.id || this.publishRecordsLoadedSkillId;
+        }
+
+        const compileRequests = Array.isArray(snapshot.compile_requests) ? snapshot.compile_requests : [];
+        const compileRequest = compileRequests.find((item) => item.id === expectedCompileRequestId) || compileRequests[0];
+        if (!compileRequest) {
+          return;
+        }
+        this.applyPublishProgress({
+          compile_request: { id: compileRequest.id },
+          terminal: Boolean(compileRequest.progress?.terminal),
+          terminal_status: compileRequest.progress?.terminal_status,
+          error_message: compileRequest.progress?.error_message || compileRequest.error_message || "",
+          stages: compileRequest.progress?.stages || []
+        });
       },
 
 
@@ -1322,7 +1402,9 @@
             throw new Error("发布任务缺少 compile request。");
           }
           this.publishProgress.compile_request_id = compileRequestId;
-          this.startPublishEventStream(compileRequestId);
+          if (!this.connectPublishActivityWebSocket(this.currentSkill.id, compileRequestId)) {
+            this.startPublishEventStream(compileRequestId);
+          }
         } catch (error) {
           const errorMessage = error.message || "发布 Skill 失败。";
           const stages = this.publishProgress.stages.length > 0

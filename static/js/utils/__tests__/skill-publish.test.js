@@ -61,6 +61,8 @@ test("skill publish tab exposes versions and publish gate controls", () => {
   expect(skillDetailJs).toContain("/versions");
   expect(skillDetailJs).toContain("/publish-gate");
   expect(skillDetailJs).toContain("loadPublishWorkspaceData");
+  expect(skillDetailJs).toContain("connectPublishActivityWebSocket");
+  expect(skillDetailJs).toContain("/ws/pskills/");
 });
 
 test("skill publish methods load versions and run publish gate", async () => {
@@ -111,4 +113,80 @@ test("skill publish methods load versions and run publish gate", async () => {
   expect(gateCall[1].method).toBe("POST");
   expect(JSON.parse(gateCall[1].body)).toEqual({ pskill_id: "skill-1", pskill_version_id: "version-1" });
   expect(context.showNotice).toHaveBeenCalledWith("success", "发布门禁需要人工复核。");
+});
+
+test("skill publish methods apply activity snapshots to versions, records, and progress", () => {
+  const methods = loadSkillDetailMethods();
+  const context = {
+    ...methods,
+    pskillVersions: [],
+    pskillVersionsLoadedSkillId: null,
+    publishRecords: [],
+    publishRecordsLoadedSkillId: null,
+    publishProgress: methods.emptyPublishProgress(),
+    busy: { publish: true },
+    currentSkill: { id: "skill-1" },
+    stopPublishProgressWatchers: jest.fn(),
+    loadSkillDetail: jest.fn(),
+    showNotice: jest.fn()
+  };
+  const snapshot = {
+    pskill: { id: "skill-1" },
+    versions: [{ id: "version-1", status: "published" }],
+    publishes: [{ id: "publish-1", publish_status: "compiling" }],
+    compile_requests: [
+      {
+        id: "compile-1",
+        status: "running",
+        progress: {
+          terminal: false,
+          terminal_status: null,
+          error_message: "",
+          stages: [{ key: "source_loaded", status: "running" }]
+        }
+      }
+    ]
+  };
+
+  methods.applyPublishActivitySnapshot.call(context, snapshot, "compile-1");
+
+  expect(context.pskillVersions).toEqual([{ id: "version-1", status: "published" }]);
+  expect(context.pskillVersionsLoadedSkillId).toBe("skill-1");
+  expect(context.publishRecords).toEqual([{ id: "publish-1", publish_status: "compiling" }]);
+  expect(context.publishRecordsLoadedSkillId).toBe("skill-1");
+  expect(context.publishProgress.compile_request_id).toBe("compile-1");
+  expect(context.publishProgress.terminal).toBe(false);
+  expect(context.publishProgress.stages).toEqual([{ key: "source_loaded", status: "running" }]);
+});
+
+test("publishSkill prefers PSkill activity websocket over compile SSE", async () => {
+  const methods = loadSkillDetailMethods();
+  const context = {
+    ...methods,
+    busy: { publish: false },
+    currentSkill: { id: "skill-1" },
+    publishForm: { publish_reason: "ship it" },
+    publishProgress: methods.emptyPublishProgress(),
+    apiRequest: jest.fn(async (url, options) => {
+      if (url === "/pskills/skill-1/publish" && options?.method === "POST") {
+        return { compile_request: { id: "compile-1" } };
+      }
+      return null;
+    }),
+    connectPublishActivityWebSocket: jest.fn(() => true),
+    startPublishEventStream: jest.fn(),
+    clearNotice: jest.fn(),
+    showNotice: jest.fn(),
+    showCenterToast: jest.fn()
+  };
+
+  await methods.publishSkill.call(context);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/pskills/skill-1/publish", {
+    method: "POST",
+    body: JSON.stringify({ publish_reason: "ship it" })
+  });
+  expect(context.connectPublishActivityWebSocket).toHaveBeenCalledWith("skill-1", "compile-1");
+  expect(context.startPublishEventStream).not.toHaveBeenCalled();
+  expect(context.publishProgress.compile_request_id).toBe("compile-1");
 });

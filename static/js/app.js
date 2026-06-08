@@ -669,6 +669,8 @@
       publishGateResult: null,
       publishEventSource: null,
       publishPollTimer: null,
+      publishActivityWs: null,
+      publishActivityWsSkillId: "",
       publishProgress: {
         active: false,
         compile_request_id: null,

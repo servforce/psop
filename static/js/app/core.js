@@ -463,6 +463,9 @@
         if (this.route.name !== "tasks-list") {
           this.stopTaskPolling?.();
         }
+        if (this.route.name !== "skill-detail") {
+          this.stopPublishProgressWatchers?.();
+        }
         if (!["evaluation-reports", "evaluation-report"].includes(this.route.name)) {
           this.currentEvaluation = null;
         }
