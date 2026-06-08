@@ -284,6 +284,164 @@
               </div>
             </template>
           </section>
+
+          <section class="rounded-md border border-slate-800 bg-slate-900/40">
+            <div class="border-b border-slate-800 px-4 py-3">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">AgentRun Lookup</p>
+              <p class="mt-1 text-[11px] text-slate-500">AgentEvents / ModelCalls / ToolCalls / SkillActivations / ToolAuthorizations</p>
+            </div>
+            <div class="border-b border-slate-800 bg-slate-950/30 px-4 py-3">
+              <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+                <label class="field-block min-w-72 flex-1">
+                  <span class="field-label">AgentRun ID</span>
+                  <input x-model="observabilityFilters.agent_run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="agent_run_id" @keydown.enter.prevent="loadObservabilityAgentRun()" />
+                </label>
+                <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.observabilityAgentRunLookup" @click="loadObservabilityAgentRun()">
+                  <span class="material-symbols-outlined text-[18px]">search</span>
+                  <span class="hidden sm:inline">查询</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetObservabilityAgentRunQuery()">
+                  <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" x-show="observabilityAgentRunDetail?.id" @click="navigate(observabilityAgentRunPath(observabilityAgentRunDetail.id))">
+                  <span class="material-symbols-outlined text-[18px]">manage_history</span>
+                  <span class="hidden sm:inline">AgentRun</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" x-show="observabilityAgentRunDetail?.run_id" @click="navigate(observabilityRunLivePath(observabilityAgentRunDetail.run_id))">
+                  <span class="material-symbols-outlined text-[18px]">play_circle</span>
+                  <span class="hidden sm:inline">Run</span>
+                </button>
+              </div>
+            </div>
+
+            <template x-if="!observabilityAgentRunDetail">
+              <div class="empty-state min-h-72">
+                <span class="material-symbols-outlined text-[32px] text-slate-400">manage_history</span>
+                <p class="mt-3 text-base font-medium text-slate-100">暂无 AgentRun 明细</p>
+              </div>
+            </template>
+
+            <template x-if="observabilityAgentRunDetail">
+              <div class="divide-y divide-slate-800">
+                <div class="grid grid-cols-2 divide-x divide-slate-800 text-xs lg:grid-cols-6">
+                  <div class="p-4">
+                    <p class="text-slate-500">Agent</p>
+                    <p class="mt-1 truncate font-mono text-slate-300" x-text="observabilityAgentRunDetail.agent_key"></p>
+                  </div>
+                  <div class="p-4">
+                    <p class="text-slate-500">Status</p>
+                    <p class="mt-1 text-slate-300" x-text="observabilityAgentRunDetail.status"></p>
+                  </div>
+                  <div class="p-4">
+                    <p class="text-slate-500">Events</p>
+                    <p class="mt-1 font-mono text-slate-300" x-text="observabilityNumber(observabilityAgentEvents.length)"></p>
+                  </div>
+                  <div class="p-4">
+                    <p class="text-slate-500">Model</p>
+                    <p class="mt-1 font-mono text-slate-300" x-text="observabilityNumber(observabilityModelCalls.length)"></p>
+                  </div>
+                  <div class="p-4">
+                    <p class="text-slate-500">Tools</p>
+                    <p class="mt-1 font-mono text-slate-300" x-text="observabilityNumber(observabilityToolCalls.length)"></p>
+                  </div>
+                  <div class="p-4">
+                    <p class="text-slate-500">Auth</p>
+                    <p class="mt-1 font-mono text-slate-300" x-text="observabilityNumber(observabilityToolAuthorizations.length)"></p>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 divide-y divide-slate-800 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] xl:divide-x xl:divide-y-0">
+                  <div class="divide-y divide-slate-800">
+                    <div class="p-4">
+                      <div class="flex items-center justify-between gap-3">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Agent Events</p>
+                        <span class="font-mono text-[11px] text-slate-500" x-text="observabilityAgentEvents.length"></span>
+                      </div>
+                      <div class="mt-3 max-h-80 overflow-auto divide-y divide-slate-800 rounded-md border border-slate-800">
+                        <template x-for="event in observabilityAgentEvents" :key="event.id">
+                          <div class="p-3 text-xs">
+                            <div class="flex items-center justify-between gap-3">
+                              <p class="min-w-0 truncate font-mono text-slate-300" x-text="event.event_type"></p>
+                              <span class="font-mono text-[11px] text-slate-500" x-text="'#' + event.seq_no"></span>
+                            </div>
+                            <p class="mt-1 truncate text-slate-500" x-text="event.phase || 'N/A'"></p>
+                            <pre class="mt-2 max-h-32 overflow-auto rounded bg-slate-950/60 p-2 font-mono text-[11px] leading-5 text-slate-300" x-text="observabilityPayloadPreview(event.payload)"></pre>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+
+                    <div class="p-4">
+                      <div class="flex items-center justify-between gap-3">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Model Calls</p>
+                        <span class="font-mono text-[11px] text-slate-500" x-text="observabilityModelCalls.length"></span>
+                      </div>
+                      <div class="mt-3 max-h-72 overflow-auto divide-y divide-slate-800 rounded-md border border-slate-800">
+                        <template x-for="call in observabilityModelCalls" :key="call.id">
+                          <div class="grid gap-2 p-3 text-xs sm:grid-cols-[minmax(0,1fr)_6rem_6rem]">
+                            <p class="min-w-0 truncate font-mono text-slate-300" x-text="call.route_key || call.provider"></p>
+                            <span class="status-badge justify-center border-slate-700 bg-slate-950/40 text-slate-300" x-text="call.status"></span>
+                            <span class="font-mono text-slate-500" x-text="observabilityNumber((call.usage_json || {}).total_tokens)"></span>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="divide-y divide-slate-800">
+                    <div class="p-4">
+                      <div class="flex items-center justify-between gap-3">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Tool Calls</p>
+                        <span class="font-mono text-[11px] text-slate-500" x-text="observabilityToolCalls.length"></span>
+                      </div>
+                      <div class="mt-3 max-h-72 overflow-auto divide-y divide-slate-800 rounded-md border border-slate-800">
+                        <template x-for="call in observabilityToolCalls" :key="call.id">
+                          <div class="p-3 text-xs">
+                            <div class="flex items-center justify-between gap-3">
+                              <p class="min-w-0 truncate font-mono text-slate-300" x-text="call.tool_name"></p>
+                              <span class="status-badge border-slate-700 bg-slate-950/40 text-slate-300" x-text="call.status"></span>
+                            </div>
+                            <pre class="mt-2 max-h-32 overflow-auto rounded bg-slate-950/60 p-2 font-mono text-[11px] leading-5 text-slate-300" x-text="observabilityPayloadPreview(call.arguments_summary)"></pre>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+
+                    <div class="p-4">
+                      <div class="flex items-center justify-between gap-3">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Tool Authorizations</p>
+                        <span class="font-mono text-[11px] text-slate-500" x-text="observabilityToolAuthorizations.length"></span>
+                      </div>
+                      <div class="mt-3 max-h-56 overflow-auto divide-y divide-slate-800 rounded-md border border-slate-800">
+                        <template x-for="authorization in observabilityToolAuthorizations" :key="authorization.id">
+                          <div class="grid gap-2 p-3 text-xs sm:grid-cols-[minmax(0,1fr)_7rem_6rem]">
+                            <p class="min-w-0 truncate font-mono text-slate-300" x-text="authorization.tool_name"></p>
+                            <span class="status-badge justify-center border-slate-700 bg-slate-950/40 text-slate-300" x-text="authorization.status"></span>
+                            <span class="text-slate-500" x-text="authorization.risk_level"></span>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+
+                    <div class="p-4">
+                      <div class="flex items-center justify-between gap-3">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Skill Activations</p>
+                        <span class="font-mono text-[11px] text-slate-500" x-text="observabilitySkillActivations.length"></span>
+                      </div>
+                      <div class="mt-3 max-h-48 overflow-auto divide-y divide-slate-800 rounded-md border border-slate-800">
+                        <template x-for="activation in observabilitySkillActivations" :key="activation.id">
+                          <div class="grid gap-2 p-3 text-xs sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                            <p class="min-w-0 truncate font-mono text-slate-300" x-text="activation.package_id"></p>
+                            <p class="min-w-0 truncate font-mono text-slate-500" x-text="activation.version_id"></p>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </section>
         </div>
       </template>
     </div>

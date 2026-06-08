@@ -612,10 +612,17 @@
       observabilityFilters: {
         window_hours: 24,
         run_id: "",
-        trace_event_type: ""
+        trace_event_type: "",
+        agent_run_id: ""
       },
       observabilityRunTraces: [],
       observabilityTraceLookupRunId: "",
+      observabilityAgentRunDetail: null,
+      observabilityAgentEvents: [],
+      observabilityModelCalls: [],
+      observabilityToolCalls: [],
+      observabilitySkillActivations: [],
+      observabilityToolAuthorizations: [],
       currentSkill: null,
       activeDetailTab: "overview",
       sourceLoadedSkillId: null,
@@ -1013,7 +1020,8 @@
         replayDetail: false,
         dashboard: false,
         observabilityMetrics: false,
-        observabilityTraceLookup: false
+        observabilityTraceLookup: false,
+        observabilityAgentRunLookup: false
       }
     };
   }

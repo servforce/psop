@@ -494,6 +494,12 @@
         if (this.route.name !== "platform-observability") {
           this.observabilityRunTraces = [];
           this.observabilityTraceLookupRunId = "";
+          this.observabilityAgentRunDetail = null;
+          this.observabilityAgentEvents = [];
+          this.observabilityModelCalls = [];
+          this.observabilityToolCalls = [];
+          this.observabilitySkillActivations = [];
+          this.observabilityToolAuthorizations = [];
         }
         if (!["compiler-artifact", "skill-compiler-artifact"].includes(this.route.name)) {
           this.destroyCompilerArtifactViewer();

@@ -29,6 +29,9 @@
       if (this.observabilityFilters.run_id) {
         await this.loadObservabilityRunTraces();
       }
+      if (this.observabilityFilters.agent_run_id) {
+        await this.loadObservabilityAgentRun();
+      }
     },
 
     async loadObservabilityMetrics() {
@@ -87,6 +90,47 @@
       this.observabilityTraceLookupRunId = "";
     },
 
+    async loadObservabilityAgentRun() {
+      const agentRunId = String(this.observabilityFilters.agent_run_id || "").trim();
+      if (!agentRunId) {
+        this.resetObservabilityAgentRunQuery();
+        return;
+      }
+
+      this.busy.observabilityAgentRunLookup = true;
+      try {
+        const encoded = encodeURIComponent(agentRunId);
+        const [run, events, modelCalls, toolCalls, skillActivations, toolAuthorizations] = await Promise.all([
+          this.apiRequest(`/agent-runs/${encoded}`),
+          this.apiRequest(`/agent-runs/${encoded}/events`),
+          this.apiRequest(`/agent-runs/${encoded}/model-calls`),
+          this.apiRequest(`/agent-runs/${encoded}/tool-calls`),
+          this.apiRequest(`/agent-runs/${encoded}/skill-activations`),
+          this.apiRequest(`/agent-runs/${encoded}/tool-authorizations`)
+        ]);
+        this.observabilityAgentRunDetail = run;
+        this.observabilityAgentEvents = Array.isArray(events) ? events : [];
+        this.observabilityModelCalls = Array.isArray(modelCalls) ? modelCalls : [];
+        this.observabilityToolCalls = Array.isArray(toolCalls) ? toolCalls : [];
+        this.observabilitySkillActivations = Array.isArray(skillActivations) ? skillActivations : [];
+        this.observabilityToolAuthorizations = Array.isArray(toolAuthorizations) ? toolAuthorizations : [];
+      } catch (error) {
+        this.showNotice("error", error.message || "AgentRun 可观测数据查询失败。");
+      } finally {
+        this.busy.observabilityAgentRunLookup = false;
+      }
+    },
+
+    resetObservabilityAgentRunQuery() {
+      this.observabilityFilters.agent_run_id = "";
+      this.observabilityAgentRunDetail = null;
+      this.observabilityAgentEvents = [];
+      this.observabilityModelCalls = [];
+      this.observabilityToolCalls = [];
+      this.observabilitySkillActivations = [];
+      this.observabilityToolAuthorizations = [];
+    },
+
     platformObservabilityPath() {
       return buildPlatformObservabilityPath();
     },
@@ -101,6 +145,10 @@
 
     observabilityRunLivePath(runId) {
       return buildRunLivePath(runId);
+    },
+
+    observabilityAgentRunPath(agentRunId) {
+      return `${buildPlatformAgentRunsPath()}/${encodeURIComponent(agentRunId)}`;
     },
 
     observabilityGeneratedAt() {
@@ -153,6 +201,13 @@
         return this.platformJsonPreview(trace.payload);
       }
       return JSON.stringify(trace.payload, null, 2);
+    },
+
+    observabilityPayloadPreview(value) {
+      if (typeof this.platformJsonPreview === "function") {
+        return this.platformJsonPreview(value || {});
+      }
+      return JSON.stringify(value || {}, null, 2);
     }
   };
 })();

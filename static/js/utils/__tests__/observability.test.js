@@ -40,7 +40,7 @@ test("observability methods load global metrics with the selected window", async
   const context = {
     ...methods,
     busy: { observabilityMetrics: false },
-    observabilityFilters: { window_hours: 72, run_id: "", trace_event_type: "" },
+    observabilityFilters: { window_hours: 72, run_id: "", trace_event_type: "", agent_run_id: "" },
     observabilityMetrics: null,
     apiRequest: jest.fn(async () => payload),
     showNotice: jest.fn()
@@ -77,6 +77,76 @@ test("observability methods query run traces with optional event type", async ()
   expect(context.observabilityRunTraces).toEqual(traces);
   expect(context.observabilityTraceLookupRunId).toBe("run 1");
   expect(methods.observabilityRunLivePath("run-1")).toBe("/admin/runs/run-1/live");
+});
+
+test("observability methods query agent run observability streams", async () => {
+  const methods = loadObservabilityMethods();
+  const run = { id: "agent-run-1", agent_key: "pskill.runner", status: "succeeded", run_id: "run-1" };
+  const events = [{ id: "event-1", event_type: "agent.run.created", payload: {} }];
+  const modelCalls = [{ id: "model-1", route_key: "runner", status: "succeeded", usage_json: { total_tokens: 42 } }];
+  const toolCalls = [{ id: "tool-1", tool_name: "psop.runtime.read", status: "succeeded", arguments_summary: {} }];
+  const activations = [{ id: "activation-1", package_id: "pkg-1", version_id: "ver-1" }];
+  const authorizations = [{ id: "auth-1", tool_name: "psop.repository.commit_patch", status: "pending" }];
+  const context = {
+    ...methods,
+    busy: { observabilityAgentRunLookup: false },
+    observabilityFilters: {
+      window_hours: 24,
+      run_id: "",
+      trace_event_type: "",
+      agent_run_id: "agent run 1"
+    },
+    observabilityAgentRunDetail: null,
+    observabilityAgentEvents: [],
+    observabilityModelCalls: [],
+    observabilityToolCalls: [],
+    observabilitySkillActivations: [],
+    observabilityToolAuthorizations: [],
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/agent-runs/agent%20run%201") {
+        return run;
+      }
+      if (url.endsWith("/events")) {
+        return events;
+      }
+      if (url.endsWith("/model-calls")) {
+        return modelCalls;
+      }
+      if (url.endsWith("/tool-calls")) {
+        return toolCalls;
+      }
+      if (url.endsWith("/skill-activations")) {
+        return activations;
+      }
+      if (url.endsWith("/tool-authorizations")) {
+        return authorizations;
+      }
+      return null;
+    }),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadObservabilityAgentRun.call(context);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent%20run%201");
+  expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent%20run%201/events");
+  expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent%20run%201/model-calls");
+  expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent%20run%201/tool-calls");
+  expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent%20run%201/skill-activations");
+  expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent%20run%201/tool-authorizations");
+  expect(context.observabilityAgentRunDetail).toBe(run);
+  expect(context.observabilityAgentEvents).toEqual(events);
+  expect(context.observabilityModelCalls).toEqual(modelCalls);
+  expect(context.observabilityToolCalls).toEqual(toolCalls);
+  expect(context.observabilitySkillActivations).toEqual(activations);
+  expect(context.observabilityToolAuthorizations).toEqual(authorizations);
+  expect(methods.observabilityAgentRunPath("agent-run-1")).toBe("/admin/platform/agent-runs/agent-run-1");
+
+  methods.resetObservabilityAgentRunQuery.call(context);
+
+  expect(context.observabilityFilters.agent_run_id).toBe("");
+  expect(context.observabilityAgentRunDetail).toBeNull();
+  expect(context.observabilityToolAuthorizations).toEqual([]);
 });
 
 test("observability methods sort distribution entries and derive trace event options", () => {
