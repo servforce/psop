@@ -33,6 +33,7 @@ from app.runtime.service import RuntimeService
 from app.skills.models import SkillActivation
 from app.skills.repository import SkillPackageRepository
 from app.skills.service import SkillPackageService
+from app.testing.service import SkillTestService
 
 
 DEFAULT_AGENT_SKILLS: dict[str, list[str]] = {
@@ -58,6 +59,7 @@ class AgentRunner:
         compiler_service: CompilerService | None = None,
         runtime_service: RuntimeService | None = None,
         evaluation_service: EvaluationService | None = None,
+        testing_service: SkillTestService | None = None,
         governance_service: GovernanceService | None = None,
         output_guardrail: OutputGuardrail | None = None,
         planner: AgentPlanner | None = None,
@@ -71,6 +73,7 @@ class AgentRunner:
         self.compiler_service = compiler_service
         self.runtime_service = runtime_service
         self.evaluation_service = evaluation_service or EvaluationService()
+        self.testing_service = testing_service
         self.governance_service = governance_service or GovernanceService()
         self.output_guardrail = output_guardrail or OutputGuardrail()
         self.planner = planner or AgentPlanner()
@@ -412,6 +415,8 @@ class AgentRunner:
             return {"result": {"content": render_skill_yaml(document), "document": document.model_dump(mode="json")}}
         if tool_call.tool_name == "psop.compiler.validate_formal_v5":
             return {"result": self._validate_formal_v5_artifact(session, tool_call=tool_call, arguments=arguments)}
+        if tool_call.tool_name == "psop.testing.write_diagnostics":
+            return {"result": self._write_testing_diagnostics(session, tool_call=tool_call, arguments=arguments)}
         if tool_call.tool_name == "psop.memory.search":
             try:
                 payload = MemorySearchRequest(
@@ -628,6 +633,11 @@ class AgentRunner:
             raise SkillValidationError("AgentRunner 未配置 Runtime service，无法执行 Runtime 工具。")
         return self.runtime_service
 
+    def _require_testing_service(self) -> SkillTestService:
+        if not self.testing_service:
+            raise SkillValidationError("AgentRunner 未配置 Testing service，无法执行 Testing 工具。")
+        return self.testing_service
+
     def _validate_formal_v5_artifact(self, session: Session, *, tool_call: Any, arguments: dict[str, Any]) -> dict[str, Any]:
         artifact_id = str(arguments.get("artifact_id") or arguments.get("compile_artifact_id") or "").strip()
         if artifact_id:
@@ -666,6 +676,14 @@ class AgentRunner:
             commit=False,
         )
         return result
+
+    def _write_testing_diagnostics(self, session: Session, *, tool_call: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._require_testing_service().write_diagnostics_from_agent_tool(
+            session,
+            agent_run_id=tool_call.agent_run_id,
+            payload=arguments,
+            commit=False,
+        )
 
     def _write_evaluation_diagnostics(self, session: Session, *, tool_call: Any, arguments: dict[str, Any]) -> dict[str, Any]:
         evaluation_id = str(arguments.get("evaluation_id") or "").strip()

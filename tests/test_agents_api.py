@@ -528,6 +528,144 @@ def test_agent_runner_executes_compiler_read_and_formal_v5_validation_tools() ->
     assert "agent.tool_call.succeeded" in validate_event_types
 
 
+def test_agent_runner_executes_tester_write_diagnostics_tool() -> None:
+    client, _, _ = create_test_client()
+    timeline = {
+        "schema_version": "psop-skill-test-timeline/v1",
+        "duration_ms": 3000,
+        "events": [
+            {
+                "id": "tester_tool_request",
+                "lane_id": "input.text",
+                "at_ms": 0,
+                "event_kind": "terminal.text.input.v1",
+                "mime_type": "text/plain",
+                "payload_inline": "请完成一次测试工具诊断任务。",
+            },
+            {
+                "id": "tester_tool_expectation",
+                "lane_id": "expected.semantic",
+                "at_ms": 1000,
+                "expectation": "系统应给出可执行的现场提示。",
+            },
+        ],
+    }
+
+    with client:
+        skill_response = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "tester-write-diagnostics-tool",
+                "name": "Tester Write Diagnostics Tool",
+                "description": "Validate tester Agent can write diagnostics.",
+            },
+        )
+        skill = skill_response.json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill['id']}/publish",
+            json={"publish_reason": "Tester diagnostics tool test"},
+        )
+        publish_payload = publish_response.json()
+        compile_request_id = publish_payload["compile_request"]["id"]
+        compile_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        suite_response = client.post(
+            "/api/v1/testing/suites",
+            json={
+                "pskill_id": skill["id"],
+                "pskill_version_id": publish_payload["published_version"]["id"],
+                "name": "测试诊断工具套件",
+                "suite_type": "pre_publish",
+            },
+        )
+        suite = suite_response.json()
+        scenario_response = client.post(
+            f"/api/v1/testing/suites/{suite['id']}/scenarios",
+            json={
+                "name": "测试诊断工具场景",
+                "description": "覆盖 tester diagnostics tool。",
+                "duration_ms": 3000,
+                "target_compile_artifact_id": compile_response.json()["artifact_id"],
+                "timeline": timeline,
+                "judge_policy": {"route_key": "text", "confidence_threshold": 0.7},
+            },
+        )
+        suite_run_response = client.post(f"/api/v1/testing/suites/{suite['id']}/run", json={})
+        test_run_id = suite_run_response.json()["runs"][0]["id"]
+        agent_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.tester",
+                "owner_type": "pskill_test_run",
+                "owner_id": test_run_id,
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.testing.write_diagnostics",
+                        "side_effect_level": "low_write",
+                        "arguments_summary": {
+                            "decision": "require_human_review",
+                            "score": 72,
+                            "coverage": {"scenario_count": 1},
+                            "diagnostics": [
+                                {
+                                    "code": "coverage.manual_review",
+                                    "message": "需要人工复核测试期望是否覆盖安全提示。",
+                                }
+                            ],
+                            "warnings": [
+                                {
+                                    "code": "coverage.warning",
+                                    "message": "当前仅覆盖一个测试场景。",
+                                }
+                            ],
+                            "publish_gate_summary": "测试诊断建议进入人工 review。",
+                        },
+                    }
+                },
+            },
+        )
+        agent_run_id = agent_run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        test_run_response = client.get(f"/api/v1/testing/runs/{test_run_id}")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert skill_response.status_code == 201
+    assert publish_response.status_code == 202
+    assert compile_response.status_code == 200
+    assert suite_response.status_code == 201
+    assert scenario_response.status_code == 201
+    assert suite_run_response.status_code == 202
+    assert agent_run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    payload = run_once_response.json()
+    assert payload["status"] == "succeeded"
+    result = payload["output_payload"]["tool_result"]["result"]
+    assert result["scenario_run_id"] == test_run_id
+    assert result["decision"] == "require_human_review"
+    assert result["score"] == 72
+    assert result["diagnostics"][0]["code"] == "coverage.manual_review"
+    assert result["warnings"][0]["code"] == "coverage.warning"
+    assert authorizations_response.json() == []
+
+    test_run = test_run_response.json()
+    assert test_run["result_summary"]["agent_diagnostics"]["scenario_run_id"] == test_run_id
+    assert test_run["result_summary"]["agent_diagnostics"]["decision"] == "require_human_review"
+
+    tool_call = tool_calls_response.json()[0]
+    assert tool_call["tool_name"] == "psop.testing.write_diagnostics"
+    assert tool_call["status"] == "succeeded"
+    assert tool_call["result_summary"]["executed"] is True
+    assert tool_call["result_summary"]["result"]["scenario_run_id"] == test_run_id
+    assert "native_execution" not in tool_call["result_summary"]["result"]
+
+    event_types = [item["event_type"] for item in events_response.json()]
+    assert "testing.diagnostics.written" in event_types
+    assert "tool.execution_succeeded" in event_types
+    assert "agent.tool_call.succeeded" in event_types
+
+
 def test_agent_version_api_creates_publishes_and_activates_draft() -> None:
     client, _, _ = create_test_client()
 

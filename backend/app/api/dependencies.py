@@ -72,6 +72,7 @@ def get_agent_runner(request: Request) -> AgentRunner:
         compiler_service=get_compiler_service(request),
         runtime_service=get_runtime_service(request),
         evaluation_service=get_evaluation_service(request),
+        testing_service=get_skill_test_service(request),
     )
 
 

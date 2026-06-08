@@ -919,6 +919,68 @@ class SkillTestService:
         session.commit()
         return self._build_publish_gate_response(gate)
 
+    def write_diagnostics_from_agent_tool(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        payload: dict[str, Any],
+        commit: bool = True,
+    ) -> dict[str, Any]:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        scenario_run_id = str(payload.get("scenario_run_id") or "").strip()
+        if not scenario_run_id and agent_run.owner_type == "pskill_test_run":
+            scenario_run_id = str(agent_run.owner_id or "").strip()
+        scenario_run = self.repository.get_scenario_run(session, scenario_run_id) if scenario_run_id else None
+        if scenario_run_id and not scenario_run:
+            raise SkillNotFoundError("未找到 PSkill 测试运行。", details={"scenario_run_id": scenario_run_id})
+
+        diagnostics = self._normalize_testing_diagnostic_list(payload.get("diagnostics"), field_name="diagnostics")
+        blocking_findings = self._normalize_testing_diagnostic_list(
+            payload.get("blocking_findings"),
+            field_name="blocking_findings",
+        )
+        warnings = self._normalize_testing_diagnostic_list(payload.get("warnings"), field_name="warnings")
+        decision = self._testing_decision(payload.get("decision"), blocking_findings=blocking_findings)
+        score = self._bounded_testing_score(payload.get("score"), default=0 if blocking_findings else 100)
+        summary = str(payload.get("publish_gate_summary") or payload.get("summary") or "").strip()
+        if not summary:
+            summary = "测试诊断已记录。"
+        result = {
+            "decision": decision,
+            "score": score,
+            "coverage": payload.get("coverage") if isinstance(payload.get("coverage"), dict) else {},
+            "diagnostics": diagnostics,
+            "blocking_findings": blocking_findings,
+            "warnings": warnings,
+            "publish_gate_summary": summary,
+            "scenario_run_id": scenario_run.id if scenario_run else None,
+        }
+        if scenario_run:
+            scenario_run.result_summary = {
+                **(scenario_run.result_summary or {}),
+                "agent_diagnostics": result,
+            }
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="testing.diagnostics.written",
+                phase="testing",
+                payload={
+                    "scenario_run_id": scenario_run.id if scenario_run else None,
+                    "decision": decision,
+                    "diagnostic_count": len(diagnostics),
+                    "blocking_finding_count": len(blocking_findings),
+                    "warning_count": len(warnings),
+                },
+            ),
+            commit=False,
+        )
+        if commit:
+            session.commit()
+        return result
+
     def _start_forked_invocation(
         self,
         session: Session,
@@ -1390,6 +1452,48 @@ class SkillTestService:
     def _publish_gate_summary(status: str, score: int, checks: dict[str, dict[str, Any]]) -> str:
         check_summary = ", ".join(f"{name}:{check.get('status')}" for name, check in checks.items())
         return f"publish gate {status} with score {score}; {check_summary}"
+
+    @staticmethod
+    def _normalize_testing_diagnostic_list(value: Any, *, field_name: str) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            value = [value]
+        if not isinstance(value, list):
+            raise SkillValidationError(f"{field_name} 必须是数组。", details={field_name: value})
+        normalized: list[dict[str, Any]] = []
+        for index, item in enumerate(value):
+            if not isinstance(item, dict):
+                raise SkillValidationError(
+                    f"{field_name} 条目必须是对象。",
+                    details={field_name: value, "index": index},
+                )
+            code = str(item.get("code") or item.get("id") or f"{field_name}_{index + 1}").strip()
+            message = str(item.get("message") or item.get("description") or "").strip()
+            if not message:
+                raise SkillValidationError(f"{field_name} 条目缺少 message。", details={"index": index})
+            normalized.append({**item, "code": code, "message": message})
+        return normalized
+
+    @staticmethod
+    def _testing_decision(value: Any, *, blocking_findings: list[dict[str, Any]]) -> str:
+        decision = str(value or "").strip()
+        if not decision:
+            return "fail" if blocking_findings else "pass"
+        if decision not in {"pass", "fail", "require_human_review"}:
+            raise SkillValidationError("testing decision 无效。", details={"decision": decision})
+        return decision
+
+    @staticmethod
+    def _bounded_testing_score(value: Any, *, default: int) -> int:
+        if value is None or value == "":
+            parsed = default
+        else:
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError) as error:
+                raise SkillValidationError("testing score 必须是整数。", details={"score": value}) from error
+        return max(0, min(parsed, 100))
 
     @staticmethod
     def _suite_run_status(status_counts: dict[str, int]) -> str:
