@@ -512,6 +512,16 @@ class AgentService:
             session,
             agent_run.id,
             AppendAgentEventRequest(
+                event_type="tool.authorization_requested",
+                phase="tool_authorization",
+                payload=self._tool_authorization_event_payload(authorization),
+            ),
+            commit=False,
+        )
+        self.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
                 event_type="agent.waiting_tool_authorization",
                 phase="tool_authorization",
                 payload={"authorization_id": authorization.id, "tool_name": authorization.tool_name},
@@ -564,6 +574,20 @@ class AgentService:
             session,
             agent_run.id,
             AppendAgentEventRequest(
+                event_type="tool.authorization_approved",
+                phase="tool_authorization",
+                payload={
+                    **self._tool_authorization_event_payload(authorization),
+                    "decision": "approved",
+                    "response_payload": authorization.response_payload,
+                },
+            ),
+            commit=False,
+        )
+        self.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
                 event_type="agent.resumed_after_tool_authorization",
                 phase="tool_authorization",
                 payload={"authorization_id": authorization.id, "decision": "approved"},
@@ -590,6 +614,20 @@ class AgentService:
         tool_call = self.repository.get_tool_call(session, authorization.agent_tool_call_id)
         if tool_call:
             tool_call.status = "denied"
+        self.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="tool.authorization_rejected",
+                phase="tool_authorization",
+                payload={
+                    **self._tool_authorization_event_payload(authorization),
+                    "decision": "rejected",
+                    "response_payload": authorization.response_payload,
+                },
+            ),
+            commit=False,
+        )
         self.append_event(
             session,
             agent_run.id,
@@ -690,6 +728,24 @@ class AgentService:
                 details={"authorization_id": authorization_id, "status": authorization.status},
             )
         return authorization
+
+    @staticmethod
+    def _tool_authorization_event_payload(authorization: AgentToolAuthorization) -> dict[str, Any]:
+        return {
+            "authorization_id": authorization.id,
+            "agent_tool_call_id": authorization.agent_tool_call_id,
+            "run_id": authorization.run_id,
+            "run_event_id": authorization.run_event_id,
+            "tool_name": authorization.tool_name,
+            "tool_provider": authorization.tool_provider,
+            "mcp_server_name": authorization.mcp_server_name,
+            "side_effect_level": authorization.side_effect_level,
+            "risk_level": authorization.risk_level,
+            "authorization_reason": authorization.authorization_reason,
+            "expected_effect_summary": authorization.expected_effect_summary,
+            "reversible": authorization.reversible,
+            "idempotency_key": authorization.idempotency_key,
+        }
 
     def _ensure_session_for_run(self, session: Session, agent_run: AgentRun) -> AgentSession:
         agent_session = self.repository.get_session(session, agent_run.agent_session_id)

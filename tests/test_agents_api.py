@@ -84,6 +84,7 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
             json={"response_payload": {"reason": "needs review"}},
         )
         rejected_run_response = client.get(f"/api/v1/agent-runs/{reject_run['id']}")
+        rejected_events_response = client.get(f"/api/v1/agent-runs/{reject_run['id']}/events")
         pending_authorizations_response = client.get("/api/v1/tool-authorizations", params={"status": "pending"})
         commit_patch_authorizations_response = client.get(
             "/api/v1/tool-authorizations",
@@ -133,6 +134,10 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert reject_response.json()["status"] == "rejected"
     assert rejected_run_response.json()["status"] == "failed"
     assert rejected_run_response.json()["error_message"] == "tool_authorization_denied"
+    rejected_event_types = [item["event_type"] for item in rejected_events_response.json()]
+    assert "tool.authorization_requested" in rejected_event_types
+    assert "tool.authorization_rejected" in rejected_event_types
+    assert "agent.failed_tool_authorization_denied" in rejected_event_types
     assert pending_authorizations_response.json() == []
     assert [item["id"] for item in commit_patch_authorizations_response.json()] == [authorization["id"]]
     assert [item["id"] for item in activate_authorizations_response.json()] == [reject_authorization["id"]]
@@ -261,6 +266,7 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
     event_types = [item["event_type"] for item in events_response.json()]
     assert "agent.skills.activated" in event_types
     assert "agent.model_call.completed" in event_types
+    assert "tool.authorization_requested" in event_types
     assert "agent.waiting_tool_authorization" in event_types
 
     assert approve_response.status_code == 200
@@ -277,6 +283,9 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
     assert {item["active_version_id"] for item in compiler_after_response.json()["bindings"]} == {draft_version["id"]}
     assert [item["status"] for item in resumed_tool_calls_response.json()] == ["succeeded"]
     resumed_event_types = [item["event_type"] for item in resumed_events_response.json()]
+    assert "tool.authorization_approved" in resumed_event_types
+    assert "tool.execution_started" in resumed_event_types
+    assert "tool.execution_succeeded" in resumed_event_types
     assert "agent.runner.resumed_authorized_tool" in resumed_event_types
     assert "agent.tool_call.succeeded" in resumed_event_types
 
@@ -358,6 +367,58 @@ def test_agent_runner_executes_authorized_skill_version_activation_tool() -> Non
     ]
     assert tool_calls_response.json()[0]["result_summary"]["result"]["package_name"] == "pskill-builder"
     assert executed_authorization_response.json()["status"] == "executed"
+
+
+def test_agent_runner_records_authorized_tool_execution_failure_event() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "psop.governance",
+                "owner_type": "governance",
+                "owner_id": "proposal-failed-activation",
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.agent_version.activate",
+                        "side_effect_level": "high_write",
+                        "arguments_summary": {"agent_key": "pskill.compiler"},
+                        "expected_effect_summary": "尝试激活缺少 version_id 的 AgentVersion。",
+                        "authorization_reason": "激活 AgentVersion 会改变生产智能体配置。",
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        first_run_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        authorization = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations").json()[0]
+        approve_response = client.post(
+            f"/api/v1/tool-authorizations/{authorization['id']}/approve",
+            json={"response_payload": {"approved_by": "tester"}},
+        )
+        resumed_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        failed_authorization_response = client.get(f"/api/v1/tool-authorizations/{authorization['id']}")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert run_response.status_code == 201
+    assert first_run_response.json()["status"] == "waiting_tool_authorization"
+    assert approve_response.json()["status"] == "approved"
+    assert resumed_response.status_code == 200
+    assert resumed_response.json()["status"] == "failed"
+    assert "缺少 agent_key 或 version_id" in resumed_response.json()["error_message"]
+    assert failed_authorization_response.json()["status"] == "failed"
+    assert tool_calls_response.json()[0]["status"] == "failed"
+    assert tool_calls_response.json()[0]["result_summary"]["executed"] is False
+
+    event_types = [item["event_type"] for item in events_response.json()]
+    assert "tool.authorization_requested" in event_types
+    assert "tool.authorization_approved" in event_types
+    assert "tool.execution_started" in event_types
+    assert "tool.execution_failed" in event_types
+    assert "agent.tool_call.failed" in event_types
 
 
 def test_agent_runner_output_guardrail_records_business_wait_as_non_hitl() -> None:

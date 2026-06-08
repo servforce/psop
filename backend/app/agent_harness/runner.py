@@ -202,6 +202,22 @@ class AgentRunner:
             ),
             commit=False,
         )
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="tool.execution_started",
+                phase="tool",
+                payload={
+                    "tool_call_id": tool_call.id,
+                    "authorization_id": authorization.id if authorization else "",
+                    "tool_name": tool_call.tool_name,
+                    "tool_provider": tool_call.tool_provider,
+                    "side_effect_level": tool_call.side_effect_level,
+                },
+            ),
+            commit=False,
+        )
         try:
             tool_result = self._execute_native_tool_call(session, tool_call=tool_call)
         except (SkillNotFoundError, SkillValidationError) as error:
@@ -213,6 +229,21 @@ class AgentRunner:
             agent_run.status = "failed"
             agent_run.error_message = error.message
             agent_run.ended_at = now_utc()
+            self.agent_service.append_event(
+                session,
+                agent_run.id,
+                AppendAgentEventRequest(
+                    event_type="tool.execution_failed",
+                    phase="tool",
+                    payload={
+                        "tool_call_id": tool_call.id,
+                        "authorization_id": authorization.id if authorization else "",
+                        "tool_name": tool_call.tool_name,
+                        "error": error.message,
+                    },
+                ),
+                commit=False,
+            )
             self.agent_service.append_event(
                 session,
                 agent_run.id,
@@ -239,6 +270,21 @@ class AgentRunner:
             "tool_result": {"tool_name": tool_call.tool_name, "status": "succeeded", **tool_result}
         }
         agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="tool.execution_succeeded",
+                phase="tool",
+                payload={
+                    "tool_call_id": tool_call.id,
+                    "authorization_id": authorization.id if authorization else "",
+                    "tool_name": tool_call.tool_name,
+                    "result": tool_result,
+                },
+            ),
+            commit=False,
+        )
         self.agent_service.append_event(
             session,
             agent_run.id,
