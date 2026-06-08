@@ -1219,6 +1219,144 @@
       },
 
 
+      liveRunReplayAgentRunCount() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.agent_runs || []).length
+          : 0;
+      },
+
+
+      liveRunReplayModelCallCount() {
+        if (this.replayDetail?.run?.id !== this.liveRun?.id) {
+          return 0;
+        }
+        return (this.replayDetail.agent_model_calls || this.replayDetail.model_calls || []).length;
+      },
+
+
+      liveRunReplayToolCallCount() {
+        if (this.replayDetail?.run?.id !== this.liveRun?.id) {
+          return 0;
+        }
+        return (this.replayDetail.agent_tool_calls || this.replayDetail.tool_calls || []).length;
+      },
+
+
+      liveRunReplayToolAuthorizationCount() {
+        if (this.replayDetail?.run?.id !== this.liveRun?.id) {
+          return 0;
+        }
+        return (this.replayDetail.agent_tool_authorizations || this.replayDetail.tool_authorizations || []).length;
+      },
+
+
+      liveRunReplayEvaluationCount() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.run_evaluations || []).length
+          : 0;
+      },
+
+
+      liveRunReplayFindingCount() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.run_evaluation_findings || []).length
+          : 0;
+      },
+
+
+      liveRunReplayAgentRuns() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.agent_runs || [])
+          : [];
+      },
+
+
+      liveRunReplayModelCalls() {
+        if (this.replayDetail?.run?.id !== this.liveRun?.id) {
+          return [];
+        }
+        return this.replayDetail.agent_model_calls || this.replayDetail.model_calls || [];
+      },
+
+
+      liveRunReplayToolCalls() {
+        if (this.replayDetail?.run?.id !== this.liveRun?.id) {
+          return [];
+        }
+        return this.replayDetail.agent_tool_calls || this.replayDetail.tool_calls || [];
+      },
+
+
+      liveRunReplayToolAuthorizations() {
+        if (this.replayDetail?.run?.id !== this.liveRun?.id) {
+          return [];
+        }
+        return this.replayDetail.agent_tool_authorizations || this.replayDetail.tool_authorizations || [];
+      },
+
+
+      liveRunReplayEvaluations() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.run_evaluations || [])
+          : [];
+      },
+
+
+      liveRunReplayFindings() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.run_evaluation_findings || [])
+          : [];
+      },
+
+
+      liveRunReplayAgentRunSummary(agentRun) {
+        return [
+          agentRun?.agent_key || "agent",
+          agentRun?.status || "unknown",
+          agentRun?.owner_type || "owner:N/A"
+        ].join(" · ");
+      },
+
+
+      liveRunReplayModelCallSummary(call) {
+        const usage = call?.usage_json || {};
+        const tokens = Number(usage.total_tokens || 0);
+        return [
+          call?.route_key || call?.provider || "model",
+          call?.status || "unknown",
+          Number.isFinite(tokens) && tokens > 0 ? `${tokens} tokens` : "tokens:N/A"
+        ].join(" · ");
+      },
+
+
+      liveRunReplayToolCallSummary(call) {
+        return [
+          call?.tool_name || "tool",
+          call?.status || "unknown",
+          call?.side_effect_level || "effect:N/A"
+        ].join(" · ");
+      },
+
+
+      liveRunReplayEvaluationSummary(evaluation) {
+        const score = Number(evaluation?.quality_score ?? 0);
+        return [
+          evaluation?.overall_outcome || "outcome:N/A",
+          `score ${Number.isFinite(score) ? score : 0}`,
+          `${(evaluation?.findings || []).length} findings`
+        ].join(" · ");
+      },
+
+
+      liveRunReplayFindingSummary(finding) {
+        return [
+          finding?.category || "category:N/A",
+          finding?.severity || "severity:N/A",
+          finding?.status || "status:N/A"
+        ].join(" · ");
+      },
+
+
       replaySnapshotSummary(snapshot) {
         const summary = snapshot?.selection_summary;
         if (!summary || typeof summary !== "object" || Array.isArray(summary)) {

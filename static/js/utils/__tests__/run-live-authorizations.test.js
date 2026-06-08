@@ -193,6 +193,112 @@ test("run replay selection follows event id from location", () => {
   expect(methods.selectedLiveRunReplayItem.call(context)).toBe(replayEvent);
 });
 
+test("run replay exposes closed-loop evidence counts", () => {
+  const methods = loadRuntimeMethods();
+  const context = {
+    ...methods,
+    liveRun: { id: "run-1" },
+    replayDetail: {
+      run: { id: "run-1" },
+      agent_runs: [{ id: "agent-run-1", agent_key: "pskill.runner", status: "succeeded", owner_type: "runtime" }],
+      agent_model_calls: [
+        {
+          id: "model-call-1",
+          provider: "deterministic",
+          route_key: "runner",
+          status: "succeeded",
+          usage_json: { total_tokens: 42 }
+        }
+      ],
+      agent_tool_calls: [
+        {
+          id: "tool-call-1",
+          tool_name: "psop.runtime.read",
+          status: "succeeded",
+          side_effect_level: "read"
+        }
+      ],
+      agent_tool_authorizations: [
+        {
+          id: "auth-1",
+          tool_name: "psop.repository.commit_patch",
+          status: "pending"
+        }
+      ],
+      run_evaluations: [
+        {
+          id: "evaluation-1",
+          overall_outcome: "success",
+          quality_score: 94,
+          findings: []
+        }
+      ],
+      run_evaluation_findings: [
+        {
+          id: "finding-1",
+          category: "runner_issue",
+          severity: "high",
+          status: "open"
+        }
+      ]
+    }
+  };
+
+  expect(methods.liveRunReplayAgentRunCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayModelCallCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayToolCallCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayToolAuthorizationCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayEvaluationCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayFindingCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayAgentRuns.call(context)).toEqual(context.replayDetail.agent_runs);
+  expect(methods.liveRunReplayModelCalls.call(context)).toEqual(context.replayDetail.agent_model_calls);
+  expect(methods.liveRunReplayToolCalls.call(context)).toEqual(context.replayDetail.agent_tool_calls);
+  expect(methods.liveRunReplayToolAuthorizations.call(context)).toEqual(
+    context.replayDetail.agent_tool_authorizations
+  );
+  expect(methods.liveRunReplayEvaluations.call(context)).toEqual(context.replayDetail.run_evaluations);
+  expect(methods.liveRunReplayFindings.call(context)).toEqual(context.replayDetail.run_evaluation_findings);
+  expect(methods.liveRunReplayAgentRunSummary(context.replayDetail.agent_runs[0])).toBe(
+    "pskill.runner · succeeded · runtime"
+  );
+  expect(methods.liveRunReplayModelCallSummary(context.replayDetail.agent_model_calls[0])).toBe(
+    "runner · succeeded · 42 tokens"
+  );
+  expect(methods.liveRunReplayToolCallSummary(context.replayDetail.agent_tool_calls[0])).toBe(
+    "psop.runtime.read · succeeded · read"
+  );
+  expect(methods.liveRunReplayEvaluationSummary(context.replayDetail.run_evaluations[0])).toBe(
+    "success · score 94 · 0 findings"
+  );
+  expect(methods.liveRunReplayFindingSummary(context.replayDetail.run_evaluation_findings[0])).toBe(
+    "runner_issue · high · open"
+  );
+
+  const fallbackContext = {
+    ...context,
+    replayDetail: {
+      run: { id: "run-1" },
+      model_calls: [{ id: "model-call-1" }],
+      tool_calls: [{ id: "tool-call-1" }],
+      tool_authorizations: [{ id: "auth-1" }]
+    }
+  };
+
+  expect(methods.liveRunReplayModelCallCount.call(fallbackContext)).toBe(1);
+  expect(methods.liveRunReplayToolCallCount.call(fallbackContext)).toBe(1);
+  expect(methods.liveRunReplayToolAuthorizationCount.call(fallbackContext)).toBe(1);
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
+  expect(html).toContain("Closed-loop Evidence");
+  expect(html).toContain("liveRunReplayAgentRunCount()");
+  expect(html).toContain("liveRunReplayModelCallCount()");
+  expect(html).toContain("liveRunReplayToolAuthorizationCount()");
+  expect(html).toContain("liveRunReplayEvaluationCount()");
+  expect(html).toContain("liveRunReplayFindingCount()");
+  expect(html).toContain("liveRunReplayAgentRunSummary(agentRun)");
+  expect(html).toContain("liveRunReplayFindingSummary(finding)");
+});
+
 test("run live authorization decisions update local list and refresh run", async () => {
   const methods = loadRuntimeMethods();
   const pending = { id: "auth-1", status: "pending", tool_name: "psop.repository.commit_patch" };

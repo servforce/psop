@@ -401,6 +401,12 @@
                       <div class="flex flex-wrap gap-1.5 text-[11px]">
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayTerminalCount()} terminal`"></span>
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayTraceCount()} trace`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayAgentRunCount()} agents`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayModelCallCount()} model`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayToolCallCount()} tools`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayToolAuthorizationCount()} auth`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayEvaluationCount()} eval`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayFindingCount()} findings`"></span>
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplaySnapshots().length} snapshots`"></span>
                       </div>
                     </div>
@@ -538,6 +544,135 @@
                                 </div>
                               </details>
                             </template>
+                          </div>
+                        </details>
+
+                        <details class="px-4 py-3">
+                          <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <span>Closed-loop Evidence</span>
+                            <span class="ml-2 font-mono text-[11px] text-slate-500" x-text="`${liveRunReplayAgentRunCount()}A/${liveRunReplayModelCallCount()}M/${liveRunReplayToolCallCount()}T/${liveRunReplayEvaluationCount()}E`"></span>
+                          </summary>
+
+                          <div class="mt-3 divide-y divide-slate-800 border-y border-slate-800 text-sm">
+                            <section class="py-3">
+                              <div class="flex items-center justify-between gap-3">
+                                <p class="field-label">Agent Runs</p>
+                                <span class="mono-field" x-text="liveRunReplayAgentRunCount()"></span>
+                              </div>
+                              <template x-if="liveRunReplayAgentRuns().length === 0">
+                                <p class="mt-2 text-xs text-slate-500">暂无 AgentRun 证据。</p>
+                              </template>
+                              <div class="mt-2 divide-y divide-slate-800">
+                                <template x-for="agentRun in liveRunReplayAgentRuns()" :key="agentRun.id">
+                                  <div class="py-2">
+                                    <div class="flex items-start justify-between gap-3">
+                                      <div class="min-w-0">
+                                        <p class="truncate font-semibold text-slate-100" x-text="agentRun.agent_key"></p>
+                                        <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayAgentRunSummary(agentRun)"></p>
+                                        <p class="mt-1 mono-field break-all" x-text="agentRun.id"></p>
+                                      </div>
+                                      <span class="status-badge shrink-0" :class="statusBadgeTone(agentRun.status)" x-text="agentRun.status"></span>
+                                    </div>
+                                  </div>
+                                </template>
+                              </div>
+                            </section>
+
+                            <section class="py-3">
+                              <div class="flex items-center justify-between gap-3">
+                                <p class="field-label">Model Calls</p>
+                                <span class="mono-field" x-text="liveRunReplayModelCallCount()"></span>
+                              </div>
+                              <template x-if="liveRunReplayModelCalls().length === 0">
+                                <p class="mt-2 text-xs text-slate-500">暂无 ModelCall 证据。</p>
+                              </template>
+                              <div class="mt-2 divide-y divide-slate-800">
+                                <template x-for="call in liveRunReplayModelCalls()" :key="call.id">
+                                  <div class="py-2">
+                                    <div class="flex items-start justify-between gap-3">
+                                      <div class="min-w-0">
+                                        <p class="truncate font-semibold text-slate-100" x-text="call.model_name || call.provider"></p>
+                                        <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayModelCallSummary(call)"></p>
+                                        <p class="mt-1 mono-field break-all" x-text="call.agent_run_id"></p>
+                                      </div>
+                                      <span class="status-badge shrink-0" :class="statusBadgeTone(call.status)" x-text="call.status"></span>
+                                    </div>
+                                  </div>
+                                </template>
+                              </div>
+                            </section>
+
+                            <section class="py-3">
+                              <div class="flex items-center justify-between gap-3">
+                                <p class="field-label">Tool Calls / Authorizations</p>
+                                <span class="mono-field" x-text="`${liveRunReplayToolCallCount()} / ${liveRunReplayToolAuthorizationCount()}`"></span>
+                              </div>
+                              <template x-if="liveRunReplayToolCalls().length === 0 && liveRunReplayToolAuthorizations().length === 0">
+                                <p class="mt-2 text-xs text-slate-500">暂无 ToolCall 或 ToolAuthorization 证据。</p>
+                              </template>
+                              <div class="mt-2 divide-y divide-slate-800">
+                                <template x-for="call in liveRunReplayToolCalls()" :key="call.id">
+                                  <div class="py-2">
+                                    <div class="flex items-start justify-between gap-3">
+                                      <div class="min-w-0">
+                                        <p class="truncate font-semibold text-slate-100" x-text="call.tool_name"></p>
+                                        <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayToolCallSummary(call)"></p>
+                                        <p class="mt-1 mono-field break-all" x-text="call.id"></p>
+                                      </div>
+                                      <span class="status-badge shrink-0" :class="statusBadgeTone(call.status)" x-text="call.status"></span>
+                                    </div>
+                                  </div>
+                                </template>
+                                <template x-for="authorization in liveRunReplayToolAuthorizations()" :key="authorization.id">
+                                  <div class="py-2">
+                                    <div class="flex items-start justify-between gap-3">
+                                      <div class="min-w-0">
+                                        <p class="truncate font-semibold text-slate-100" x-text="authorization.tool_name"></p>
+                                        <p class="mt-1 truncate text-xs text-slate-400" x-text="`${authorization.risk_level || 'risk:N/A'} · ${authorization.side_effect_level || 'effect:N/A'}`"></p>
+                                        <p class="mt-1 mono-field break-all" x-text="authorization.id"></p>
+                                      </div>
+                                      <span class="status-badge shrink-0" :class="statusBadgeTone(authorization.status)" x-text="authorization.status"></span>
+                                    </div>
+                                  </div>
+                                </template>
+                              </div>
+                            </section>
+
+                            <section class="py-3">
+                              <div class="flex items-center justify-between gap-3">
+                                <p class="field-label">Evaluations / Findings</p>
+                                <span class="mono-field" x-text="`${liveRunReplayEvaluationCount()} / ${liveRunReplayFindingCount()}`"></span>
+                              </div>
+                              <template x-if="liveRunReplayEvaluations().length === 0 && liveRunReplayFindings().length === 0">
+                                <p class="mt-2 text-xs text-slate-500">暂无 Evaluation 或 Finding 证据。</p>
+                              </template>
+                              <div class="mt-2 divide-y divide-slate-800">
+                                <template x-for="evaluation in liveRunReplayEvaluations()" :key="evaluation.id">
+                                  <div class="py-2">
+                                    <div class="flex items-start justify-between gap-3">
+                                      <div class="min-w-0">
+                                        <p class="truncate font-semibold text-slate-100" x-text="evaluation.summary || evaluation.id"></p>
+                                        <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayEvaluationSummary(evaluation)"></p>
+                                        <p class="mt-1 mono-field break-all" x-text="evaluation.agent_run_id"></p>
+                                      </div>
+                                      <span class="status-badge shrink-0 border-slate-700 bg-slate-900/60 text-slate-300" x-text="evaluation.overall_outcome"></span>
+                                    </div>
+                                  </div>
+                                </template>
+                                <template x-for="finding in liveRunReplayFindings()" :key="finding.id">
+                                  <div class="py-2">
+                                    <div class="flex items-start justify-between gap-3">
+                                      <div class="min-w-0">
+                                        <p class="line-clamp-2 font-semibold text-slate-100" x-text="finding.description"></p>
+                                        <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayFindingSummary(finding)"></p>
+                                        <p class="mt-1 mono-field break-all" x-text="finding.id"></p>
+                                      </div>
+                                      <span class="status-badge shrink-0" :class="statusBadgeTone(finding.status)" x-text="finding.status"></span>
+                                    </div>
+                                  </div>
+                                </template>
+                              </div>
+                            </section>
                           </div>
                         </details>
                       </div>

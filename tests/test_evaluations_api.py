@@ -25,6 +25,7 @@ def test_evaluation_api_creates_report_for_completed_run_and_records_evaluator_a
         agent_run_response = client.get(f"/api/v1/agent-runs/{evaluation['agent_run_id']}")
         agent_events_response = client.get(f"/api/v1/agent-runs/{evaluation['agent_run_id']}/events")
         agent_model_calls_response = client.get(f"/api/v1/agent-runs/{evaluation['agent_run_id']}/model-calls")
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
 
     assert evaluation_response.status_code == 201
     assert evaluation["run_id"] == run_id
@@ -47,6 +48,13 @@ def test_evaluation_api_creates_report_for_completed_run_and_records_evaluator_a
         "evaluation.agent.model_call.completed",
         "evaluation.run.completed",
     } <= {item["event_type"] for item in agent_events_response.json()}
+    replay_payload = replay_response.json()
+    assert evaluation["id"] in {item["id"] for item in replay_payload["run_evaluations"]}
+    assert evaluation["agent_run_id"] in {item["id"] for item in replay_payload["agent_runs"]}
+    assert "evaluation.run.completed" in {item["event_type"] for item in replay_payload["agent_events"]}
+    assert any(item["agent_run_id"] == evaluation["agent_run_id"] for item in replay_payload["model_calls"])
+    assert replay_payload["agent_model_calls"] == replay_payload["model_calls"]
+    assert replay_payload["run_evaluation_findings"] == []
 
 
 def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -> None:

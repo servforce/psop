@@ -7,14 +7,26 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
+from app.agents.models import AgentEvent, AgentModelCall, AgentRun, AgentToolAuthorization, AgentToolCall
+from app.agents.schemas import (
+    AgentEventResponse,
+    AgentModelCallResponse,
+    AgentRunResponse,
+    AgentToolAuthorizationResponse,
+    AgentToolCallResponse,
+    AppendAgentEventRequest,
+    CreateAgentRunRequest,
+)
 from app.agents.service import AgentService
 from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
 from app.agent_prompts.service import AgentPromptService
+from app.evaluations.models import RunEvaluation, RunEvaluationFinding
+from app.evaluations.schemas import RunEvaluationFindingResponse, RunEvaluationResponse
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.schemas import RuntimeJobResponse
@@ -952,6 +964,18 @@ class RuntimeService:
         snapshots = self.list_snapshots(session, run_id)
         run_traces = self.list_run_traces(session, run_id)
         run_events = self.list_run_events(session, run_id)
+        agent_runs = self._list_replay_agent_runs(session, run_id=run_id, run_traces=run_traces, run_events=run_events)
+        agent_run_ids = [item.id for item in agent_runs]
+        agent_events = self._list_replay_agent_events(session, agent_run_ids=agent_run_ids)
+        agent_tool_calls = self._list_replay_agent_tool_calls(session, agent_run_ids=agent_run_ids)
+        agent_model_calls = self._list_replay_agent_model_calls(session, agent_run_ids=agent_run_ids)
+        agent_tool_authorizations = self._list_replay_agent_tool_authorizations(
+            session,
+            run_id=run_id,
+            agent_run_ids=agent_run_ids,
+        )
+        run_evaluations = self._list_replay_run_evaluations(session, run_id=run_id)
+        run_evaluation_findings = self._list_replay_run_evaluation_findings(session, run_id=run_id)
         timeline = [self._build_timeline_item(event) for event in run_traces]
         timeline.extend(self._build_terminal_timeline_item(event) for event in run_events)
         timeline.sort(key=lambda item: (item.occurred_at, item.seq_no, item.event_type))
@@ -964,6 +988,143 @@ class RuntimeService:
             run_events=run_events,
             terminal_events=run_events,
             bindings=self.list_run_bindings(session, run_id),
+            agent_runs=[self._build_agent_run_response(item) for item in agent_runs],
+            agent_events=[self._build_agent_event_response(item) for item in agent_events],
+            agent_tool_calls=[self._build_agent_tool_call_response(item) for item in agent_tool_calls],
+            tool_calls=[self._build_agent_tool_call_response(item) for item in agent_tool_calls],
+            agent_model_calls=[self._build_agent_model_call_response(item) for item in agent_model_calls],
+            model_calls=[self._build_agent_model_call_response(item) for item in agent_model_calls],
+            agent_tool_authorizations=[
+                self._build_agent_tool_authorization_response(item) for item in agent_tool_authorizations
+            ],
+            tool_authorizations=[self._build_agent_tool_authorization_response(item) for item in agent_tool_authorizations],
+            run_evaluations=[
+                self._build_run_evaluation_response(evaluation, findings=run_evaluation_findings)
+                for evaluation in run_evaluations
+            ],
+            run_evaluation_findings=[
+                self._build_run_evaluation_finding_response(item) for item in run_evaluation_findings
+            ],
+        )
+
+    def _list_replay_agent_runs(
+        self,
+        session: Session,
+        *,
+        run_id: str,
+        run_traces: list[RunTraceResponse],
+        run_events: list[RunEventResponse],
+    ) -> list[AgentRun]:
+        agent_run_ids = {
+            item.agent_run_id
+            for item in [*run_traces, *run_events]
+            if item.agent_run_id
+        }
+        direct_agent_runs = list(
+            session.scalars(
+                select(AgentRun)
+                .where(AgentRun.run_id == run_id)
+                .order_by(AgentRun.created_at.asc(), AgentRun.id.asc())
+            ).all()
+        )
+        agent_run_ids.update(item.id for item in direct_agent_runs)
+        agent_run_ids.update(
+            item
+            for item in session.scalars(
+                select(AgentToolAuthorization.agent_run_id).where(AgentToolAuthorization.run_id == run_id)
+            ).all()
+            if item
+        )
+        agent_run_ids.update(
+            item
+            for item in session.scalars(select(RunEvaluation.agent_run_id).where(RunEvaluation.run_id == run_id)).all()
+            if item
+        )
+        if not agent_run_ids:
+            return []
+        return list(
+            session.scalars(
+                select(AgentRun)
+                .where(AgentRun.id.in_(sorted(agent_run_ids)))
+                .order_by(AgentRun.created_at.asc(), AgentRun.id.asc())
+            ).all()
+        )
+
+    @staticmethod
+    def _list_replay_agent_events(session: Session, *, agent_run_ids: list[str]) -> list[AgentEvent]:
+        if not agent_run_ids:
+            return []
+        return list(
+            session.scalars(
+                select(AgentEvent)
+                .where(AgentEvent.agent_run_id.in_(agent_run_ids))
+                .order_by(AgentEvent.occurred_at.asc(), AgentEvent.agent_run_id.asc(), AgentEvent.seq_no.asc())
+            ).all()
+        )
+
+    @staticmethod
+    def _list_replay_agent_tool_calls(session: Session, *, agent_run_ids: list[str]) -> list[AgentToolCall]:
+        if not agent_run_ids:
+            return []
+        return list(
+            session.scalars(
+                select(AgentToolCall)
+                .where(AgentToolCall.agent_run_id.in_(agent_run_ids))
+                .order_by(AgentToolCall.created_at.asc(), AgentToolCall.agent_run_id.asc(), AgentToolCall.id.asc())
+            ).all()
+        )
+
+    @staticmethod
+    def _list_replay_agent_model_calls(session: Session, *, agent_run_ids: list[str]) -> list[AgentModelCall]:
+        if not agent_run_ids:
+            return []
+        return list(
+            session.scalars(
+                select(AgentModelCall)
+                .where(AgentModelCall.agent_run_id.in_(agent_run_ids))
+                .order_by(AgentModelCall.created_at.asc(), AgentModelCall.agent_run_id.asc(), AgentModelCall.id.asc())
+            ).all()
+        )
+
+    @staticmethod
+    def _list_replay_agent_tool_authorizations(
+        session: Session,
+        *,
+        run_id: str,
+        agent_run_ids: list[str],
+    ) -> list[AgentToolAuthorization]:
+        by_id: dict[str, AgentToolAuthorization] = {
+            item.id: item
+            for item in session.scalars(
+                select(AgentToolAuthorization).where(AgentToolAuthorization.run_id == run_id)
+            ).all()
+        }
+        if agent_run_ids:
+            for item in session.scalars(
+                select(AgentToolAuthorization).where(AgentToolAuthorization.agent_run_id.in_(agent_run_ids))
+            ).all():
+                by_id[item.id] = item
+        return sorted(by_id.values(), key=lambda item: (item.created_at, item.id))
+
+    @staticmethod
+    def _list_replay_run_evaluations(session: Session, *, run_id: str) -> list[RunEvaluation]:
+        return list(
+            session.scalars(
+                select(RunEvaluation)
+                .where(RunEvaluation.run_id == run_id)
+                .order_by(RunEvaluation.created_at.asc(), RunEvaluation.id.asc())
+            ).all()
+        )
+
+    @staticmethod
+    def _list_replay_run_evaluation_findings(session: Session, *, run_id: str) -> list[RunEvaluationFinding]:
+        return list(
+            session.scalars(
+                select(RunEvaluationFinding)
+                .join(RunEvaluation, RunEvaluation.id == RunEvaluationFinding.evaluation_id)
+                .where(RunEvaluation.run_id == run_id)
+                .order_by(RunEvaluationFinding.created_at.asc(), RunEvaluationFinding.id.asc())
+            ).all()
         )
 
     def _append_step(
@@ -2764,6 +2925,141 @@ class RuntimeService:
             checksum=part.checksum,
             metadata=part.part_metadata,
             created_at=part.created_at,
+        )
+
+    @staticmethod
+    def _build_agent_run_response(agent_run: AgentRun) -> AgentRunResponse:
+        return AgentRunResponse(
+            id=agent_run.id,
+            definition_id=agent_run.definition_id,
+            agent_version_id=agent_run.agent_version_id,
+            agent_session_id=agent_run.agent_session_id,
+            agent_key=agent_run.agent_key,
+            status=agent_run.status,
+            owner_type=agent_run.owner_type,
+            owner_id=agent_run.owner_id,
+            run_id=agent_run.run_id,
+            input_payload=agent_run.input_payload,
+            output_payload=agent_run.output_payload,
+            error_message=agent_run.error_message,
+            started_at=agent_run.started_at,
+            ended_at=agent_run.ended_at,
+            created_at=agent_run.created_at,
+            updated_at=agent_run.updated_at,
+        )
+
+    @staticmethod
+    def _build_agent_event_response(event: AgentEvent) -> AgentEventResponse:
+        return AgentEventResponse(
+            id=event.id,
+            agent_run_id=event.agent_run_id,
+            seq_no=event.seq_no,
+            event_type=event.event_type,
+            phase=event.phase,
+            payload=event.payload,
+            occurred_at=event.occurred_at,
+        )
+
+    @staticmethod
+    def _build_agent_tool_call_response(tool_call: AgentToolCall) -> AgentToolCallResponse:
+        return AgentToolCallResponse(
+            id=tool_call.id,
+            agent_run_id=tool_call.agent_run_id,
+            tool_name=tool_call.tool_name,
+            tool_provider=tool_call.tool_provider,
+            status=tool_call.status,
+            arguments_summary=tool_call.arguments_summary,
+            result_summary=tool_call.result_summary,
+            side_effect_level=tool_call.side_effect_level,
+            idempotency_key=tool_call.idempotency_key,
+            created_at=tool_call.created_at,
+            updated_at=tool_call.updated_at,
+        )
+
+    @staticmethod
+    def _build_agent_model_call_response(model_call: AgentModelCall) -> AgentModelCallResponse:
+        return AgentModelCallResponse(
+            id=model_call.id,
+            agent_run_id=model_call.agent_run_id,
+            provider=model_call.provider,
+            route_key=model_call.route_key,
+            model_name=model_call.model_name,
+            status=model_call.status,
+            request_payload=model_call.request_payload,
+            response_payload=model_call.response_payload,
+            usage_json=model_call.usage_json,
+            error_message=model_call.error_message,
+            started_at=model_call.started_at,
+            ended_at=model_call.ended_at,
+            created_at=model_call.created_at,
+        )
+
+    @staticmethod
+    def _build_agent_tool_authorization_response(
+        authorization: AgentToolAuthorization,
+    ) -> AgentToolAuthorizationResponse:
+        return AgentToolAuthorizationResponse(
+            id=authorization.id,
+            agent_run_id=authorization.agent_run_id,
+            agent_tool_call_id=authorization.agent_tool_call_id,
+            run_id=authorization.run_id,
+            run_event_id=authorization.run_event_id,
+            tool_name=authorization.tool_name,
+            tool_provider=authorization.tool_provider,
+            mcp_server_name=authorization.mcp_server_name,
+            side_effect_level=authorization.side_effect_level,
+            risk_level=authorization.risk_level,
+            authorization_reason=authorization.authorization_reason,
+            tool_arguments_summary=authorization.tool_arguments_summary,
+            expected_effect_summary=authorization.expected_effect_summary,
+            reversible=authorization.reversible,
+            idempotency_key=authorization.idempotency_key,
+            status=authorization.status,
+            request_payload=authorization.request_payload,
+            response_payload=authorization.response_payload,
+            created_at=authorization.created_at,
+            responded_at=authorization.responded_at,
+            executed_at=authorization.executed_at,
+        )
+
+    def _build_run_evaluation_response(
+        self,
+        evaluation: RunEvaluation,
+        *,
+        findings: list[RunEvaluationFinding],
+    ) -> RunEvaluationResponse:
+        return RunEvaluationResponse(
+            id=evaluation.id,
+            run_id=evaluation.run_id,
+            pskill_definition_id=evaluation.pskill_definition_id,
+            pskill_version_id=evaluation.pskill_version_id,
+            artifact_id=evaluation.artifact_id,
+            agent_run_id=evaluation.agent_run_id,
+            overall_outcome=evaluation.overall_outcome,
+            quality_score=evaluation.quality_score,
+            summary=evaluation.summary,
+            attribution=evaluation.attribution_json,
+            findings=[
+                self._build_run_evaluation_finding_response(item)
+                for item in findings
+                if item.evaluation_id == evaluation.id
+            ],
+            created_at=evaluation.created_at,
+        )
+
+    @staticmethod
+    def _build_run_evaluation_finding_response(finding: RunEvaluationFinding) -> RunEvaluationFindingResponse:
+        return RunEvaluationFindingResponse(
+            id=finding.id,
+            evaluation_id=finding.evaluation_id,
+            category=finding.category,
+            severity=finding.severity,
+            confidence=finding.confidence,
+            description=finding.description,
+            evidence_refs=finding.evidence_refs,
+            recommended_action=finding.recommended_action,
+            status=finding.status,
+            created_at=finding.created_at,
         )
 
     @staticmethod

@@ -5,6 +5,15 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.agents.schemas import (
+    AgentEventResponse,
+    AgentModelCallResponse,
+    AgentRunResponse,
+    AgentToolAuthorizationResponse,
+    AgentToolCallResponse,
+)
+from app.evaluations.schemas import RunEvaluationFindingResponse, RunEvaluationResponse
+
 
 class CreateInvocationRequest(BaseModel):
     skill_key: str = Field(min_length=1, max_length=120)
@@ -243,6 +252,16 @@ class ReplayDetailResponse(BaseModel):
     run_events: list[RunEventResponse] = Field(default_factory=list)
     terminal_events: list[RunEventResponse] = Field(default_factory=list)
     bindings: list[RunCapabilityBindingResponse] = Field(default_factory=list)
+    agent_runs: list[AgentRunResponse] = Field(default_factory=list)
+    agent_events: list[AgentEventResponse] = Field(default_factory=list)
+    agent_tool_calls: list[AgentToolCallResponse] = Field(default_factory=list)
+    tool_calls: list[AgentToolCallResponse] = Field(default_factory=list)
+    agent_model_calls: list[AgentModelCallResponse] = Field(default_factory=list)
+    model_calls: list[AgentModelCallResponse] = Field(default_factory=list)
+    agent_tool_authorizations: list[AgentToolAuthorizationResponse] = Field(default_factory=list)
+    tool_authorizations: list[AgentToolAuthorizationResponse] = Field(default_factory=list)
+    run_evaluations: list[RunEvaluationResponse] = Field(default_factory=list)
+    run_evaluation_findings: list[RunEvaluationFindingResponse] = Field(default_factory=list)
 
 
 TraceEventResponse = RunTraceResponse
