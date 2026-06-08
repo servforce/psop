@@ -1,6 +1,7 @@
 (function () {
   const {
     buildTasksPath,
+    buildSkillDetailPath,
     buildPlatformAgentPath,
     buildPlatformAgentRunsPath,
     buildPlatformAgentRunPath,
@@ -15,8 +16,11 @@
     buildEvaluationFindingsPath,
     buildGovernanceProposalPath,
     buildGovernanceExperimentsPath,
+    buildCompilerArtifactPath,
+    buildCompilerRequestPath,
     buildRunLivePath,
     buildReplayPath,
+    buildReplayTracePath,
     resolveWsUrl
   } = window.PSOPConsoleHelpers;
 
@@ -1279,6 +1283,19 @@
         ref.evaluation_id ||
         ref.finding_id ||
         ref.experiment_id ||
+        ref.compile_artifact_id ||
+        ref.artifact_id ||
+        ref.compile_request_id ||
+        ref.snapshot_id ||
+        ref.session_token_snapshot_id ||
+        ref.pskill_material_id ||
+        ref.material_id ||
+        ref.pskill_definition_id ||
+        ref.pskill_id ||
+        ref.skill_id ||
+        ref.package_name ||
+        ref.tool_name ||
+        ref.agent_key ||
         ref.memory_entry_id ||
         ref.memory_id ||
         ref.run_id ||
@@ -1295,7 +1312,20 @@
         !ref.memory_id &&
         !ref.evaluation_id &&
         !ref.finding_id &&
-        !ref.experiment_id
+        !ref.experiment_id &&
+        !ref.compile_artifact_id &&
+        !ref.artifact_id &&
+        !ref.compile_request_id &&
+        !ref.snapshot_id &&
+        !ref.session_token_snapshot_id &&
+        !ref.pskill_material_id &&
+        !ref.material_id &&
+        !ref.pskill_definition_id &&
+        !ref.pskill_id &&
+        !ref.skill_id &&
+        !ref.package_name &&
+        !ref.tool_name &&
+        !ref.agent_key
       ) {
         return null;
       }
@@ -1327,6 +1357,18 @@
           href: buildGovernanceExperimentsPath({ experiment_id: experimentId })
         };
       }
+      if (["eg_compile_artifact", "compile_artifact", "artifact"].includes(kind) || ref.compile_artifact_id || ref.artifact_id) {
+        const artifactId = String(ref.compile_artifact_id || ref.artifact_id || id).trim();
+        return { key: `compile-artifact-${artifactId}`, label: `Artifact ${artifactId}`, href: buildCompilerArtifactPath(artifactId) };
+      }
+      if (["pskill_compile_request", "compile_request"].includes(kind) || ref.compile_request_id) {
+        const compileRequestId = String(ref.compile_request_id || id).trim();
+        return {
+          key: `compile-request-${compileRequestId}`,
+          label: `Compile ${compileRequestId}`,
+          href: buildCompilerRequestPath(compileRequestId)
+        };
+      }
       if (["agent_tool_call", "tool_call"].includes(kind)) {
         const toolCallId = String(ref.agent_tool_call_id || ref.tool_call_id || ref.id || "").trim();
         const agentRunId = String(ref.agent_run_id || "").trim();
@@ -1349,7 +1391,7 @@
         const seqNo = String(ref.seq_no || ref.trace_seq_no || "").trim();
         const href = runId
           ? buildReplayPath(runId, traceId ? { trace_id: traceId } : { seq_no: seqNo })
-          : this.platformMemoryPath();
+          : (traceId ? buildReplayTracePath(traceId) : this.platformMemoryPath());
         return { key: `run-trace-${id || `${runId}-${seqNo}`}`, label: `RunTrace ${id || seqNo || runId}`, href };
       }
       if (["run_event", "event"].includes(kind)) {
@@ -1359,6 +1401,15 @@
           ? buildReplayPath(runId, { event_id: eventId })
           : this.platformMemoryPath();
         return { key: `run-event-${eventId}`, label: `RunEvent ${eventId}`, href };
+      }
+      if (["session_token_snapshot", "snapshot"].includes(kind) || ref.session_token_snapshot_id || ref.snapshot_id) {
+        const runId = String(ref.run_id || "").trim();
+        const snapshotId = String(ref.session_token_snapshot_id || ref.snapshot_id || id).trim();
+        const snapshotSeq = String(ref.snapshot_seq || ref.seq_no || ref.seq || "").trim();
+        const href = runId
+          ? buildReplayPath(runId, snapshotSeq ? { snapshot_seq: snapshotSeq } : {})
+          : this.platformMemoryPath();
+        return { key: `snapshot-${snapshotId || `${runId}-${snapshotSeq}`}`, label: `Snapshot ${snapshotId || snapshotSeq || runId}`, href };
       }
       if (["agent_run", "agentrun"].includes(kind) || ref.agent_run_id) {
         const agentRunId = String(ref.agent_run_id || id).trim();
@@ -1371,6 +1422,30 @@
       if (["governance_proposal", "proposal"].includes(kind) || ref.proposal_id) {
         const proposalId = String(ref.proposal_id || id).trim();
         return { key: `proposal-${proposalId}`, label: `Proposal ${proposalId}`, href: buildGovernanceProposalPath(proposalId) };
+      }
+      if (["pskill_material", "material"].includes(kind) || ref.pskill_material_id || ref.material_id) {
+        const materialId = String(ref.pskill_material_id || ref.material_id || id).trim();
+        const pskillId = String(ref.pskill_definition_id || ref.pskill_id || ref.skill_id || "").trim();
+        if (!pskillId) {
+          return null;
+        }
+        return { key: `material-${materialId}`, label: `Material ${materialId}`, href: buildSkillDetailPath(pskillId) };
+      }
+      if (["pskill_definition", "pskill", "skill_definition"].includes(kind) || ref.pskill_definition_id || ref.pskill_id) {
+        const pskillId = String(ref.pskill_definition_id || ref.pskill_id || id).trim();
+        return { key: `pskill-${pskillId}`, label: `PSkill ${pskillId}`, href: buildSkillDetailPath(pskillId) };
+      }
+      if (["skill_package", "agent_skill_package"].includes(kind) || ref.package_name) {
+        const packageName = String(ref.package_name || id).trim();
+        return { key: `skill-package-${packageName}`, label: `Skill ${packageName}`, href: buildPlatformSkillPath(packageName) };
+      }
+      if (["tool", "tool_definition"].includes(kind) || ref.tool_name) {
+        const toolName = String(ref.tool_name || id).trim();
+        return { key: `tool-${toolName}`, label: `Tool ${toolName}`, href: buildPlatformToolPath(toolName) };
+      }
+      if (["agent", "agent_definition"].includes(kind) || ref.agent_key) {
+        const agentKey = String(ref.agent_key || id).trim();
+        return { key: `agent-${agentKey}`, label: `Agent ${agentKey}`, href: buildPlatformAgentPath(agentKey) };
       }
       return null;
     },

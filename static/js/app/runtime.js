@@ -18,6 +18,8 @@
     buildPlatformAgentRunPath,
     buildEvaluationReportPath,
     buildEvaluationFindingsPath,
+    buildGovernanceProposalPath,
+    buildGovernanceExperimentsPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -1708,9 +1710,18 @@
 
 
       liveRunReplayFindingPath(finding) {
+        const evaluationId = String(finding?.evaluation_id || "").trim();
+        if (evaluationId) {
+          return buildEvaluationReportPath(evaluationId);
+        }
         const runId = String(finding?.run_id || this.replayDetail?.run?.id || this.liveRun?.id || "").trim();
-        const basePath = buildEvaluationFindingsPath();
-        return runId ? `${basePath}?run_id=${encodeURIComponent(runId)}` : basePath;
+        return buildEvaluationFindingsPath({
+          run_id: runId,
+          pskill_definition_id: finding?.pskill_definition_id || "",
+          status: finding?.status || "",
+          category: finding?.category || "",
+          severity: finding?.severity || ""
+        });
       },
 
 
@@ -2106,6 +2117,20 @@
       },
 
 
+      liveRunReplayGovernanceProposalCount() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.governance_proposals || []).length
+          : 0;
+      },
+
+
+      liveRunReplayGovernanceExperimentCount() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.governance_experiments || []).length
+          : 0;
+      },
+
+
       liveRunReplayAgentRuns() {
         return this.replayDetail?.run?.id === this.liveRun?.id
           ? (this.replayDetail.agent_runs || [])
@@ -2180,6 +2205,20 @@
       },
 
 
+      liveRunReplayGovernanceProposals() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.governance_proposals || [])
+          : [];
+      },
+
+
+      liveRunReplayGovernanceExperiments() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.governance_experiments || [])
+          : [];
+      },
+
+
       liveRunReplayAgentRunSummary(agentRun) {
         return [
           agentRun?.agent_key || "agent",
@@ -2233,6 +2272,59 @@
           finding?.severity || "severity:N/A",
           finding?.status || "status:N/A"
         ].join(" · ");
+      },
+
+
+      liveRunReplayGovernanceProposalSummary(proposal) {
+        return [
+          proposal?.proposal_type || "proposal_type:N/A",
+          proposal?.status || "status:N/A",
+          `${(proposal?.source_finding_ids || []).length} findings`,
+          `${(proposal?.experiments || []).length} experiments`
+        ].join(" · ");
+      },
+
+
+      liveRunReplayGovernanceExperimentSummary(experiment) {
+        return [
+          experiment?.experiment_type || "experiment_type:N/A",
+          experiment?.status || "status:N/A",
+          experiment?.proposal_status || "proposal_status:N/A"
+        ].join(" · ");
+      },
+
+
+      liveRunReplayGovernanceProposalPath(proposal) {
+        const proposalId = String(typeof proposal === "string" ? proposal : proposal?.id || "").trim();
+        return proposalId ? buildGovernanceProposalPath(proposalId) : "";
+      },
+
+
+      liveRunReplayGovernanceExperimentPath(experiment) {
+        const experimentId = String(typeof experiment === "string" ? experiment : experiment?.id || "").trim();
+        if (experimentId) {
+          return buildGovernanceExperimentsPath({ experiment_id: experimentId });
+        }
+        const proposalId = String(experiment?.proposal_id || "").trim();
+        return proposalId ? buildGovernanceExperimentsPath({ proposal_id: proposalId }) : "";
+      },
+
+
+      openLiveRunReplayGovernanceProposal(proposal) {
+        const path = this.liveRunReplayGovernanceProposalPath(proposal);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
+      },
+
+
+      openLiveRunReplayGovernanceExperiment(experiment) {
+        const path = this.liveRunReplayGovernanceExperimentPath(experiment);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
       },
 
 

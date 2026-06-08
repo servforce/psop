@@ -105,7 +105,18 @@ function loadEvaluationHarness(locationSearch = "") {
           const query = params.toString();
           return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
         },
-        buildPlatformMemoryEntryPath: (memoryId) => `/admin/platform/memory/${memoryId}`
+        buildPlatformMemoryEntryPath: (memoryId) => `/admin/platform/memory/${memoryId}`,
+        buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
+        buildGovernanceExperimentsPath: (filters = {}) => buildFilteredPath(
+          "/admin/governance/experiments",
+          filters,
+          ["experiment_id", "proposal_id", "status", "experiment_type"]
+        ),
+        buildToolAuthorizationsPath: (filters = {}) => buildFilteredPath(
+          "/admin/platform/tool-authorizations",
+          filters,
+          ["status", "tool_name"]
+        )
       }
     },
     WebSocket: FakeWebSocket,
@@ -309,9 +320,31 @@ test("evaluation finding evidence refs build run replay deep links", () => {
       { kind: "trace_event", id: "trace-legacy", event_type: "runtime.failed" }
     ]
   };
+  const findingWithAgentEvidence = {
+    id: "finding-5",
+    run_id: "run-5",
+    evidence_refs: [
+      { kind: "agent_event", id: "agent-event-1", agent_run_id: "agent-run-1" },
+      { kind: "agent_model_call", id: "model-call-1", agent_run_id: "agent-run-1" },
+      { kind: "agent_tool_call", id: "tool-call-1", agent_run_id: "agent-run-1" },
+      { kind: "agent_tool_authorization", id: "auth-1", agent_run_id: "agent-run-1" },
+      { kind: "psop_improvement_proposal", id: "proposal-1" },
+      { kind: "psop_improvement_experiment", id: "experiment-1" },
+      { kind: "agent_memory_entry", id: "memory-1" }
+    ]
+  };
+  const findingWithAuthorizationListEvidence = {
+    id: "finding-6",
+    evidence_refs: [
+      { kind: "tool_authorization", tool_name: "psop.agent_version.activate", status: "pending" }
+    ]
+  };
 
   expect(methods.evaluationRunReplayPath({ run_id: "run-1" })).toBe("/admin/runs/run-1/live/replay");
   expect(methods.findingRunReplayPath.call(context, findingWithRun, findingWithRun.evidence_refs[0])).toBe(
+    "/admin/runs/run-1/live/replay?trace_id=trace-1"
+  );
+  expect(methods.findingEvidencePath.call(context, findingWithRun, findingWithRun.evidence_refs[0])).toBe(
     "/admin/runs/run-1/live/replay?trace_id=trace-1"
   );
   expect(methods.findingRunReplayPath.call(context, findingWithoutRun, findingWithoutRun.evidence_refs[0])).toBe(
@@ -326,18 +359,51 @@ test("evaluation finding evidence refs build run replay deep links", () => {
   expect(methods.findingRunReplayPath.call(context, findingWithLegacyRefs, findingWithLegacyRefs.evidence_refs[1])).toBe(
     "/admin/runs/run-4/live/replay?trace_id=trace-legacy"
   );
+  expect(methods.findingEvidencePath.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[0])).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=events&event_id=agent-event-1"
+  );
+  expect(methods.findingEvidencePath.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[1])).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=model&model_call_id=model-call-1"
+  );
+  expect(methods.findingEvidencePath.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[2])).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-call-1"
+  );
+  expect(methods.findingEvidencePath.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[3])).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-1"
+  );
+  expect(methods.findingEvidencePath.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[4])).toBe(
+    "/admin/governance/proposals/proposal-1"
+  );
+  expect(methods.findingEvidencePath.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[5])).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-1"
+  );
+  expect(methods.findingEvidencePath.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[6])).toBe(
+    "/admin/platform/memory/memory-1"
+  );
+  expect(methods.findingEvidencePath.call(
+    context,
+    findingWithAuthorizationListEvidence,
+    findingWithAuthorizationListEvidence.evidence_refs[0]
+  )).toBe(
+    "/admin/platform/tool-authorizations?status=pending&tool_name=psop.agent_version.activate"
+  );
+  expect(methods.canOpenFindingEvidence.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[0])).toBe(true);
   expect(methods.canOpenFindingEvidenceReplay.call(context, findingWithoutRun)).toBe(true);
 
   methods.openFindingEvidenceReplay.call(context, findingWithRun, findingWithRun.evidence_refs[0]);
+  methods.openFindingEvidence.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[3]);
 
   expect(context.navigate).toHaveBeenCalledWith("/admin/runs/run-1/live/replay?trace_id=trace-1");
+  expect(context.navigate).toHaveBeenCalledWith(
+    "/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-1"
+  );
 
   const htmlReport = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-reports.html"), "utf8");
   const htmlFindings = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-findings.html"), "utf8");
-  expect(htmlReport).toContain("openFindingEvidenceReplay(finding, ref, currentEvaluation)");
-  expect(htmlFindings).toContain("openFindingEvidenceReplay(finding, ref)");
-  expect(htmlReport).toContain("canOpenFindingEvidenceReplay(finding, currentEvaluation)");
-  expect(htmlFindings).toContain("canOpenFindingEvidenceReplay(finding)");
+  expect(htmlReport).toContain("openFindingEvidence(finding, ref, currentEvaluation)");
+  expect(htmlFindings).toContain("openFindingEvidence(finding, ref)");
+  expect(htmlReport).toContain("canOpenFindingEvidence(finding, ref, currentEvaluation)");
+  expect(htmlFindings).toContain("canOpenFindingEvidence(finding, ref)");
 });
 
 test("evaluation report links evaluator AgentRun details", () => {

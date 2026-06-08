@@ -74,6 +74,11 @@ function loadGovernanceHarness(locationSearch = "") {
       PSOPConsoleHelpers: {
         buildSkillDetailPath: (skillId) => `/admin/skills/${skillId}`,
         buildEvaluationReportPath: (evaluationId) => `/admin/evaluations/${evaluationId}`,
+        buildEvaluationFindingsPath: (filters = {}) => buildFilteredPath(
+          "/admin/evaluations/findings",
+          filters,
+          ["status", "category", "severity", "run_id", "pskill_definition_id"]
+        ),
         buildGovernanceProposalsPath: (filters = {}) => buildFilteredPath(
           "/admin/governance/proposals",
           filters,
@@ -120,6 +125,7 @@ function loadGovernanceHarness(locationSearch = "") {
           const query = params.toString();
           return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
         },
+        buildReplayTracePath: (traceId) => `/admin/replay/traces/${traceId}`,
         resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`
       }
     },
@@ -195,6 +201,75 @@ test("governance proposal opens governance AgentRun details", () => {
   expect(html).toContain("currentGovernanceProposal.agent_run_id");
   expect(html).toContain("governanceProposalMemoryEntries");
   expect(html).toContain("openGovernanceProposalMemoryEntry(memory)");
+});
+
+test("governance proposal evidence refs expose navigation links", () => {
+  const methods = loadGovernanceMethods();
+  const proposal = {
+    id: "proposal-1",
+    agent_run_id: "governance-agent-run-1",
+    source_run_id: "runtime-run-1",
+    source_evaluation_id: "evaluation-1",
+    evidence_refs: [
+      { kind: "run_evaluation", id: "evaluation-1" },
+      { kind: "run_evaluation_finding", id: "finding-1" },
+      { kind: "run_replay", run_id: "runtime-run-1" },
+      { kind: "run_trace", id: "trace-1" },
+      { kind: "run_event", id: "event-1" },
+      { kind: "agent_tool_authorization", id: "authorization-1", agent_run_id: "governance-agent-run-1" },
+      { kind: "psop_improvement_experiment", id: "experiment-1" },
+      { kind: "memory", id: "memory-1" }
+    ]
+  };
+
+  const links = methods.governanceProposalEvidenceLinks.call(methods, proposal);
+
+  expect(links.map((item) => item.key)).toEqual([
+    "evaluation-evaluation-1",
+    "finding-finding-1",
+    "run-replay-runtime-run-1",
+    "run-trace-trace-1",
+    "run-event-event-1",
+    "authorization-authorization-1",
+    "experiment-experiment-1",
+    "memory-memory-1"
+  ]);
+  expect(links.find((item) => item.key === "evaluation-evaluation-1").href).toBe(
+    "/admin/evaluations/evaluation-1"
+  );
+  expect(links.find((item) => item.key === "finding-finding-1").href).toBe(
+    "/admin/evaluations/evaluation-1"
+  );
+  expect(links.find((item) => item.key === "run-trace-trace-1").href).toBe(
+    "/admin/runs/runtime-run-1/live/replay?trace_id=trace-1"
+  );
+  expect(links.find((item) => item.key === "run-event-event-1").href).toBe(
+    "/admin/runs/runtime-run-1/live/replay?event_id=event-1"
+  );
+  expect(links.find((item) => item.key === "authorization-authorization-1").href).toBe(
+    "/admin/platform/agent-runs/governance-agent-run-1?tab=authorizations&authorization_id=authorization-1"
+  );
+  expect(links.find((item) => item.key === "experiment-experiment-1").href).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-1"
+  );
+  expect(links.find((item) => item.key === "memory-memory-1").href).toBe(
+    "/admin/platform/memory/memory-1"
+  );
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/governance-proposals.html"), "utf8");
+  expect(html).toContain("governanceProposalEvidenceLinks(currentGovernanceProposal)");
+  expect(html).toContain("@click=\"navigate(link.href)\"");
+});
+
+test("governance proposal run trace evidence can fall back to replay trace route", () => {
+  const methods = loadGovernanceMethods();
+  const link = methods.governanceProposalEvidenceLink.call(
+    methods,
+    { id: "proposal-1" },
+    { kind: "run_trace", id: "trace-without-run" }
+  );
+
+  expect(link.href).toBe("/admin/replay/traces/trace-without-run");
 });
 
 test("governance proposal filters sync from URL and replace location", async () => {
@@ -310,12 +385,18 @@ test("governance methods build tool authorization context links", () => {
     run_event_id: "event-1",
     tool_arguments_summary: {
       package_name: "pskill.runner",
-      nested: { evaluation_id: "eval-1" }
+      nested: {
+        evaluation_id: "eval-1",
+        run_evaluation_finding_id: "finding-1",
+        run_trace_id: "trace-1"
+      }
     },
     request_payload: {
       decision: {
         arguments_summary: {
           proposal_id: "proposal-1",
+          experiment_id: "experiment-1",
+          snapshot_seq: 4,
           agent_key: "psop.governance"
         }
       }
@@ -335,7 +416,11 @@ test("governance methods build tool authorization context links", () => {
     "run-replay-runtime-run-1",
     "run-event-event-1",
     "proposal-proposal-1",
+    "experiment-experiment-1",
     "evaluation-eval-1",
+    "finding-finding-1",
+    "run-trace-trace-1",
+    "snapshot-4",
     "skill-package-pskill.runner",
     "agent-psop.governance",
     "memory-memory-1"
@@ -354,6 +439,18 @@ test("governance methods build tool authorization context links", () => {
   );
   expect(links.find((item) => item.key === "proposal-proposal-1").href).toBe(
     "/admin/governance/proposals/proposal-1"
+  );
+  expect(links.find((item) => item.key === "experiment-experiment-1").href).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-1"
+  );
+  expect(links.find((item) => item.key === "finding-finding-1").href).toBe(
+    "/admin/evaluations/eval-1"
+  );
+  expect(links.find((item) => item.key === "run-trace-trace-1").href).toBe(
+    "/admin/runs/runtime-run-1/live/replay?trace_id=trace-1"
+  );
+  expect(links.find((item) => item.key === "snapshot-4").href).toBe(
+    "/admin/runs/runtime-run-1/live/replay?snapshot_seq=4"
   );
 });
 
@@ -666,7 +763,8 @@ test("governance methods manage experiment proposal actions and metric compariso
       outcome: "canary_running",
       checks: [{ kind: "regression" }],
       canary_scope: { cohort: "internal" },
-      rollback_conditions: ["metric_regression"]
+      rollback_conditions: ["metric_regression"],
+      evidence_refs: [{ kind: "run_event", id: "run-event-1" }]
     },
     canary_scope: { cohort: "internal" },
     rollback_conditions: ["metric_regression"],
@@ -674,10 +772,27 @@ test("governance methods manage experiment proposal actions and metric compariso
   };
   const proposal = {
     id: "proposal-1",
+    agent_run_id: "governance-agent-run-1",
     status: "approved",
     proposal_type: "agent_skill_update",
     problem_statement: "adjust agent",
+    source_evaluation_id: "evaluation-1",
     source_run_id: "run-1",
+    source_finding_ids: ["finding-1"],
+    source_findings: [
+      {
+        id: "finding-1",
+        evaluation_id: "evaluation-1",
+        run_id: "run-1",
+        status: "converted_to_proposal",
+        category: "runner_issue",
+        severity: "high"
+      }
+    ],
+    evidence_refs: [
+      { kind: "run_trace", id: "trace-1" },
+      { kind: "agent_tool_authorization", id: "auth-1" }
+    ],
     experiments: [experiment]
   };
   const updatedProposal = {
@@ -723,6 +838,30 @@ test("governance methods manage experiment proposal actions and metric compariso
   expect(context.apiRequest).toHaveBeenCalledWith("/governance/proposals/proposal-1");
   expect(context.governanceExperimentProposal.status).toBe("approved");
   expect(methods.governanceCanActivateCanary(methods.governanceExperimentProposalContext.call(context))).toBe(true);
+  const evidenceLinks = methods.governanceExperimentEvidenceLinks.call(context, experiment);
+  expect(evidenceLinks.map((item) => item.key)).toEqual([
+    "experiment-experiment-1",
+    "proposal-proposal-1",
+    "agent-run-governance-agent-run-1",
+    "run-replay-run-1",
+    "evaluation-evaluation-1",
+    "finding-finding-1",
+    "run-trace-trace-1",
+    "authorization-auth-1",
+    "run-event-run-event-1"
+  ]);
+  expect(evidenceLinks.find((item) => item.key === "agent-run-governance-agent-run-1").href).toBe(
+    "/admin/platform/agent-runs/governance-agent-run-1?tab=events"
+  );
+  expect(evidenceLinks.find((item) => item.key === "finding-finding-1").href).toBe(
+    "/admin/evaluations/evaluation-1"
+  );
+  expect(evidenceLinks.find((item) => item.key === "authorization-auth-1").href).toBe(
+    "/admin/platform/agent-runs/governance-agent-run-1?tab=authorizations&authorization_id=auth-1"
+  );
+  expect(evidenceLinks.find((item) => item.key === "run-event-run-event-1").href).toBe(
+    "/admin/runs/run-1/live/replay?event_id=run-event-1"
+  );
 
   const contextOnlyExperiment = { id: "experiment-context", proposal_id: "proposal-1" };
   expect(methods.governanceExperimentReplayPath.call(context, contextOnlyExperiment)).toBe(
@@ -743,6 +882,7 @@ test("governance methods manage experiment proposal actions and metric compariso
 
   const html = fs.readFileSync(path.join(__dirname, "../../../pages/governance-experiments.html"), "utf8");
   expect(html).toContain("selectGovernanceExperiment(experiment)");
+  expect(html).toContain("governanceExperimentEvidenceLinks(governanceExperimentDetail)");
   expect(html).toContain("governanceExperimentMetricRows(governanceExperimentDetail)");
   expect(html).toContain("openGovernanceExperimentReplay(governanceExperimentDetail)");
   expect(html).toContain("activateCanaryFromGovernanceExperiment(governanceExperimentDetail)");

@@ -5,7 +5,10 @@
     buildEvaluationFindingsPath,
     buildReplayPath,
     buildPlatformAgentRunPath,
-    buildPlatformMemoryEntryPath
+    buildPlatformMemoryEntryPath,
+    buildGovernanceProposalPath,
+    buildGovernanceExperimentsPath,
+    buildToolAuthorizationsPath
   } = window.PSOPConsoleHelpers || {};
 
   const EVALUATION_OUTCOME_OPTIONS = [
@@ -934,6 +937,133 @@
       const path = this.findingRunReplayPath(finding, ref, evaluation);
       if (!path) {
         this.showNotice?.("error", "Finding 缺少 Run 关联，无法打开 Replay。");
+        return;
+      }
+      return this.navigate(path);
+    },
+
+    findingEvidencePath(finding, ref = null, evaluation = this.currentEvaluation) {
+      if (!ref || typeof ref !== "object") {
+        return this.findingRunReplayPath(finding, ref, evaluation);
+      }
+      const kind = this.evaluationNormalizeEvidenceKind(ref.kind || ref.source_kind).replace(/-/g, "_");
+      const id = this.findingEvidenceRefId(ref);
+      if (["run_trace", "run_event", "run", "session_token_snapshot", "snapshot"].includes(kind)) {
+        return this.findingRunReplayPath(finding, ref, evaluation);
+      }
+      if (["agent_run", "agentrun"].includes(kind)) {
+        const agentRunId = String(ref.agent_run_id || id).trim();
+        return agentRunId && typeof buildPlatformAgentRunPath === "function"
+          ? buildPlatformAgentRunPath(agentRunId, { tab: "events" })
+          : "";
+      }
+      if (["agent_event", "agent_run_event"].includes(kind)) {
+        const agentRunId = this.findingEvidenceAgentRunId(finding, ref, evaluation);
+        return agentRunId && id && typeof buildPlatformAgentRunPath === "function"
+          ? buildPlatformAgentRunPath(agentRunId, { tab: "events", event_id: id })
+          : "";
+      }
+      if (["agent_model_call", "model_call"].includes(kind)) {
+        const agentRunId = this.findingEvidenceAgentRunId(finding, ref, evaluation);
+        return agentRunId && id && typeof buildPlatformAgentRunPath === "function"
+          ? buildPlatformAgentRunPath(agentRunId, { tab: "model", model_call_id: id })
+          : "";
+      }
+      if (["agent_tool_call", "tool_call"].includes(kind)) {
+        const agentRunId = this.findingEvidenceAgentRunId(finding, ref, evaluation);
+        return agentRunId && id && typeof buildPlatformAgentRunPath === "function"
+          ? buildPlatformAgentRunPath(agentRunId, { tab: "tools", tool_call_id: id })
+          : "";
+      }
+      if (["agent_tool_authorization", "tool_authorization"].includes(kind)) {
+        const authorizationId = String(ref.authorization_id || ref.tool_authorization_id || id).trim();
+        const agentRunId = this.findingEvidenceAgentRunId(finding, ref, evaluation);
+        if (agentRunId && authorizationId && typeof buildPlatformAgentRunPath === "function") {
+          return buildPlatformAgentRunPath(agentRunId, { tab: "authorizations", authorization_id: authorizationId });
+        }
+        return typeof buildToolAuthorizationsPath === "function"
+          ? buildToolAuthorizationsPath({ status: ref.status || "", tool_name: ref.tool_name || "" })
+          : "";
+      }
+      if (["run_evaluation", "evaluation"].includes(kind)) {
+        const evaluationId = String(ref.evaluation_id || id).trim();
+        return evaluationId ? this.evaluationReportPath(evaluationId) : "";
+      }
+      if (["run_evaluation_finding", "evaluation_finding", "finding"].includes(kind)) {
+        const evaluationId = String(ref.evaluation_id || finding?.evaluation_id || evaluation?.id || "").trim();
+        return evaluationId ? this.evaluationReportPath(evaluationId) : this.evaluationFindingsPath({
+          run_id: ref.run_id || finding?.run_id || evaluation?.run_id || "",
+          status: ref.status || "",
+          category: ref.category || finding?.category || "",
+          severity: ref.severity || finding?.severity || "",
+          pskill_definition_id: ref.pskill_definition_id || finding?.pskill_definition_id || ""
+        });
+      }
+      if (["psop_improvement_proposal", "governance_proposal", "proposal"].includes(kind)) {
+        const proposalId = String(ref.proposal_id || id).trim();
+        return proposalId && typeof buildGovernanceProposalPath === "function"
+          ? buildGovernanceProposalPath(proposalId)
+          : "";
+      }
+      if (["psop_improvement_experiment", "governance_experiment", "experiment"].includes(kind)) {
+        const experimentId = String(ref.experiment_id || id).trim();
+        return experimentId && typeof buildGovernanceExperimentsPath === "function"
+          ? buildGovernanceExperimentsPath({ experiment_id: experimentId })
+          : "";
+      }
+      if (["agent_memory_entry", "memory_entry", "memory"].includes(kind)) {
+        const memoryId = String(ref.memory_entry_id || ref.memory_id || id).trim();
+        return memoryId && typeof buildPlatformMemoryEntryPath === "function"
+          ? buildPlatformMemoryEntryPath(memoryId)
+          : "";
+      }
+      return "";
+    },
+
+    findingEvidenceRefId(ref) {
+      return String(
+        ref?.id ||
+        ref?.source_id ||
+        ref?.run_trace_id ||
+        ref?.trace_id ||
+        ref?.run_event_id ||
+        ref?.event_id ||
+        ref?.agent_event_id ||
+        ref?.model_call_id ||
+        ref?.agent_model_call_id ||
+        ref?.tool_call_id ||
+        ref?.agent_tool_call_id ||
+        ref?.authorization_id ||
+        ref?.tool_authorization_id ||
+        ref?.evaluation_id ||
+        ref?.finding_id ||
+        ref?.proposal_id ||
+        ref?.experiment_id ||
+        ref?.memory_entry_id ||
+        ref?.memory_id ||
+        ref?.agent_run_id ||
+        ""
+      ).trim();
+    },
+
+    findingEvidenceAgentRunId(finding, ref = {}, evaluation = this.currentEvaluation) {
+      return String(
+        ref?.agent_run_id ||
+        ref?.owner_agent_run_id ||
+        finding?.agent_run_id ||
+        evaluation?.agent_run_id ||
+        ""
+      ).trim();
+    },
+
+    canOpenFindingEvidence(finding, ref = null, evaluation = this.currentEvaluation) {
+      return Boolean(this.findingEvidencePath(finding, ref, evaluation));
+    },
+
+    openFindingEvidence(finding, ref = null, evaluation = this.currentEvaluation) {
+      const path = this.findingEvidencePath(finding, ref, evaluation);
+      if (!path) {
+        this.showNotice?.("error", "Finding evidence 缺少可跳转上下文。");
         return;
       }
       return this.navigate(path);

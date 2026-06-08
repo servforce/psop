@@ -70,6 +70,8 @@ function loadRuntimeHarness(locationSearch = "") {
     "buildPlatformAgentRunPath",
     "buildEvaluationReportPath",
     "buildEvaluationFindingsPath",
+    "buildGovernanceProposalPath",
+    "buildGovernanceExperimentsPath",
     "generateSkillKey",
     "resolveApiBaseUrl",
     "resolveWsUrl",
@@ -147,7 +149,31 @@ function loadRuntimeHarness(locationSearch = "") {
     return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
   };
   context.window.PSOPConsoleHelpers.buildEvaluationReportPath = (evaluationId) => `/admin/evaluations/${evaluationId}`;
-  context.window.PSOPConsoleHelpers.buildEvaluationFindingsPath = () => "/admin/evaluations/findings";
+  context.window.PSOPConsoleHelpers.buildEvaluationFindingsPath = (filters = {}) => {
+    const params = new URLSearchParams();
+    for (const key of ["status", "category", "severity", "run_id", "pskill_definition_id"]) {
+      const value = String(filters?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `/admin/evaluations/findings?${query}` : "/admin/evaluations/findings";
+  };
+  context.window.PSOPConsoleHelpers.buildGovernanceProposalPath = (proposalId) => (
+    `/admin/governance/proposals/${proposalId}`
+  );
+  context.window.PSOPConsoleHelpers.buildGovernanceExperimentsPath = (filters = {}) => {
+    const params = new URLSearchParams();
+    for (const key of ["experiment_id", "proposal_id", "status", "experiment_type"]) {
+      const value = String(filters?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `/admin/governance/experiments?${query}` : "/admin/governance/experiments";
+  };
   context.window.PSOPConsoleHelpers.resolveWsUrl = (_apiBaseUrl, pathname) => `ws://localhost${pathname}`;
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -755,10 +781,31 @@ test("run replay exposes closed-loop evidence counts", () => {
       run_evaluation_findings: [
         {
           id: "finding-1",
+          evaluation_id: "evaluation-1",
           run_id: "run-1",
           category: "runner_issue",
           severity: "high",
           status: "open"
+        }
+      ],
+      governance_proposals: [
+        {
+          id: "proposal-1",
+          proposal_type: "agent_skill_update",
+          status: "testing",
+          problem_statement: "Improve runner failure handling.",
+          source_finding_ids: ["finding-1"],
+          experiments: [{ id: "experiment-1" }]
+        }
+      ],
+      governance_experiments: [
+        {
+          id: "experiment-1",
+          proposal_id: "proposal-1",
+          proposal_status: "testing",
+          experiment_type: "regression",
+          status: "succeeded",
+          summary: "Regression checks completed."
         }
       ]
     }
@@ -771,6 +818,8 @@ test("run replay exposes closed-loop evidence counts", () => {
   expect(methods.liveRunReplayToolAuthorizationCount.call(context)).toBe(1);
   expect(methods.liveRunReplayEvaluationCount.call(context)).toBe(1);
   expect(methods.liveRunReplayFindingCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayGovernanceProposalCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayGovernanceExperimentCount.call(context)).toBe(1);
   expect(methods.liveRunReplayAgentRuns.call(context)).toEqual(context.replayDetail.agent_runs);
   expect(methods.liveRunReplayAgentEvents.call(context)).toEqual(context.replayDetail.agent_events);
   expect(methods.liveRunReplayModelCalls.call(context)).toEqual(context.replayDetail.agent_model_calls);
@@ -780,6 +829,8 @@ test("run replay exposes closed-loop evidence counts", () => {
   );
   expect(methods.liveRunReplayEvaluations.call(context)).toEqual(context.replayDetail.run_evaluations);
   expect(methods.liveRunReplayFindings.call(context)).toEqual(context.replayDetail.run_evaluation_findings);
+  expect(methods.liveRunReplayGovernanceProposals.call(context)).toEqual(context.replayDetail.governance_proposals);
+  expect(methods.liveRunReplayGovernanceExperiments.call(context)).toEqual(context.replayDetail.governance_experiments);
   expect(methods.liveRunReplayAgentRunSummary(context.replayDetail.agent_runs[0])).toBe(
     "pskill.runner · succeeded · runtime"
   );
@@ -797,6 +848,12 @@ test("run replay exposes closed-loop evidence counts", () => {
   );
   expect(methods.liveRunReplayFindingSummary(context.replayDetail.run_evaluation_findings[0])).toBe(
     "runner_issue · high · open"
+  );
+  expect(methods.liveRunReplayGovernanceProposalSummary(context.replayDetail.governance_proposals[0])).toBe(
+    "agent_skill_update · testing · 1 findings · 1 experiments"
+  );
+  expect(methods.liveRunReplayGovernanceExperimentSummary(context.replayDetail.governance_experiments[0])).toBe(
+    "regression · succeeded · testing"
   );
   expect(methods.liveRunReplayAgentRunPath.call(context, "agent-run-1", { tab: "events" })).toBe(
     "/admin/platform/agent-runs/agent-run-1?tab=events"
@@ -817,7 +874,23 @@ test("run replay exposes closed-loop evidence counts", () => {
     "/admin/evaluations/evaluation-1"
   );
   expect(methods.liveRunReplayFindingPath.call(context, context.replayDetail.run_evaluation_findings[0])).toBe(
-    "/admin/evaluations/findings?run_id=run-1"
+    "/admin/evaluations/evaluation-1"
+  );
+  expect(methods.liveRunReplayFindingPath.call(context, {
+    id: "finding-2",
+    run_id: "run-1",
+    category: "tool_issue",
+    severity: "medium",
+    status: "accepted",
+    pskill_definition_id: "pskill-1"
+  })).toBe(
+    "/admin/evaluations/findings?status=accepted&category=tool_issue&severity=medium&run_id=run-1&pskill_definition_id=pskill-1"
+  );
+  expect(methods.liveRunReplayGovernanceProposalPath(context.replayDetail.governance_proposals[0])).toBe(
+    "/admin/governance/proposals/proposal-1"
+  );
+  expect(methods.liveRunReplayGovernanceExperimentPath(context.replayDetail.governance_experiments[0])).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-1"
   );
 
   const navigationContext = { ...context, navigate: jest.fn() };
@@ -825,8 +898,12 @@ test("run replay exposes closed-loop evidence counts", () => {
   expect(navigationContext.navigate).toHaveBeenCalledWith("/admin/platform/agent-runs/agent-run-1?tab=events");
   methods.openLiveRunReplayEvaluation.call(navigationContext, context.replayDetail.run_evaluations[0]);
   methods.openLiveRunReplayFinding.call(navigationContext, context.replayDetail.run_evaluation_findings[0]);
+  methods.openLiveRunReplayGovernanceProposal.call(navigationContext, context.replayDetail.governance_proposals[0]);
+  methods.openLiveRunReplayGovernanceExperiment.call(navigationContext, context.replayDetail.governance_experiments[0]);
   expect(navigationContext.navigate).toHaveBeenCalledWith("/admin/evaluations/evaluation-1");
-  expect(navigationContext.navigate).toHaveBeenCalledWith("/admin/evaluations/findings?run_id=run-1");
+  expect(navigationContext.navigate).toHaveBeenCalledWith("/admin/evaluations/evaluation-1");
+  expect(navigationContext.navigate).toHaveBeenCalledWith("/admin/governance/proposals/proposal-1");
+  expect(navigationContext.navigate).toHaveBeenCalledWith("/admin/governance/experiments?experiment_id=experiment-1");
 
   const fallbackContext = {
     ...context,
@@ -851,8 +928,12 @@ test("run replay exposes closed-loop evidence counts", () => {
   expect(html).toContain("liveRunReplayToolAuthorizationCount()");
   expect(html).toContain("liveRunReplayEvaluationCount()");
   expect(html).toContain("liveRunReplayFindingCount()");
+  expect(html).toContain("liveRunReplayGovernanceProposalCount()");
+  expect(html).toContain("liveRunReplayGovernanceExperimentCount()");
   expect(html).toContain("liveRunReplayAgentRunSummary(agentRun)");
   expect(html).toContain("liveRunReplayFindingSummary(finding)");
+  expect(html).toContain("liveRunReplayGovernanceProposalSummary(proposal)");
+  expect(html).toContain("liveRunReplayGovernanceExperimentSummary(experiment)");
   expect(html).toContain("openLiveRunReplayAgentRun(agentRun, { tab: 'events' })");
   expect(html).toContain("liveRunReplayAgentEventPath(event)");
   expect(html).toContain("liveRunReplayModelCallPath(call)");
@@ -860,6 +941,8 @@ test("run replay exposes closed-loop evidence counts", () => {
   expect(html).toContain("liveRunReplayToolAuthorizationPath(authorization)");
   expect(html).toContain("openLiveRunReplayEvaluation(evaluation)");
   expect(html).toContain("openLiveRunReplayFinding(finding)");
+  expect(html).toContain("openLiveRunReplayGovernanceProposal(proposal)");
+  expect(html).toContain("openLiveRunReplayGovernanceExperiment(experiment)");
   expect(html).toContain("liveRunReplayAgentRunPath(selectedLiveRunReplayItem().agent_run_id");
 });
 

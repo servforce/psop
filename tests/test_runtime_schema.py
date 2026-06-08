@@ -36,5 +36,6 @@ def test_replay_detail_response_uses_run_event_and_run_trace_fields() -> None:
     fields = set(runtime_schemas.ReplayDetailResponse.model_fields)
 
     assert {"run_events", "run_traces"} <= fields
+    assert {"governance_proposals", "governance_experiments"} <= fields
     assert "terminal_events" not in fields
     assert "trace_events" not in fields

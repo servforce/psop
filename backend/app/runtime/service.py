@@ -27,6 +27,8 @@ from app.core.observability import current_trace_context, record_span_exception,
 from app.agent_prompts.service import AgentPromptService
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
 from app.evaluations.schemas import RunEvaluationFindingResponse, RunEvaluationResponse
+from app.governance.models import PsopImprovementExperiment, PsopImprovementProposal
+from app.governance.schemas import GovernanceExperimentResponse, GovernanceProposalResponse
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.schemas import RuntimeJobResponse
@@ -945,6 +947,18 @@ class RuntimeService:
         run_evaluations = self._list_replay_run_evaluations(session, run_id=run_id)
         run_evaluations_by_id = {evaluation.id: evaluation for evaluation in run_evaluations}
         run_evaluation_findings = self._list_replay_run_evaluation_findings(session, run_id=run_id)
+        governance_proposals = self._list_replay_governance_proposals(
+            session,
+            run_id=run_id,
+            run_evaluation_ids=set(run_evaluations_by_id),
+            run_evaluation_finding_ids={finding.id for finding in run_evaluation_findings},
+        )
+        governance_experiments = self._list_replay_governance_experiments(
+            session,
+            proposal_ids={proposal.id for proposal in governance_proposals},
+        )
+        governance_proposals_by_id = {proposal.id: proposal for proposal in governance_proposals}
+        governance_experiments_by_proposal = self._group_governance_experiments_by_proposal(governance_experiments)
         timeline = [self._build_timeline_item(event) for event in run_traces]
         timeline.extend(self._build_terminal_timeline_item(event) for event in run_events)
         timeline.sort(key=lambda item: (self._timeline_occurred_at_sort_key(item.occurred_at), item.seq_no, item.event_type))
@@ -977,6 +991,21 @@ class RuntimeService:
                     evaluation=run_evaluations_by_id.get(item.evaluation_id),
                 )
                 for item in run_evaluation_findings
+            ],
+            governance_proposals=[
+                self._build_governance_proposal_response(
+                    session,
+                    proposal,
+                    experiments=governance_experiments_by_proposal.get(proposal.id, []),
+                )
+                for proposal in governance_proposals
+            ],
+            governance_experiments=[
+                self._build_governance_experiment_response(
+                    experiment,
+                    proposal=governance_proposals_by_id.get(experiment.proposal_id),
+                )
+                for experiment in governance_experiments
             ],
         )
 
@@ -1237,6 +1266,106 @@ class RuntimeService:
                 .order_by(RunEvaluationFinding.created_at.asc(), RunEvaluationFinding.id.asc())
             ).all()
         )
+
+    @staticmethod
+    def _list_replay_governance_proposals(
+        session: Session,
+        *,
+        run_id: str,
+        run_evaluation_ids: set[str],
+        run_evaluation_finding_ids: set[str],
+    ) -> list[PsopImprovementProposal]:
+        proposals = list(
+            session.scalars(
+                select(PsopImprovementProposal)
+                .order_by(PsopImprovementProposal.created_at.asc(), PsopImprovementProposal.id.asc())
+            ).all()
+        )
+        return [
+            proposal
+            for proposal in proposals
+            if RuntimeService._governance_proposal_references_replay_run(
+                proposal,
+                run_id=run_id,
+                run_evaluation_ids=run_evaluation_ids,
+                run_evaluation_finding_ids=run_evaluation_finding_ids,
+            )
+        ]
+
+    @staticmethod
+    def _governance_proposal_references_replay_run(
+        proposal: PsopImprovementProposal,
+        *,
+        run_id: str,
+        run_evaluation_ids: set[str],
+        run_evaluation_finding_ids: set[str],
+    ) -> bool:
+        if proposal.source_run_id == run_id:
+            return True
+        if proposal.source_evaluation_id and proposal.source_evaluation_id in run_evaluation_ids:
+            return True
+        source_finding_ids = {str(item) for item in list(proposal.source_finding_ids or []) if item}
+        if source_finding_ids.intersection(run_evaluation_finding_ids):
+            return True
+        return RuntimeService._governance_evidence_refs_replay_run(
+            list(proposal.evidence_refs or []),
+            run_id=run_id,
+            run_evaluation_ids=run_evaluation_ids,
+            run_evaluation_finding_ids=run_evaluation_finding_ids,
+        )
+
+    @staticmethod
+    def _governance_evidence_refs_replay_run(
+        evidence_refs: list[Any],
+        *,
+        run_id: str,
+        run_evaluation_ids: set[str],
+        run_evaluation_finding_ids: set[str],
+    ) -> bool:
+        for ref in evidence_refs:
+            if not isinstance(ref, dict):
+                continue
+            ref_id = str(ref.get("id") or ref.get("source_id") or "").strip()
+            ref_run_id = str(ref.get("run_id") or ref.get("source_run_id") or "").strip()
+            ref_evaluation_id = str(ref.get("evaluation_id") or ref.get("run_evaluation_id") or "").strip()
+            ref_finding_id = str(ref.get("finding_id") or ref.get("run_evaluation_finding_id") or "").strip()
+            kind = str(ref.get("kind") or ref.get("source_kind") or "").strip()
+            if ref_run_id == run_id:
+                return True
+            if ref_evaluation_id in run_evaluation_ids or ref_finding_id in run_evaluation_finding_ids:
+                return True
+            if kind in {"run", "run_replay"} and ref_id == run_id:
+                return True
+            if kind == "run_evaluation" and ref_id in run_evaluation_ids:
+                return True
+            if kind == "run_evaluation_finding" and ref_id in run_evaluation_finding_ids:
+                return True
+        return False
+
+    @staticmethod
+    def _list_replay_governance_experiments(
+        session: Session,
+        *,
+        proposal_ids: set[str],
+    ) -> list[PsopImprovementExperiment]:
+        if not proposal_ids:
+            return []
+        return list(
+            session.scalars(
+                select(PsopImprovementExperiment)
+                .where(PsopImprovementExperiment.proposal_id.in_(proposal_ids))
+                .order_by(PsopImprovementExperiment.created_at.asc(), PsopImprovementExperiment.id.asc())
+            ).all()
+        )
+
+    @staticmethod
+    def _group_governance_experiments_by_proposal(
+        experiments: list[PsopImprovementExperiment],
+    ) -> dict[str, list[PsopImprovementExperiment]]:
+        grouped: dict[str, list[PsopImprovementExperiment]] = {}
+        for experiment in experiments:
+            grouped.setdefault(experiment.proposal_id, []).append(experiment)
+        return grouped
 
     def _append_step(
         self,
@@ -3311,6 +3440,132 @@ class RuntimeService:
             evaluation_created_at=evaluation.created_at if evaluation else None,
             created_at=finding.created_at,
         )
+
+    def _build_governance_proposal_response(
+        self,
+        session: Session,
+        proposal: PsopImprovementProposal,
+        *,
+        experiments: list[PsopImprovementExperiment],
+    ) -> GovernanceProposalResponse:
+        return GovernanceProposalResponse(
+            id=proposal.id,
+            agent_run_id=proposal.agent_run_id,
+            source_finding_ids=list(proposal.source_finding_ids or []),
+            source_findings=[
+                response
+                for finding_id in list(proposal.source_finding_ids or [])
+                if (response := self._build_governance_source_finding_response(session, str(finding_id))) is not None
+            ],
+            source_evaluation_id=proposal.source_evaluation_id,
+            source_run_id=proposal.source_run_id,
+            proposal_type=proposal.proposal_type,
+            target=proposal.target_json,
+            problem_statement=proposal.problem_statement,
+            evidence_refs=list(proposal.evidence_refs or []),
+            proposed_changes=list(proposal.proposed_changes or []),
+            risk_assessment=proposal.risk_assessment,
+            required_tests=list(proposal.required_tests or []),
+            activation_plan=proposal.activation_plan,
+            status=proposal.status,
+            experiments=[
+                self._build_governance_experiment_response(experiment, proposal=proposal)
+                for experiment in experiments
+            ],
+            created_at=proposal.created_at,
+            updated_at=proposal.updated_at,
+        )
+
+    def _build_governance_source_finding_response(
+        self,
+        session: Session,
+        finding_id: str,
+    ) -> RunEvaluationFindingResponse | None:
+        finding = session.get(RunEvaluationFinding, finding_id)
+        if not finding:
+            return None
+        evaluation = session.get(RunEvaluation, finding.evaluation_id)
+        return self._build_run_evaluation_finding_response(finding, evaluation=evaluation)
+
+    def _build_governance_experiment_response(
+        self,
+        experiment: PsopImprovementExperiment,
+        *,
+        proposal: PsopImprovementProposal | None = None,
+    ) -> GovernanceExperimentResponse:
+        return GovernanceExperimentResponse(
+            id=experiment.id,
+            proposal_id=experiment.proposal_id,
+            proposal_status=proposal.status if proposal else "",
+            proposal_type=proposal.proposal_type if proposal else "",
+            problem_statement=proposal.problem_statement if proposal else "",
+            source_run_id=proposal.source_run_id if proposal else None,
+            experiment_type=experiment.experiment_type,
+            status=experiment.status,
+            summary=experiment.summary,
+            before_metrics=experiment.before_metrics,
+            after_metrics=experiment.after_metrics,
+            result=experiment.result_json,
+            canary_scope=self._governance_experiment_canary_scope(experiment, proposal=proposal),
+            rollback_conditions=self._governance_experiment_rollback_conditions(experiment, proposal=proposal),
+            started_at=experiment.started_at,
+            finished_at=experiment.finished_at,
+            created_at=experiment.created_at,
+        )
+
+    @staticmethod
+    def _governance_canary_scope(proposal: PsopImprovementProposal) -> dict[str, Any]:
+        activation_plan = proposal.activation_plan or {}
+        nested = activation_plan.get("canary")
+        if isinstance(nested, dict) and isinstance(nested.get("scope"), dict):
+            return dict(nested["scope"])
+        direct = activation_plan.get("canary_scope")
+        if isinstance(direct, dict):
+            return dict(direct)
+        return {
+            "strategy": activation_plan.get("strategy", "test_review_canary_rollback"),
+            "source_run_id": proposal.source_run_id,
+            "proposal_type": proposal.proposal_type,
+        }
+
+    @staticmethod
+    def _governance_rollback_conditions(proposal: PsopImprovementProposal) -> list[Any]:
+        activation_plan = proposal.activation_plan or {}
+        nested = activation_plan.get("rollback")
+        if isinstance(nested, dict) and isinstance(nested.get("conditions"), list):
+            return list(nested["conditions"])
+        direct = activation_plan.get("rollback_conditions")
+        if isinstance(direct, list):
+            return list(direct)
+        return [
+            "canary_metric_regression",
+            "manual_review_rejects_canary",
+            "unexpected_runtime_or_tool_authorization_failure",
+        ]
+
+    def _governance_experiment_canary_scope(
+        self,
+        experiment: PsopImprovementExperiment,
+        *,
+        proposal: PsopImprovementProposal | None = None,
+    ) -> dict[str, Any]:
+        result = experiment.result_json or {}
+        result_scope = result.get("canary_scope")
+        if isinstance(result_scope, dict):
+            return dict(result_scope)
+        return self._governance_canary_scope(proposal) if proposal else {}
+
+    def _governance_experiment_rollback_conditions(
+        self,
+        experiment: PsopImprovementExperiment,
+        *,
+        proposal: PsopImprovementProposal | None = None,
+    ) -> list[Any]:
+        result = experiment.result_json or {}
+        result_conditions = result.get("rollback_conditions")
+        if isinstance(result_conditions, list):
+            return list(result_conditions)
+        return self._governance_rollback_conditions(proposal) if proposal else []
 
     @staticmethod
     def _build_run_binding_response(binding: RunCapabilityBinding) -> RunCapabilityBindingResponse:

@@ -86,6 +86,8 @@ def test_materials_to_governance_closed_loop(monkeypatch) -> None:
         finding = evaluation["findings"][0]
         proposal_response = client.post(f"/api/v1/evaluations/findings/{finding['id']}/create-proposal")
         proposal = proposal_response.json()
+        run_tests_response = client.post(f"/api/v1/governance/proposals/{proposal['id']}/run-tests")
+        replay_after_governance_response = client.get(f"/api/v1/replay/runs/{run_id}")
         governance_agent_run_response = client.get(f"/api/v1/agent-runs/{proposal['agent_run_id']}")
         governance_authorizations_response = client.get(
             f"/api/v1/agent-runs/{proposal['agent_run_id']}/tool-authorizations"
@@ -136,3 +138,16 @@ def test_materials_to_governance_closed_loop(monkeypatch) -> None:
     assert governance_agent_run_response.json()["agent_key"] == "psop.governance"
     assert governance_agent_run_response.json()["status"] == "succeeded"
     assert governance_authorizations_response.json() == []
+
+    assert run_tests_response.status_code == 200
+    replay_after_governance = replay_after_governance_response.json()
+    replay_proposals = replay_after_governance["governance_proposals"]
+    replay_experiments = replay_after_governance["governance_experiments"]
+    assert [item["id"] for item in replay_proposals] == [proposal["id"]]
+    assert replay_proposals[0]["source_run_id"] == run_id
+    assert replay_proposals[0]["source_evaluation_id"] == evaluation["id"]
+    assert replay_proposals[0]["source_findings"][0]["id"] == finding["id"]
+    assert replay_proposals[0]["experiments"][0]["experiment_type"] == "regression"
+    assert [item["proposal_id"] for item in replay_experiments] == [proposal["id"]]
+    assert replay_experiments[0]["source_run_id"] == run_id
+    assert replay_experiments[0]["result"]["direct_activation_performed"] is False

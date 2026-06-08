@@ -65,6 +65,7 @@ function loadPlatformHarness(locationSearch = "") {
           const query = params.toString();
           return query ? `/admin/tasks?${query}` : "/admin/tasks";
         },
+        buildSkillDetailPath: (skillId) => `/admin/skills/${skillId}`,
         buildPlatformAgentPath: (agentKey) => `/admin/platform/agents/${agentKey}`,
         buildPlatformAgentRunsPath: (filters = {}) => {
           const params = new URLSearchParams();
@@ -125,6 +126,10 @@ function loadPlatformHarness(locationSearch = "") {
           const query = params.toString();
           return query ? `/admin/governance/experiments?${query}` : "/admin/governance/experiments";
         },
+        buildCompilerArtifactPath: (artifactId) => `/admin/compiler/artifacts/${artifactId}`,
+        buildCompilerRequestPath: (compileRequestId) => (
+          compileRequestId ? `/admin/compiler?compile_request_id=${compileRequestId}` : "/admin/compiler"
+        ),
         buildRunLivePath: (runId) => `/admin/runs/${runId}/live`,
         buildReplayPath: (runId, focus = {}) => {
           const params = new URLSearchParams();
@@ -136,6 +141,7 @@ function loadPlatformHarness(locationSearch = "") {
           const query = params.toString();
           return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
         },
+        buildReplayTracePath: (traceId) => `/admin/replay/traces/${traceId}`,
         resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`
       }
     },
@@ -738,8 +744,14 @@ test("platform methods search and save memory entries", async () => {
       { kind: "governance_proposal", proposal_id: "proposal-1" },
       { kind: "psop_improvement_experiment", id: "experiment-1" },
       { kind: "agent_memory_entry", id: "memory-source-1" },
+      { kind: "pskill_material", id: "material-1", pskill_definition_id: "pskill-1" },
+      { kind: "pskill_definition", id: "pskill-1" },
+      { kind: "eg_compile_artifact", id: "artifact-1" },
+      { kind: "pskill_compile_request", id: "compile-1" },
       { kind: "run_trace", id: "trace-1", run_id: "runtime-run-1", seq_no: 7 },
+      { kind: "run_trace", trace_id: "otel-trace-1" },
       { kind: "run_event", id: "run-event-1", run_id: "runtime-run-1" },
+      { kind: "session_token_snapshot", id: "snapshot-1", run_id: "runtime-run-1", seq_no: 3 },
       { kind: "tool_call", id: "tool-call-1", agent_run_id: "agent-run-1" },
       {
         kind: "tool_authorization",
@@ -747,7 +759,10 @@ test("platform methods search and save memory entries", async () => {
         agent_run_id: "agent-run-1",
         tool_name: "psop.repository.commit_patch",
         status: "pending"
-      }
+      },
+      { kind: "skill_package", package_name: "psop-runner" },
+      { kind: "tool", tool_name: "psop.memory.search" },
+      { kind: "agent", agent_key: "psop.governance" }
     ],
     created_by_agent_run_id: "agent-run-1",
     tags: ["finding"],
@@ -875,14 +890,44 @@ test("platform methods search and save memory entries", async () => {
       href: "/admin/platform/memory/memory-source-1"
     },
     {
+      key: "material-material-1",
+      label: "Material material-1",
+      href: "/admin/skills/pskill-1"
+    },
+    {
+      key: "pskill-pskill-1",
+      label: "PSkill pskill-1",
+      href: "/admin/skills/pskill-1"
+    },
+    {
+      key: "compile-artifact-artifact-1",
+      label: "Artifact artifact-1",
+      href: "/admin/compiler/artifacts/artifact-1"
+    },
+    {
+      key: "compile-request-compile-1",
+      label: "Compile compile-1",
+      href: "/admin/compiler?compile_request_id=compile-1"
+    },
+    {
       key: "run-trace-trace-1",
       label: "RunTrace trace-1",
       href: "/admin/runs/runtime-run-1/live/replay?trace_id=trace-1"
     },
     {
+      key: "run-trace-otel-trace-1",
+      label: "RunTrace otel-trace-1",
+      href: "/admin/replay/traces/otel-trace-1"
+    },
+    {
       key: "run-event-run-event-1",
       label: "RunEvent run-event-1",
       href: "/admin/runs/runtime-run-1/live/replay?event_id=run-event-1"
+    },
+    {
+      key: "snapshot-snapshot-1",
+      label: "Snapshot snapshot-1",
+      href: "/admin/runs/runtime-run-1/live/replay?snapshot_seq=3"
     },
     {
       key: "tool-call-tool-call-1",
@@ -893,6 +938,21 @@ test("platform methods search and save memory entries", async () => {
       key: "tool-auth-auth-1",
       label: "ToolAuth auth-1",
       href: "/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-1"
+    },
+    {
+      key: "skill-package-psop-runner",
+      label: "Skill psop-runner",
+      href: "/admin/platform/skills/psop-runner"
+    },
+    {
+      key: "tool-psop.memory.search",
+      label: "Tool psop.memory.search",
+      href: "/admin/platform/tools/psop.memory.search"
+    },
+    {
+      key: "agent-psop.governance",
+      label: "Agent psop.governance",
+      href: "/admin/platform/agents/psop.governance"
     }
   ]);
   expect(context.busy.memoryUpdate).toBe(false);

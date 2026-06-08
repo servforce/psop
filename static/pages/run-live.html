@@ -525,6 +525,8 @@
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayToolAuthorizationCount()} auth`"></span>
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayEvaluationCount()} eval`"></span>
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayFindingCount()} findings`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayGovernanceProposalCount()} proposals`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayGovernanceExperimentCount()} experiments`"></span>
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplaySnapshots().length} snapshots`"></span>
                       </div>
                     </div>
@@ -771,7 +773,7 @@
                         <details class="px-4 py-3">
                           <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
                             <span>Closed-loop Evidence</span>
-                            <span class="ml-2 font-mono text-[11px] text-slate-500" x-text="`${liveRunReplayAgentRunCount()}A/${liveRunReplayAgentEventCount()}Ev/${liveRunReplayModelCallCount()}M/${liveRunReplayToolCallCount()}T/${liveRunReplayEvaluationCount()}E`"></span>
+                            <span class="ml-2 font-mono text-[11px] text-slate-500" x-text="`${liveRunReplayAgentRunCount()}A/${liveRunReplayAgentEventCount()}Ev/${liveRunReplayModelCallCount()}M/${liveRunReplayToolCallCount()}T/${liveRunReplayEvaluationCount()}E/${liveRunReplayGovernanceProposalCount()}G`"></span>
                           </summary>
 
                           <div class="mt-3 divide-y divide-slate-800 border-y border-slate-800 text-sm">
@@ -1010,6 +1012,64 @@
                                           <span class="hidden sm:inline">Finding</span>
                                         </button>
                                         <span class="status-badge" :class="statusBadgeTone(finding.status)" x-text="finding.status"></span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </template>
+                              </div>
+                            </section>
+
+                            <section class="py-3">
+                              <div class="flex items-center justify-between gap-3">
+                                <p class="field-label">Governance Proposals / Experiments</p>
+                                <span class="mono-field" x-text="`${liveRunReplayGovernanceProposalCount()} / ${liveRunReplayGovernanceExperimentCount()}`"></span>
+                              </div>
+                              <template x-if="liveRunReplayGovernanceProposals().length === 0 && liveRunReplayGovernanceExperiments().length === 0">
+                                <p class="mt-2 text-xs text-slate-500">暂无 Governance Proposal 或 Experiment 证据。</p>
+                              </template>
+                              <div class="mt-2 divide-y divide-slate-800">
+                                <template x-for="proposal in liveRunReplayGovernanceProposals()" :key="proposal.id">
+                                  <div class="py-2">
+                                    <div class="flex items-start justify-between gap-3">
+                                      <div class="min-w-0">
+                                        <p class="line-clamp-2 font-semibold text-slate-100" x-text="proposal.problem_statement || proposal.id"></p>
+                                        <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayGovernanceProposalSummary(proposal)"></p>
+                                        <p class="mt-1 mono-field break-all" x-text="proposal.id"></p>
+                                      </div>
+                                      <div class="flex shrink-0 items-center gap-2">
+                                        <button
+                                          type="button"
+                                          class="button-secondary h-8 px-2 text-xs"
+                                          @click="openLiveRunReplayGovernanceProposal(proposal)"
+                                          title="打开 Governance Proposal"
+                                        >
+                                          <span class="material-symbols-outlined text-[14px]">account_tree</span>
+                                          <span class="hidden sm:inline">Proposal</span>
+                                        </button>
+                                        <span class="status-badge" :class="statusBadgeTone(proposal.status)" x-text="proposal.status"></span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </template>
+                                <template x-for="experiment in liveRunReplayGovernanceExperiments()" :key="experiment.id">
+                                  <div class="py-2">
+                                    <div class="flex items-start justify-between gap-3">
+                                      <div class="min-w-0">
+                                        <p class="line-clamp-2 font-semibold text-slate-100" x-text="experiment.summary || experiment.id"></p>
+                                        <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayGovernanceExperimentSummary(experiment)"></p>
+                                        <p class="mt-1 mono-field break-all" x-text="experiment.id"></p>
+                                      </div>
+                                      <div class="flex shrink-0 items-center gap-2">
+                                        <button
+                                          type="button"
+                                          class="button-secondary h-8 px-2 text-xs"
+                                          @click="openLiveRunReplayGovernanceExperiment(experiment)"
+                                          title="打开 Governance Experiment"
+                                        >
+                                          <span class="material-symbols-outlined text-[14px]">science</span>
+                                          <span class="hidden sm:inline">Experiment</span>
+                                        </button>
+                                        <span class="status-badge" :class="statusBadgeTone(experiment.status)" x-text="experiment.status"></span>
                                       </div>
                                     </div>
                                   </div>

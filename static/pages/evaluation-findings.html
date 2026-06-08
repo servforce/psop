@@ -228,8 +228,8 @@
                   <button
                     type="button"
                     class="inline-flex h-8 max-w-full items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 font-mono text-[11px] text-sky-200 transition hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/40 disabled:text-slate-500"
-                    :disabled="!canOpenFindingEvidenceReplay(finding)"
-                    @click="openFindingEvidenceReplay(finding, ref)"
+                    :disabled="!canOpenFindingEvidence(finding, ref)"
+                    @click="openFindingEvidence(finding, ref)"
                   >
                     <span class="material-symbols-outlined shrink-0 text-[14px]">target</span>
                     <span class="truncate" x-text="findingEvidenceLabel(ref)"></span>

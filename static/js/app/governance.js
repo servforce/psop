@@ -2,6 +2,7 @@
   const {
     buildSkillDetailPath,
     buildEvaluationReportPath,
+    buildEvaluationFindingsPath,
     buildGovernanceProposalsPath,
     buildGovernanceProposalPath,
     buildGovernanceExperimentsPath,
@@ -11,6 +12,7 @@
     buildPlatformSkillPath,
     buildPlatformMemoryEntryPath,
     buildReplayPath,
+    buildReplayTracePath,
     resolveWsUrl
   } = window.PSOPConsoleHelpers;
 
@@ -630,10 +632,15 @@
       }
       return {
         id: experiment.proposal_id,
+        agent_run_id: experiment.agent_run_id || "",
         status: experiment.proposal_status || "",
         proposal_type: experiment.proposal_type || "",
         problem_statement: experiment.problem_statement || "",
+        source_finding_ids: Array.isArray(experiment.source_finding_ids) ? experiment.source_finding_ids : [],
+        source_findings: Array.isArray(experiment.source_findings) ? experiment.source_findings : [],
+        source_evaluation_id: experiment.source_evaluation_id || "",
         source_run_id: experiment.source_run_id || "",
+        evidence_refs: Array.isArray(experiment.evidence_refs) ? experiment.evidence_refs : [],
         experiments: []
       };
     },
@@ -658,6 +665,45 @@
         return;
       }
       return this.navigate(path);
+    },
+
+    governanceExperimentEvidenceLinks(experiment = this.governanceExperimentDetail) {
+      const proposal = this.governanceExperimentProposalContext(experiment);
+      const refs = [];
+      if (experiment?.id) {
+        refs.push({ kind: "psop_improvement_experiment", id: experiment.id });
+      }
+      if (proposal?.id) {
+        refs.push({ kind: "psop_improvement_proposal", id: proposal.id });
+      }
+      if (proposal?.agent_run_id) {
+        refs.push({ kind: "agent_run", id: proposal.agent_run_id });
+      }
+      if (proposal?.source_run_id || experiment?.source_run_id) {
+        refs.push({ kind: "run_replay", run_id: proposal?.source_run_id || experiment.source_run_id });
+      }
+      if (proposal?.source_evaluation_id) {
+        refs.push({ kind: "run_evaluation", id: proposal.source_evaluation_id });
+      }
+      for (const finding of this.governanceProposalSourceFindings(proposal)) {
+        refs.push({
+          kind: "run_evaluation_finding",
+          id: finding.id,
+          evaluation_id: finding.evaluation_id || proposal?.source_evaluation_id || "",
+          run_id: finding.run_id || proposal?.source_run_id || "",
+          status: finding.status || "",
+          category: finding.category || "",
+          severity: finding.severity || "",
+          pskill_definition_id: finding.pskill_definition_id || ""
+        });
+      }
+      refs.push(...(Array.isArray(proposal?.evidence_refs) ? proposal.evidence_refs : []));
+      refs.push(...(Array.isArray(experiment?.evidence_refs) ? experiment.evidence_refs : []));
+      refs.push(...(Array.isArray(experiment?.result?.evidence_refs) ? experiment.result.evidence_refs : []));
+      const links = refs
+        .map((ref) => this.governanceProposalEvidenceLink(proposal, ref))
+        .filter(Boolean);
+      return this.uniqueToolAuthorizationLinks(links);
     },
 
     async runTestsFromGovernanceExperiment(experiment = this.governanceExperimentDetail) {
@@ -1123,9 +1169,33 @@
         "proposal_id",
         "governance_proposal_id"
       ]);
+      const experimentId = this.toolAuthorizationFirstNestedValue(authorization, [
+        "experiment_id",
+        "governance_experiment_id"
+      ]);
       const evaluationId = this.toolAuthorizationFirstNestedValue(authorization, [
         "evaluation_id",
-        "evaluation_report_id"
+        "evaluation_report_id",
+        "run_evaluation_id"
+      ]);
+      const findingId = this.toolAuthorizationFirstNestedValue(authorization, [
+        "finding_id",
+        "run_evaluation_finding_id",
+        "source_finding_id"
+      ]);
+      const runId = String(authorization?.run_id || this.toolAuthorizationFirstNestedValue(authorization, [
+        "run_id",
+        "source_run_id"
+      ]) || "").trim();
+      const runTraceId = this.toolAuthorizationFirstNestedValue(authorization, [
+        "run_trace_id",
+        "trace_id",
+        "trace_event_id"
+      ]);
+      const snapshotSeq = this.toolAuthorizationFirstNestedValue(authorization, [
+        "snapshot_seq",
+        "session_token_seq",
+        "seq_no"
       ]);
       const skillId = this.toolAuthorizationFirstNestedValue(authorization, [
         "skill_id",
@@ -1152,6 +1222,15 @@
           icon: "account_tree"
         });
       }
+      if (experimentId) {
+        links.push({
+          key: `experiment-${experimentId}`,
+          label: "Experiment",
+          value: experimentId,
+          href: buildGovernanceExperimentsPath({ experiment_id: experimentId }),
+          icon: "science"
+        });
+      }
       if (evaluationId) {
         links.push({
           key: `evaluation-${evaluationId}`,
@@ -1159,6 +1238,36 @@
           value: evaluationId,
           href: buildEvaluationReportPath(evaluationId),
           icon: "fact_check"
+        });
+      }
+      if (findingId) {
+        const href = evaluationId
+          ? buildEvaluationReportPath(evaluationId)
+          : buildEvaluationFindingsPath({ run_id: runId });
+        links.push({
+          key: `finding-${findingId}`,
+          label: "Finding",
+          value: findingId,
+          href,
+          icon: "find_in_page"
+        });
+      }
+      if (runTraceId) {
+        links.push({
+          key: `run-trace-${runTraceId}`,
+          label: "RunTrace",
+          value: runTraceId,
+          href: runId ? buildReplayPath(runId, { trace_id: runTraceId }) : buildReplayTracePath(runTraceId),
+          icon: "timeline"
+        });
+      }
+      if (runId && snapshotSeq) {
+        links.push({
+          key: `snapshot-${snapshotSeq}`,
+          label: "Snapshot",
+          value: snapshotSeq,
+          href: buildReplayPath(runId, { snapshot_seq: snapshotSeq }),
+          icon: "difference"
         });
       }
       if (skillId) {
@@ -1290,6 +1399,171 @@
         run_id: proposal?.source_run_id || "",
         evidence_refs: []
       }));
+    },
+
+    governanceProposalEvidenceLinks(proposal = this.currentGovernanceProposal) {
+      const refs = Array.isArray(proposal?.evidence_refs) ? proposal.evidence_refs : [];
+      const links = refs
+        .map((ref) => this.governanceProposalEvidenceLink(proposal, ref))
+        .filter(Boolean);
+      return this.uniqueToolAuthorizationLinks(links);
+    },
+
+    governanceProposalEvidenceLink(proposal, ref) {
+      if (!ref || typeof ref !== "object") {
+        return null;
+      }
+      const kind = this.governanceNormalizeEvidenceKind(ref.kind || ref.source_kind || ref.type);
+      const id = this.governanceEvidenceRefId(ref);
+      const runId = this.governanceEvidenceRunId(proposal, ref);
+      const evaluationId = String(ref.evaluation_id || ref.run_evaluation_id || "").trim();
+      const agentRunId = String(ref.agent_run_id || ref.agentRunId || "").trim();
+
+      if (["run_evaluation", "evaluation"].includes(kind)) {
+        const value = id || evaluationId || String(proposal?.source_evaluation_id || "").trim();
+        return value ? this.governanceEvidenceLink("evaluation", "Evaluation", value, buildEvaluationReportPath(value), "fact_check") : null;
+      }
+      if (["run_evaluation_finding", "evaluation_finding", "finding"].includes(kind)) {
+        const value = String(ref.finding_id || id || "").trim();
+        const href = evaluationId || proposal?.source_evaluation_id
+          ? buildEvaluationReportPath(evaluationId || proposal.source_evaluation_id)
+          : buildEvaluationFindingsPath({
+            run_id: runId,
+            status: ref.status || "",
+            category: ref.category || ""
+          });
+        return value || href
+          ? this.governanceEvidenceLink("finding", "Finding", value || "Findings", href, "find_in_page")
+          : null;
+      }
+      if (["run", "run_replay", "replay"].includes(kind)) {
+        const value = runId || id || String(ref.run_id || "").trim();
+        return value ? this.governanceEvidenceLink("run-replay", "Run Replay", value, buildReplayPath(value), "history") : null;
+      }
+      if (kind === "run_trace") {
+        const value = String(ref.trace_id || ref.run_trace_id || id || "").trim();
+        if (!value) {
+          return null;
+        }
+        const href = runId ? buildReplayPath(runId, { trace_id: value }) : buildReplayTracePath(value);
+        return this.governanceEvidenceLink("run-trace", "RunTrace", value, href, "timeline");
+      }
+      if (kind === "run_event") {
+        const value = String(ref.run_event_id || ref.event_id || id || "").trim();
+        if (!runId || !value) {
+          return null;
+        }
+        return this.governanceEvidenceLink("run-event", "RunEvent", value, buildReplayPath(runId, { event_id: value }), "receipt_long");
+      }
+      if (kind === "session_token_snapshot") {
+        const value = String(ref.snapshot_seq || ref.seq_no || id || "").trim();
+        if (!runId || !value) {
+          return null;
+        }
+        return this.governanceEvidenceLink("snapshot", "Snapshot", value, buildReplayPath(runId, { snapshot_seq: value }), "difference");
+      }
+      if (["agent_run", "agentrun"].includes(kind)) {
+        const value = id || agentRunId;
+        return value ? this.governanceEvidenceLink("agent-run", "AgentRun", value, buildPlatformAgentRunPath(value, { tab: "events" }), "smart_toy") : null;
+      }
+      if (["agent_event", "agent_run_event"].includes(kind)) {
+        const value = String(ref.event_id || id || "").trim();
+        const ownerAgentRunId = agentRunId || String(proposal?.agent_run_id || "").trim();
+        if (!ownerAgentRunId || !value) {
+          return null;
+        }
+        return this.governanceEvidenceLink("agent-event", "AgentEvent", value, buildPlatformAgentRunPath(ownerAgentRunId, { tab: "events", event_id: value }), "event_note");
+      }
+      if (["agent_model_call", "model_call"].includes(kind)) {
+        const value = String(ref.model_call_id || id || "").trim();
+        const ownerAgentRunId = agentRunId || String(proposal?.agent_run_id || "").trim();
+        if (!ownerAgentRunId || !value) {
+          return null;
+        }
+        return this.governanceEvidenceLink("model-call", "ModelCall", value, buildPlatformAgentRunPath(ownerAgentRunId, { tab: "model", model_call_id: value }), "psychology");
+      }
+      if (["agent_tool_call", "tool_call"].includes(kind)) {
+        const value = String(ref.tool_call_id || ref.agent_tool_call_id || id || "").trim();
+        const ownerAgentRunId = agentRunId || String(proposal?.agent_run_id || "").trim();
+        if (!ownerAgentRunId || !value) {
+          return null;
+        }
+        return this.governanceEvidenceLink("tool-call", "ToolCall", value, buildPlatformAgentRunPath(ownerAgentRunId, { tab: "tools", tool_call_id: value }), "build");
+      }
+      if (["agent_tool_authorization", "tool_authorization"].includes(kind)) {
+        const value = String(ref.authorization_id || ref.tool_authorization_id || id || "").trim();
+        const ownerAgentRunId = agentRunId || String(proposal?.agent_run_id || "").trim();
+        const href = ownerAgentRunId && value
+          ? buildPlatformAgentRunPath(ownerAgentRunId, { tab: "authorizations", authorization_id: value })
+          : buildToolAuthorizationsPath();
+        return this.governanceEvidenceLink("authorization", "Authorization", value || "Tool Authorizations", href, "admin_panel_settings");
+      }
+      if (["psop_improvement_proposal", "governance_proposal", "proposal"].includes(kind)) {
+        const value = String(ref.proposal_id || id || "").trim();
+        return value ? this.governanceEvidenceLink("proposal", "Proposal", value, buildGovernanceProposalPath(value), "account_tree") : null;
+      }
+      if (["psop_improvement_experiment", "governance_experiment", "experiment"].includes(kind)) {
+        const value = String(ref.experiment_id || id || "").trim();
+        return value ? this.governanceEvidenceLink("experiment", "Experiment", value, buildGovernanceExperimentsPath({ experiment_id: value }), "science") : null;
+      }
+      if (["agent_memory_entry", "memory"].includes(kind)) {
+        const value = String(ref.memory_id || ref.memory_entry_id || id || "").trim();
+        return value ? this.governanceEvidenceLink("memory", "Memory", value, buildPlatformMemoryEntryPath(value), "database") : null;
+      }
+      if (["pskill", "pskill_definition", "skill"].includes(kind)) {
+        const value = String(ref.pskill_definition_id || ref.skill_id || id || "").trim();
+        return value ? this.governanceEvidenceLink("pskill", "PSkill", value, buildSkillDetailPath(value), "hub") : null;
+      }
+      if (["skill_package", "package"].includes(kind)) {
+        const value = String(ref.package_name || ref.skill_package || id || "").trim();
+        return value ? this.governanceEvidenceLink("skill-package", "Skill Package", value, buildPlatformSkillPath(value), "inventory_2") : null;
+      }
+      if (kind === "agent") {
+        const value = String(ref.agent_key || id || "").trim();
+        return value ? this.governanceEvidenceLink("agent", "Agent", value, buildPlatformAgentPath(value), "smart_toy") : null;
+      }
+      return null;
+    },
+
+    governanceEvidenceLink(prefix, label, value, href, icon) {
+      if (!href) {
+        return null;
+      }
+      const normalizedValue = String(value || "").trim();
+      return {
+        key: `${prefix}-${normalizedValue || href}`,
+        label,
+        value: normalizedValue,
+        href,
+        icon
+      };
+    },
+
+    governanceEvidenceRefId(ref) {
+      return String(
+        ref?.id ||
+          ref?.source_id ||
+          ref?.evaluation_id ||
+          ref?.finding_id ||
+          ref?.run_id ||
+          ref?.trace_id ||
+          ref?.event_id ||
+          ref?.agent_run_id ||
+          ref?.authorization_id ||
+          ref?.proposal_id ||
+          ref?.experiment_id ||
+          ref?.memory_id ||
+          ""
+      ).trim();
+    },
+
+    governanceEvidenceRunId(proposal, ref = {}) {
+      return String(
+        ref.run_id ||
+          ref.source_run_id ||
+          proposal?.source_run_id ||
+          ""
+      ).trim();
     },
 
     governanceSourceFindingReplayPath(finding, ref = null) {

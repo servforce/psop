@@ -13,6 +13,7 @@ from app.agents.schemas import (
     AgentToolCallResponse,
 )
 from app.evaluations.schemas import RunEvaluationFindingResponse, RunEvaluationResponse
+from app.governance.schemas import GovernanceExperimentResponse, GovernanceProposalResponse
 
 
 class CreateInvocationRequest(BaseModel):
@@ -293,6 +294,8 @@ class ReplayDetailResponse(BaseModel):
     tool_authorizations: list[AgentToolAuthorizationResponse] = Field(default_factory=list)
     run_evaluations: list[RunEvaluationResponse] = Field(default_factory=list)
     run_evaluation_findings: list[RunEvaluationFindingResponse] = Field(default_factory=list)
+    governance_proposals: list[GovernanceProposalResponse] = Field(default_factory=list)
+    governance_experiments: list[GovernanceExperimentResponse] = Field(default_factory=list)
 
 
 class ReplayTraceLookupResponse(BaseModel):
