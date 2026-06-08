@@ -2,7 +2,54 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-function loadGovernanceMethods(locationSearch = "") {
+function createFakeWebSocketClass() {
+  const instances = [];
+
+  class FakeWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+
+    constructor(url) {
+      this.url = url;
+      this.readyState = FakeWebSocket.CONNECTING;
+      this.listeners = {};
+      instances.push(this);
+    }
+
+    addEventListener(type, handler) {
+      this.listeners[type] = this.listeners[type] || [];
+      this.listeners[type].push(handler);
+    }
+
+    close() {
+      this.readyState = FakeWebSocket.CLOSED;
+      this.emit("close", {});
+    }
+
+    open() {
+      this.readyState = FakeWebSocket.OPEN;
+      this.emit("open", {});
+    }
+
+    message(payload) {
+      this.emit("message", { data: JSON.stringify(payload) });
+    }
+
+    emit(type, event) {
+      for (const handler of this.listeners[type] || []) {
+        handler(event);
+      }
+    }
+  }
+
+  FakeWebSocket.instances = instances;
+  return FakeWebSocket;
+}
+
+function loadGovernanceHarness(locationSearch = "") {
+  const FakeWebSocket = createFakeWebSocketClass();
   const code = fs.readFileSync(path.join(__dirname, "../../app/governance.js"), "utf8");
   const sandbox = {
     window: {
@@ -11,9 +58,11 @@ function loadGovernanceMethods(locationSearch = "") {
         buildGovernanceProposalsPath: () => "/admin/governance/proposals",
         buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
         buildGovernanceExperimentsPath: () => "/admin/governance/experiments",
-        buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations"
+        buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations",
+        resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`
       }
     },
+    WebSocket: FakeWebSocket,
     URLSearchParams,
     JSON,
     String,
@@ -23,7 +72,11 @@ function loadGovernanceMethods(locationSearch = "") {
   };
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
-  return sandbox.window.PSOPConsoleGovernanceMethods;
+  return { methods: sandbox.window.PSOPConsoleGovernanceMethods, FakeWebSocket };
+}
+
+function loadGovernanceMethods(locationSearch = "") {
+  return loadGovernanceHarness(locationSearch).methods;
 }
 
 test("governance methods build filters and labels", () => {
@@ -156,6 +209,76 @@ test("governance methods create proposals and run state actions", async () => {
     method: "POST"
   });
   expect(context.currentGovernanceProposal.status).toBe("testing");
+});
+
+test("governance methods stream proposal activity snapshots", async () => {
+  const { methods, FakeWebSocket } = loadGovernanceHarness();
+  const proposal = {
+    id: "proposal-activity",
+    agent_run_id: "agent-run-activity",
+    status: "draft",
+    proposal_type: "test_suite_update",
+    problem_statement: "add regression coverage",
+    experiments: [],
+    updated_at: "2026-01-01T00:00:00.000Z"
+  };
+  const context = {
+    ...methods,
+    apiBaseUrl: "/api/v1",
+    busy: { governanceProposals: false },
+    governanceProposals: [proposal],
+    currentGovernanceProposal: null,
+    governanceExperimentRows: [],
+    governanceProposalActivityWs: null,
+    governanceProposalActivityWsId: "",
+    governanceProposalActivityWsStatus: "idle",
+    governanceProposalAgentRun: null,
+    governanceProposalAgentEvents: [],
+    governanceProposalModelCalls: [],
+    governanceProposalToolCalls: [],
+    governanceProposalSkillActivations: [],
+    governanceProposalToolAuthorizations: [],
+    governanceProposalMemoryEntries: [],
+    apiRequest: jest.fn(async () => proposal),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadGovernanceProposalDetail.call(context, "proposal-activity");
+  const socket = FakeWebSocket.instances[0];
+  socket.open();
+  socket.message({
+    event_type: "governance_proposal.activity.snapshot",
+    payload: {
+      proposal: {
+        ...proposal,
+        status: "testing",
+        experiments: [{ id: "experiment-1", experiment_type: "regression", status: "succeeded" }]
+      },
+      agent_run: { id: "agent-run-activity", agent_key: "psop.governance", status: "succeeded" },
+      agent_events: [{ id: "event-1", event_type: "governance.proposal.created" }],
+      model_calls: [{ id: "model-call-1", provider: "deterministic" }],
+      tool_calls: [],
+      skill_activations: [],
+      tool_authorizations: [],
+      memory_entries: [{ id: "memory-1", memory_type: "episodic" }]
+    }
+  });
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/governance/proposals/proposal-activity");
+  expect(socket.url).toBe("ws://localhost/ws/governance/proposals/proposal-activity");
+  expect(context.governanceProposalActivityWsStatus).toBe("open");
+  expect(context.currentGovernanceProposal.status).toBe("testing");
+  expect(context.governanceProposals[0].status).toBe("testing");
+  expect(context.governanceExperimentRows[0].id).toBe("experiment-1");
+  expect(context.governanceProposalAgentRun.agent_key).toBe("psop.governance");
+  expect(context.governanceProposalAgentEvents).toHaveLength(1);
+  expect(context.governanceProposalModelCalls).toHaveLength(1);
+  expect(context.governanceProposalMemoryEntries).toHaveLength(1);
+
+  methods.disconnectGovernanceProposalActivityWebSocket.call(context);
+
+  expect(context.governanceProposalActivityWs).toBeNull();
+  expect(context.governanceProposalActivityWsStatus).toBe("idle");
 });
 
 test("governance methods decide tool authorizations", async () => {

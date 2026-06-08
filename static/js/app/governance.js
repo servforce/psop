@@ -3,7 +3,8 @@
     buildGovernanceProposalsPath,
     buildGovernanceProposalPath,
     buildGovernanceExperimentsPath,
-    buildToolAuthorizationsPath
+    buildToolAuthorizationsPath,
+    resolveWsUrl
   } = window.PSOPConsoleHelpers;
 
   const PROPOSAL_TYPE_OPTIONS = [
@@ -36,7 +37,8 @@
     async loadGovernanceProposalsPage() {
       await this.loadGovernanceProposals();
       if (!this.currentGovernanceProposal && this.governanceProposals.length) {
-        this.currentGovernanceProposal = this.governanceProposals[0];
+        this.applyGovernanceProposalActivitySnapshot({ proposal: this.governanceProposals[0] });
+        this.connectGovernanceProposalActivityWebSocket(this.governanceProposals[0].id);
       }
     },
 
@@ -67,11 +69,103 @@
       }
       this.busy.governanceProposals = true;
       try {
-        this.currentGovernanceProposal = await this.apiRequest(`/governance/proposals/${encodeURIComponent(id)}`);
+        const proposal = await this.apiRequest(`/governance/proposals/${encodeURIComponent(id)}`);
+        this.applyGovernanceProposalActivitySnapshot({ proposal });
+        this.connectGovernanceProposalActivityWebSocket(proposal.id);
       } catch (error) {
         this.showNotice("error", error.message || "治理提案详情加载失败。");
       } finally {
         this.busy.governanceProposals = false;
+      }
+    },
+
+    connectGovernanceProposalActivityWebSocket(proposalId = this.currentGovernanceProposal?.id) {
+      const id = String(proposalId || "").trim();
+      if (!id || typeof WebSocket === "undefined" || typeof resolveWsUrl !== "function") {
+        return false;
+      }
+      if (
+        this.governanceProposalActivityWs &&
+        this.governanceProposalActivityWsId === id &&
+        [WebSocket.CONNECTING, WebSocket.OPEN].includes(this.governanceProposalActivityWs.readyState)
+      ) {
+        return true;
+      }
+
+      this.disconnectGovernanceProposalActivityWebSocket();
+      const socket = new WebSocket(resolveWsUrl(this.apiBaseUrl, `/ws/governance/proposals/${encodeURIComponent(id)}`));
+      this.governanceProposalActivityWs = socket;
+      this.governanceProposalActivityWsId = id;
+      this.governanceProposalActivityWsStatus = "connecting";
+      socket.addEventListener("open", () => {
+        if (this.governanceProposalActivityWs === socket) {
+          this.governanceProposalActivityWsStatus = "open";
+        }
+      });
+      socket.addEventListener("message", (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.event_type === "governance_proposal.activity.snapshot" && message.payload) {
+            this.applyGovernanceProposalActivitySnapshot(message.payload);
+          }
+          if (message.event_type === "governance_proposal.activity.error") {
+            this.showNotice("error", message.payload?.message || "获取 Governance Proposal 活动流失败。");
+            this.disconnectGovernanceProposalActivityWebSocket();
+          }
+        } catch {
+          // Ignore malformed activity messages; REST actions remain the recovery path.
+        }
+      });
+      socket.addEventListener("close", () => {
+        if (this.governanceProposalActivityWs === socket) {
+          this.governanceProposalActivityWsStatus = "closed";
+        }
+      });
+      socket.addEventListener("error", () => {
+        if (this.governanceProposalActivityWs === socket) {
+          this.governanceProposalActivityWsStatus = "error";
+        }
+      });
+      return true;
+    },
+
+    disconnectGovernanceProposalActivityWebSocket() {
+      if (this.governanceProposalActivityWs) {
+        this.governanceProposalActivityWs.close();
+      }
+      this.governanceProposalActivityWs = null;
+      this.governanceProposalActivityWsId = "";
+      this.governanceProposalActivityWsStatus = "idle";
+    },
+
+    applyGovernanceProposalActivitySnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== "object") {
+        return;
+      }
+      if (snapshot.proposal?.id) {
+        this.currentGovernanceProposal = snapshot.proposal;
+        this.replaceGovernanceProposal(snapshot.proposal);
+      }
+      if (snapshot.agent_run) {
+        this.governanceProposalAgentRun = snapshot.agent_run;
+      }
+      if (Array.isArray(snapshot.agent_events)) {
+        this.governanceProposalAgentEvents = snapshot.agent_events;
+      }
+      if (Array.isArray(snapshot.model_calls)) {
+        this.governanceProposalModelCalls = snapshot.model_calls;
+      }
+      if (Array.isArray(snapshot.tool_calls)) {
+        this.governanceProposalToolCalls = snapshot.tool_calls;
+      }
+      if (Array.isArray(snapshot.skill_activations)) {
+        this.governanceProposalSkillActivations = snapshot.skill_activations;
+      }
+      if (Array.isArray(snapshot.tool_authorizations)) {
+        this.governanceProposalToolAuthorizations = snapshot.tool_authorizations;
+      }
+      if (Array.isArray(snapshot.memory_entries)) {
+        this.governanceProposalMemoryEntries = snapshot.memory_entries;
       }
     },
 

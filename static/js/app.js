@@ -751,6 +751,16 @@
       },
       governanceProposals: [],
       currentGovernanceProposal: null,
+      governanceProposalActivityWs: null,
+      governanceProposalActivityWsId: "",
+      governanceProposalActivityWsStatus: "idle",
+      governanceProposalAgentRun: null,
+      governanceProposalAgentEvents: [],
+      governanceProposalModelCalls: [],
+      governanceProposalToolCalls: [],
+      governanceProposalSkillActivations: [],
+      governanceProposalToolAuthorizations: [],
+      governanceProposalMemoryEntries: [],
       governanceProposalFilters: {
         status: ""
       },

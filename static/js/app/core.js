@@ -472,6 +472,7 @@
           this.currentEvaluation = null;
         }
         if (!["governance-proposals", "governance-proposal"].includes(this.route.name)) {
+          this.disconnectGovernanceProposalActivityWebSocket?.();
           this.currentGovernanceProposal = null;
         }
         if (!["platform-tools", "platform-tool"].includes(this.route.name)) {

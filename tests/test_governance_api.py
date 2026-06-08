@@ -126,3 +126,51 @@ def test_governance_api_creates_manual_proposal_with_agent_run() -> None:
     assert agent_run["agent_key"] == "psop.governance"
     assert agent_run["status"] == "succeeded"
     assert agent_run["owner_id"] == proposal["id"]
+
+
+def test_governance_proposal_activity_websocket_streams_proposal_snapshot() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        proposal_response = client.post(
+            "/api/v1/governance/proposals",
+            json={
+                "proposal_type": "test_suite_update",
+                "target": {"kind": "regression_suite", "name": "governance-activity"},
+                "problem_statement": "补充 governance proposal activity stream 覆盖。",
+            },
+        )
+        proposal = proposal_response.json()
+
+        with client.websocket_connect(f"/ws/governance/proposals/{proposal['id']}") as websocket:
+            connected = websocket.receive_json()
+            initial_snapshot = websocket.receive_json()
+            run_tests_response = client.post(f"/api/v1/governance/proposals/{proposal['id']}/run-tests")
+            updated_snapshot = websocket.receive_json()
+
+    assert proposal_response.status_code == 201
+    assert connected["event_type"] == "ws.connected"
+    assert connected["proposal_id"] == proposal["id"]
+
+    assert initial_snapshot["event_type"] == "governance_proposal.activity.snapshot"
+    initial_payload = initial_snapshot["payload"]
+    assert initial_payload["proposal"]["id"] == proposal["id"]
+    assert initial_payload["proposal"]["status"] == "draft"
+    assert initial_payload["agent_run"]["id"] == proposal["agent_run_id"]
+    assert initial_payload["agent_run"]["agent_key"] == "psop.governance"
+    assert initial_payload["active"] is False
+    assert initial_payload["terminal"] is True
+    assert initial_payload["tool_authorizations"] == []
+    assert initial_payload["model_calls"][0]["provider"] == "deterministic"
+    assert {
+        "agent.run.created",
+        "governance.proposal.started",
+        "governance.agent.model_call.completed",
+        "governance.proposal.created",
+    } <= {item["event_type"] for item in initial_payload["agent_events"]}
+
+    assert run_tests_response.status_code == 200
+    updated_payload = updated_snapshot["payload"]
+    assert updated_payload["proposal"]["status"] == "testing"
+    assert updated_payload["proposal"]["experiments"][0]["experiment_type"] == "regression"
+    assert updated_payload["proposal"]["experiments"][0]["status"] == "succeeded"
