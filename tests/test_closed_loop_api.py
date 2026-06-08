@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+from app.gateway.inference import LlmCompletion
+from app.pskills import service as skills_service_module
+from tests.test_skills_api import _fake_video_analysis_result, create_test_client
+
+
+class FailingRuntimeInferenceGateway:
+    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "text") -> LlmCompletion:
+        raise RuntimeError("runtime provider failed during closed-loop test")
+
+
+def test_materials_to_governance_closed_loop(monkeypatch) -> None:
+    monkeypatch.setattr(
+        skills_service_module,
+        "analyze_video_material",
+        lambda **_: _fake_video_analysis_result(),
+    )
+    client, fake_gateway, original_inference = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "closed-loop-materials",
+                "name": "Closed Loop Materials",
+                "description": "Validate materials to governance acceptance loop.",
+            },
+        ).json()
+        skill_id = created["id"]
+        material_response = client.post(
+            f"/api/v1/pskills/{skill_id}/materials",
+            data={"name": "现场流程视频", "material_kind": "video"},
+            files={"file": ("workflow.mp4", b"fake mp4", "video/mp4")},
+        )
+        material_id = material_response.json()["id"]
+        generate_response = client.post(
+            f"/api/v1/pskills/{skill_id}/materials/generate-skill-draft",
+            json={
+                "user_description": "请基于素材生成一个现场支持 PSkill。",
+                "base_commit_sha": created["latest_draft_head_sha"],
+            },
+        )
+        generated = generate_response.json()
+        source_response = client.get(f"/api/v1/pskills/{skill_id}/source")
+
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill_id}/publish",
+            json={"publish_reason": "Closed-loop acceptance publish"},
+        )
+        publish_payload = publish_response.json()
+        compile_response = client.post(f"/api/v1/compiler/requests/{publish_payload['compile_request']['id']}/retry")
+        compile_payload = compile_response.json()
+        artifact_response = client.get(f"/api/v1/compiler/artifacts/{compile_payload['artifact_id']}")
+        publishes_response = client.get(f"/api/v1/pskills/{skill_id}/publishes")
+
+        client.app.state.inference_gateway = FailingRuntimeInferenceGateway()
+        try:
+            invocation_response = client.post(
+                "/api/v1/gateway/invocations",
+                json={
+                    "skill_key": "closed-loop-materials",
+                    "input_envelope": {"user_input": "触发一次失败运行以生成改进闭环。"},
+                    "gateway_type": "web",
+                },
+            )
+            run_id = invocation_response.json()["run_id"]
+            run_response = client.get(f"/api/v1/runs/{run_id}")
+        finally:
+            client.app.state.inference_gateway = original_inference
+
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+        evaluation_response = client.post(f"/api/v1/evaluations/runs/{run_id}")
+        evaluation = evaluation_response.json()
+        finding = evaluation["findings"][0]
+        proposal_response = client.post(f"/api/v1/evaluations/findings/{finding['id']}/create-proposal")
+        proposal = proposal_response.json()
+        governance_agent_run_response = client.get(f"/api/v1/agent-runs/{proposal['agent_run_id']}")
+        governance_authorizations_response = client.get(
+            f"/api/v1/agent-runs/{proposal['agent_run_id']}/tool-authorizations"
+        )
+
+    assert material_response.status_code == 201
+    assert material_response.json()["status"] == "ready"
+    assert generate_response.status_code == 200
+    assert generated["status"] == "succeeded"
+    assert generated["material_ids"] == [material_id]
+    assert {"README.md", "SKILL.md", "tests/checklist.md"} <= set(generated["generated_files"])
+    assert source_response.json()["head_commit_sha"] == generated["committed_commit_sha"]
+    assert fake_gateway.projects[created["gitlab_project_id"]].files["README.md"].startswith("# Generated Skill")
+
+    assert publish_response.status_code == 202
+    assert publish_payload["publish_record"]["publish_status"] == "compiling"
+    assert compile_response.status_code == 200
+    assert compile_payload["status"] == "succeeded"
+    assert artifact_response.json()["artifact"]["formal_revision"] == "psop-eg-formal/v5"
+    assert publishes_response.json()[0]["publish_status"] == "published"
+
+    assert invocation_response.status_code == 201
+    assert run_response.json()["status"] == "failed"
+    replay_payload = replay_response.json()
+    assert replay_payload["run"]["id"] == run_id
+    assert len(replay_payload["run_traces"]) >= 1
+    assert "runtime.failed" in {item["event_type"] for item in replay_payload["timeline"]}
+
+    assert evaluation_response.status_code == 201
+    assert evaluation["run_id"] == run_id
+    assert evaluation["overall_outcome"] == "failed"
+    assert finding["severity"] == "high"
+    assert finding["evidence_refs"][0]["kind"] == "run_trace"
+
+    assert proposal_response.status_code == 201
+    assert proposal["status"] == "draft"
+    assert proposal["source_run_id"] == run_id
+    assert proposal["source_evaluation_id"] == evaluation["id"]
+    assert proposal["source_finding_ids"] == [finding["id"]]
+    assert governance_agent_run_response.json()["agent_key"] == "psop.governance"
+    assert governance_agent_run_response.json()["status"] == "succeeded"
+    assert governance_authorizations_response.json() == []
