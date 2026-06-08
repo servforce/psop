@@ -25,6 +25,8 @@ from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import current_trace_context, record_span_exception, start_span
 from app.agent_prompts.service import AgentPromptService
+from app.agents.tool_authorization_context import tool_authorization_business_context
+from app.evaluations.evidence import finding_evidence_refs
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
 from app.evaluations.schemas import RunEvaluationFindingResponse, RunEvaluationResponse
 from app.governance.models import PsopImprovementExperiment, PsopImprovementProposal
@@ -3384,6 +3386,7 @@ class RuntimeService:
             reversible=authorization.reversible,
             idempotency_key=authorization.idempotency_key,
             status=authorization.status,
+            business_context=tool_authorization_business_context(authorization),
             request_payload=authorization.request_payload,
             response_payload=authorization.response_payload,
             created_at=authorization.created_at,
@@ -3434,7 +3437,7 @@ class RuntimeService:
             severity=finding.severity,
             confidence=finding.confidence,
             description=finding.description,
-            evidence_refs=finding.evidence_refs,
+            evidence_refs=finding_evidence_refs(finding, evaluation),
             recommended_action=finding.recommended_action,
             status=finding.status,
             evaluation_created_at=evaluation.created_at if evaluation else None,

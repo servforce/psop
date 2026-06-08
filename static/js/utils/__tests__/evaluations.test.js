@@ -339,6 +339,22 @@ test("evaluation finding evidence refs build run replay deep links", () => {
       { kind: "tool_authorization", tool_name: "psop.agent_version.activate", status: "pending" }
     ]
   };
+  const findingWithSourceContextEvidence = {
+    id: "finding-7",
+    evidence_refs: [
+      { kind: "run_trace", id: "trace-source", source_run_id: "run-source" },
+      { kind: "run_event", source_event_id: "event-source", source_run_id: "run-source" },
+      { kind: "session_token_snapshot", seq_no: 8, source_run_id: "run-source" },
+      { kind: "run_evaluation", source_evaluation_id: "evaluation-source" },
+      {
+        kind: "run_evaluation_finding",
+        source_finding_id: "finding-source",
+        source_evaluation_id: "evaluation-source",
+        source_run_id: "run-source"
+      },
+      { kind: "run", source_run_id: "run-source" }
+    ]
+  };
 
   expect(methods.evaluationRunReplayPath({ run_id: "run-1" })).toBe("/admin/runs/run-1/live/replay");
   expect(methods.findingRunReplayPath.call(context, findingWithRun, findingWithRun.evidence_refs[0])).toBe(
@@ -386,6 +402,48 @@ test("evaluation finding evidence refs build run replay deep links", () => {
     findingWithAuthorizationListEvidence.evidence_refs[0]
   )).toBe(
     "/admin/platform/tool-authorizations?status=pending&tool_name=psop.agent_version.activate"
+  );
+  expect(methods.findingEvidencePath.call(
+    context,
+    findingWithSourceContextEvidence,
+    findingWithSourceContextEvidence.evidence_refs[0]
+  )).toBe(
+    "/admin/runs/run-source/live/replay?trace_id=trace-source"
+  );
+  expect(methods.findingEvidencePath.call(
+    context,
+    findingWithSourceContextEvidence,
+    findingWithSourceContextEvidence.evidence_refs[1]
+  )).toBe(
+    "/admin/runs/run-source/live/replay?event_id=event-source"
+  );
+  expect(methods.findingEvidencePath.call(
+    context,
+    findingWithSourceContextEvidence,
+    findingWithSourceContextEvidence.evidence_refs[2]
+  )).toBe(
+    "/admin/runs/run-source/live/replay?snapshot_seq=8"
+  );
+  expect(methods.findingEvidencePath.call(
+    context,
+    findingWithSourceContextEvidence,
+    findingWithSourceContextEvidence.evidence_refs[3]
+  )).toBe(
+    "/admin/evaluations/evaluation-source"
+  );
+  expect(methods.findingEvidencePath.call(
+    context,
+    findingWithSourceContextEvidence,
+    findingWithSourceContextEvidence.evidence_refs[4]
+  )).toBe(
+    "/admin/evaluations/evaluation-source"
+  );
+  expect(methods.findingEvidencePath.call(
+    context,
+    findingWithSourceContextEvidence,
+    findingWithSourceContextEvidence.evidence_refs[5]
+  )).toBe(
+    "/admin/runs/run-source/live/replay"
   );
   expect(methods.canOpenFindingEvidence.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[0])).toBe(true);
   expect(methods.canOpenFindingEvidenceReplay.call(context, findingWithoutRun)).toBe(true);
@@ -620,8 +678,20 @@ test("evaluation findings create governance proposal from selected findings", as
   expect(body.proposal_type).toBe("pskill_template_update");
   expect(body.risk_assessment.risk_level).toBe("high");
   expect(body.evidence_refs).toEqual([
-    { kind: "run_trace", id: "trace-1", source_finding_id: "finding-1" },
-    { kind: "run_event", seq_no: 3, source_finding_id: "finding-2" }
+    {
+      kind: "run_trace",
+      id: "trace-1",
+      source_finding_id: "finding-1",
+      source_evaluation_id: "evaluation-1",
+      source_run_id: "run-1"
+    },
+    {
+      kind: "run_event",
+      seq_no: 3,
+      source_finding_id: "finding-2",
+      source_evaluation_id: "evaluation-2",
+      source_run_id: "run-2"
+    }
   ]);
   expect(context.evaluationFindings.map((finding) => finding.status)).toEqual([
     "converted_to_proposal",

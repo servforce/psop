@@ -87,7 +87,16 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
 
         reject_run_response = client.post(
             "/api/v1/agent-runs",
-            json={"agent_key": "psop.governance", "owner_type": "governance", "owner_id": "proposal-1"},
+            json={
+                "agent_key": "psop.governance",
+                "owner_type": "governance",
+                "owner_id": "proposal-1",
+                "input_payload": {
+                    "source_finding_ids": ["finding-context-1"],
+                    "source_evaluation_id": "evaluation-context-1",
+                    "source_run_id": "run-context-1",
+                },
+            },
         )
         reject_run = reject_run_response.json()
         reject_authorization_response = client.post(
@@ -164,8 +173,14 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
 
     assert authorization_response.status_code == 201
     assert authorization["status"] == "pending"
+    assert authorization["business_context"]["agent_owner_type"] == "runtime"
+    assert authorization["business_context"]["agent_owner_id"] == "run-owner"
+    assert authorization["business_context"]["source_run_id"] == agent_run["run_id"]
+    assert authorization["business_context"]["tool_name"] == "psop.repository.commit_patch"
+    assert authorization["request_payload"]["business_context"]["agent_owner_type"] == "runtime"
     assert run_authorizations_response.status_code == 200
     assert [item["id"] for item in run_authorizations_response.json()] == [authorization["id"]]
+    assert run_authorizations_response.json()[0]["business_context"]["source_run_id"] == agent_run["run_id"]
     assert pending_run_authorizations_response.status_code == 200
     assert [item["id"] for item in pending_run_authorizations_response.json()] == [authorization["id"]]
     assert tool_run_authorizations_response.status_code == 200
@@ -173,10 +188,19 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert waiting_run_response.json()["status"] == "waiting_tool_authorization"
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved"
+    assert approve_response.json()["business_context"]["source_run_id"] == agent_run["run_id"]
     assert approved_run_response.json()["status"] == "queued"
 
+    assert reject_authorization["business_context"]["proposal_id"] == "proposal-1"
+    assert reject_authorization["business_context"]["source_finding_id"] == "finding-context-1"
+    assert reject_authorization["business_context"]["source_evaluation_id"] == "evaluation-context-1"
+    assert reject_authorization["business_context"]["source_run_id"] == "run-context-1"
+    assert reject_authorization["request_payload"]["business_context"]["proposal_id"] == "proposal-1"
+    assert reject_authorization["request_payload"]["business_context"]["source_evaluation_id"] == "evaluation-context-1"
     assert reject_response.status_code == 200
     assert reject_response.json()["status"] == "rejected"
+    assert reject_response.json()["business_context"]["proposal_id"] == "proposal-1"
+    assert reject_response.json()["business_context"]["source_run_id"] == "run-context-1"
     assert rejected_run_response.json()["status"] == "failed"
     assert rejected_run_response.json()["error_message"] == "tool_authorization_denied"
     rejected_event_types = [item["event_type"] for item in rejected_events_response.json()]
@@ -364,6 +388,8 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
     assert request_run_ws_message["payload"]["event_kind"] == "tool_authorization_request"
     assert request_tool_authorization_ws_message["event_type"] == "tool.authorization_requested"
     assert request_tool_authorization_ws_message["authorization_id"] == authorization["id"]
+    assert request_tool_authorization_ws_message["payload"]["business_context"]["agent_owner_type"] == "runtime_run"
+    assert request_tool_authorization_ws_message["payload"]["business_context"]["source_run_id"] == run_id
     request_events = [
         event for event in request_events_response.json() if event["event_kind"] == "tool_authorization_request"
     ]
@@ -408,6 +434,11 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
     replay_event_kinds = [event["event_kind"] for event in replay_run_events]
     assert "tool_authorization_request" in replay_event_kinds
     assert "tool_authorization_response" in replay_event_kinds
+    replay_authorization = next(
+        item for item in replay_response.json()["tool_authorizations"] if item["id"] == authorization["id"]
+    )
+    assert replay_authorization["business_context"]["agent_owner_type"] == "runtime_run"
+    assert replay_authorization["business_context"]["source_run_id"] == run_id
 
 
 def test_agent_runner_tool_authorization_request_broadcasts_run_live_and_global_ws() -> None:
@@ -1566,12 +1597,21 @@ def test_agent_runner_executes_evaluator_write_diagnostics_tool() -> None:
     assert result["finding_count"] == 1
     assert result["findings"][0]["category"] == "test_gap"
     assert result["findings"][0]["status"] == "open"
-    assert result["findings"][0]["evidence_refs"] == [{"kind": "run", "id": run_id}]
+    result_evidence_ref = result["findings"][0]["evidence_refs"][0]
+    assert result_evidence_ref["kind"] == "run"
+    assert result_evidence_ref["id"] == run_id
+    assert result_evidence_ref["source_finding_id"] == result["findings"][0]["id"]
+    assert result_evidence_ref["source_evaluation_id"] == evaluation["id"]
+    assert result_evidence_ref["source_run_id"] == run_id
     assert authorizations_response.json() == []
 
     findings = findings_response.json()
     assert [item["id"] for item in findings] == [result["findings"][0]["id"]]
+    assert findings[0]["evidence_refs"][0]["source_finding_id"] == result["findings"][0]["id"]
+    assert findings[0]["evidence_refs"][0]["source_evaluation_id"] == evaluation["id"]
+    assert findings[0]["evidence_refs"][0]["source_run_id"] == run_id
     assert detail_response.json()["findings"][0]["id"] == result["findings"][0]["id"]
+    assert detail_response.json()["findings"][0]["evidence_refs"][0]["source_run_id"] == run_id
 
     tool_call = tool_calls_response.json()[0]
     assert tool_call["tool_name"] == "psop.evaluations.write_diagnostics"

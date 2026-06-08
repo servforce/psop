@@ -37,6 +37,10 @@ from app.agents.schemas import (
     ToolAuthorizationDecisionRequest,
     AgentToolCallResponse,
 )
+from app.agents.tool_authorization_context import (
+    enrich_tool_authorization_request_payload,
+    tool_authorization_business_context,
+)
 from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
 from app.runtime.tool_authorization_events import RunToolAuthorizationEventWriter
@@ -501,6 +505,7 @@ class AgentService:
                 "Agent Tool Call 不属于当前 AgentRun。",
                 details={"agent_run_id": agent_run.id, "agent_tool_call_id": tool_call.id},
             )
+        request_payload = enrich_tool_authorization_request_payload(payload.request_payload, agent_run=agent_run)
         authorization = AgentToolAuthorization(
             agent_run_id=agent_run.id,
             agent_tool_call_id=payload.agent_tool_call_id,
@@ -517,7 +522,7 @@ class AgentService:
             reversible=payload.reversible,
             idempotency_key=payload.idempotency_key,
             status="pending",
-            request_payload=payload.request_payload,
+            request_payload=request_payload,
         )
         session.add(authorization)
         if tool_call:
@@ -875,6 +880,7 @@ class AgentService:
             "expected_effect_summary": authorization.expected_effect_summary,
             "reversible": authorization.reversible,
             "idempotency_key": authorization.idempotency_key,
+            "business_context": tool_authorization_business_context(authorization),
         }
 
     def _ensure_session_for_run(self, session: Session, agent_run: AgentRun) -> AgentSession:
@@ -1047,6 +1053,7 @@ class AgentService:
             reversible=authorization.reversible,
             idempotency_key=authorization.idempotency_key,
             status=authorization.status,
+            business_context=tool_authorization_business_context(authorization),
             request_payload=authorization.request_payload,
             response_payload=authorization.response_payload,
             created_at=authorization.created_at,

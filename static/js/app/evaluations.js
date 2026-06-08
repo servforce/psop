@@ -743,6 +743,12 @@
       for (const finding of findings || []) {
         for (const ref of finding?.evidence_refs || []) {
           const normalized = { ...ref, source_finding_id: finding.id };
+          if (!normalized.source_evaluation_id && finding?.evaluation_id) {
+            normalized.source_evaluation_id = finding.evaluation_id;
+          }
+          if (!normalized.source_run_id && finding?.run_id) {
+            normalized.source_run_id = finding.run_id;
+          }
           const key = JSON.stringify([
             normalized.source_finding_id || "",
             normalized.kind || "",
@@ -887,7 +893,7 @@
     },
 
     findingRunReplayPath(finding, ref = null, evaluation = this.currentEvaluation) {
-      const runId = finding?.run_id || evaluation?.run_id || "";
+      const runId = String(ref?.run_id || ref?.source_run_id || finding?.run_id || evaluation?.run_id || "").trim();
       if (!runId) {
         return "";
       }
@@ -910,11 +916,24 @@
         return {};
       }
       const kind = this.evaluationNormalizeEvidenceKind(ref.kind || ref.source_kind);
-      const traceId = String(ref.trace_id || ref.run_trace_id || ref.trace_event_id || "").trim();
+      const traceId = String(
+        ref.trace_id ||
+        ref.run_trace_id ||
+        ref.trace_event_id ||
+        ref.source_trace_id ||
+        ref.source_run_trace_id ||
+        ""
+      ).trim();
       if (traceId) {
         return { trace_id: traceId };
       }
-      const eventId = String(ref.run_event_id || ref.event_id || "").trim();
+      const eventId = String(
+        ref.run_event_id ||
+        ref.event_id ||
+        ref.source_event_id ||
+        ref.source_run_event_id ||
+        ""
+      ).trim();
       if (eventId) {
         return { event_id: eventId };
       }
@@ -922,10 +941,14 @@
       if (id && kind === "run_trace") {
         return { trace_id: id };
       }
-      if (id) {
+      if (id && kind === "run_event") {
         return { event_id: id };
       }
       const seqNo = String(ref.seq_no ?? "").trim();
+      if (["session_token_snapshot", "snapshot"].includes(kind)) {
+        const snapshotSeq = String(ref.snapshot_seq || ref.session_token_seq || seqNo).trim();
+        return snapshotSeq ? { snapshot_seq: snapshotSeq } : {};
+      }
       return seqNo ? { seq_no: seqNo } : {};
     },
 
@@ -986,13 +1009,13 @@
           : "";
       }
       if (["run_evaluation", "evaluation"].includes(kind)) {
-        const evaluationId = String(ref.evaluation_id || id).trim();
+        const evaluationId = String(ref.evaluation_id || ref.source_evaluation_id || id).trim();
         return evaluationId ? this.evaluationReportPath(evaluationId) : "";
       }
       if (["run_evaluation_finding", "evaluation_finding", "finding"].includes(kind)) {
-        const evaluationId = String(ref.evaluation_id || finding?.evaluation_id || evaluation?.id || "").trim();
+        const evaluationId = String(ref.evaluation_id || ref.source_evaluation_id || finding?.evaluation_id || evaluation?.id || "").trim();
         return evaluationId ? this.evaluationReportPath(evaluationId) : this.evaluationFindingsPath({
-          run_id: ref.run_id || finding?.run_id || evaluation?.run_id || "",
+          run_id: ref.run_id || ref.source_run_id || finding?.run_id || evaluation?.run_id || "",
           status: ref.status || "",
           category: ref.category || finding?.category || "",
           severity: ref.severity || finding?.severity || "",
@@ -1026,8 +1049,12 @@
         ref?.source_id ||
         ref?.run_trace_id ||
         ref?.trace_id ||
+        ref?.source_run_trace_id ||
+        ref?.source_trace_id ||
         ref?.run_event_id ||
         ref?.event_id ||
+        ref?.source_run_event_id ||
+        ref?.source_event_id ||
         ref?.agent_event_id ||
         ref?.model_call_id ||
         ref?.agent_model_call_id ||
@@ -1036,11 +1063,15 @@
         ref?.authorization_id ||
         ref?.tool_authorization_id ||
         ref?.evaluation_id ||
+        ref?.source_evaluation_id ||
         ref?.finding_id ||
+        ref?.source_finding_id ||
         ref?.proposal_id ||
         ref?.experiment_id ||
         ref?.memory_entry_id ||
         ref?.memory_id ||
+        ref?.run_id ||
+        ref?.source_run_id ||
         ref?.agent_run_id ||
         ""
       ).trim();

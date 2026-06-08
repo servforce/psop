@@ -190,6 +190,7 @@ class AgentToolAuthorizationResponse(BaseModel):
     reversible: bool
     idempotency_key: str
     status: str
+    business_context: dict[str, Any] = Field(default_factory=dict)
     request_payload: dict[str, Any]
     response_payload: dict[str, Any]
     created_at: datetime

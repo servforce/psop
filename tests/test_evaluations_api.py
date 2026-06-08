@@ -155,6 +155,9 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
     assert finding["severity"] == "high"
     assert finding["status"] == "open"
     assert finding["evidence_refs"][0]["kind"] == "run_trace"
+    assert finding["evidence_refs"][0]["source_finding_id"] == finding["id"]
+    assert finding["evidence_refs"][0]["source_evaluation_id"] == evaluation["id"]
+    assert finding["evidence_refs"][0]["source_run_id"] == run_id
     assert finding["run_id"] == run_id
     assert finding["pskill_definition_id"] == evaluation["pskill_definition_id"]
     assert finding["pskill_version_id"] == evaluation["pskill_version_id"]
@@ -164,9 +167,11 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
     assert finding_list_response.json()[0]["id"] == finding["id"]
     assert finding_list_response.json()[0]["run_id"] == run_id
     assert finding_list_response.json()[0]["quality_score"] == evaluation["quality_score"]
+    assert finding_list_response.json()[0]["evidence_refs"][0]["source_run_id"] == run_id
     assert update_response.json()["status"] == "accepted"
     assert update_response.json()["run_id"] == run_id
     assert update_response.json()["quality_score"] == evaluation["quality_score"]
+    assert update_response.json()["evidence_refs"][0]["source_evaluation_id"] == evaluation["id"]
     memory_entries = agent_memory_response.json()
     assert agent_memory_response.status_code == 200
     assert {item["memory_type"] for item in memory_entries} == {"episodic", "artifact"}
@@ -174,8 +179,16 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
     assert episodic_memory["namespace"] == "evaluation"
     assert episodic_memory["agent_key"] == "pskill.evaluator"
     assert episodic_memory["created_by_agent_run_id"] == evaluation["agent_run_id"]
-    assert {"kind": "run_evaluation_finding", "id": finding["id"]} in episodic_memory["source_refs"]
-    assert any(item.get("kind") == "run_trace" and item.get("id") == finding["evidence_refs"][0]["id"] for item in episodic_memory["source_refs"])
+    source_finding_ref = next(item for item in episodic_memory["source_refs"] if item.get("kind") == "run_evaluation_finding")
+    assert source_finding_ref["id"] == finding["id"]
+    assert source_finding_ref["source_finding_id"] == finding["id"]
+    assert source_finding_ref["source_evaluation_id"] == evaluation["id"]
+    assert source_finding_ref["source_run_id"] == run_id
+    source_trace_ref = next(item for item in episodic_memory["source_refs"] if item.get("kind") == "run_trace")
+    assert source_trace_ref["id"] == finding["evidence_refs"][0]["id"]
+    assert source_trace_ref["source_finding_id"] == finding["id"]
+    assert source_trace_ref["source_evaluation_id"] == evaluation["id"]
+    assert source_trace_ref["source_run_id"] == run_id
     assert episodic_memory["metadata"]["schema"] == "psop-run-evaluation-memory/v1"
     assert episodic_memory["metadata"]["finding_id"] == finding["id"]
     replay_payload = replay_response.json()
@@ -188,8 +201,12 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
     assert matching_timeline_items
     assert matching_timeline_items[0]["event_type"] == evidence_ref["event_type"]
     assert replay_payload["run_evaluation_findings"][0]["evidence_refs"][0]["id"] == evidence_ref["id"]
+    assert replay_payload["run_evaluation_findings"][0]["evidence_refs"][0]["source_finding_id"] == finding["id"]
+    assert replay_payload["run_evaluation_findings"][0]["evidence_refs"][0]["source_evaluation_id"] == evaluation["id"]
+    assert replay_payload["run_evaluation_findings"][0]["evidence_refs"][0]["source_run_id"] == run_id
     assert replay_payload["run_evaluation_findings"][0]["quality_score"] == evaluation["quality_score"]
     assert replay_payload["run_evaluations"][0]["findings"][0]["quality_score"] == evaluation["quality_score"]
+    assert replay_payload["run_evaluations"][0]["findings"][0]["evidence_refs"][0]["source_run_id"] == run_id
 
 
 def test_evaluation_activity_websocket_streams_report_snapshot() -> None:

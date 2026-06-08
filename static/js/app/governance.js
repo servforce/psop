@@ -1325,6 +1325,7 @@
     toolAuthorizationFirstNestedValue(authorization, keys) {
       const keySet = new Set(keys);
       const sources = [
+        authorization?.business_context,
         authorization?.tool_arguments_summary,
         authorization?.request_payload,
         authorization?.request_payload?.decision,

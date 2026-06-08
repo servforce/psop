@@ -454,6 +454,46 @@ test("governance methods build tool authorization context links", () => {
   );
 });
 
+test("governance methods build tool authorization links from business context", () => {
+  const methods = loadGovernanceMethods();
+  const authorization = {
+    id: "auth-business",
+    agent_run_id: "agent-run-1",
+    business_context: {
+      proposal_id: "proposal-business",
+      experiment_id: "experiment-business",
+      source_evaluation_id: "evaluation-business",
+      source_finding_id: "finding-business",
+      source_run_id: "run-business",
+      run_trace_id: "trace-business",
+      snapshot_seq: 9,
+      package_name: "psop-governance-manager",
+      agent_key: "psop.governance"
+    }
+  };
+
+  const links = methods.toolAuthorizationContextLinks.call(methods, authorization);
+
+  expect(links.find((item) => item.key === "proposal-proposal-business").href).toBe(
+    "/admin/governance/proposals/proposal-business"
+  );
+  expect(links.find((item) => item.key === "experiment-experiment-business").href).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-business"
+  );
+  expect(links.find((item) => item.key === "evaluation-evaluation-business").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "finding-finding-business").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "run-trace-trace-business").href).toBe(
+    "/admin/runs/run-business/live/replay?trace_id=trace-business"
+  );
+  expect(links.find((item) => item.key === "snapshot-9").href).toBe(
+    "/admin/runs/run-business/live/replay?snapshot_seq=9"
+  );
+});
+
 test("governance methods sync tool authorization filters from location", () => {
   const methods = loadGovernanceMethods("?status=approved&tool_name=psop.agent_version.activate");
   const context = {

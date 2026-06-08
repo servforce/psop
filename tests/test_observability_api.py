@@ -1465,6 +1465,8 @@ def test_observability_tool_authorization_query_filters_recent_agent_authorizati
     assert payload[0]["risk_level"] == "high"
     assert payload[0]["side_effect_level"] == "high_write"
     assert payload[0]["tool_arguments_summary"] == {"path": "SKILL.md"}
+    assert payload[0]["business_context"]["source_run_id"] == run.id
+    assert payload[0]["business_context"]["tool_name"] == "psop.repository.commit_patch"
 
     assert scoped_response.status_code == 200
     scoped_payload = scoped_response.json()

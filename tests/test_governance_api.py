@@ -85,6 +85,9 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
     assert proposal["source_findings"][0]["id"] == finding["id"]
     assert proposal["source_findings"][0]["run_id"] == run_id
     assert proposal["source_findings"][0]["quality_score"] == evaluation["quality_score"]
+    assert proposal["source_findings"][0]["evidence_refs"][0]["source_finding_id"] == finding["id"]
+    assert proposal["source_findings"][0]["evidence_refs"][0]["source_evaluation_id"] == evaluation["id"]
+    assert proposal["source_findings"][0]["evidence_refs"][0]["source_run_id"] == run_id
     assert proposal["source_evaluation_id"] == evaluation["id"]
     assert proposal["source_run_id"] == run_id
     assert proposal["target"]["finding_id"] == finding["id"]
@@ -94,6 +97,14 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
     assert any(ref["kind"] == "run" and ref["id"] == run_id for ref in evidence_refs)
     assert any(ref["kind"] == "run_replay" and ref["run_id"] == run_id for ref in evidence_refs)
     assert any(ref["kind"] == "run_trace" and ref["id"] == finding["evidence_refs"][0]["id"] for ref in evidence_refs)
+    trace_ref = next(ref for ref in evidence_refs if ref["kind"] == "run_trace")
+    assert trace_ref["source_finding_id"] == finding["id"]
+    assert trace_ref["source_evaluation_id"] == evaluation["id"]
+    assert trace_ref["source_run_id"] == run_id
+    finding_ref = next(ref for ref in evidence_refs if ref["kind"] == "run_evaluation_finding")
+    assert finding_ref["source_finding_id"] == finding["id"]
+    assert finding_ref["source_evaluation_id"] == evaluation["id"]
+    assert finding_ref["source_run_id"] == run_id
     assert proposal["risk_assessment"]["requires_human_review"] is True
     assert proposal["activation_plan"]["direct_activation_allowed"] is False
     assert converted_finding["id"] == finding["id"]
@@ -109,6 +120,10 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
         ref["kind"] == "run_evaluation_finding" and ref["id"] == finding["id"]
         for ref in agent_run["output_payload"]["evidence_refs"]
     )
+    output_trace_ref = next(ref for ref in agent_run["output_payload"]["evidence_refs"] if ref["kind"] == "run_trace")
+    assert output_trace_ref["source_finding_id"] == finding["id"]
+    assert output_trace_ref["source_evaluation_id"] == evaluation["id"]
+    assert output_trace_ref["source_run_id"] == run_id
     assert agent_model_calls[0]["provider"] == "deterministic"
     assert agent_authorizations == []
     assert {
@@ -153,6 +168,13 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
     assert any(ref["kind"] == "psop_improvement_experiment" for ref in artifact_memory["source_refs"])
     assert episodic_memory["metadata"]["proposal_status"] == "rolled_back"
     assert any(ref["kind"] == "psop_improvement_proposal" and ref["id"] == proposal["id"] for ref in episodic_memory["source_refs"])
+    assert any(
+        ref["kind"] == "run_evaluation_finding"
+        and ref["source_finding_id"] == finding["id"]
+        and ref["source_evaluation_id"] == evaluation["id"]
+        and ref["source_run_id"] == run_id
+        for ref in episodic_memory["source_refs"]
+    )
     memory_events = [item for item in final_agent_events if item["event_type"] == "governance.memory_candidates.written"]
     assert len(memory_events) >= 2
     assert all(event["payload"]["used_as_runtime_state"] is False for event in memory_events)
@@ -266,12 +288,19 @@ def test_governance_api_creates_manual_proposal_from_source_findings() -> None:
     assert proposal["source_finding_ids"] == [finding["id"]]
     assert proposal["source_findings"][0]["id"] == finding["id"]
     assert proposal["source_findings"][0]["quality_score"] == evaluation["quality_score"]
+    assert proposal["source_findings"][0]["evidence_refs"][0]["source_finding_id"] == finding["id"]
+    assert proposal["source_findings"][0]["evidence_refs"][0]["source_evaluation_id"] == evaluation["id"]
+    assert proposal["source_findings"][0]["evidence_refs"][0]["source_run_id"] == run_id
     assert proposal["source_evaluation_id"] == evaluation["id"]
     assert proposal["source_run_id"] == run_id
     assert any(
         ref["kind"] == "run_evaluation_finding" and ref["id"] == finding["id"]
         for ref in proposal["evidence_refs"]
     )
+    trace_ref = next(ref for ref in proposal["evidence_refs"] if ref["kind"] == "run_trace")
+    assert trace_ref["source_finding_id"] == finding["id"]
+    assert trace_ref["source_evaluation_id"] == evaluation["id"]
+    assert trace_ref["source_run_id"] == run_id
     assert any(ref["kind"] == "run_evaluation" and ref["id"] == evaluation["id"] for ref in proposal["evidence_refs"])
     assert any(ref["kind"] == "run_replay" and ref["run_id"] == run_id for ref in proposal["evidence_refs"])
     assert converted_finding["id"] == finding["id"]

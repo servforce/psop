@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
 from app.agents.service import AgentService
+from app.evaluations.evidence import finding_evidence_refs, finding_source_ref
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
 from app.evaluations.schemas import RunEvaluationFindingResponse
 from app.governance.models import PsopImprovementExperiment, PsopImprovementProposal
@@ -146,7 +147,7 @@ class GovernanceService:
             agent_input={
                 "schema": "GovernanceProposalInput",
                 "source": "run_evaluation_finding",
-                "finding": self._finding_payload(finding),
+                "finding": self._finding_payload(finding, evaluation),
                 "evaluation": {
                     "id": evaluation.id,
                     "run_id": evaluation.run_id,
@@ -738,7 +739,7 @@ class GovernanceService:
                 "artifact_id": evaluation.artifact_id,
             },
             "problem_statement": finding.description,
-            "evidence_refs": list(finding.evidence_refs or []),
+            "evidence_refs": finding_evidence_refs(finding, evaluation),
             "proposed_changes": [
                 {
                     "kind": "recommended_action",
@@ -787,14 +788,11 @@ class GovernanceService:
             evaluation = self.repository.get_evaluation(session, finding.evaluation_id)
             if evaluation:
                 evaluations[evaluation.id] = evaluation
-            evidence_refs.append(
-                {
-                    "kind": "run_evaluation_finding",
-                    "id": finding.id,
-                    "evaluation_id": finding.evaluation_id,
-                }
-            )
-            evidence_refs.extend(list(finding.evidence_refs or []))
+            source_ref = finding_source_ref(finding, evaluation)
+            if not source_ref.get("source_run_id") and source_run_id:
+                source_ref["source_run_id"] = source_run_id
+            evidence_refs.append(source_ref)
+            evidence_refs.extend(finding_evidence_refs(finding, evaluation))
 
         if source_evaluation_id and source_evaluation_id not in evaluations:
             evaluation = self.repository.get_evaluation(session, source_evaluation_id)
@@ -948,7 +946,13 @@ class GovernanceService:
                 ]
             )
         refs.extend(
-            {"kind": "run_evaluation_finding", "id": finding_id}
+            {
+                "kind": "run_evaluation_finding",
+                "id": finding_id,
+                "source_finding_id": finding_id,
+                "source_evaluation_id": proposal.source_evaluation_id,
+                "source_run_id": proposal.source_run_id,
+            }
             for finding_id in list(proposal.source_finding_ids or [])
         )
         refs.extend(list(proposal.evidence_refs or []))
@@ -968,6 +972,17 @@ class GovernanceService:
                 continue
             normalized = cls._evidence_ref_identity(ref)
             if normalized in seen:
+                for existing in merged:
+                    if cls._evidence_ref_identity(existing) != normalized:
+                        continue
+                    for key, value in ref.items():
+                        if (
+                            value is not None
+                            and value != ""
+                            and (existing.get(key) is None or existing.get(key) == "")
+                        ):
+                            existing[key] = value
+                    break
                 continue
             seen.add(normalized)
             merged.append(dict(ref))
@@ -1084,7 +1099,7 @@ class GovernanceService:
             severity=finding.severity,
             confidence=finding.confidence,
             description=finding.description,
-            evidence_refs=finding.evidence_refs,
+            evidence_refs=finding_evidence_refs(finding, evaluation),
             recommended_action=finding.recommended_action,
             status=finding.status,
             evaluation_created_at=evaluation.created_at if evaluation else None,
@@ -1176,7 +1191,7 @@ class GovernanceService:
         return []
 
     @staticmethod
-    def _finding_payload(finding: RunEvaluationFinding) -> dict[str, Any]:
+    def _finding_payload(finding: RunEvaluationFinding, evaluation: RunEvaluation | None = None) -> dict[str, Any]:
         return {
             "id": finding.id,
             "evaluation_id": finding.evaluation_id,
@@ -1184,7 +1199,7 @@ class GovernanceService:
             "severity": finding.severity,
             "confidence": finding.confidence,
             "description": finding.description,
-            "evidence_refs": finding.evidence_refs,
+            "evidence_refs": finding_evidence_refs(finding, evaluation),
             "recommended_action": finding.recommended_action,
             "status": finding.status,
         }

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
 from app.agents.service import AgentService
+from app.evaluations.evidence import finding_evidence_refs, finding_source_ref
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
 from app.evaluations.repository import EvaluationRepository
 from app.evaluations.schemas import (
@@ -97,7 +98,7 @@ class EvaluationService:
             "quality_score": evaluation.quality_score,
             "summary": evaluation.summary,
             "attribution": evaluation.attribution_json,
-            "findings": [self._finding_result_payload(item) for item in finding_models],
+            "findings": [self._finding_result_payload(item, evaluation=evaluation) for item in finding_models],
         }
         memory_entries = self._write_evaluation_memory_candidates(
             session,
@@ -727,8 +728,8 @@ class EvaluationService:
                     "confidence": finding.confidence,
                     "source_refs": [
                         {"kind": "run_evaluation", "id": evaluation.id},
-                        {"kind": "run_evaluation_finding", "id": finding.id},
-                        *list(finding.evidence_refs or []),
+                        finding_source_ref(finding, evaluation),
+                        *finding_evidence_refs(finding, evaluation),
                     ],
                     "tags": ["evaluation", "finding", finding.category, finding.severity],
                     "metadata": {
@@ -765,14 +766,18 @@ class EvaluationService:
         }
 
     @staticmethod
-    def _finding_result_payload(finding: RunEvaluationFinding) -> dict[str, Any]:
+    def _finding_result_payload(
+        finding: RunEvaluationFinding,
+        *,
+        evaluation: RunEvaluation | None = None,
+    ) -> dict[str, Any]:
         return {
             "id": finding.id,
             "category": finding.category,
             "severity": finding.severity,
             "confidence": finding.confidence,
             "description": finding.description,
-            "evidence_refs": finding.evidence_refs,
+            "evidence_refs": finding_evidence_refs(finding, evaluation),
             "recommended_action": finding.recommended_action,
             "status": finding.status,
         }
@@ -814,7 +819,7 @@ class EvaluationService:
             severity=finding.severity,
             confidence=finding.confidence,
             description=finding.description,
-            evidence_refs=finding.evidence_refs,
+            evidence_refs=finding_evidence_refs(finding, evaluation),
             recommended_action=finding.recommended_action,
             status=finding.status,
             evaluation_created_at=evaluation.created_at if evaluation else None,

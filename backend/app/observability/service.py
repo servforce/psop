@@ -12,6 +12,7 @@ from app.agents.schemas import (
     AgentToolAuthorizationResponse,
     AgentToolCallResponse,
 )
+from app.agents.tool_authorization_context import tool_authorization_business_context
 from app.core.config import Settings
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
 from app.governance.models import PsopImprovementExperiment, PsopImprovementProposal
@@ -775,6 +776,7 @@ class ObservabilityService:
             reversible=authorization.reversible,
             idempotency_key=authorization.idempotency_key,
             status=authorization.status,
+            business_context=tool_authorization_business_context(authorization),
             request_payload=authorization.request_payload,
             response_payload=authorization.response_payload,
             created_at=authorization.created_at,
