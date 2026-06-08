@@ -2,7 +2,54 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-function loadPlatformMethods() {
+function createFakeWebSocketClass() {
+  const instances = [];
+
+  class FakeWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+
+    constructor(url) {
+      this.url = url;
+      this.readyState = FakeWebSocket.CONNECTING;
+      this.listeners = {};
+      instances.push(this);
+    }
+
+    addEventListener(type, handler) {
+      this.listeners[type] = this.listeners[type] || [];
+      this.listeners[type].push(handler);
+    }
+
+    close() {
+      this.readyState = FakeWebSocket.CLOSED;
+      this.emit("close", {});
+    }
+
+    open() {
+      this.readyState = FakeWebSocket.OPEN;
+      this.emit("open", {});
+    }
+
+    message(payload) {
+      this.emit("message", { data: JSON.stringify(payload) });
+    }
+
+    emit(type, event) {
+      for (const handler of this.listeners[type] || []) {
+        handler(event);
+      }
+    }
+  }
+
+  FakeWebSocket.instances = instances;
+  return FakeWebSocket;
+}
+
+function loadPlatformHarness() {
+  const FakeWebSocket = createFakeWebSocketClass();
   const code = fs.readFileSync(path.join(__dirname, "../../app/platform.js"), "utf8");
   const sandbox = {
     window: {
@@ -17,9 +64,11 @@ function loadPlatformMethods() {
         buildPlatformMemoryEntryPath: (memoryId) => `/admin/platform/memory/${memoryId}`,
         buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations",
         buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
-        buildRunLivePath: (runId) => `/admin/runs/${runId}/live`
+        buildRunLivePath: (runId) => `/admin/runs/${runId}/live`,
+        resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`
       }
     },
+    WebSocket: FakeWebSocket,
     URLSearchParams,
     Date,
     JSON,
@@ -31,7 +80,11 @@ function loadPlatformMethods() {
   };
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
-  return sandbox.window.PSOPConsolePlatformMethods;
+  return { methods: sandbox.window.PSOPConsolePlatformMethods, FakeWebSocket };
+}
+
+function loadPlatformMethods() {
+  return loadPlatformHarness().methods;
 }
 
 test("platform methods build filters, labels, and paths", () => {
@@ -99,6 +152,7 @@ test("platform methods load agent runs with detail observability streams", async
   };
   const context = {
     ...methods,
+    apiBaseUrl: "/api/v1",
     busy: { agentRuns: false, agentRunDetail: false },
     agentRunFilters: { agent_key: "pskill.runner", status: "", owner_type: "", owner_id: "" },
     agentRuns: [],
@@ -153,6 +207,100 @@ test("platform methods load agent runs with detail observability streams", async
   expect(methods.agentRunDurationLabel.call(context, run)).toBe("3000 ms");
   expect(methods.agentRunToolFailureCount.call(context)).toBe(1);
   expect(methods.agentRunModelTokenUsage(context.currentAgentRunModelCalls[0])).toBe(42);
+});
+
+test("platform methods stream agent run activity snapshots", async () => {
+  const { methods, FakeWebSocket } = loadPlatformHarness();
+  const run = {
+    id: "agent-run-activity",
+    agent_key: "pskill.runner",
+    status: "queued",
+    owner_type: "runtime",
+    owner_id: "run-activity",
+    run_id: "runtime-run-activity",
+    input_payload: {},
+    output_payload: {},
+    error_message: "",
+    started_at: null,
+    ended_at: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z"
+  };
+  const context = {
+    ...methods,
+    apiBaseUrl: "/api/v1",
+    busy: { agentRunDetail: false },
+    agentRuns: [],
+    currentAgentRun: null,
+    currentAgentRunEvents: [],
+    currentAgentRunModelCalls: [],
+    currentAgentRunToolCalls: [],
+    currentAgentRunSkillActivations: [],
+    currentAgentRunToolAuthorizations: [],
+    currentAgentRunMemoryEntries: [],
+    agentRunActivityWs: null,
+    agentRunActivityWsAgentRunId: "",
+    agentRunActivityWsStatus: "idle",
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/agent-runs/agent-run-activity") {
+        return run;
+      }
+      if (url.endsWith("/events")) {
+        return [{ id: "event-1", event_type: "agent.run.created" }];
+      }
+      if (url.endsWith("/model-calls")) {
+        return [];
+      }
+      if (url.endsWith("/tool-calls")) {
+        return [];
+      }
+      if (url.endsWith("/skill-activations")) {
+        return [];
+      }
+      if (url.endsWith("/tool-authorizations")) {
+        return [];
+      }
+      if (url.endsWith("/memory-entries")) {
+        return [];
+      }
+      return null;
+    }),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadPlatformAgentRunDetail.call(context, "agent-run-activity");
+  const socket = FakeWebSocket.instances[0];
+  socket.open();
+  socket.message({
+    event_type: "agent_run.activity.snapshot",
+    payload: {
+      agent_run: { ...run, status: "waiting_tool_authorization" },
+      events: [
+        { id: "event-1", event_type: "agent.run.created" },
+        { id: "event-2", event_type: "tool.authorization_requested" }
+      ],
+      model_calls: [{ id: "model-1", usage_json: { total_tokens: 16 } }],
+      tool_calls: [{ id: "tool-1", status: "waiting_authorization" }],
+      skill_activations: [{ id: "activation-1" }],
+      tool_authorizations: [{ id: "auth-1", status: "pending" }],
+      memory_entries: [{ id: "memory-1", memory_type: "episodic" }]
+    }
+  });
+
+  expect(socket.url).toBe("ws://localhost/ws/agent-runs/agent-run-activity");
+  expect(context.agentRunActivityWsStatus).toBe("open");
+  expect(context.currentAgentRun.status).toBe("waiting_tool_authorization");
+  expect(context.currentAgentRunEvents).toHaveLength(2);
+  expect(context.currentAgentRunModelCalls).toHaveLength(1);
+  expect(context.currentAgentRunToolCalls).toHaveLength(1);
+  expect(context.currentAgentRunSkillActivations).toHaveLength(1);
+  expect(context.currentAgentRunToolAuthorizations).toHaveLength(1);
+  expect(context.currentAgentRunMemoryEntries).toHaveLength(1);
+
+  methods.disconnectAgentRunActivityWebSocket.call(context);
+
+  expect(context.agentRunActivityWs).toBeNull();
+  expect(context.agentRunActivityWsStatus).toBe("idle");
 });
 
 test("platform methods sync, load, create, validate, and activate skill packages", async () => {

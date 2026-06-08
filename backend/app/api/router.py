@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.routes.agents import (
     agents_router,
     agent_runs_router,
+    agent_runs_ws_router,
     run_tool_authorizations_router,
     tool_authorizations_router,
     tool_authorizations_ws_router,
@@ -45,5 +46,6 @@ api_router.include_router(terminal_router)
 api_router.include_router(replay_router)
 api_router.include_router(runtime_router)
 api_router.include_router(ws_router)
+api_router.include_router(agent_runs_ws_router)
 api_router.include_router(tool_authorizations_ws_router)
 api_router.include_router(pskill_activity_ws_router)

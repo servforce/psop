@@ -774,6 +774,9 @@
       currentAgentRunSkillActivations: [],
       currentAgentRunToolAuthorizations: [],
       currentAgentRunMemoryEntries: [],
+      agentRunActivityWs: null,
+      agentRunActivityWsAgentRunId: "",
+      agentRunActivityWsStatus: "idle",
       agentRunDetailTab: "events",
       agentRunFilters: {
         agent_key: "",

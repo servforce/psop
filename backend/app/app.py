@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
-from app.api.routes.agents import tool_authorizations_ws_router
+from app.api.routes.agents import agent_runs_ws_router, tool_authorizations_ws_router
 from app.api.routes.runtime import ws_router
 from app.api.routes.skills import pskill_activity_ws_router
 from app.api.routes.system import root_router
@@ -117,6 +117,7 @@ def create_app(
 
     app.include_router(root_router)
     app.include_router(ws_router)
+    app.include_router(agent_runs_ws_router)
     app.include_router(tool_authorizations_ws_router)
     app.include_router(pskill_activity_ws_router)
     app.include_router(api_router, prefix=resolved_settings.api_prefix)

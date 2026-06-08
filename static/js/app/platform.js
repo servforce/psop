@@ -10,7 +10,8 @@
     buildPlatformMemoryEntryPath,
     buildToolAuthorizationsPath,
     buildGovernanceProposalPath,
-    buildRunLivePath
+    buildRunLivePath,
+    resolveWsUrl
   } = window.PSOPConsoleHelpers;
 
   const TOOL_SIDE_EFFECT_OPTIONS = [
@@ -117,18 +118,107 @@
           this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/tool-authorizations`),
           this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/memory-entries`)
         ]);
-        this.currentAgentRun = run;
-        this.currentAgentRunEvents = Array.isArray(events) ? events : [];
-        this.currentAgentRunModelCalls = Array.isArray(modelCalls) ? modelCalls : [];
-        this.currentAgentRunToolCalls = Array.isArray(toolCalls) ? toolCalls : [];
-        this.currentAgentRunSkillActivations = Array.isArray(skillActivations) ? skillActivations : [];
-        this.currentAgentRunToolAuthorizations = Array.isArray(toolAuthorizations) ? toolAuthorizations : [];
-        this.currentAgentRunMemoryEntries = Array.isArray(memoryEntries) ? memoryEntries : [];
-        this.replaceAgentRun(run);
+        this.applyAgentRunActivitySnapshot({
+          agent_run: run,
+          events,
+          model_calls: modelCalls,
+          tool_calls: toolCalls,
+          skill_activations: skillActivations,
+          tool_authorizations: toolAuthorizations,
+          memory_entries: memoryEntries
+        });
+        this.connectAgentRunActivityWebSocket(id);
       } catch (error) {
         this.showNotice("error", error.message || "AgentRun 详情加载失败。");
       } finally {
         this.busy.agentRunDetail = false;
+      }
+    },
+
+    connectAgentRunActivityWebSocket(agentRunId) {
+      const id = String(agentRunId || "").trim();
+      if (!id || typeof WebSocket === "undefined") {
+        return false;
+      }
+      if (
+        this.agentRunActivityWs &&
+        this.agentRunActivityWsAgentRunId === id &&
+        [WebSocket.CONNECTING, WebSocket.OPEN].includes(this.agentRunActivityWs.readyState)
+      ) {
+        return true;
+      }
+
+      this.disconnectAgentRunActivityWebSocket();
+      const socket = new WebSocket(resolveWsUrl(this.apiBaseUrl, `/ws/agent-runs/${encodeURIComponent(id)}`));
+      this.agentRunActivityWs = socket;
+      this.agentRunActivityWsAgentRunId = id;
+      this.agentRunActivityWsStatus = "connecting";
+      socket.addEventListener("open", () => {
+        if (this.agentRunActivityWs === socket) {
+          this.agentRunActivityWsStatus = "open";
+        }
+      });
+      socket.addEventListener("message", (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.event_type === "agent_run.activity.snapshot" && message.payload) {
+            this.applyAgentRunActivitySnapshot(message.payload);
+          }
+          if (message.event_type === "agent_run.activity.error") {
+            this.showNotice("error", message.payload?.message || "获取 AgentRun 活动流失败。");
+            this.disconnectAgentRunActivityWebSocket();
+          }
+        } catch {
+          // Ignore malformed activity messages; the REST detail remains available.
+        }
+      });
+      socket.addEventListener("close", () => {
+        if (this.agentRunActivityWs === socket) {
+          this.agentRunActivityWsStatus = "closed";
+        }
+      });
+      socket.addEventListener("error", () => {
+        if (this.agentRunActivityWs === socket) {
+          this.agentRunActivityWsStatus = "error";
+        }
+      });
+      return true;
+    },
+
+    disconnectAgentRunActivityWebSocket() {
+      if (this.agentRunActivityWs) {
+        this.agentRunActivityWs.close();
+      }
+      this.agentRunActivityWs = null;
+      this.agentRunActivityWsAgentRunId = "";
+      this.agentRunActivityWsStatus = "idle";
+    },
+
+    applyAgentRunActivitySnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== "object") {
+        return;
+      }
+      if (snapshot.agent_run?.id) {
+        this.currentAgentRun = snapshot.agent_run;
+        this.replaceAgentRun(snapshot.agent_run);
+      }
+      if (Array.isArray(snapshot.events)) {
+        this.currentAgentRunEvents = snapshot.events;
+      }
+      if (Array.isArray(snapshot.model_calls)) {
+        this.currentAgentRunModelCalls = snapshot.model_calls;
+      }
+      if (Array.isArray(snapshot.tool_calls)) {
+        this.currentAgentRunToolCalls = snapshot.tool_calls;
+      }
+      if (Array.isArray(snapshot.skill_activations)) {
+        this.currentAgentRunSkillActivations = snapshot.skill_activations;
+      }
+      if (Array.isArray(snapshot.tool_authorizations)) {
+        this.currentAgentRunToolAuthorizations = snapshot.tool_authorizations;
+      }
+      if (Array.isArray(snapshot.memory_entries)) {
+        this.currentAgentRunMemoryEntries = snapshot.memory_entries;
       }
     },
 
@@ -157,6 +247,7 @@
     },
 
     applyAgentRunFilters() {
+      this.disconnectAgentRunActivityWebSocket();
       this.currentAgentRun = null;
       this.currentAgentRunEvents = [];
       this.currentAgentRunModelCalls = [];

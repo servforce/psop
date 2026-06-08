@@ -481,6 +481,7 @@
           this.platformAgentToolAuthorizations = [];
         }
         if (!["platform-agent-runs", "platform-agent-run"].includes(this.route.name)) {
+          this.disconnectAgentRunActivityWebSocket?.();
           this.currentAgentRun = null;
           this.currentAgentRunEvents = [];
           this.currentAgentRunModelCalls = [];

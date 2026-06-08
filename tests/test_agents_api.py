@@ -160,6 +160,72 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert [item["id"] for item in activate_authorizations_response.json()] == [reject_authorization["id"]]
 
 
+def test_agent_run_activity_websocket_streams_observability_snapshot() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.runner",
+                "owner_type": "runtime",
+                "owner_id": "runtime-run-activity",
+                "run_id": "runtime-run-activity",
+                "input_payload": {"node_id": "inspect"},
+            },
+        )
+        agent_run = run_response.json()
+
+        with client.websocket_connect(f"/ws/agent-runs/{agent_run['id']}") as websocket:
+            connected = websocket.receive_json()
+            initial_snapshot = websocket.receive_json()
+            event_response = client.post(
+                f"/api/v1/agent-runs/{agent_run['id']}/events",
+                json={
+                    "event_type": "agent.test.progress",
+                    "phase": "test",
+                    "payload": {"step": "tool-auth"},
+                },
+            )
+            authorization_response = client.post(
+                "/api/v1/tool-authorizations",
+                json={
+                    "agent_run_id": agent_run["id"],
+                    "run_id": agent_run["run_id"],
+                    "tool_name": "psop.repository.commit_patch",
+                    "side_effect_level": "high_write",
+                    "authorization_reason": "需要写入 Git 仓库。",
+                    "tool_arguments_summary": {"path": "SKILL.md"},
+                },
+            )
+            updated_snapshot = websocket.receive_json()
+            if not updated_snapshot["payload"]["tool_authorizations"]:
+                updated_snapshot = websocket.receive_json()
+
+    assert run_response.status_code == 201
+    assert connected["event_type"] == "ws.connected"
+    assert connected["agent_run_id"] == agent_run["id"]
+
+    assert initial_snapshot["event_type"] == "agent_run.activity.snapshot"
+    initial_payload = initial_snapshot["payload"]
+    assert initial_payload["agent_run"]["id"] == agent_run["id"]
+    assert initial_payload["active"] is True
+    assert initial_payload["terminal"] is False
+    assert [event["event_type"] for event in initial_payload["events"]] == ["agent.run.created"]
+
+    assert event_response.status_code == 201
+    assert authorization_response.status_code == 201
+    updated_payload = updated_snapshot["payload"]
+    assert updated_payload["agent_run"]["status"] == "waiting_tool_authorization"
+    assert [event["event_type"] for event in updated_payload["events"]] == [
+        "agent.run.created",
+        "agent.test.progress",
+        "tool.authorization_requested",
+        "agent.waiting_tool_authorization",
+    ]
+    assert [item["id"] for item in updated_payload["tool_authorizations"]] == [authorization_response.json()["id"]]
+
+
 def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> None:
     client, _, _ = create_test_client()
 

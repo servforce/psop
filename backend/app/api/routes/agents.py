@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
+
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 
 from app.agent_harness.runner import AgentRunner
+from app.agents.activity import AgentRunActivityService
 from app.agents.schemas import (
     AgentDefinitionDetailResponse,
     AgentDefinitionSummaryResponse,
@@ -39,6 +43,7 @@ from app.runtime.websocket import (
     tool_authorization_ws_message,
 )
 from app.memory.service import MemoryService
+from app.pskills.exceptions import SkillsError
 from app.skills.schemas import SkillActivationResponse
 from app.skills.service import SkillPackageService
 
@@ -48,6 +53,7 @@ agent_runs_router = APIRouter(prefix="/agent-runs", tags=["agent-runs"])
 tool_authorizations_router = APIRouter(prefix="/tool-authorizations", tags=["tool-authorizations"])
 run_tool_authorizations_router = APIRouter(prefix="/runs", tags=["tool-authorizations"])
 tool_authorizations_ws_router = APIRouter(prefix="/ws", tags=["ws"])
+agent_runs_ws_router = APIRouter(prefix="/ws", tags=["ws"])
 TOOL_AUTHORIZATION_WS_CHANNEL = "global"
 
 
@@ -312,6 +318,53 @@ async def reject_tool_authorization(
         action="rejected",
     )
     return authorization
+
+
+@agent_runs_ws_router.websocket("/agent-runs/{agent_run_id}")
+async def agent_run_activity_websocket(websocket: WebSocket, agent_run_id: str) -> None:
+    await websocket.accept()
+    await websocket.send_json(
+        {
+            "event_type": "ws.connected",
+            "agent_run_id": agent_run_id,
+            "occurred_at": None,
+            "payload": {"message": "connected"},
+        }
+    )
+    service = AgentRunActivityService()
+    last_payload = ""
+    try:
+        while True:
+            with websocket.app.state.db_manager.session() as session:
+                snapshot = service.build_snapshot(session, agent_run_id)
+            encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
+            if encoded != last_payload:
+                await websocket.send_json(
+                    {
+                        "event_type": "agent_run.activity.snapshot",
+                        "agent_run_id": agent_run_id,
+                        "occurred_at": snapshot["agent_run"]["updated_at"],
+                        "payload": snapshot,
+                    }
+                )
+                last_payload = encoded
+            await asyncio.sleep(1)
+    except SkillsError as exc:
+        await websocket.send_json(
+            {
+                "event_type": "agent_run.activity.error",
+                "agent_run_id": agent_run_id,
+                "occurred_at": None,
+                "payload": {
+                    "code": exc.error_code,
+                    "message": exc.message,
+                    "details": exc.details,
+                },
+            }
+        )
+        await websocket.close(code=1008)
+    except (RuntimeError, WebSocketDisconnect):
+        return
 
 
 @tool_authorizations_ws_router.websocket("/tool-authorizations")
