@@ -48,6 +48,15 @@
             @input.debounce.300ms="applyEvaluationFindingFilters()"
           />
         </label>
+        <label class="field-block min-w-56 flex-1">
+          <span class="field-label">PSkill ID</span>
+          <input
+            x-model="evaluationFindingFilters.pskill_definition_id"
+            class="input-field h-9 py-0 font-mono text-xs"
+            placeholder="pskill_definition_id"
+            @input.debounce.300ms="applyEvaluationFindingFilters()"
+          />
+        </label>
         <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.evaluationFindings" @click="loadEvaluationFindings()">
           <span class="material-symbols-outlined text-[18px]">refresh</span>
         </button>
@@ -57,7 +66,102 @@
       </div>
     </div>
 
-    <div class="grid h-11 shrink-0 items-center gap-3 border-b border-slate-800 bg-slate-950/70 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500" style="grid-template-columns: minmax(0,1.05fr) 8rem 7rem 6rem minmax(0,1.5fr) 8.5rem;">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/30 px-3 py-3">
+      <div class="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-slate-800 bg-slate-800 lg:grid-cols-6">
+        <div class="bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Findings</p>
+          <p class="mt-1 text-lg font-semibold tabular-nums text-slate-100" x-text="evaluationFindingSummary().total"></p>
+        </div>
+        <div class="bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">未关闭</p>
+          <p class="mt-1 text-lg font-semibold tabular-nums text-amber-200" x-text="evaluationFindingSummary().unresolved_count"></p>
+        </div>
+        <div class="bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">高风险</p>
+          <p class="mt-1 text-lg font-semibold tabular-nums text-orange-200" x-text="evaluationFindingSummary().high_severity_count"></p>
+        </div>
+        <div class="bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">质量均分</p>
+          <p class="mt-1 text-lg font-semibold tabular-nums" :class="evaluationScoreTone(evaluationFindingSummary().avg_quality_score)" x-text="evaluationFindingSummary().avg_quality_score ?? 'N/A'"></p>
+        </div>
+        <div class="bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">证据不足率</p>
+          <p class="mt-1 text-lg font-semibold tabular-nums text-sky-200" x-text="evaluationFindingPercentLabel(evaluationFindingSummary().evidence_insufficiency_rate)"></p>
+        </div>
+        <div class="bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">PSkills / Runs</p>
+          <p class="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+            <span x-text="evaluationFindingSummary().pskill_count"></span>
+            <span class="text-slate-500">/</span>
+            <span x-text="evaluationFindingSummary().run_count"></span>
+          </p>
+        </div>
+      </div>
+
+      <div class="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+        <div class="min-w-0">
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">趋势</p>
+            <p class="font-mono text-[11px] text-slate-500">count / quality / evidence</p>
+          </div>
+          <div class="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
+            <template x-if="evaluationFindingTrendBuckets().length === 0">
+              <div class="col-span-full text-sm text-slate-500">暂无趋势数据</div>
+            </template>
+            <template x-for="bucket in evaluationFindingTrendBuckets()" :key="bucket.date">
+              <div class="min-w-0 border border-slate-800 bg-slate-950/40 px-2 py-2">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-mono text-[11px] text-slate-400" x-text="evaluationFindingTrendDateLabel(bucket.date)"></span>
+                  <span class="font-mono text-[11px] text-slate-300" x-text="bucket.count"></span>
+                </div>
+                <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800">
+                  <span class="block h-full rounded-full bg-orange-400" :style="{ width: evaluationFindingTrendCountWidth(bucket) }"></span>
+                </div>
+                <div class="mt-2 flex items-center justify-between gap-2 font-mono text-[11px]">
+                  <span :class="evaluationScoreTone(bucket.avg_quality_score)" x-text="bucket.avg_quality_score ?? 'N/A'"></span>
+                  <span class="text-sky-300" x-text="evaluationFindingPercentLabel(bucket.evidence_insufficiency_rate)"></span>
+                </div>
+                <div class="mt-1 h-1 overflow-hidden rounded-full bg-slate-800">
+                  <span class="block h-full rounded-full bg-sky-400" :style="{ width: evaluationFindingTrendEvidenceWidth(bucket) }"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <span class="rounded-full border border-slate-800 bg-slate-950/50 px-3 py-1.5 text-xs text-slate-300">
+            已选 <span class="font-mono tabular-nums text-slate-100" x-text="selectedEvaluationFindingCount()"></span>
+          </span>
+          <button type="button" class="button-primary h-8 px-3" :disabled="busy.evaluationFindingUpdate || selectedEvaluationFindingCount() === 0" @click="createProposalFromSelectedEvaluationFindings()">
+            <span class="material-symbols-outlined text-[17px]">account_tree</span>
+            <span class="hidden sm:inline">转提案</span>
+          </button>
+          <button type="button" class="button-secondary h-8 px-3" :disabled="busy.evaluationFindingUpdate || selectedEvaluationFindingCount() === 0" @click="bulkUpdateSelectedEvaluationFindingsStatus('resolved')">
+            <span class="material-symbols-outlined text-[17px]">task_alt</span>
+            <span class="hidden sm:inline">解决</span>
+          </button>
+          <button type="button" class="button-secondary h-8 px-3" :disabled="busy.evaluationFindingUpdate || selectedEvaluationFindingCount() === 0" @click="bulkUpdateSelectedEvaluationFindingsStatus('dismissed')">
+            <span class="material-symbols-outlined text-[17px]">block</span>
+            <span class="hidden sm:inline">驳回</span>
+          </button>
+          <button type="button" class="button-secondary h-8 px-3" :disabled="selectedEvaluationFindingCount() === 0" @click="clearEvaluationFindingSelection()">
+            <span class="material-symbols-outlined text-[17px]">backspace</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid h-11 shrink-0 items-center gap-3 border-b border-slate-800 bg-slate-950/70 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500" style="grid-template-columns: 2.5rem minmax(0,1.05fr) 8rem 7rem 6rem minmax(0,1.5fr) 8.5rem;">
+      <label class="flex justify-center">
+        <input
+          type="checkbox"
+          class="size-4 rounded border-slate-700 bg-slate-950 accent-orange-500"
+          :checked="evaluationFindingsAllVisibleSelected()"
+          :disabled="evaluationFindings.length === 0"
+          @change="toggleAllVisibleEvaluationFindings()"
+        />
+      </label>
       <span>Finding</span>
       <span>类别</span>
       <span class="text-center">严重度</span>
@@ -77,10 +181,22 @@
       <template x-if="evaluationFindings.length > 0">
         <div class="divide-y divide-slate-800">
           <template x-for="finding in evaluationFindings" :key="finding.id">
-            <article class="grid min-h-16 items-center gap-3 bg-slate-950/20 px-3 py-3 text-sm transition hover:bg-slate-900/50" style="grid-template-columns: minmax(0,1.05fr) 8rem 7rem 6rem minmax(0,1.5fr) 8.5rem;">
+            <article class="grid min-h-16 items-center gap-3 bg-slate-950/20 px-3 py-3 text-sm transition hover:bg-slate-900/50" style="grid-template-columns: 2.5rem minmax(0,1.05fr) 8rem 7rem 6rem minmax(0,1.5fr) 8.5rem;">
+              <label class="flex justify-center">
+                <input
+                  type="checkbox"
+                  class="size-4 rounded border-slate-700 bg-slate-950 accent-orange-500"
+                  :checked="isEvaluationFindingSelected(finding)"
+                  @change="toggleEvaluationFindingSelection(finding)"
+                />
+              </label>
               <button type="button" class="min-w-0 text-left" @click="navigate(evaluationReportPath(finding.evaluation_id))">
                 <span class="block truncate font-semibold text-slate-100" x-text="finding.description"></span>
-                <span class="mt-1 block truncate font-mono text-[11px] text-slate-500" x-text="finding.id"></span>
+                <span class="mt-1 block truncate font-mono text-[11px] text-slate-500">
+                  <span x-text="finding.id"></span>
+                  <span class="text-slate-600"> · </span>
+                  <span x-text="finding.pskill_definition_id || 'pskill:N/A'"></span>
+                </span>
               </button>
               <div class="min-w-0 truncate text-slate-300" x-text="findingCategoryLabel(finding.category)"></div>
               <div class="flex justify-center">
@@ -91,7 +207,7 @@
               </div>
               <div class="min-w-0 truncate text-slate-400" x-text="finding.recommended_action"></div>
               <div class="text-center font-mono text-[11px] text-slate-500" x-text="formatDateTime(finding.created_at)"></div>
-              <div class="col-span-full flex flex-wrap items-center gap-2">
+              <div class="col-span-full flex flex-wrap items-center gap-2 pl-12">
                 <button type="button" class="button-secondary h-8 px-3" :disabled="busy.evaluationFindingUpdate" @click="updateEvaluationFindingStatus(finding, 'accepted')">
                   <span class="material-symbols-outlined text-[17px]">check_circle</span>
                   <span>接受</span>

@@ -27,6 +27,31 @@
     { value: "critical", label: "严重" }
   ];
 
+  const FINDING_CATEGORY_PROPOSAL_TYPES = {
+    pskill_build_issue: "pskill_template_update",
+    compile_issue: "validator_update",
+    test_gap: "test_suite_update",
+    runner_issue: "agent_skill_update",
+    human_operation_issue: "pskill_template_update",
+    evidence_quality_issue: "pskill_template_update",
+    tool_issue: "tool_policy_update",
+    environment_issue: "test_suite_update"
+  };
+
+  const FINDING_SEVERITY_RANK = {
+    low: 1,
+    medium: 2,
+    high: 3,
+    critical: 4
+  };
+
+  const FINDING_SEVERITY_RISK = {
+    low: "low",
+    medium: "medium",
+    high: "high",
+    critical: "high"
+  };
+
   window.PSOPConsoleEvaluationMethods = {
     async loadEvaluationReportsPage() {
       if (this.evaluationForm.evaluation_id && !this.currentEvaluation) {
@@ -171,6 +196,7 @@
           const updated = findings.find((finding) => finding.id === item.id);
           return updated || item;
         });
+        this.syncEvaluationFindingSelection();
       }
     },
 
@@ -181,6 +207,7 @@
         const suffix = query ? `?${query}` : "";
         const findings = await this.apiRequest(`/evaluations/findings${suffix}`);
         this.evaluationFindings = Array.isArray(findings) ? findings : [];
+        this.syncEvaluationFindingSelection();
       } catch (error) {
         this.showNotice("error", error.message || "Findings 加载失败。");
       } finally {
@@ -200,6 +227,7 @@
         run_id: "",
         pskill_definition_id: ""
       };
+      this.clearEvaluationFindingSelection();
       return this.loadEvaluationFindings();
     },
 
@@ -230,10 +258,7 @@
           method: "PATCH",
           body: JSON.stringify({ status })
         });
-        this.evaluationFindings = this.evaluationFindings.map((item) => item.id === updated.id ? updated : item);
-        if (this.currentEvaluation?.findings) {
-          this.currentEvaluation.findings = this.currentEvaluation.findings.map((item) => item.id === updated.id ? updated : item);
-        }
+        this.applyEvaluationFindingUpdate(updated);
       } catch (error) {
         this.showNotice("error", error.message || "更新 finding 状态失败。");
       } finally {
@@ -251,10 +276,7 @@
           method: "POST"
         });
         const convertedFinding = { ...finding, status: "converted_to_proposal" };
-        this.evaluationFindings = this.evaluationFindings.map((item) => item.id === finding.id ? convertedFinding : item);
-        if (this.currentEvaluation?.findings) {
-          this.currentEvaluation.findings = this.currentEvaluation.findings.map((item) => item.id === finding.id ? convertedFinding : item);
-        }
+        this.applyEvaluationFindingUpdate(convertedFinding);
         this.showNotice("success", "已创建治理提案。");
         await this.navigate(this.governanceProposalPath(proposal.id));
       } catch (error) {
@@ -262,6 +284,345 @@
       } finally {
         this.busy.evaluationFindingUpdate = false;
       }
+    },
+
+    applyEvaluationFindingUpdate(updated) {
+      if (!updated?.id) {
+        return;
+      }
+      this.evaluationFindings = (this.evaluationFindings || []).map((item) => item.id === updated.id ? updated : item);
+      if (this.currentEvaluation?.findings) {
+        this.currentEvaluation.findings = this.currentEvaluation.findings.map((item) => item.id === updated.id ? updated : item);
+      }
+      this.syncEvaluationFindingSelection();
+    },
+
+    evaluationFindingId(finding) {
+      return String(finding?.id || "").trim();
+    },
+
+    selectedEvaluationFindingIdSet() {
+      return new Set((this.selectedEvaluationFindingIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+    },
+
+    syncEvaluationFindingSelection() {
+      const visibleIds = new Set((this.evaluationFindings || []).map((finding) => this.evaluationFindingId(finding)).filter(Boolean));
+      this.selectedEvaluationFindingIds = (this.selectedEvaluationFindingIds || [])
+        .map((id) => String(id || "").trim())
+        .filter((id, index, ids) => id && ids.indexOf(id) === index && visibleIds.has(id));
+    },
+
+    isEvaluationFindingSelected(finding) {
+      const id = this.evaluationFindingId(finding);
+      return Boolean(id && this.selectedEvaluationFindingIdSet().has(id));
+    },
+
+    toggleEvaluationFindingSelection(finding) {
+      const id = this.evaluationFindingId(finding);
+      if (!id) {
+        return;
+      }
+      const selected = this.selectedEvaluationFindingIdSet();
+      if (selected.has(id)) {
+        selected.delete(id);
+      } else {
+        selected.add(id);
+      }
+      this.selectedEvaluationFindingIds = Array.from(selected);
+    },
+
+    evaluationFindingsAllVisibleSelected() {
+      const visibleIds = (this.evaluationFindings || []).map((finding) => this.evaluationFindingId(finding)).filter(Boolean);
+      if (!visibleIds.length) {
+        return false;
+      }
+      const selected = this.selectedEvaluationFindingIdSet();
+      return visibleIds.every((id) => selected.has(id));
+    },
+
+    toggleAllVisibleEvaluationFindings() {
+      const visibleIds = (this.evaluationFindings || []).map((finding) => this.evaluationFindingId(finding)).filter(Boolean);
+      if (!visibleIds.length) {
+        return;
+      }
+      if (this.evaluationFindingsAllVisibleSelected()) {
+        this.selectedEvaluationFindingIds = [];
+        return;
+      }
+      this.selectedEvaluationFindingIds = Array.from(new Set(visibleIds));
+    },
+
+    clearEvaluationFindingSelection() {
+      this.selectedEvaluationFindingIds = [];
+    },
+
+    selectedEvaluationFindings() {
+      const selected = this.selectedEvaluationFindingIdSet();
+      return (this.evaluationFindings || []).filter((finding) => selected.has(this.evaluationFindingId(finding)));
+    },
+
+    selectedEvaluationFindingCount() {
+      return this.selectedEvaluationFindings().length;
+    },
+
+    async bulkUpdateSelectedEvaluationFindingsStatus(status) {
+      const findings = this.selectedEvaluationFindings();
+      if (!findings.length || !status) {
+        return;
+      }
+      this.busy.evaluationFindingUpdate = true;
+      let updatedCount = 0;
+      try {
+        for (const finding of findings) {
+          const updated = await this.apiRequest(`/evaluations/findings/${encodeURIComponent(finding.id)}`, {
+            method: "PATCH",
+            body: JSON.stringify({ status })
+          });
+          updatedCount += 1;
+          this.applyEvaluationFindingUpdate(updated);
+        }
+        this.clearEvaluationFindingSelection();
+        this.showNotice("success", `已将 ${updatedCount} 个 finding 标记为${this.findingStatusLabel(status)}。`);
+      } catch (error) {
+        this.showNotice("error", error.message || "批量更新 finding 状态失败。");
+      } finally {
+        this.busy.evaluationFindingUpdate = false;
+      }
+    },
+
+    async createProposalFromSelectedEvaluationFindings() {
+      const findings = this.selectedEvaluationFindings();
+      if (!findings.length) {
+        this.showNotice("error", "请先选择 findings。");
+        return;
+      }
+      this.busy.evaluationFindingUpdate = true;
+      try {
+        const payload = this.evaluationFindingProposalPayload(findings);
+        const proposal = await this.apiRequest("/governance/proposals", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        for (const finding of findings) {
+          this.applyEvaluationFindingUpdate({ ...finding, status: "converted_to_proposal" });
+        }
+        this.clearEvaluationFindingSelection();
+        this.showNotice("success", "已从选中 findings 创建治理提案。");
+        await this.navigate(this.governanceProposalPath(proposal.id));
+      } catch (error) {
+        this.showNotice("error", error.message || "从选中 findings 创建治理提案失败。");
+      } finally {
+        this.busy.evaluationFindingUpdate = false;
+      }
+    },
+
+    evaluationFindingProposalPayload(findings) {
+      const selected = Array.isArray(findings) ? findings : [];
+      const findingIds = this.evaluationFindingUniqueValues(selected, "id");
+      const runIds = this.evaluationFindingUniqueValues(selected, "run_id");
+      const evaluationIds = this.evaluationFindingUniqueValues(selected, "evaluation_id");
+      const pskillDefinitionIds = this.evaluationFindingUniqueValues(selected, "pskill_definition_id");
+      const categories = this.evaluationFindingUniqueValues(selected, "category");
+      const severities = this.evaluationFindingUniqueValues(selected, "severity");
+      const proposalType = this.proposalTypeForEvaluationFindings(selected);
+      return {
+        proposal_type: proposalType,
+        target: {
+          kind: "run_evaluation_findings",
+          finding_ids: findingIds,
+          evaluation_ids: evaluationIds,
+          run_ids: runIds,
+          pskill_definition_ids: pskillDefinitionIds,
+          categories
+        },
+        problem_statement: this.evaluationFindingProblemStatement(selected),
+        evidence_refs: this.evaluationFindingFlattenEvidenceRefs(selected),
+        proposed_changes: [
+          ...selected.map((finding) => ({
+            kind: "recommended_action",
+            description: finding.recommended_action || finding.description || "复核 finding 并制定修复措施。",
+            source_finding_id: finding.id
+          })),
+          {
+            kind: "governance_boundary",
+            description: "仅生成提案和验证计划，不直接修改 Runtime Kernel、发布版本或工具权限。",
+            direct_activation_allowed: false
+          }
+        ],
+        risk_assessment: {
+          risk_level: this.riskLevelForEvaluationFindings(selected),
+          finding_count: selected.length,
+          severities,
+          requires_human_review: true,
+          requires_rollback_plan: true
+        },
+        required_tests: [
+          {
+            kind: "regression",
+            scope: proposalType,
+            description: "覆盖选中 findings 的回归验证。"
+          },
+          {
+            kind: "replay",
+            run_ids: runIds,
+            description: "使用 Replay / OTel 证据链复核变更前后的运行行为。"
+          }
+        ],
+        source_finding_ids: findingIds,
+        source_evaluation_id: evaluationIds.length === 1 ? evaluationIds[0] : null,
+        source_run_id: runIds.length === 1 ? runIds[0] : null
+      };
+    },
+
+    evaluationFindingUniqueValues(findings, key) {
+      const values = [];
+      for (const finding of findings || []) {
+        const value = String(finding?.[key] || "").trim();
+        if (value && !values.includes(value)) {
+          values.push(value);
+        }
+      }
+      return values;
+    },
+
+    proposalTypeForEvaluationFindings(findings) {
+      const proposalTypes = this.evaluationFindingUniqueValues(findings, "category")
+        .map((category) => FINDING_CATEGORY_PROPOSAL_TYPES[category] || "pskill_template_update");
+      const uniqueTypes = Array.from(new Set(proposalTypes));
+      return uniqueTypes.length === 1 ? uniqueTypes[0] : "pskill_template_update";
+    },
+
+    riskLevelForEvaluationFindings(findings) {
+      let topSeverity = "medium";
+      for (const finding of findings || []) {
+        const severity = String(finding?.severity || "").toLowerCase();
+        if ((FINDING_SEVERITY_RANK[severity] || 0) > (FINDING_SEVERITY_RANK[topSeverity] || 0)) {
+          topSeverity = severity;
+        }
+      }
+      return FINDING_SEVERITY_RISK[topSeverity] || "medium";
+    },
+
+    evaluationFindingProblemStatement(findings) {
+      const selected = Array.isArray(findings) ? findings : [];
+      const descriptions = selected
+        .map((finding) => String(finding?.description || "").trim())
+        .filter(Boolean);
+      if (selected.length === 1) {
+        return descriptions[0] || `处理 RunEvaluationFinding ${selected[0]?.id || ""}`.trim();
+      }
+      const summary = descriptions.slice(0, 3).join("；");
+      const suffix = descriptions.length > 3 ? `；另有 ${descriptions.length - 3} 个 finding。` : "";
+      return `基于 ${selected.length} 个 RunEvaluationFinding 生成治理提案：${summary || "复核选中 findings 并制定改进措施。"}${suffix}`;
+    },
+
+    evaluationFindingFlattenEvidenceRefs(findings) {
+      const refs = [];
+      const seen = new Set();
+      for (const finding of findings || []) {
+        for (const ref of finding?.evidence_refs || []) {
+          const normalized = { ...ref, source_finding_id: finding.id };
+          const key = JSON.stringify([
+            normalized.source_finding_id || "",
+            normalized.kind || "",
+            normalized.id || normalized.source_id || normalized.run_trace_id || normalized.run_event_id || "",
+            normalized.seq_no ?? ""
+          ]);
+          if (!seen.has(key)) {
+            seen.add(key);
+            refs.push(normalized);
+          }
+        }
+      }
+      return refs;
+    },
+
+    evaluationFindingSummary(findings = this.evaluationFindings || []) {
+      const items = Array.isArray(findings) ? findings : [];
+      const total = items.length;
+      const qualityScores = items
+        .map((finding) => Number(finding?.quality_score))
+        .filter((score) => Number.isFinite(score));
+      const evidenceQualityCount = items.filter((finding) => finding.category === "evidence_quality_issue").length;
+      const unresolvedCount = items.filter((finding) => !["resolved", "dismissed"].includes(finding.status)).length;
+      const highSeverityCount = items.filter((finding) => ["high", "critical"].includes(finding.severity)).length;
+      return {
+        total,
+        open_count: items.filter((finding) => finding.status === "open").length,
+        unresolved_count: unresolvedCount,
+        resolved_count: items.filter((finding) => finding.status === "resolved").length,
+        dismissed_count: items.filter((finding) => finding.status === "dismissed").length,
+        high_severity_count: highSeverityCount,
+        evidence_quality_count: evidenceQualityCount,
+        evidence_insufficiency_rate: total ? Math.round((evidenceQualityCount / total) * 100) : 0,
+        avg_quality_score: qualityScores.length
+          ? Math.round(qualityScores.reduce((sum, score) => sum + score, 0) / qualityScores.length)
+          : null,
+        run_count: this.evaluationFindingUniqueValues(items, "run_id").length,
+        pskill_count: this.evaluationFindingUniqueValues(items, "pskill_definition_id").length
+      };
+    },
+
+    evaluationFindingDateKey(finding) {
+      const value = String(finding?.evaluation_created_at || finding?.created_at || "").trim();
+      return /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : "unknown";
+    },
+
+    evaluationFindingTrendBuckets(findings = this.evaluationFindings || []) {
+      const buckets = new Map();
+      for (const finding of findings || []) {
+        const key = this.evaluationFindingDateKey(finding);
+        if (!buckets.has(key)) {
+          buckets.set(key, {
+            date: key,
+            count: 0,
+            evidence_quality_count: 0,
+            quality_scores: []
+          });
+        }
+        const bucket = buckets.get(key);
+        bucket.count += 1;
+        if (finding.category === "evidence_quality_issue") {
+          bucket.evidence_quality_count += 1;
+        }
+        const qualityScore = Number(finding?.quality_score);
+        if (Number.isFinite(qualityScore)) {
+          bucket.quality_scores.push(qualityScore);
+        }
+      }
+      return Array.from(buckets.values())
+        .sort((left, right) => left.date.localeCompare(right.date))
+        .slice(-8)
+        .map((bucket) => ({
+          ...bucket,
+          avg_quality_score: bucket.quality_scores.length
+            ? Math.round(bucket.quality_scores.reduce((sum, score) => sum + score, 0) / bucket.quality_scores.length)
+            : null,
+          evidence_insufficiency_rate: bucket.count
+            ? Math.round((bucket.evidence_quality_count / bucket.count) * 100)
+            : 0
+        }));
+    },
+
+    evaluationFindingTrendDateLabel(date) {
+      const value = String(date || "");
+      return value === "unknown" ? "未知" : value.slice(5);
+    },
+
+    evaluationFindingTrendCountWidth(bucket) {
+      const maxCount = Math.max(1, ...this.evaluationFindingTrendBuckets().map((item) => item.count));
+      const count = Number(bucket?.count || 0);
+      return count ? `${Math.max(10, Math.round((count / maxCount) * 100))}%` : "0%";
+    },
+
+    evaluationFindingTrendEvidenceWidth(bucket) {
+      const rate = Number(bucket?.evidence_insufficiency_rate || 0);
+      return `${Math.max(0, Math.min(100, Math.round(rate)))}%`;
+    },
+
+    evaluationFindingPercentLabel(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? `${Math.round(number)}%` : "N/A";
     },
 
     evaluationReportPath(evaluationId) {

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
 from app.agents.service import AgentService
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
+from app.evaluations.schemas import RunEvaluationFindingResponse
 from app.governance.models import PsopImprovementExperiment, PsopImprovementProposal
 from app.governance.repository import GovernanceRepository
 from app.governance.schemas import (
@@ -14,6 +15,7 @@ from app.governance.schemas import (
     GovernanceProposalCreateRequest,
     GovernanceProposalResponse,
     GovernanceReviewRequest,
+    GovernanceProposalUpdateRequest,
 )
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
@@ -75,23 +77,37 @@ class GovernanceService:
         session: Session,
         payload: GovernanceProposalCreateRequest,
     ) -> GovernanceProposalResponse:
+        source_findings: list[RunEvaluationFinding] = []
+        seen_finding_ids: set[str] = set()
+        for raw_finding_id in payload.source_finding_ids:
+            finding_id = str(raw_finding_id).strip()
+            if not finding_id or finding_id in seen_finding_ids:
+                continue
+            finding = self.repository.get_finding(session, finding_id)
+            if not finding:
+                raise SkillNotFoundError("未找到 RunEvaluationFinding。", details={"finding_id": finding_id})
+            seen_finding_ids.add(finding_id)
+            source_findings.append(finding)
+        source_finding_ids = [finding.id for finding in source_findings]
         result = self._proposal_result_from_request(payload)
         proposal = self._create_proposal_with_governance_agent(
             session,
             proposal_id=generate_uuid(),
-            source_finding_ids=list(payload.source_finding_ids),
+            source_finding_ids=source_finding_ids,
             source_evaluation_id=payload.source_evaluation_id,
             source_run_id=payload.source_run_id,
             result=result,
             agent_input={
                 "schema": "GovernanceProposalInput",
                 "source": "manual",
-                "source_finding_ids": list(payload.source_finding_ids),
+                "source_finding_ids": source_finding_ids,
                 "source_evaluation_id": payload.source_evaluation_id,
                 "source_run_id": payload.source_run_id,
                 "proposal": result,
             },
         )
+        for finding in source_findings:
+            finding.status = "converted_to_proposal"
         session.commit()
         return self.get_proposal(session, proposal.id)
 
@@ -266,6 +282,63 @@ class GovernanceService:
         proposal = self._get_proposal(session, proposal_id)
         return self._build_proposal_response(session, proposal)
 
+    def update_proposal(
+        self,
+        session: Session,
+        proposal_id: str,
+        payload: GovernanceProposalUpdateRequest,
+    ) -> GovernanceProposalResponse:
+        proposal = self._get_proposal(session, proposal_id)
+        self._require_status(proposal, {"draft", "rejected"}, action="update_proposal")
+        result = {
+            "proposal_type": payload.proposal_type.strip() if payload.proposal_type is not None else proposal.proposal_type,
+            "target": payload.target if payload.target is not None else proposal.target_json,
+            "problem_statement": (
+                payload.problem_statement.strip()
+                if payload.problem_statement is not None
+                else proposal.problem_statement
+            ),
+            "evidence_refs": payload.evidence_refs if payload.evidence_refs is not None else list(proposal.evidence_refs or []),
+            "proposed_changes": (
+                payload.proposed_changes
+                if payload.proposed_changes is not None
+                else list(proposal.proposed_changes or [])
+            ),
+            "risk_assessment": (
+                payload.risk_assessment
+                if payload.risk_assessment is not None
+                else dict(proposal.risk_assessment or {})
+            ),
+            "required_tests": payload.required_tests if payload.required_tests is not None else list(proposal.required_tests or []),
+            "activation_plan": (
+                payload.activation_plan
+                if payload.activation_plan is not None
+                else dict(proposal.activation_plan or {})
+            ),
+        }
+        self._validate_proposal_result(result)
+        proposal.proposal_type = str(result["proposal_type"])
+        proposal.target_json = dict(result["target"])
+        proposal.problem_statement = str(result["problem_statement"])
+        proposal.evidence_refs = list(result["evidence_refs"])
+        proposal.proposed_changes = list(result["proposed_changes"])
+        proposal.risk_assessment = dict(result["risk_assessment"])
+        proposal.required_tests = list(result["required_tests"])
+        proposal.activation_plan = dict(result["activation_plan"])
+        proposal.updated_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            proposal.agent_run_id,
+            AppendAgentEventRequest(
+                event_type="governance.proposal.updated",
+                phase="governance",
+                payload={"proposal_id": proposal.id, "status": proposal.status},
+            ),
+            commit=False,
+        )
+        session.commit()
+        return self.get_proposal(session, proposal.id)
+
     def run_tests(self, session: Session, proposal_id: str) -> GovernanceProposalResponse:
         proposal = self._get_proposal(session, proposal_id)
         self._require_status(proposal, {"draft", "testing", "reviewing", "rejected"}, action="run_tests")
@@ -287,6 +360,11 @@ class GovernanceService:
             },
             result_json={
                 "schema": "GovernanceExperimentResult",
+                "regression": {
+                    "status": "succeeded",
+                    "failed_checks": 0,
+                    "required_tests_planned": len(required_tests),
+                },
                 "checks": required_tests,
                 "outcome": "ready_for_review",
                 "direct_activation_performed": False,
@@ -330,16 +408,20 @@ class GovernanceService:
         self._require_status(proposal, {"approved"}, action="activate_canary")
         proposal.status = "canary"
         proposal.updated_at = now_utc()
+        canary_scope = self._canary_scope(proposal)
+        rollback_conditions = self._rollback_conditions(proposal)
         experiment = PsopImprovementExperiment(
             proposal_id=proposal.id,
             experiment_type="canary",
             status="running",
             summary="Governance canary activated; production activation is still gated.",
-            before_metrics={"proposal_status": "approved"},
-            after_metrics={"canary_status": "running"},
+            before_metrics={"proposal_status": "approved", "risk_level": (proposal.risk_assessment or {}).get("risk_level", "medium")},
+            after_metrics={"canary_status": "running", "canary_scope_size": len(canary_scope) if canary_scope else 0},
             result_json={
                 "schema": "GovernanceExperimentResult",
                 "outcome": "canary_running",
+                "canary_scope": canary_scope,
+                "rollback_conditions": rollback_conditions,
                 "direct_activation_performed": False,
                 "rollback_available": True,
             },
@@ -361,6 +443,7 @@ class GovernanceService:
                     **(experiment.result_json or {}),
                     "outcome": "rolled_back",
                     "rolled_back_at": now.isoformat(),
+                    "rollback_conditions": self._rollback_conditions(proposal),
                 }
         proposal.status = "rolled_back"
         proposal.updated_at = now
@@ -375,6 +458,7 @@ class GovernanceService:
                 result_json={
                     "schema": "GovernanceExperimentResult",
                     "outcome": "rolled_back",
+                    "rollback_conditions": self._rollback_conditions(proposal),
                     "direct_activation_performed": False,
                 },
                 started_at=now,
@@ -388,7 +472,10 @@ class GovernanceService:
         experiment = self.repository.get_experiment(session, experiment_id)
         if not experiment:
             raise SkillNotFoundError("未找到治理实验。", details={"experiment_id": experiment_id})
-        return self._build_experiment_response(experiment)
+        return self._build_experiment_response(
+            experiment,
+            proposal=self.repository.get_proposal(session, experiment.proposal_id),
+        )
 
     def list_experiments(
         self,
@@ -400,14 +487,22 @@ class GovernanceService:
     ) -> list[GovernanceExperimentResponse]:
         if proposal_id:
             self._get_proposal(session, proposal_id)
-        return [
-            self._build_experiment_response(item)
-            for item in self.repository.list_experiments(
+        experiments = self.repository.list_experiments(
+            session,
+            proposal_id=self._normalize_optional(proposal_id),
+            status=self._normalize_optional(status),
+            experiment_type=self._normalize_optional(experiment_type),
+        )
+        proposals = {
+            proposal.id: proposal
+            for proposal in self.repository.list_proposals_by_ids(
                 session,
-                proposal_id=self._normalize_optional(proposal_id),
-                status=self._normalize_optional(status),
-                experiment_type=self._normalize_optional(experiment_type),
+                {experiment.proposal_id for experiment in experiments},
             )
+        }
+        return [
+            self._build_experiment_response(item, proposal=proposals.get(item.proposal_id))
+            for item in experiments
         ]
 
     def _create_proposal_with_governance_agent(
@@ -679,6 +774,11 @@ class GovernanceService:
             id=proposal.id,
             agent_run_id=proposal.agent_run_id,
             source_finding_ids=list(proposal.source_finding_ids or []),
+            source_findings=[
+                finding
+                for finding_id in list(proposal.source_finding_ids or [])
+                if (finding := self._build_source_finding_response(session, finding_id)) is not None
+            ],
             source_evaluation_id=proposal.source_evaluation_id,
             source_run_id=proposal.source_run_id,
             proposal_type=proposal.proposal_type,
@@ -691,28 +791,124 @@ class GovernanceService:
             activation_plan=proposal.activation_plan,
             status=proposal.status,
             experiments=[
-                self._build_experiment_response(item)
+                self._build_experiment_response(item, proposal=proposal)
                 for item in self.repository.list_experiments_for_proposal(session, proposal.id)
             ],
             created_at=proposal.created_at,
             updated_at=proposal.updated_at,
         )
 
-    @staticmethod
-    def _build_experiment_response(experiment: PsopImprovementExperiment) -> GovernanceExperimentResponse:
+    def _build_source_finding_response(
+        self,
+        session: Session,
+        finding_id: str,
+    ) -> RunEvaluationFindingResponse | None:
+        finding = self.repository.get_finding(session, finding_id)
+        if not finding:
+            return None
+        evaluation = self.repository.get_evaluation(session, finding.evaluation_id)
+        return RunEvaluationFindingResponse(
+            id=finding.id,
+            evaluation_id=finding.evaluation_id,
+            run_id=evaluation.run_id if evaluation else "",
+            pskill_definition_id=evaluation.pskill_definition_id if evaluation else "",
+            pskill_version_id=evaluation.pskill_version_id if evaluation else "",
+            overall_outcome=evaluation.overall_outcome if evaluation else "",
+            quality_score=evaluation.quality_score if evaluation else None,
+            category=finding.category,
+            severity=finding.severity,
+            confidence=finding.confidence,
+            description=finding.description,
+            evidence_refs=finding.evidence_refs,
+            recommended_action=finding.recommended_action,
+            status=finding.status,
+            evaluation_created_at=evaluation.created_at if evaluation else None,
+            created_at=finding.created_at,
+        )
+
+    def _build_experiment_response(
+        self,
+        experiment: PsopImprovementExperiment,
+        *,
+        proposal: PsopImprovementProposal | None = None,
+    ) -> GovernanceExperimentResponse:
         return GovernanceExperimentResponse(
             id=experiment.id,
             proposal_id=experiment.proposal_id,
+            proposal_status=proposal.status if proposal else "",
+            proposal_type=proposal.proposal_type if proposal else "",
+            problem_statement=proposal.problem_statement if proposal else "",
+            source_run_id=proposal.source_run_id if proposal else None,
             experiment_type=experiment.experiment_type,
             status=experiment.status,
             summary=experiment.summary,
             before_metrics=experiment.before_metrics,
             after_metrics=experiment.after_metrics,
             result=experiment.result_json,
+            canary_scope=self._experiment_canary_scope(experiment, proposal=proposal),
+            rollback_conditions=self._experiment_rollback_conditions(experiment, proposal=proposal),
             started_at=experiment.started_at,
             finished_at=experiment.finished_at,
             created_at=experiment.created_at,
         )
+
+    @staticmethod
+    def _canary_scope(proposal: PsopImprovementProposal) -> dict[str, Any]:
+        activation_plan = proposal.activation_plan or {}
+        nested = activation_plan.get("canary")
+        if isinstance(nested, dict) and isinstance(nested.get("scope"), dict):
+            return dict(nested["scope"])
+        direct = activation_plan.get("canary_scope")
+        if isinstance(direct, dict):
+            return dict(direct)
+        return {
+            "strategy": activation_plan.get("strategy", "test_review_canary_rollback"),
+            "source_run_id": proposal.source_run_id,
+            "proposal_type": proposal.proposal_type,
+        }
+
+    @staticmethod
+    def _rollback_conditions(proposal: PsopImprovementProposal) -> list[Any]:
+        activation_plan = proposal.activation_plan or {}
+        nested = activation_plan.get("rollback")
+        if isinstance(nested, dict) and isinstance(nested.get("conditions"), list):
+            return list(nested["conditions"])
+        direct = activation_plan.get("rollback_conditions")
+        if isinstance(direct, list):
+            return list(direct)
+        return [
+            "canary_metric_regression",
+            "manual_review_rejects_canary",
+            "unexpected_runtime_or_tool_authorization_failure",
+        ]
+
+    def _experiment_canary_scope(
+        self,
+        experiment: PsopImprovementExperiment,
+        *,
+        proposal: PsopImprovementProposal | None = None,
+    ) -> dict[str, Any]:
+        result = experiment.result_json or {}
+        result_scope = result.get("canary_scope")
+        if isinstance(result_scope, dict):
+            return dict(result_scope)
+        if proposal:
+            return self._canary_scope(proposal)
+        return {}
+
+    def _experiment_rollback_conditions(
+        self,
+        experiment: PsopImprovementExperiment,
+        *,
+        proposal: PsopImprovementProposal | None = None,
+    ) -> list[Any]:
+        result = experiment.result_json or {}
+        result_conditions = result.get("rollback_conditions")
+        if isinstance(result_conditions, list):
+            return list(result_conditions)
+        if proposal:
+            return self._rollback_conditions(proposal)
+        return []
 
     @staticmethod
     def _finding_payload(finding: RunEvaluationFinding) -> dict[str, Any]:

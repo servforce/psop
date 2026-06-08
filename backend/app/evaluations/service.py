@@ -666,6 +666,8 @@ class EvaluationService:
             run_id=evaluation.run_id if evaluation else "",
             pskill_definition_id=evaluation.pskill_definition_id if evaluation else "",
             pskill_version_id=evaluation.pskill_version_id if evaluation else "",
+            overall_outcome=evaluation.overall_outcome if evaluation else "",
+            quality_score=evaluation.quality_score if evaluation else None,
             category=finding.category,
             severity=finding.severity,
             confidence=finding.confidence,
@@ -673,6 +675,7 @@ class EvaluationService:
             evidence_refs=finding.evidence_refs,
             recommended_action=finding.recommended_action,
             status=finding.status,
+            evaluation_created_at=evaluation.created_at if evaluation else None,
             created_at=finding.created_at,
         )
 

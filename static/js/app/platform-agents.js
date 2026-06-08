@@ -73,6 +73,7 @@
         this.currentPlatformAgent = agent;
         this.replacePlatformAgent(agent);
         this.platformAgentRuns = asArray(runs);
+        this.ensurePlatformAgentVersionSelection();
         const runIds = this.platformAgentRuns
           .slice(0, 10)
           .map((run) => run.id)
@@ -121,6 +122,7 @@
           });
           this.currentPlatformAgent = detail;
           this.replacePlatformAgent(detail);
+          this.selectedPlatformAgentVersionId = detail.active_version_id || "";
           this.platformAgentDetailTab = "versions";
           this.showNotice("success", "AgentVersion draft 已创建。");
           return;
@@ -148,6 +150,7 @@
           );
           this.currentPlatformAgent = detail;
           this.replacePlatformAgent(detail);
+          this.selectedPlatformAgentVersionId = version.id;
           await this.loadPlatformAgents();
           this.platformAgentDetailTab = "versions";
           this.showNotice("success", action === "rollback" ? "AgentVersion 已回滚。" : "AgentVersion 已激活。");
@@ -314,6 +317,30 @@
       return asArray(agent?.versions).find((version) => version.id === versionId) || null;
     },
 
+    ensurePlatformAgentVersionSelection(agent = this.currentPlatformAgent) {
+      const versions = asArray(agent?.versions);
+      const selected = this.platformAgentVersionById(this.selectedPlatformAgentVersionId, agent);
+      if (selected) {
+        return selected;
+      }
+      const fallback = this.platformAgentVersionById(agent?.active_version_id, agent) || versions[0] || null;
+      this.selectedPlatformAgentVersionId = fallback?.id || "";
+      return fallback;
+    },
+
+    selectPlatformAgentVersion(version) {
+      if (!version?.id) {
+        return;
+      }
+      this.selectedPlatformAgentVersionId = version.id;
+      this.platformAgentDetailTab = "versions";
+    },
+
+    selectedPlatformAgentVersion(agent = this.currentPlatformAgent) {
+      return this.platformAgentVersionById(this.selectedPlatformAgentVersionId, agent)
+        || this.ensurePlatformAgentVersionSelection(agent);
+    },
+
     platformAgentBindingVersionLabel(binding, agent = this.currentPlatformAgent) {
       const version = this.platformAgentVersionById(binding?.active_version_id, agent);
       return version ? this.platformAgentVersionLabel(version) : shortHash(binding?.active_version_id);
@@ -345,6 +372,89 @@
         null,
         2
       );
+    },
+
+    platformAgentSpecDiffRows(version = this.selectedPlatformAgentVersion()) {
+      const activeSpec = this.currentPlatformAgent?.active_version?.spec_json || {};
+      const candidateSpec = version?.spec_json || {};
+      return this.platformAgentSpecDiffRowsForValues(activeSpec, candidateSpec);
+    },
+
+    platformAgentSpecDiffRowsForValues(activeValue, candidateValue, prefix = "") {
+      if (this.platformAgentDiffIsPlainObject(activeValue) && this.platformAgentDiffIsPlainObject(candidateValue)) {
+        const keys = Array.from(new Set([...Object.keys(activeValue), ...Object.keys(candidateValue)])).sort();
+        return keys.flatMap((key) => {
+          const path = prefix ? `${prefix}.${key}` : key;
+          const activeChild = activeValue[key];
+          const candidateChild = candidateValue[key];
+          if (this.platformAgentDiffIsPlainObject(activeChild) && this.platformAgentDiffIsPlainObject(candidateChild)) {
+            return this.platformAgentSpecDiffRowsForValues(activeChild, candidateChild, path);
+          }
+          return [this.platformAgentSpecDiffRow(path, activeChild, candidateChild)];
+        });
+      }
+      return [this.platformAgentSpecDiffRow(prefix || "$", activeValue, candidateValue)];
+    },
+
+    platformAgentSpecDiffRow(path, activeValue, candidateValue) {
+      const activeText = this.platformAgentDiffValueText(activeValue);
+      const candidateText = this.platformAgentDiffValueText(candidateValue);
+      const missingActive = activeValue === undefined;
+      const missingCandidate = candidateValue === undefined;
+      return {
+        path,
+        active: missingActive ? "N/A" : activeText,
+        candidate: missingCandidate ? "N/A" : candidateText,
+        change_type: missingActive ? "added" : missingCandidate ? "removed" : activeText === candidateText ? "same" : "changed"
+      };
+    },
+
+    platformAgentDiffIsPlainObject(value) {
+      return value !== null && typeof value === "object" && !Array.isArray(value);
+    },
+
+    platformAgentDiffValueText(value) {
+      if (value === undefined) {
+        return "";
+      }
+      if (value === null || typeof value !== "object") {
+        return String(value);
+      }
+      return JSON.stringify(value);
+    },
+
+    platformAgentSpecDiffCount(version = this.selectedPlatformAgentVersion(), changeType = "") {
+      const rows = this.platformAgentSpecDiffRows(version);
+      if (!changeType) {
+        return rows.filter((row) => row.change_type !== "same").length;
+      }
+      return rows.filter((row) => row.change_type === changeType).length;
+    },
+
+    platformAgentSpecDiffTone(row) {
+      if (row?.change_type === "added") {
+        return "bg-emerald-500/5 text-emerald-100";
+      }
+      if (row?.change_type === "removed") {
+        return "bg-rose-500/5 text-rose-100";
+      }
+      if (row?.change_type === "changed") {
+        return "bg-orange-500/5 text-orange-100";
+      }
+      return "bg-slate-950/20 text-slate-400";
+    },
+
+    platformAgentSpecDiffBadgeTone(changeType) {
+      if (changeType === "added") {
+        return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
+      }
+      if (changeType === "removed") {
+        return "border-rose-500/30 bg-rose-500/10 text-rose-200";
+      }
+      if (changeType === "changed") {
+        return "border-orange-500/30 bg-orange-500/10 text-orange-200";
+      }
+      return "border-slate-700 bg-slate-950/40 text-slate-400";
     },
 
     platformAgentShortHash(value) {

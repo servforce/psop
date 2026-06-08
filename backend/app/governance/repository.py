@@ -22,6 +22,19 @@ class GovernanceRepository:
             query = query.where(PsopImprovementProposal.status == status)
         return list(session.scalars(query).all())
 
+    def list_proposals_by_ids(
+        self,
+        session: Session,
+        proposal_ids: set[str],
+    ) -> list[PsopImprovementProposal]:
+        if not proposal_ids:
+            return []
+        return list(
+            session.scalars(
+                select(PsopImprovementProposal).where(PsopImprovementProposal.id.in_(proposal_ids))
+            ).all()
+        )
+
     def get_experiment(self, session: Session, experiment_id: str) -> PsopImprovementExperiment | None:
         return session.get(PsopImprovementExperiment, experiment_id)
 

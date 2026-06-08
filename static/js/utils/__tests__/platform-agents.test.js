@@ -41,7 +41,8 @@ function loadPlatformAgentMethods() {
     String,
     Array,
     Object,
-    Number
+    Number,
+    Set
   };
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
@@ -133,6 +134,7 @@ test("platform agent methods load definitions, recent runs, and linked authoriza
     busy: { platformAgents: false, platformAgentDetail: false },
     platformAgents: [],
     currentPlatformAgent: null,
+    selectedPlatformAgentVersionId: "",
     platformAgentRuns: [],
     platformAgentToolAuthorizations: [],
     apiRequest: jest.fn(async (url) => {
@@ -160,6 +162,7 @@ test("platform agent methods load definitions, recent runs, and linked authoriza
   expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs?agent_key=pskill.runner");
   expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent-run-1/tool-authorizations");
   expect(context.currentPlatformAgent.key).toBe("pskill.runner");
+  expect(context.selectedPlatformAgentVersionId).toBe("ver-1");
   expect(context.platformAgentRuns).toEqual([run]);
   expect(context.platformAgentToolAuthorizations).toEqual([authorization]);
   expect(methods.platformAgentRunCountByStatus.call(context, "waiting_tool_authorization")).toBe(1);
@@ -173,6 +176,7 @@ test("platform agent methods derive spec labels, bindings, paths, and diff previ
     ...methods,
     platformAgents: [detail],
     currentPlatformAgent: detail,
+    selectedPlatformAgentVersionId: "",
     platformAgentRuns: [],
     platformAgentToolAuthorizations: []
   };
@@ -210,6 +214,21 @@ test("platform agent methods derive spec labels, bindings, paths, and diff previ
   expect(methods.platformAgentVersionChanged.call(context, detail.versions[0])).toBe(true);
   expect(methods.platformAgentVersionChanged.call(context, detail.versions[1])).toBe(false);
   expect(methods.platformAgentSpecDiffPreview.call(context, detail.versions[0])).toContain('"changed": true');
+  expect(methods.ensurePlatformAgentVersionSelection.call(context).id).toBe("ver-1");
+  methods.selectPlatformAgentVersion.call(context, detail.versions[0]);
+  expect(context.selectedPlatformAgentVersionId).toBe("ver-2");
+  expect(methods.selectedPlatformAgentVersion.call(context).id).toBe("ver-2");
+  const diffRows = methods.platformAgentSpecDiffRows.call(context, detail.versions[0]);
+  expect(diffRows.find((row) => row.path === "goal")).toMatchObject({
+    active: "Observe runtime state.",
+    candidate: "Observe runtime state with extra context.",
+    change_type: "changed"
+  });
+  expect(methods.platformAgentSpecDiffCount.call(context, detail.versions[0], "changed")).toBe(1);
+  expect(methods.platformAgentSpecDiffRowsForValues.call(context, { a: 1 }, { a: 1, b: 2 })).toEqual([
+    { path: "a", active: "1", candidate: "1", change_type: "same" },
+    { path: "b", active: "N/A", candidate: "2", change_type: "added" }
+  ]);
   expect(methods.platformAgentShortHash("abcdef1234567890")).toBe("abcdef123456");
 });
 
@@ -219,6 +238,9 @@ test("platform agents page exposes precise waiting authorization navigation", ()
   expect(html).toContain("platformAgentWaitingAuthorizationPath(run)");
   expect(html).toContain("platformAgentAuthorizationPath(authorization)");
   expect(html).toContain("platformAgentsToolAuthorizationsPath(authorization)");
+  expect(html).toContain("selectPlatformAgentVersion(version)");
+  expect(html).toContain("platformAgentSpecDiffRows(selectedPlatformAgentVersion())");
+  expect(html).toContain("platformAgentSpecDiffCount(selectedPlatformAgentVersion(), 'changed')");
 });
 
 test("platform agent actions create drafts and activate published versions", async () => {
@@ -249,6 +271,7 @@ test("platform agent actions create drafts and activate published versions", asy
     ...methods,
     busy: { platformAgentAction: false, platformAgentDetail: false, platformAgents: false },
     currentPlatformAgent: detail,
+    selectedPlatformAgentVersionId: "",
     platformAgents: [detail],
     platformAgentRuns: [],
     platformAgentToolAuthorizations: [],

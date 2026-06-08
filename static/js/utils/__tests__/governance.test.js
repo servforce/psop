@@ -142,6 +142,7 @@ test("governance methods build filters and labels", () => {
   expect(methods.toolAuthorizationStatusLabel.call(context, "cancelled")).toBe("已取消");
   expect(methods.toolAuthorizationStatusLabel.call(context, "executed")).toBe("已执行");
   expect(methods.governanceProposalPath("proposal-1")).toBe("/admin/governance/proposals/proposal-1");
+  expect(methods.governanceEvaluationReportPath("evaluation-1")).toBe("/admin/evaluations/evaluation-1");
 });
 
 test("governance methods build tool authorization context links", () => {
@@ -284,6 +285,79 @@ test("governance methods extract tool authorization patch diffs", () => {
   expect(methods.toolAuthorizationDiffText.call(context, { tool_arguments_summary: {}, request_payload: {} })).toBe("");
 });
 
+test("governance methods edit proposal payloads and source finding links", async () => {
+  const methods = loadGovernanceMethods();
+  const proposal = {
+    id: "proposal-1",
+    status: "draft",
+    proposal_type: "test_suite_update",
+    problem_statement: "add tests",
+    target: { kind: "test_suite", patch: "--- a/test\n+++ b/test\n@@\n-old\n+new" },
+    evidence_refs: [{ kind: "run_trace", id: "trace-1" }],
+    proposed_changes: [{ kind: "patch", before: { enabled: false }, after: { enabled: true } }],
+    risk_assessment: { risk_level: "medium" },
+    required_tests: [{ kind: "regression" }],
+    activation_plan: { strategy: "review" },
+    source_finding_ids: ["finding-1"],
+    source_findings: [
+      {
+        id: "finding-1",
+        evaluation_id: "evaluation-1",
+        run_id: "run-1",
+        pskill_definition_id: "pskill-1",
+        description: "runner issue",
+        evidence_refs: [{ kind: "run_trace", id: "trace-1" }]
+      }
+    ],
+    experiments: []
+  };
+  const updated = { ...proposal, problem_statement: "add better tests" };
+  const context = {
+    ...methods,
+    busy: { governanceProposalSave: false },
+    governanceProposals: [proposal],
+    currentGovernanceProposal: proposal,
+    governanceProposalEditOpen: false,
+    governanceProposalEditForm: {},
+    apiRequest: jest.fn(async () => updated),
+    showNotice: jest.fn(),
+    refreshGovernanceExperimentRows: jest.fn()
+  };
+
+  expect(methods.governanceCanEditProposal(proposal)).toBe(true);
+  expect(methods.governanceCanEditProposal({ status: "approved" })).toBe(false);
+  expect(methods.governanceProposalSourceFindings(proposal)[0].id).toBe("finding-1");
+  expect(methods.governanceSourceFindingReplayPath(proposal.source_findings[0], proposal.source_findings[0].evidence_refs[0])).toBe(
+    "/admin/runs/run-1/live/replay?event_id=trace-1"
+  );
+  expect(methods.governanceProposalHasPatchDiff.call(context, proposal)).toBe(true);
+  expect(methods.governanceProposalPatchDiffText.call(context, proposal)).toContain("+++ b/test");
+  expect(methods.governanceProposalChangeDiffText.call(context, proposal.proposed_changes[0])).toContain("--- before");
+
+  methods.openGovernanceProposalEdit.call(context, proposal);
+  context.governanceProposalEditForm.problem_statement = "add better tests";
+  context.governanceProposalEditForm.required_tests_json = "[{\"kind\":\"regression\"},{\"kind\":\"replay\"}]";
+
+  await methods.saveGovernanceProposalEdit.call(context, proposal);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/governance/proposals/proposal-1", expect.objectContaining({
+    method: "PATCH"
+  }));
+  const body = JSON.parse(context.apiRequest.mock.calls[0][1].body);
+  expect(body.problem_statement).toBe("add better tests");
+  expect(body.target).toEqual(proposal.target);
+  expect(body.required_tests).toEqual([{ kind: "regression" }, { kind: "replay" }]);
+  expect(context.currentGovernanceProposal.problem_statement).toBe("add better tests");
+  expect(context.governanceProposalEditOpen).toBe(false);
+  expect(context.showNotice).toHaveBeenCalledWith("success", "治理提案已保存。");
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/governance-proposals.html"), "utf8");
+  expect(html).toContain("openGovernanceProposalEdit(currentGovernanceProposal)");
+  expect(html).toContain("governanceProposalSourceFindings(currentGovernanceProposal)");
+  expect(html).toContain("governanceProposalPatchDiffText(currentGovernanceProposal)");
+  expect(html).toContain("governanceProposalToolAuthorizations");
+});
+
 test("governance methods flatten proposal experiments", () => {
   const methods = loadGovernanceMethods();
   const rows = methods.flattenGovernanceExperiments([
@@ -315,7 +389,13 @@ test("governance methods flatten proposal experiments", () => {
 test("governance methods load experiments from read model filters", async () => {
   const methods = loadGovernanceMethods();
   const rows = [
-    { id: "experiment-1", proposal_id: "proposal-1", status: "running", experiment_type: "canary" }
+    {
+      id: "experiment-1",
+      proposal_id: "proposal-1",
+      proposal_status: "canary",
+      status: "running",
+      experiment_type: "canary"
+    }
   ];
   const context = {
     ...methods,
@@ -323,6 +403,8 @@ test("governance methods load experiments from read model filters", async () => 
     governanceExperimentFilters: { proposal_id: "proposal-1", status: "running", experiment_type: "canary" },
     governanceExperimentRows: [],
     governanceExperimentDetail: { id: "experiment-1", status: "planned" },
+    governanceExperimentProposal: null,
+    governanceProposals: [],
     apiRequest: jest.fn(async () => rows),
     showNotice: jest.fn()
   };
@@ -334,7 +416,98 @@ test("governance methods load experiments from read model filters", async () => 
   );
   expect(context.governanceExperimentRows).toEqual(rows);
   expect(context.governanceExperimentDetail.status).toBe("running");
+  expect(context.governanceExperimentDetail.proposal_status).toBe("canary");
   expect(context.busy.governanceExperiments).toBe(false);
+});
+
+test("governance methods manage experiment proposal actions and metric comparisons", async () => {
+  const methods = loadGovernanceMethods();
+  const experiment = {
+    id: "experiment-1",
+    proposal_id: "proposal-1",
+    proposal_status: "approved",
+    proposal_type: "agent_skill_update",
+    source_run_id: "run-1",
+    experiment_type: "canary",
+    status: "running",
+    summary: "canary running",
+    before_metrics: { proposal_status: "approved", risk_level: "high" },
+    after_metrics: { canary_status: "running", risk_level: "high" },
+    result: {
+      outcome: "canary_running",
+      checks: [{ kind: "regression" }],
+      canary_scope: { cohort: "internal" },
+      rollback_conditions: ["metric_regression"]
+    },
+    canary_scope: { cohort: "internal" },
+    rollback_conditions: ["metric_regression"],
+    created_at: "2026-01-01T00:00:00Z"
+  };
+  const proposal = {
+    id: "proposal-1",
+    status: "approved",
+    proposal_type: "agent_skill_update",
+    problem_statement: "adjust agent",
+    source_run_id: "run-1",
+    experiments: [experiment]
+  };
+  const updatedProposal = {
+    ...proposal,
+    status: "canary",
+    experiments: [
+      experiment,
+      {
+        ...experiment,
+        id: "experiment-2",
+        proposal_status: "canary",
+        created_at: "2026-01-02T00:00:00Z"
+      }
+    ]
+  };
+  const context = {
+    ...methods,
+    busy: { governanceProposalAction: false },
+    governanceProposals: [],
+    governanceExperimentRows: [experiment],
+    governanceExperimentDetail: null,
+    governanceExperimentLookupId: "",
+    governanceExperimentProposal: null,
+    apiRequest: jest.fn(async (url) => {
+      if (url.endsWith("/activate-canary")) {
+        return updatedProposal;
+      }
+      return proposal;
+    }),
+    showNotice: jest.fn()
+  };
+
+  const metricRows = methods.governanceExperimentMetricRows.call(context, experiment);
+  expect(metricRows.map((row) => row.key)).toEqual(["canary_status", "proposal_status", "risk_level"]);
+  expect(metricRows.find((row) => row.key === "risk_level").changed).toBe(false);
+  expect(methods.governanceExperimentRegressionChecks(experiment)).toEqual([{ kind: "regression" }]);
+  expect(methods.governanceExperimentCanaryScope(experiment)).toEqual({ cohort: "internal" });
+  expect(methods.governanceExperimentRollbackConditions(experiment)).toEqual(["metric_regression"]);
+
+  await methods.selectGovernanceExperiment.call(context, experiment);
+  expect(context.apiRequest).toHaveBeenCalledWith("/governance/proposals/proposal-1");
+  expect(context.governanceExperimentProposal.status).toBe("approved");
+  expect(methods.governanceCanActivateCanary(methods.governanceExperimentProposalContext.call(context))).toBe(true);
+
+  await methods.activateCanaryFromGovernanceExperiment.call(context, experiment);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/governance/proposals/proposal-1/activate-canary", {
+    method: "POST"
+  });
+  expect(context.governanceExperimentProposal.status).toBe("canary");
+  expect(context.governanceExperimentDetail.id).toBe("experiment-2");
+  expect(context.governanceExperimentRows[0].id).toBe("experiment-2");
+  expect(context.showNotice).toHaveBeenCalledWith("success", "灰度已激活。");
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/governance-experiments.html"), "utf8");
+  expect(html).toContain("selectGovernanceExperiment(experiment)");
+  expect(html).toContain("governanceExperimentMetricRows(governanceExperimentDetail)");
+  expect(html).toContain("activateCanaryFromGovernanceExperiment(governanceExperimentDetail)");
+  expect(html).toContain("governanceExperimentRollbackConditions(governanceExperimentDetail)");
 });
 
 test("governance methods create proposals and run state actions", async () => {

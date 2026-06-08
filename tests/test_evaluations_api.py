@@ -72,7 +72,12 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
         finding = evaluation["findings"][0]
         finding_list_response = client.get(
             "/api/v1/evaluations/findings",
-            params={"status": "open", "category": "runner_issue", "run_id": run_id},
+            params={
+                "status": "open",
+                "category": "runner_issue",
+                "run_id": run_id,
+                "pskill_definition_id": evaluation["pskill_definition_id"],
+            },
         )
         update_response = client.patch(
             f"/api/v1/evaluations/findings/{finding['id']}",
@@ -92,10 +97,15 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
     assert finding["run_id"] == run_id
     assert finding["pskill_definition_id"] == evaluation["pskill_definition_id"]
     assert finding["pskill_version_id"] == evaluation["pskill_version_id"]
+    assert finding["overall_outcome"] == evaluation["overall_outcome"]
+    assert finding["quality_score"] == evaluation["quality_score"]
+    assert finding["evaluation_created_at"] == evaluation["created_at"]
     assert finding_list_response.json()[0]["id"] == finding["id"]
     assert finding_list_response.json()[0]["run_id"] == run_id
+    assert finding_list_response.json()[0]["quality_score"] == evaluation["quality_score"]
     assert update_response.json()["status"] == "accepted"
     assert update_response.json()["run_id"] == run_id
+    assert update_response.json()["quality_score"] == evaluation["quality_score"]
     replay_payload = replay_response.json()
     evidence_ref = finding["evidence_refs"][0]
     matching_timeline_items = [
@@ -106,6 +116,8 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
     assert matching_timeline_items
     assert matching_timeline_items[0]["event_type"] == evidence_ref["event_type"]
     assert replay_payload["run_evaluation_findings"][0]["evidence_refs"][0]["id"] == evidence_ref["id"]
+    assert replay_payload["run_evaluation_findings"][0]["quality_score"] == evaluation["quality_score"]
+    assert replay_payload["run_evaluations"][0]["findings"][0]["quality_score"] == evaluation["quality_score"]
 
 
 def test_evaluation_activity_websocket_streams_report_snapshot() -> None:

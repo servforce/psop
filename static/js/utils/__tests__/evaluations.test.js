@@ -75,7 +75,9 @@ function loadEvaluationHarness() {
     Math,
     String,
     Array,
-    Object
+    Object,
+    Set,
+    Map
   };
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
@@ -95,7 +97,7 @@ test("evaluation methods build finding filters and labels", () => {
       category: "runner_issue",
       severity: "high",
       run_id: "run-123",
-      pskill_definition_id: ""
+      pskill_definition_id: "pskill-1"
     }
   };
 
@@ -105,7 +107,7 @@ test("evaluation methods build finding filters and labels", () => {
   expect(query).toContain("category=runner_issue");
   expect(query).toContain("severity=high");
   expect(query).toContain("run_id=run-123");
-  expect(query).not.toContain("pskill_definition_id=");
+  expect(query).toContain("pskill_definition_id=pskill-1");
   expect(methods.findingCategoryLabel("runner_issue")).toBe("运行智能体");
   expect(methods.findingSeverityLabel("critical")).toBe("严重");
   expect(methods.findingStatusLabel("converted_to_proposal")).toBe("已转提案");
@@ -176,6 +178,186 @@ test("evaluation methods update finding status in list and current report", asyn
   expect(context.evaluationFindings[1].status).toBe("open");
   expect(context.currentEvaluation.findings[0]).toBe(updated);
   expect(context.busy.evaluationFindingUpdate).toBe(false);
+});
+
+test("evaluation findings summarize trends and track bulk selection", () => {
+  const methods = loadEvaluationMethods();
+  const findings = [
+    {
+      id: "finding-1",
+      run_id: "run-1",
+      pskill_definition_id: "pskill-1",
+      category: "runner_issue",
+      severity: "high",
+      status: "open",
+      quality_score: 40,
+      evaluation_created_at: "2026-01-02T00:00:00.000Z"
+    },
+    {
+      id: "finding-2",
+      run_id: "run-2",
+      pskill_definition_id: "pskill-1",
+      category: "evidence_quality_issue",
+      severity: "medium",
+      status: "open",
+      quality_score: 60,
+      evaluation_created_at: "2026-01-02T12:00:00.000Z"
+    },
+    {
+      id: "finding-3",
+      run_id: "run-2",
+      pskill_definition_id: "pskill-2",
+      category: "test_gap",
+      severity: "critical",
+      status: "resolved",
+      quality_score: 80,
+      evaluation_created_at: "2026-01-03T00:00:00.000Z"
+    }
+  ];
+  const context = {
+    ...methods,
+    evaluationFindings: findings,
+    selectedEvaluationFindingIds: []
+  };
+
+  const summary = methods.evaluationFindingSummary.call(context);
+  const trend = methods.evaluationFindingTrendBuckets.call(context);
+
+  expect(summary).toMatchObject({
+    total: 3,
+    unresolved_count: 2,
+    high_severity_count: 2,
+    evidence_quality_count: 1,
+    evidence_insufficiency_rate: 33,
+    avg_quality_score: 60,
+    run_count: 2,
+    pskill_count: 2
+  });
+  expect(trend).toHaveLength(2);
+  expect(trend[0]).toMatchObject({
+    date: "2026-01-02",
+    count: 2,
+    avg_quality_score: 50,
+    evidence_insufficiency_rate: 50
+  });
+  expect(methods.evaluationFindingTrendDateLabel("2026-01-02")).toBe("01-02");
+
+  methods.toggleEvaluationFindingSelection.call(context, findings[0]);
+  expect(methods.isEvaluationFindingSelected.call(context, findings[0])).toBe(true);
+  expect(methods.selectedEvaluationFindingCount.call(context)).toBe(1);
+
+  methods.toggleAllVisibleEvaluationFindings.call(context);
+  expect(context.selectedEvaluationFindingIds).toEqual(["finding-1", "finding-2", "finding-3"]);
+  expect(methods.evaluationFindingsAllVisibleSelected.call(context)).toBe(true);
+
+  context.evaluationFindings = findings.slice(0, 2);
+  methods.syncEvaluationFindingSelection.call(context);
+  expect(context.selectedEvaluationFindingIds).toEqual(["finding-1", "finding-2"]);
+});
+
+test("evaluation findings bulk update selected statuses", async () => {
+  const methods = loadEvaluationMethods();
+  const findingA = { id: "finding-1", status: "open", category: "runner_issue" };
+  const findingB = { id: "finding-2", status: "open", category: "test_gap" };
+  const context = {
+    ...methods,
+    busy: { evaluationFindingUpdate: false },
+    evaluationFindings: [findingA, findingB],
+    selectedEvaluationFindingIds: ["finding-1", "finding-2"],
+    currentEvaluation: { findings: [findingA, findingB] },
+    apiRequest: jest.fn(async (url) => ({
+      id: url.endsWith("finding-1") ? "finding-1" : "finding-2",
+      status: "resolved"
+    })),
+    showNotice: jest.fn()
+  };
+
+  await methods.bulkUpdateSelectedEvaluationFindingsStatus.call(context, "resolved");
+
+  expect(context.apiRequest).toHaveBeenNthCalledWith(1, "/evaluations/findings/finding-1", {
+    method: "PATCH",
+    body: JSON.stringify({ status: "resolved" })
+  });
+  expect(context.apiRequest).toHaveBeenNthCalledWith(2, "/evaluations/findings/finding-2", {
+    method: "PATCH",
+    body: JSON.stringify({ status: "resolved" })
+  });
+  expect(context.evaluationFindings.map((finding) => finding.status)).toEqual(["resolved", "resolved"]);
+  expect(context.currentEvaluation.findings.map((finding) => finding.status)).toEqual(["resolved", "resolved"]);
+  expect(context.selectedEvaluationFindingIds).toEqual([]);
+  expect(context.showNotice).toHaveBeenCalledWith("success", "已将 2 个 finding 标记为已解决。");
+  expect(context.busy.evaluationFindingUpdate).toBe(false);
+});
+
+test("evaluation findings create governance proposal from selected findings", async () => {
+  const methods = loadEvaluationMethods();
+  const findings = [
+    {
+      id: "finding-1",
+      evaluation_id: "evaluation-1",
+      run_id: "run-1",
+      pskill_definition_id: "pskill-1",
+      category: "runner_issue",
+      severity: "high",
+      description: "运行智能体失败。",
+      recommended_action: "调整 runner prompt。",
+      evidence_refs: [{ kind: "run_trace", id: "trace-1" }],
+      status: "open"
+    },
+    {
+      id: "finding-2",
+      evaluation_id: "evaluation-2",
+      run_id: "run-2",
+      pskill_definition_id: "pskill-1",
+      category: "evidence_quality_issue",
+      severity: "medium",
+      description: "证据不足。",
+      recommended_action: "补充证据采集要求。",
+      evidence_refs: [{ kind: "run_event", seq_no: 3 }],
+      status: "open"
+    }
+  ];
+  const context = {
+    ...methods,
+    busy: { evaluationFindingUpdate: false },
+    evaluationFindings: findings,
+    selectedEvaluationFindingIds: ["finding-1", "finding-2"],
+    currentEvaluation: { findings },
+    apiRequest: jest.fn(async () => ({ id: "proposal-1" })),
+    showNotice: jest.fn(),
+    navigate: jest.fn(),
+    governanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`
+  };
+
+  await methods.createProposalFromSelectedEvaluationFindings.call(context);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/governance/proposals", expect.objectContaining({
+    method: "POST"
+  }));
+  const body = JSON.parse(context.apiRequest.mock.calls[0][1].body);
+  expect(body.source_finding_ids).toEqual(["finding-1", "finding-2"]);
+  expect(body.target).toMatchObject({
+    kind: "run_evaluation_findings",
+    run_ids: ["run-1", "run-2"],
+    pskill_definition_ids: ["pskill-1"]
+  });
+  expect(body.proposal_type).toBe("pskill_template_update");
+  expect(body.risk_assessment.risk_level).toBe("high");
+  expect(body.evidence_refs).toEqual([
+    { kind: "run_trace", id: "trace-1", source_finding_id: "finding-1" },
+    { kind: "run_event", seq_no: 3, source_finding_id: "finding-2" }
+  ]);
+  expect(context.evaluationFindings.map((finding) => finding.status)).toEqual([
+    "converted_to_proposal",
+    "converted_to_proposal"
+  ]);
+  expect(context.selectedEvaluationFindingIds).toEqual([]);
+  expect(context.navigate).toHaveBeenCalledWith("/admin/governance/proposals/proposal-1");
+
+  const htmlFindings = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-findings.html"), "utf8");
+  expect(htmlFindings).toContain("evaluationFindingFilters.pskill_definition_id");
+  expect(htmlFindings).toContain("createProposalFromSelectedEvaluationFindings()");
+  expect(htmlFindings).toContain("bulkUpdateSelectedEvaluationFindingsStatus('resolved')");
 });
 
 test("evaluation methods stream activity snapshots into current report", async () => {

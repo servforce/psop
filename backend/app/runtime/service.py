@@ -976,6 +976,7 @@ class RuntimeService:
             agent_run_ids=agent_run_ids,
         )
         run_evaluations = self._list_replay_run_evaluations(session, run_id=run_id)
+        run_evaluations_by_id = {evaluation.id: evaluation for evaluation in run_evaluations}
         run_evaluation_findings = self._list_replay_run_evaluation_findings(session, run_id=run_id)
         timeline = [self._build_timeline_item(event) for event in run_traces]
         timeline.extend(self._build_terminal_timeline_item(event) for event in run_events)
@@ -1005,7 +1006,11 @@ class RuntimeService:
                 for evaluation in run_evaluations
             ],
             run_evaluation_findings=[
-                self._build_run_evaluation_finding_response(item) for item in run_evaluation_findings
+                self._build_run_evaluation_finding_response(
+                    item,
+                    evaluation=run_evaluations_by_id.get(item.evaluation_id),
+                )
+                for item in run_evaluation_findings
             ],
         )
 
@@ -3100,7 +3105,7 @@ class RuntimeService:
             summary=evaluation.summary,
             attribution=evaluation.attribution_json,
             findings=[
-                self._build_run_evaluation_finding_response(item)
+                self._build_run_evaluation_finding_response(item, evaluation=evaluation)
                 for item in findings
                 if item.evaluation_id == evaluation.id
             ],
@@ -3108,10 +3113,19 @@ class RuntimeService:
         )
 
     @staticmethod
-    def _build_run_evaluation_finding_response(finding: RunEvaluationFinding) -> RunEvaluationFindingResponse:
+    def _build_run_evaluation_finding_response(
+        finding: RunEvaluationFinding,
+        *,
+        evaluation: RunEvaluation | None = None,
+    ) -> RunEvaluationFindingResponse:
         return RunEvaluationFindingResponse(
             id=finding.id,
             evaluation_id=finding.evaluation_id,
+            run_id=evaluation.run_id if evaluation else "",
+            pskill_definition_id=evaluation.pskill_definition_id if evaluation else "",
+            pskill_version_id=evaluation.pskill_version_id if evaluation else "",
+            overall_outcome=evaluation.overall_outcome if evaluation else "",
+            quality_score=evaluation.quality_score if evaluation else None,
             category=finding.category,
             severity=finding.severity,
             confidence=finding.confidence,
@@ -3119,6 +3133,7 @@ class RuntimeService:
             evidence_refs=finding.evidence_refs,
             recommended_action=finding.recommended_action,
             status=finding.status,
+            evaluation_created_at=evaluation.created_at if evaluation else None,
             created_at=finding.created_at,
         )
 

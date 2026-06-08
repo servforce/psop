@@ -12,6 +12,7 @@ from app.governance.schemas import (
     GovernanceExperimentResponse,
     GovernanceProposalCreateRequest,
     GovernanceProposalResponse,
+    GovernanceProposalUpdateRequest,
     GovernanceReviewRequest,
 )
 from app.governance.service import GovernanceService
@@ -47,6 +48,16 @@ def get_proposal(
     service: GovernanceService = Depends(get_governance_service),
 ) -> GovernanceProposalResponse:
     return service.get_proposal(session, proposal_id)
+
+
+@router.patch("/proposals/{proposal_id}", response_model=GovernanceProposalResponse)
+def update_proposal(
+    proposal_id: str,
+    payload: GovernanceProposalUpdateRequest,
+    session: Session = Depends(get_db_session),
+    service: GovernanceService = Depends(get_governance_service),
+) -> GovernanceProposalResponse:
+    return service.update_proposal(session, proposal_id, payload)
 
 
 @router.post("/proposals/{proposal_id}/run-tests", response_model=GovernanceProposalResponse)

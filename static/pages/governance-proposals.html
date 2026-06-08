@@ -113,6 +113,10 @@
                 <span class="status-badge" :class="statusBadgeTone(currentGovernanceProposal.status)" x-text="governanceProposalStatusLabel(currentGovernanceProposal.status)"></span>
               </div>
               <div class="mt-4 flex flex-wrap gap-2">
+                <button type="button" class="button-secondary h-9 px-3" :disabled="busy.governanceProposalSave || !governanceCanEditProposal(currentGovernanceProposal)" @click="openGovernanceProposalEdit(currentGovernanceProposal)">
+                  <span class="material-symbols-outlined text-[18px]">edit</span>
+                  <span>编辑</span>
+                </button>
                 <button type="button" class="button-secondary h-9 px-3" :disabled="busy.governanceProposalAction || !governanceCanRunTests(currentGovernanceProposal)" @click="runGovernanceProposalTests(currentGovernanceProposal)">
                   <span class="material-symbols-outlined text-[18px]">science</span>
                   <span>测试</span>
@@ -136,6 +140,63 @@
               </div>
             </header>
 
+            <section x-show="governanceProposalEditOpen" x-cloak class="divide-y divide-slate-800 bg-slate-950/30">
+              <div class="flex flex-wrap items-center justify-between gap-3 p-4">
+                <div>
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Edit Proposal</p>
+                  <p class="mt-1 text-sm text-slate-400">仅 draft / rejected 状态可编辑；保存后需要重新运行测试与 review。</p>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button type="button" class="button-secondary h-8 px-3" :disabled="busy.governanceProposalSave" @click="closeGovernanceProposalEdit()">
+                    <span class="material-symbols-outlined text-[17px]">close</span>
+                    <span>取消</span>
+                  </button>
+                  <button type="button" class="button-primary h-8 px-3" :disabled="busy.governanceProposalSave" @click="saveGovernanceProposalEdit(currentGovernanceProposal)">
+                    <span class="material-symbols-outlined text-[17px]">save</span>
+                    <span>保存</span>
+                  </button>
+                </div>
+              </div>
+              <div class="grid gap-3 p-4 lg:grid-cols-2">
+                <label class="field-block">
+                  <span class="field-label">类型</span>
+                  <select x-model="governanceProposalEditForm.proposal_type" class="input-field h-9 py-0">
+                    <template x-for="option in governanceProposalTypeOptions()" :key="option.value">
+                      <option :value="option.value" x-text="option.label"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block">
+                  <span class="field-label">Problem Statement</span>
+                  <input x-model="governanceProposalEditForm.problem_statement" class="input-field h-9 py-0" />
+                </label>
+                <label class="field-block lg:col-span-2">
+                  <span class="field-label">Target JSON</span>
+                  <textarea x-model="governanceProposalEditForm.target_json" class="textarea-field min-h-28 font-mono text-xs"></textarea>
+                </label>
+                <label class="field-block">
+                  <span class="field-label">Evidence refs</span>
+                  <textarea x-model="governanceProposalEditForm.evidence_refs_json" class="textarea-field min-h-36 font-mono text-xs"></textarea>
+                </label>
+                <label class="field-block">
+                  <span class="field-label">Proposed changes</span>
+                  <textarea x-model="governanceProposalEditForm.proposed_changes_json" class="textarea-field min-h-36 font-mono text-xs"></textarea>
+                </label>
+                <label class="field-block">
+                  <span class="field-label">Risk assessment</span>
+                  <textarea x-model="governanceProposalEditForm.risk_assessment_json" class="textarea-field min-h-36 font-mono text-xs"></textarea>
+                </label>
+                <label class="field-block">
+                  <span class="field-label">Required tests</span>
+                  <textarea x-model="governanceProposalEditForm.required_tests_json" class="textarea-field min-h-36 font-mono text-xs"></textarea>
+                </label>
+                <label class="field-block lg:col-span-2">
+                  <span class="field-label">Activation plan</span>
+                  <textarea x-model="governanceProposalEditForm.activation_plan_json" class="textarea-field min-h-36 font-mono text-xs"></textarea>
+                </label>
+              </div>
+            </section>
+
             <div class="grid grid-cols-2 divide-x divide-slate-800 text-xs lg:grid-cols-4">
               <div class="p-4">
                 <p class="text-slate-500">类型</p>
@@ -154,6 +215,70 @@
                 <p class="mt-1 font-mono text-slate-300" x-text="(currentGovernanceProposal.source_finding_ids || []).length"></p>
               </div>
             </div>
+
+            <section class="p-4">
+              <div class="flex items-center justify-between gap-3">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Source Findings</p>
+                <button type="button" class="button-secondary h-8 px-3" @click="navigate('/admin/evaluations/findings')">
+                  <span class="material-symbols-outlined text-[17px]">fact_check</span>
+                  <span>Findings</span>
+                </button>
+              </div>
+              <div class="mt-3 divide-y divide-slate-800 rounded-md border border-slate-800">
+                <template x-if="governanceProposalSourceFindings(currentGovernanceProposal).length === 0">
+                  <p class="p-3 text-sm text-slate-400">无来源 finding</p>
+                </template>
+                <template x-for="finding in governanceProposalSourceFindings(currentGovernanceProposal)" :key="finding.id">
+                  <div class="p-3">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                      <div class="min-w-0">
+                        <p class="break-words text-sm font-medium text-slate-200" x-text="finding.description || finding.id"></p>
+                        <p class="mt-1 truncate font-mono text-[11px] text-slate-500">
+                          <span x-text="finding.id"></span>
+                          <span class="text-slate-600"> · </span>
+                          <span x-text="finding.pskill_definition_id || 'pskill:N/A'"></span>
+                        </p>
+                      </div>
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="status-badge" :class="statusBadgeTone(finding.status)" x-text="formatStatus(finding.status)"></span>
+                        <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300" x-text="finding.category || 'category:N/A'"></span>
+                      </div>
+                    </div>
+                    <div class="mt-3 flex flex-wrap items-center gap-2">
+                      <button type="button" class="button-secondary h-8 px-3" :disabled="!finding.evaluation_id" @click="navigate(governanceEvaluationReportPath(finding.evaluation_id))">
+                        <span class="material-symbols-outlined text-[17px]">open_in_new</span>
+                        <span>报告</span>
+                      </button>
+                      <button type="button" class="button-secondary h-8 px-3" :disabled="!finding.run_id" @click="openGovernanceSourceFindingReplay(finding)">
+                        <span class="material-symbols-outlined text-[17px]">history</span>
+                        <span>Replay</span>
+                      </button>
+                      <template x-for="ref in finding.evidence_refs || []" :key="`${finding.id}-${ref.kind}-${ref.id || ref.seq_no}`">
+                        <button
+                          type="button"
+                          class="inline-flex h-8 max-w-full items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 font-mono text-[11px] text-sky-200 transition hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/40 disabled:text-slate-500"
+                          :disabled="!finding.run_id"
+                          @click="openGovernanceSourceFindingReplay(finding, ref)"
+                        >
+                          <span class="material-symbols-outlined shrink-0 text-[14px]">target</span>
+                          <span class="truncate" x-text="governanceFindingEvidenceLabel(ref)"></span>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </section>
+
+            <section class="p-4">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Patch Diff</p>
+              <template x-if="governanceProposalHasPatchDiff(currentGovernanceProposal)">
+                <pre class="mt-3 max-h-72 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="governanceProposalPatchDiffText(currentGovernanceProposal)"></pre>
+              </template>
+              <template x-if="!governanceProposalHasPatchDiff(currentGovernanceProposal)">
+                <p class="mt-3 rounded-md border border-slate-800 bg-slate-950/40 p-3 text-sm text-slate-400">暂无 patch diff；当前提案仍需通过 proposed changes 和 required tests review。</p>
+              </template>
+            </section>
 
             <div class="grid grid-cols-1 divide-y divide-slate-800 xl:grid-cols-2 xl:divide-x xl:divide-y-0">
               <section class="min-w-0 divide-y divide-slate-800">
@@ -185,6 +310,56 @@
                   <pre class="mt-3 max-h-48 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="governanceJsonPreview(currentGovernanceProposal.activation_plan)"></pre>
                 </div>
               </section>
+            </div>
+
+            <div class="p-4">
+              <div class="flex items-center justify-between gap-3">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Tool Authorizations</p>
+                <button type="button" class="button-secondary h-8 px-3" @click="navigate(toolAuthorizationsPath())">
+                  <span class="material-symbols-outlined text-[17px]">admin_panel_settings</span>
+                  <span>打开</span>
+                </button>
+              </div>
+              <div class="mt-3 divide-y divide-slate-800 rounded-md border border-slate-800">
+                <template x-if="(governanceProposalToolAuthorizations || []).length === 0">
+                  <p class="p-3 text-sm text-slate-400">当前 proposal 没有关联工具授权。</p>
+                </template>
+                <template x-for="authorization in governanceProposalToolAuthorizations" :key="authorization.id">
+                  <div class="p-3">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                      <div class="min-w-0">
+                        <p class="truncate text-sm font-medium text-slate-200" x-text="authorization.tool_name"></p>
+                        <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="authorization.id"></p>
+                      </div>
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="status-badge" :class="statusBadgeTone(authorization.status)" x-text="toolAuthorizationStatusLabel(authorization.status)"></span>
+                        <span class="status-badge" :class="toolAuthorizationSideEffectTone(authorization.side_effect_level)" x-text="formatStatus(authorization.side_effect_level)"></span>
+                        <span class="status-badge" :class="toolAuthorizationRiskTone(authorization.risk_level)" x-text="formatStatus(authorization.risk_level)"></span>
+                      </div>
+                    </div>
+                    <p class="mt-3 text-sm leading-6 text-slate-400" x-text="authorization.authorization_reason || authorization.expected_effect_summary || 'N/A'"></p>
+                    <div class="mt-3 flex flex-wrap items-center gap-2">
+                      <button type="button" class="button-secondary h-8 px-3" :disabled="busy.toolAuthorizationAction || authorization.status !== 'pending'" @click="decideToolAuthorization(authorization, 'approve')">
+                        <span class="material-symbols-outlined text-[17px]">check_circle</span>
+                        <span>批准</span>
+                      </button>
+                      <button type="button" class="button-danger h-8 px-3" :disabled="busy.toolAuthorizationAction || authorization.status !== 'pending'" @click="decideToolAuthorization(authorization, 'reject')">
+                        <span class="material-symbols-outlined text-[17px]">cancel</span>
+                        <span>拒绝</span>
+                      </button>
+                      <template x-for="link in toolAuthorizationContextLinks(authorization)" :key="link.key">
+                        <button type="button" class="button-secondary h-8 px-3" @click="navigate(link.href)">
+                          <span class="material-symbols-outlined text-[17px]" x-text="link.icon"></span>
+                          <span x-text="link.label"></span>
+                        </button>
+                      </template>
+                    </div>
+                    <template x-if="toolAuthorizationHasDiff(authorization)">
+                      <pre class="mt-3 max-h-48 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="toolAuthorizationDiffText(authorization)"></pre>
+                    </template>
+                  </div>
+                </template>
+              </div>
             </div>
 
             <div class="p-4">

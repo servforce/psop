@@ -12,6 +12,8 @@ class RunEvaluationFindingResponse(BaseModel):
     run_id: str = ""
     pskill_definition_id: str = ""
     pskill_version_id: str = ""
+    overall_outcome: str = ""
+    quality_score: int | None = None
     category: str
     severity: str
     confidence: int
@@ -19,6 +21,7 @@ class RunEvaluationFindingResponse(BaseModel):
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
     recommended_action: str
     status: str
+    evaluation_created_at: datetime | None = None
     created_at: datetime
 
 

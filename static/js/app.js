@@ -812,6 +812,7 @@
         evaluation_id: ""
       },
       evaluationFindings: [],
+      selectedEvaluationFindingIds: [],
       evaluationFindingFilters: {
         status: "open",
         category: "",
@@ -839,6 +840,17 @@
         problem_statement: "",
         target_json: "{\n  \"kind\": \"psop_system_improvement\"\n}"
       },
+      governanceProposalEditOpen: false,
+      governanceProposalEditForm: {
+        proposal_type: "pskill_template_update",
+        problem_statement: "",
+        target_json: "{}",
+        evidence_refs_json: "[]",
+        proposed_changes_json: "[]",
+        risk_assessment_json: "{}",
+        required_tests_json: "[]",
+        activation_plan_json: "{}"
+      },
       governanceReviewForm: {
         decision: "approved",
         review_notes: ""
@@ -851,6 +863,7 @@
       },
       governanceExperimentLookupId: "",
       governanceExperimentDetail: null,
+      governanceExperimentProposal: null,
       toolAuthorizations: [],
       toolAuthorizationFilters: {
         status: "pending",
@@ -880,6 +893,7 @@
       platformAgentRuns: [],
       platformAgentToolAuthorizations: [],
       platformAgentDetailTab: "spec",
+      selectedPlatformAgentVersionId: "",
       skillPackages: [],
       currentSkillPackage: null,
       skillPackageSyncResult: null,
@@ -1116,6 +1130,7 @@
         evaluationFindingUpdate: false,
         governanceProposals: false,
         governanceProposalCreate: false,
+        governanceProposalSave: false,
         governanceProposalAction: false,
         governanceExperiments: false,
         governanceExperimentLookup: false,
