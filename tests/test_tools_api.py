@@ -27,6 +27,7 @@ def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
         )
         detail_response = client.get("/api/v1/tools/psop.agent_version.activate")
         memory_detail_response = client.get("/api/v1/tools/psop.memory.write_candidate")
+        media_detail_response = client.get("/api/v1/tools/psop.media.compute")
         propose_patch_detail_response = client.get("/api/v1/tools/psop.repository.propose_patch")
 
     tools = {item["name"]: item for item in list_response.json()}
@@ -44,6 +45,11 @@ def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
 
     assert tools["psop.pskills.read"]["side_effect_level"] == "read"
     assert tools["psop.pskills.read"]["requires_authorization"] is False
+    assert tools["psop.pskills.read"]["policy_summary"]["native_implemented"] is True
+    assert tools["psop.media.compute"]["side_effect_level"] == "compute"
+    assert tools["psop.media.compute"]["requires_authorization"] is False
+    assert tools["psop.media.compute"]["policy_summary"]["native_implemented"] is False
+    assert tools["psop.media.compute"]["policy_summary"]["auto_executable"] is False
     assert tools["psop.agent_version.activate"]["side_effect_level"] == "high_write"
     assert tools["psop.agent_version.activate"]["requires_authorization"] is True
 
@@ -69,6 +75,11 @@ def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
     assert memory_detail_response.status_code == 200
     assert memory_detail["side_effect_level"] == "low_write"
     assert memory_detail["requires_authorization"] is False
+
+    media_detail = media_detail_response.json()
+    assert media_detail_response.status_code == 200
+    assert media_detail["allowed_agent_keys"] == []
+    assert media_detail["policy_summary"]["native_implemented"] is False
 
     propose_patch_detail = propose_patch_detail_response.json()
     assert propose_patch_detail_response.status_code == 200
@@ -126,6 +137,10 @@ def test_tools_api_dry_runs_read_compute_and_explains_authorization_policy() -> 
             "/api/v1/tools/psop.compiler.validate_formal_v5/test",
             json={"arguments_summary": {"artifact_id": "artifact-1"}},
         )
+        unimplemented_compute_response = client.post(
+            "/api/v1/tools/psop.media.compute/test",
+            json={"arguments_summary": {"operation": "extract_keyframes"}},
+        )
         high_write_response = client.post(
             "/api/v1/tools/psop.agent_version.activate/test",
             json={"arguments_summary": {"agent_key": "pskill.runner", "version_id": "version-1"}},
@@ -142,6 +157,14 @@ def test_tools_api_dry_runs_read_compute_and_explains_authorization_policy() -> 
     assert compute_response.status_code == 200
     assert compute_response.json()["executable"] is True
     assert compute_response.json()["side_effect_level"] == "compute"
+
+    assert unimplemented_compute_response.status_code == 200
+    unimplemented_compute_result = unimplemented_compute_response.json()
+    assert unimplemented_compute_result["executable"] is False
+    assert unimplemented_compute_result["side_effect_level"] == "compute"
+    assert unimplemented_compute_result["policy_reason"] == "native_tool_not_implemented"
+    assert unimplemented_compute_result["policy_decision"]["native_implemented"] is False
+    assert unimplemented_compute_result["output_preview"]["status"] == "not_executed"
 
     assert high_write_response.status_code == 200
     high_write_result = high_write_response.json()

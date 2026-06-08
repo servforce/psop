@@ -31,6 +31,28 @@ DEFAULT_TOOL_SIDE_EFFECTS: dict[str, str] = {
 }
 
 
+NATIVE_TOOL_EXECUTORS: set[str] = {
+    "psop.pskills.get",
+    "psop.pskills.read",
+    "psop.materials.list",
+    "psop.materials.read_analysis",
+    "psop.repository.read_file",
+    "psop.repository.propose_patch",
+    "psop.pskill_manifest.parse",
+    "psop.pskill_manifest.render",
+    "psop.compiler.validate_formal_v5",
+    "psop.testing.write_diagnostics",
+    "psop.runtime.read",
+    "psop.evaluations.read",
+    "psop.evaluations.write_diagnostics",
+    "psop.governance.write_proposal",
+    "psop.memory.search",
+    "psop.memory.write_candidate",
+    "psop.agent_version.activate",
+    "psop.skill_version.activate",
+}
+
+
 @dataclass(frozen=True)
 class ToolPolicyDecision:
     allowed: bool

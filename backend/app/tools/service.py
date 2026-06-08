@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agent_harness.tools import AUTH_REQUIRED_LEVELS, DEFAULT_TOOL_SIDE_EFFECTS, ToolPolicy
+from app.agent_harness.tools import AUTH_REQUIRED_LEVELS, DEFAULT_TOOL_SIDE_EFFECTS, NATIVE_TOOL_EXECUTORS, ToolPolicy
 from app.agents.service import AgentService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
@@ -168,13 +168,20 @@ class ToolService:
             requested_side_effect_level=self._normalize_optional(payload.requested_side_effect_level),
             effective_allowed_tools=effective_allowed_tools,
         )
+        native_implemented = tool.name in NATIVE_TOOL_EXECUTORS
         executable = (
             tool.status == "active"
             and policy_decision.allowed
             and not policy_decision.requires_authorization
+            and native_implemented
             and policy_decision.side_effect_level in {"read", "compute"}
         )
-        policy_reason = self._tool_test_policy_reason(tool, policy_decision.reason, executable=executable)
+        policy_reason = self._tool_test_policy_reason(
+            tool,
+            policy_decision.reason,
+            executable=executable,
+            native_implemented=native_implemented,
+        )
         return ToolTestResponse(
             tool_name=tool.name,
             executable=executable,
@@ -194,6 +201,7 @@ class ToolService:
                 "agent_key": agent_key or None,
                 "console_test_supported_levels": ["read", "compute"],
                 "dry_run_only": True,
+                "native_implemented": native_implemented,
             },
         )
 
@@ -218,7 +226,8 @@ class ToolService:
             failure_rate=failure_rate,
             policy_summary={
                 "registered": True,
-                "auto_executable": not tool.requires_authorization,
+                "native_implemented": tool.name in NATIVE_TOOL_EXECUTORS,
+                "auto_executable": not tool.requires_authorization and tool.name in NATIVE_TOOL_EXECUTORS,
                 "auth_required_levels": sorted(AUTH_REQUIRED_LEVELS),
                 "permission_rule": "AgentSpec.allowed_tools ∩ SkillPackage.allowed_tools ∩ ToolPolicy.allowed_tools",
             },
@@ -239,7 +248,13 @@ class ToolService:
         return agent_allowed_tools & skill_allowed_tools
 
     @staticmethod
-    def _tool_test_policy_reason(tool: ToolDefinition, policy_reason: str, *, executable: bool) -> str:
+    def _tool_test_policy_reason(
+        tool: ToolDefinition,
+        policy_reason: str,
+        *,
+        executable: bool,
+        native_implemented: bool,
+    ) -> str:
         if executable:
             return "console_test_allowed"
         if tool.status != "active":
@@ -248,6 +263,8 @@ class ToolService:
             return "requires_tool_authorization"
         if tool.side_effect_level not in {"read", "compute"}:
             return "unsupported_side_effect_for_console_test"
+        if not native_implemented:
+            return "native_tool_not_implemented"
         return policy_reason
 
     @staticmethod
