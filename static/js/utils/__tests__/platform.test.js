@@ -159,7 +159,7 @@ test("platform methods build filters, labels, and paths", () => {
       namespace: "evaluation",
       memory_type: "episodic",
       status: "pending_review",
-      agent_key: "psop.evaluator",
+      agent_key: "pskill.evaluator",
       q: "regression"
     },
     optionLabel: (options, value) => options.find((item) => item.value === value)?.label || value
@@ -171,7 +171,7 @@ test("platform methods build filters, labels, and paths", () => {
   );
   expect(methods.skillPackageQueryString.call(context)).toBe("scope=psop&status=active");
   expect(methods.memoryQueryString.call(context)).toBe(
-    "namespace=evaluation&memory_type=episodic&status=pending_review&agent_key=psop.evaluator&q=regression&limit=100"
+    "namespace=evaluation&memory_type=episodic&status=pending_review&agent_key=pskill.evaluator&q=regression&limit=100"
   );
   expect(methods.agentRunStatusLabel.call(context, "waiting_tool_authorization")).toBe("等待授权");
   expect(methods.skillPackageScopeLabel.call(context, "psop")).toBe("PSOP");
@@ -705,7 +705,7 @@ test("platform methods search and save memory entries", async () => {
     id: "mem-1",
     namespace: "evaluation",
     memory_type: "episodic",
-    agent_key: "psop.evaluator",
+    agent_key: "pskill.evaluator",
     status: "pending_review",
     confidence: 62,
     title: "Finding pattern",
