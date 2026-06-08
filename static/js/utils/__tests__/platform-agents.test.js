@@ -12,7 +12,7 @@ function loadPlatformAgentMethods() {
         buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
         buildPlatformAgentRunPath: (agentRunId, focus = {}) => {
           const params = new URLSearchParams();
-          for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+          for (const key of ["tab", "event_id", "model_call_id", "tool_call_id", "authorization_id"]) {
             if (focus[key]) {
               params.set(key, focus[key]);
             }

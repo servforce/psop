@@ -78,7 +78,7 @@ function loadPlatformHarness(locationSearch = "") {
         },
         buildPlatformAgentRunPath: (agentRunId, focus = {}) => {
           const params = new URLSearchParams();
-          for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+          for (const key of ["tab", "event_id", "model_call_id", "tool_call_id", "authorization_id"]) {
             if (focus[key]) {
               params.set(key, focus[key]);
             }
@@ -247,6 +247,24 @@ test("platform methods sync agent run filters from location", async () => {
 });
 
 test("platform methods sync agent run detail focus from location", () => {
+  const eventMethods = loadPlatformMethods("?event_id=event-1");
+  const eventContext = { ...eventMethods, agentRunDetailTab: "tools" };
+  eventMethods.syncAgentRunDetailFromLocation.call(eventContext);
+
+  expect(eventContext.agentRunDetailTab).toBe("events");
+  expect(eventMethods.agentRunFocusedEventId.call(eventContext)).toBe("event-1");
+  expect(eventMethods.isAgentRunEventFocused.call(eventContext, { id: "event-1" })).toBe(true);
+  expect(eventMethods.isAgentRunEventFocused.call(eventContext, { id: "event-2" })).toBe(false);
+
+  const modelMethods = loadPlatformMethods("?model_call_id=model-call-1");
+  const modelContext = { ...modelMethods, agentRunDetailTab: "events" };
+  modelMethods.syncAgentRunDetailFromLocation.call(modelContext);
+
+  expect(modelContext.agentRunDetailTab).toBe("model");
+  expect(modelMethods.agentRunFocusedModelCallId.call(modelContext)).toBe("model-call-1");
+  expect(modelMethods.isAgentRunModelCallFocused.call(modelContext, { id: "model-call-1" })).toBe(true);
+  expect(modelMethods.isAgentRunModelCallFocused.call(modelContext, { id: "model-call-2" })).toBe(false);
+
   const methods = loadPlatformMethods("?tool_call_id=tool-call-1");
   const context = { ...methods, agentRunDetailTab: "events" };
 
@@ -264,6 +282,10 @@ test("platform methods sync agent run detail focus from location", () => {
   expect(authorizationContext.agentRunDetailTab).toBe("authorizations");
   expect(authorizationMethods.agentRunFocusedAuthorizationId.call(authorizationContext)).toBe("auth-1");
   expect(authorizationMethods.isAgentRunAuthorizationFocused.call(authorizationContext, { id: "auth-1" })).toBe(true);
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/platform-agent-runs.html"), "utf8");
+  expect(html).toContain("isAgentRunEventFocused(event)");
+  expect(html).toContain("isAgentRunModelCallFocused(call)");
 });
 
 test("platform methods load agent runs with detail observability streams", async () => {

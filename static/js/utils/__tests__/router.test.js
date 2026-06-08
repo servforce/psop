@@ -132,6 +132,9 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
   expect(buildPlatformAgentRunPath("agent-run-123", { tab: "tools", tool_call_id: "tool-call-1" })).toBe(
     "/admin/platform/agent-runs/agent-run-123?tab=tools&tool_call_id=tool-call-1"
   );
+  expect(buildPlatformAgentRunPath("agent-run-123", { tab: "model", model_call_id: "model-call-1" })).toBe(
+    "/admin/platform/agent-runs/agent-run-123?tab=model&model_call_id=model-call-1"
+  );
   expect(buildPlatformSkillsPath()).toBe("/admin/platform/skills");
   expect(buildPlatformSkillPath("pskill-builder")).toBe("/admin/platform/skills/pskill-builder");
   expect(buildPlatformToolsPath()).toBe("/admin/platform/tools");

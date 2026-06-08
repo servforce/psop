@@ -287,7 +287,7 @@ static/
 | Run Live binding | WebSocket `/ws/runs/{run_id}` 接收 `binding.updated`，增量更新 Binding 列表和 Replay binding evidence，REST 补齐 |
 | Tasks | 轮询 runtime jobs 和 stats |
 | Skill Test Review | REST 拉取 review DTO，必要时轮询运行状态 |
-| Replay | REST 一次性拉取 replay detail；侧栏展示 Replay Provenance；deep link 支持 `event_id`、`trace_id`、`seq_no`、`snapshot_seq` 定位证据；RunTrace、AgentEvent、ModelCall、ToolCall、ToolAuthorization 证据可回跳 Platform AgentRun 详情对应 tab |
+| Replay | REST 一次性拉取 replay detail；侧栏展示 Replay Provenance；deep link 支持 `event_id`、`trace_id`、`seq_no`、`snapshot_seq` 定位证据；RunTrace、AgentEvent、ModelCall、ToolCall、ToolAuthorization 证据可回跳 Platform AgentRun 详情对应 tab，并用 `event_id`、`model_call_id`、`tool_call_id`、`authorization_id` 聚焦具体证据行 |
 | Evaluation / Governance activity | WebSocket 活动快照 + REST 补齐 |
 | Tool Authorizations | WebSocket `/ws/tool-authorizations` 接收授权变更，REST 补齐 |
 | Observability | REST 查询 dashboard、metrics、run events、run traces、agent/tool/model facts |
@@ -304,7 +304,7 @@ Run Live 当前负责：
 - 支持 multipart text + image/audio/video 输入。
 - 媒体 part 通过 `/runs/{run_id}/events/{event_id}/parts/{part_id}/content` 读取。
 - 将 runtime output、input、错误提示和 replay 视图区分展示。
-- Replay 中的 EG Node Path、AgentRun、AgentEvent、ModelCall、ToolCall、ToolAuthorization 必须保留到 Platform AgentRun 详情的可点击回链，用于从运行回放进入 runner 调用证据。
+- Replay 中的 EG Node Path、AgentRun、AgentEvent、ModelCall、ToolCall、ToolAuthorization 必须保留到 Platform AgentRun 详情的可点击回链，用于从运行回放进入 runner 调用证据；AgentRun 详情页必须消费 `event_id`、`model_call_id`、`tool_call_id`、`authorization_id` 并高亮对应证据行。
 
 输入规则与 [PSOP终端接入说明v1.md](./PSOP终端接入说明v1.md) 保持一致：前端不构造 `parts[]`，只提交 `text` 和文件字段。
 

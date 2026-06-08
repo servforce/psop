@@ -1366,6 +1366,10 @@
       }
       if (params.get("event_id")) {
         this.agentRunDetailTab = "events";
+        return;
+      }
+      if (params.get("model_call_id")) {
+        this.agentRunDetailTab = "model";
       }
     },
 
@@ -1399,6 +1403,30 @@
         return "";
       }
       return String(new URLSearchParams(window.location.search || "").get("authorization_id") || "").trim();
+    },
+
+    agentRunFocusedEventId() {
+      if (typeof window === "undefined" || !window.location) {
+        return "";
+      }
+      return String(new URLSearchParams(window.location.search || "").get("event_id") || "").trim();
+    },
+
+    isAgentRunEventFocused(event) {
+      const focusedId = this.agentRunFocusedEventId();
+      return Boolean(focusedId && event?.id === focusedId);
+    },
+
+    agentRunFocusedModelCallId() {
+      if (typeof window === "undefined" || !window.location) {
+        return "";
+      }
+      return String(new URLSearchParams(window.location.search || "").get("model_call_id") || "").trim();
+    },
+
+    isAgentRunModelCallFocused(call) {
+      const focusedId = this.agentRunFocusedModelCallId();
+      return Boolean(focusedId && call?.id === focusedId);
     },
 
     isAgentRunToolCallFocused(call) {

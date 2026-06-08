@@ -591,7 +591,7 @@
       if (!agentRunId) {
         return buildPlatformAgentRunsPath();
       }
-      return buildPlatformAgentRunPath(agentRunId, { tab: "model" });
+      return buildPlatformAgentRunPath(agentRunId, { tab: "model", model_call_id: call?.id || "" });
     },
 
     observabilitySkillActivationPath(activation) {

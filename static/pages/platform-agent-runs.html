@@ -190,7 +190,7 @@
                   <p class="p-4 text-sm text-slate-400">暂无 AgentEvent</p>
                 </template>
                 <template x-for="event in currentAgentRunEvents" :key="event.id">
-                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[8rem_minmax(12rem,0.45fr)_minmax(0,1fr)]">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[8rem_minmax(12rem,0.45fr)_minmax(0,1fr)]" :class="isAgentRunEventFocused(event) ? 'bg-orange-500/10' : ''">
                     <div>
                       <p class="font-mono text-slate-400" x-text="'#' + event.seq_no"></p>
                       <p class="mt-1 font-mono text-[11px] text-slate-500" x-text="formatDateTime(event.occurred_at)"></p>
@@ -209,7 +209,7 @@
                   <p class="p-4 text-sm text-slate-400">暂无 ModelCall</p>
                 </template>
                 <template x-for="call in currentAgentRunModelCalls" :key="call.id">
-                  <article class="grid gap-0 divide-y divide-slate-800 xl:grid-cols-[minmax(16rem,0.55fr)_minmax(0,1fr)] xl:divide-x xl:divide-y-0">
+                  <article class="grid gap-0 divide-y divide-slate-800 xl:grid-cols-[minmax(16rem,0.55fr)_minmax(0,1fr)] xl:divide-x xl:divide-y-0" :class="isAgentRunModelCallFocused(call) ? 'bg-orange-500/10' : ''">
                     <div class="p-4 text-xs">
                       <span class="status-badge" :class="agentRunStatusTone(call.status)" x-text="formatStatus(call.status)"></span>
                       <p class="mt-3 truncate font-semibold text-slate-100" x-text="call.model_name || call.provider"></p>

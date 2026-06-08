@@ -1642,7 +1642,10 @@
 
 
       liveRunReplayModelCallPath(call) {
-        return this.liveRunReplayAgentRunPath(call?.agent_run_id, { tab: "model" });
+        return this.liveRunReplayAgentRunPath(call?.agent_run_id, {
+          tab: "model",
+          model_call_id: call?.id || ""
+        });
       },
 
 

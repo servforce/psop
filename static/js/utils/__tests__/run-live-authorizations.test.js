@@ -131,7 +131,7 @@ function loadRuntimeHarness(locationSearch = "") {
   );
   context.window.PSOPConsoleHelpers.buildPlatformAgentRunPath = (agentRunId, focus = {}) => {
     const params = new URLSearchParams();
-    for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+    for (const key of ["tab", "event_id", "model_call_id", "tool_call_id", "authorization_id"]) {
       const value = String(focus?.[key] || "").trim();
       if (value) {
         params.set(key, value);
@@ -709,7 +709,7 @@ test("run replay exposes closed-loop evidence counts", () => {
     "/admin/platform/agent-runs/agent-run-1?tab=events&event_id=agent-event-1"
   );
   expect(methods.liveRunReplayModelCallPath(context.replayDetail.agent_model_calls[0])).toBe(
-    "/admin/platform/agent-runs/agent-run-1?tab=model"
+    "/admin/platform/agent-runs/agent-run-1?tab=model&model_call_id=model-call-1"
   );
   expect(methods.liveRunReplayToolCallPath(context.replayDetail.agent_tool_calls[0])).toBe(
     "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-call-1"

@@ -20,7 +20,7 @@ function loadObservabilityMethods() {
         },
         buildPlatformAgentRunPath: (agentRunId, focus = {}) => {
           const params = new URLSearchParams();
-          for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+          for (const key of ["tab", "event_id", "model_call_id", "tool_call_id", "authorization_id"]) {
             if (focus[key]) {
               params.set(key, focus[key]);
             }
@@ -426,7 +426,9 @@ test("observability methods query global model calls from provider filters", asy
     "/observability/model-calls?provider=deterministic&window_hours=24&limit=50"
   );
   expect(context.observabilityModelCallResults).toEqual(calls);
-  expect(methods.observabilityModelCallPath(calls[0])).toBe("/admin/platform/agent-runs/agent-run-1?tab=model");
+  expect(methods.observabilityModelCallPath(calls[0])).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=model&model_call_id=model-call-1"
+  );
 
   context.observabilityFilters.model_call_agent_key = "pskill.runner";
   context.observabilityFilters.model_call_run_id = "run 1";
