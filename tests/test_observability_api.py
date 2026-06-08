@@ -349,6 +349,21 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
                         response_payload={},
                         created_at=now - timedelta(minutes=1),
                     ),
+                    AgentToolAuthorization(
+                        id="agent-tool-auth-metrics-executed-1",
+                        agent_run_id=agent_run.id,
+                        agent_tool_call_id="agent-tool-call-metrics-1",
+                        run_id=runtime_run.id,
+                        tool_name="psop.skill_version.activate",
+                        tool_provider="native",
+                        side_effect_level="high_write",
+                        risk_level="high",
+                        status="executed",
+                        request_payload={},
+                        response_payload={"decision": "approved"},
+                        created_at=now - timedelta(minutes=1),
+                        executed_at=now - timedelta(seconds=30),
+                    ),
                 ]
             )
             session.commit()
@@ -372,7 +387,8 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
     assert payload["agents"]["skill_activation_count"] == 1
     assert payload["agents"]["skill_activation_package_counts"]["skill-package-metrics-1"] == 1
     assert payload["agents"]["tool_authorization_status_counts"]["pending"] == 1
-    assert payload["agents"]["tool_authorization_risk_counts"]["high"] == 1
+    assert payload["agents"]["tool_authorization_status_counts"]["executed"] == 1
+    assert payload["agents"]["tool_authorization_risk_counts"]["high"] == 2
     assert payload["open_telemetry"]["enabled"] is True
     assert payload["open_telemetry"]["configured"] is True
     assert payload["open_telemetry"]["service_name"] == expected_otel_service_name
@@ -714,11 +730,23 @@ def test_observability_agent_event_query_filters_recent_agent_events() -> None:
                     AgentEvent(
                         id="agent-event-observe-newer",
                         agent_run_id=runner_run.id,
-                        seq_no=2,
+                        seq_no=3,
                         event_type="agent.tool.authorization.requested",
                         phase="tools",
                         payload={"tool_name": "psop.repository.commit_patch"},
                         occurred_at=now - timedelta(minutes=1),
+                    ),
+                    AgentEvent(
+                        id="agent-event-observe-executed",
+                        agent_run_id=runner_run.id,
+                        seq_no=2,
+                        event_type="tool.authorization_executed",
+                        phase="tool_authorization",
+                        payload={
+                            "authorization_id": "tool-auth-observe-executed",
+                            "execution_status": "succeeded",
+                        },
+                        occurred_at=now - timedelta(minutes=1, seconds=30),
                     ),
                     AgentEvent(
                         id="agent-event-observe-older",
@@ -759,6 +787,10 @@ def test_observability_agent_event_query_filters_recent_agent_events() -> None:
             "/api/v1/observability/agent-events",
             params={"window_hours": 24, "agent_key": "pskill.runner", "run_id": run.id, "limit": 10},
         )
+        executed_response = client.get(
+            "/api/v1/observability/agent-events",
+            params={"window_hours": 24, "event_type": "tool.authorization_executed", "limit": 10},
+        )
 
     assert response.status_code == 200
     payload = response.json()
@@ -769,7 +801,17 @@ def test_observability_agent_event_query_filters_recent_agent_events() -> None:
 
     assert scoped_response.status_code == 200
     scoped_payload = scoped_response.json()
-    assert {item["id"] for item in scoped_payload} == {"agent-event-observe-newer", "agent-event-observe-older"}
+    assert {item["id"] for item in scoped_payload} == {
+        "agent-event-observe-newer",
+        "agent-event-observe-executed",
+        "agent-event-observe-older",
+    }
+
+    assert executed_response.status_code == 200
+    executed_payload = executed_response.json()
+    assert [item["id"] for item in executed_payload] == ["agent-event-observe-executed"]
+    assert executed_payload[0]["phase"] == "tool_authorization"
+    assert executed_payload[0]["payload"]["execution_status"] == "succeeded"
 
 
 def test_observability_tool_call_query_filters_recent_agent_tool_calls() -> None:
@@ -1173,6 +1215,24 @@ def test_observability_tool_authorization_query_filters_recent_agent_authorizati
                         created_at=now - timedelta(minutes=1),
                     ),
                     AgentToolAuthorization(
+                        id="tool-auth-observe-executed",
+                        agent_run_id=runner_run.id,
+                        run_id=run.id,
+                        tool_name="psop.skill_version.activate",
+                        tool_provider="native",
+                        side_effect_level="high_write",
+                        risk_level="high",
+                        authorization_reason="activation completed after approval",
+                        tool_arguments_summary={"package_name": "pskill-builder"},
+                        expected_effect_summary="activate skill version",
+                        reversible=True,
+                        status="executed",
+                        request_payload={"request": "executed"},
+                        response_payload={"decision": "approved"},
+                        created_at=now - timedelta(seconds=30),
+                        executed_at=now - timedelta(seconds=10),
+                    ),
+                    AgentToolAuthorization(
                         id="tool-auth-observe-old-window",
                         agent_run_id=runner_run.id,
                         run_id=run.id,
@@ -1206,6 +1266,10 @@ def test_observability_tool_authorization_query_filters_recent_agent_authorizati
                 "limit": 10,
             },
         )
+        executed_response = client.get(
+            "/api/v1/observability/tool-authorizations",
+            params={"window_hours": 24, "status": "executed", "limit": 10},
+        )
 
     assert response.status_code == 200
     payload = response.json()
@@ -1220,6 +1284,12 @@ def test_observability_tool_authorization_query_filters_recent_agent_authorizati
     assert scoped_response.status_code == 200
     scoped_payload = scoped_response.json()
     assert {item["id"] for item in scoped_payload} == {"tool-auth-observe-newer", "tool-auth-observe-older"}
+
+    assert executed_response.status_code == 200
+    executed_payload = executed_response.json()
+    assert [item["id"] for item in executed_payload] == ["tool-auth-observe-executed"]
+    assert executed_payload[0]["status"] == "executed"
+    assert executed_payload[0]["executed_at"]
 
 
 def test_observability_skill_activation_query_filters_recent_agent_skill_activations() -> None:

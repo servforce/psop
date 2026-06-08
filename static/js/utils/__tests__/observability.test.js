@@ -692,6 +692,7 @@ test("observability methods sort distribution entries and derive trace event opt
         },
         tool_authorization_status_counts: {
           approved: 1,
+          executed: 1,
           pending: 2
         },
         tool_authorization_risk_counts: {
@@ -719,7 +720,14 @@ test("observability methods sort distribution entries and derive trace event opt
     "skill-package-1",
     "skill-package-2"
   ]);
-  expect(methods.observabilityToolAuthorizationStatusOptions.call(context)).toEqual(["approved", "pending"]);
+  expect(methods.observabilityToolAuthorizationStatusOptions.call(context)).toEqual([
+    "pending",
+    "approved",
+    "executed",
+    "rejected",
+    "expired",
+    "cancelled"
+  ]);
   expect(methods.observabilityToolAuthorizationRiskOptions.call(context)).toEqual(["high", "medium"]);
   expect(methods.observabilityOtelTone(true)).toContain("emerald");
   expect(methods.observabilityOtelTone(false)).toContain("amber");

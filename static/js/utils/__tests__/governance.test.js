@@ -292,9 +292,14 @@ test("tool authorization page connects websocket and applies realtime updates", 
     event_type: "tool.authorization_approved",
     payload: { ...initial, status: "approved" }
   });
+  FakeWebSocket.instances[0].message({
+    event_type: "tool.authorization_executed",
+    payload: { ...initial, status: "executed", executed_at: "2026-06-08T00:00:00Z" }
+  });
 
   expect(context.toolAuthorizations.map((item) => item.id)).toEqual(["auth-2", "auth-1"]);
-  expect(context.toolAuthorizations[1].status).toBe("approved");
+  expect(context.toolAuthorizations[1].status).toBe("executed");
+  expect(context.toolAuthorizations[1].executed_at).toBe("2026-06-08T00:00:00Z");
 
   methods.disconnectToolAuthorizationWebSocket.call(context);
 

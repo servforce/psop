@@ -1149,7 +1149,10 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
             f"/api/v1/tool-authorizations/{authorization['id']}/approve",
             json={"response_payload": {"approved_by": "tester"}},
         )
-        resumed_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        with client.websocket_connect("/ws/tool-authorizations") as tool_authorization_ws:
+            executed_tool_authorization_ws_connected = tool_authorization_ws.receive_json()
+            resumed_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+            executed_tool_authorization_ws_message = tool_authorization_ws.receive_json()
         executed_authorization_response = client.get(f"/api/v1/tool-authorizations/{authorization['id']}")
         resumed_tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
         resumed_events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
@@ -1204,11 +1207,16 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
 
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved"
+    assert executed_tool_authorization_ws_connected["event_type"] == "ws.connected"
     assert resumed_response.status_code == 200
     assert resumed_response.json()["status"] == "succeeded"
     assert resumed_response.json()["output_payload"]["tool_result"]["tool_name"] == "psop.agent_version.activate"
     assert resumed_response.json()["output_payload"]["tool_result"]["result"]["version_id"] == draft_version["id"]
     assert executed_authorization_response.json()["status"] == "executed"
+    assert executed_tool_authorization_ws_message["event_type"] == "tool.authorization_executed"
+    assert executed_tool_authorization_ws_message["authorization_id"] == authorization["id"]
+    assert executed_tool_authorization_ws_message["payload"]["status"] == "executed"
+    assert executed_tool_authorization_ws_message["payload"]["executed_at"]
     assert resumed_tool_calls_response.json()[0]["status"] == "succeeded"
     assert resumed_tool_calls_response.json()[0]["result_summary"]["result"]["version_id"] == draft_version["id"]
     assert compiler_after_response.json()["active_version_id"] == draft_version["id"]
@@ -1219,8 +1227,14 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
     assert "tool.authorization_approved" in resumed_event_types
     assert "tool.execution_started" in resumed_event_types
     assert "tool.execution_succeeded" in resumed_event_types
+    assert "tool.authorization_executed" in resumed_event_types
     assert "agent.runner.resumed_authorized_tool" in resumed_event_types
     assert "agent.tool_call.succeeded" in resumed_event_types
+    executed_event = next(item for item in resumed_events_response.json() if item["event_type"] == "tool.authorization_executed")
+    assert executed_event["phase"] == "tool_authorization"
+    assert executed_event["payload"]["authorization_id"] == authorization["id"]
+    assert executed_event["payload"]["execution_status"] == "succeeded"
+    assert executed_event["payload"]["executed_at"]
 
 
 def test_agent_runner_executes_authorized_skill_version_activation_tool() -> None:
@@ -1896,7 +1910,12 @@ def test_agent_runner_records_authorized_tool_execution_failure_event() -> None:
     assert "tool.authorization_approved" in event_types
     assert "tool.execution_started" in event_types
     assert "tool.execution_failed" in event_types
+    assert "tool.authorization_executed" in event_types
     assert "agent.tool_call.failed" in event_types
+    executed_event = next(item for item in events_response.json() if item["event_type"] == "tool.authorization_executed")
+    assert executed_event["payload"]["authorization_id"] == authorization["id"]
+    assert executed_event["payload"]["execution_status"] == "failed"
+    assert executed_event["payload"]["executed_at"]
 
 
 def test_agent_runner_output_guardrail_records_business_wait_as_non_hitl() -> None:

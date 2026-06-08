@@ -251,6 +251,15 @@ test("run replay exposes closed-loop evidence counts", () => {
     replayDetail: {
       run: { id: "run-1" },
       agent_runs: [{ id: "agent-run-1", agent_key: "pskill.runner", status: "succeeded", owner_type: "runtime" }],
+      agent_events: [
+        {
+          id: "agent-event-1",
+          agent_run_id: "agent-run-1",
+          event_type: "tool.authorization_executed",
+          phase: "tool_authorization",
+          seq_no: 6
+        }
+      ],
       agent_model_calls: [
         {
           id: "model-call-1",
@@ -295,12 +304,14 @@ test("run replay exposes closed-loop evidence counts", () => {
   };
 
   expect(methods.liveRunReplayAgentRunCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayAgentEventCount.call(context)).toBe(1);
   expect(methods.liveRunReplayModelCallCount.call(context)).toBe(1);
   expect(methods.liveRunReplayToolCallCount.call(context)).toBe(1);
   expect(methods.liveRunReplayToolAuthorizationCount.call(context)).toBe(1);
   expect(methods.liveRunReplayEvaluationCount.call(context)).toBe(1);
   expect(methods.liveRunReplayFindingCount.call(context)).toBe(1);
   expect(methods.liveRunReplayAgentRuns.call(context)).toEqual(context.replayDetail.agent_runs);
+  expect(methods.liveRunReplayAgentEvents.call(context)).toEqual(context.replayDetail.agent_events);
   expect(methods.liveRunReplayModelCalls.call(context)).toEqual(context.replayDetail.agent_model_calls);
   expect(methods.liveRunReplayToolCalls.call(context)).toEqual(context.replayDetail.agent_tool_calls);
   expect(methods.liveRunReplayToolAuthorizations.call(context)).toEqual(
@@ -310,6 +321,9 @@ test("run replay exposes closed-loop evidence counts", () => {
   expect(methods.liveRunReplayFindings.call(context)).toEqual(context.replayDetail.run_evaluation_findings);
   expect(methods.liveRunReplayAgentRunSummary(context.replayDetail.agent_runs[0])).toBe(
     "pskill.runner · succeeded · runtime"
+  );
+  expect(methods.liveRunReplayAgentEventSummary(context.replayDetail.agent_events[0])).toBe(
+    "tool_authorization · agent-run-1 · #6"
   );
   expect(methods.liveRunReplayModelCallSummary(context.replayDetail.agent_model_calls[0])).toBe(
     "runner · succeeded · 42 tokens"
@@ -341,6 +355,8 @@ test("run replay exposes closed-loop evidence counts", () => {
   const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
   expect(html).toContain("Closed-loop Evidence");
   expect(html).toContain("liveRunReplayAgentRunCount()");
+  expect(html).toContain("liveRunReplayAgentEventCount()");
+  expect(html).toContain("liveRunReplayAgentEventSummary(event)");
   expect(html).toContain("liveRunReplayModelCallCount()");
   expect(html).toContain("liveRunReplayToolAuthorizationCount()");
   expect(html).toContain("liveRunReplayEvaluationCount()");

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import difflib
 from typing import Any
 
@@ -10,7 +11,7 @@ from app.agent_harness.agent_decision import AgentDecision
 from app.agent_harness.guardrails import OutputGuardrail
 from app.agent_harness.planning import AgentPlanner
 from app.agent_harness.tools import ToolPolicy
-from app.agents.models import AgentRun
+from app.agents.models import AgentRun, AgentToolAuthorization
 from app.agents.schemas import (
     AppendAgentEventRequest,
     CreateAgentToolCallRequest,
@@ -30,6 +31,11 @@ from app.pskills.manifest import SkillDocument, document_from_manifest_snapshot,
 from app.pskills.models import now_utc
 from app.pskills.service import SkillsService
 from app.runtime.service import RuntimeService
+from app.runtime.websocket import (
+    TOOL_AUTHORIZATION_WS_CHANNEL,
+    tool_authorization_ws_hub,
+    tool_authorization_ws_message,
+)
 from app.skills.models import SkillActivation
 from app.skills.repository import SkillPackageRepository
 from app.skills.service import SkillPackageService
@@ -314,6 +320,15 @@ class AgentRunner:
                 ),
                 commit=False,
             )
+            if authorization:
+                self._append_tool_authorization_executed_event(
+                    session,
+                    agent_run=agent_run,
+                    tool_call=tool_call,
+                    authorization=authorization,
+                    execution_status="failed",
+                    details={"error": error.message},
+                )
             self.agent_service.append_event(
                 session,
                 agent_run.id,
@@ -325,6 +340,8 @@ class AgentRunner:
                 commit=False,
             )
             session.commit()
+            if authorization:
+                self._broadcast_tool_authorization_executed(authorization)
             return self.agent_service._build_run_response(agent_run)
         tool_call.status = "succeeded"
         tool_call.result_summary = {
@@ -355,6 +372,15 @@ class AgentRunner:
             ),
             commit=False,
         )
+        if authorization:
+            self._append_tool_authorization_executed_event(
+                session,
+                agent_run=agent_run,
+                tool_call=tool_call,
+                authorization=authorization,
+                execution_status="succeeded",
+                details={"result": tool_result},
+            )
         self.agent_service.append_event(
             session,
             agent_run.id,
@@ -366,7 +392,48 @@ class AgentRunner:
             commit=False,
         )
         session.commit()
+        if authorization:
+            self._broadcast_tool_authorization_executed(authorization)
         return self.agent_service._build_run_response(agent_run)
+
+    def _broadcast_tool_authorization_executed(self, authorization: AgentToolAuthorization) -> None:
+        response = self.agent_service._build_tool_authorization_response(authorization)
+        message = tool_authorization_ws_message(response, action="executed")
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(tool_authorization_ws_hub.broadcast(TOOL_AUTHORIZATION_WS_CHANNEL, message))
+        else:
+            loop.create_task(tool_authorization_ws_hub.broadcast(TOOL_AUTHORIZATION_WS_CHANNEL, message))
+
+    def _append_tool_authorization_executed_event(
+        self,
+        session: Session,
+        *,
+        agent_run: AgentRun,
+        tool_call: Any,
+        authorization: AgentToolAuthorization,
+        execution_status: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="tool.authorization_executed",
+                phase="tool_authorization",
+                payload={
+                    "authorization_id": authorization.id,
+                    "tool_call_id": tool_call.id,
+                    "tool_name": tool_call.tool_name,
+                    "status": authorization.status,
+                    "execution_status": execution_status,
+                    "executed_at": authorization.executed_at.isoformat() if authorization.executed_at else None,
+                    **(details or {}),
+                },
+            ),
+            commit=False,
+        )
 
     def _execute_native_tool_call(self, session: Session, *, tool_call: Any) -> dict[str, Any]:
         arguments = tool_call.arguments_summary or {}

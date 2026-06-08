@@ -44,6 +44,7 @@ from app.runtime.schemas import (
 )
 from app.runtime.service import RuntimeService
 from app.runtime.websocket import (
+    TOOL_AUTHORIZATION_WS_CHANNEL,
     run_event_ws_message,
     run_ws_hub,
     tool_authorization_ws_hub,
@@ -61,7 +62,6 @@ terminal_router = APIRouter(prefix="/terminal", tags=["terminal"])
 replay_router = APIRouter(prefix="/replay", tags=["replay"])
 runtime_router = APIRouter(prefix="/runtime", tags=["runtime"])
 ws_router = APIRouter(prefix="/ws", tags=["ws"])
-TOOL_AUTHORIZATION_WS_CHANNEL = "global"
 
 
 @gateway_router.post("", response_model=InvocationResponse, status_code=201)

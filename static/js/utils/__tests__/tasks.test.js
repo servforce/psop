@@ -106,6 +106,8 @@ test("task formatters render duration and missing token usage", () => {
   expect(methods.formatDuration(null)).toBe("N/A");
   expect(methods.formatTokenUsage(null)).toBe("N/A");
   expect(methods.formatTokenUsage({ total_tokens: 1200 })).toBe("1,200");
+  expect(methods.formatStatus("executed")).toBe("已执行");
+  expect(methods.statusBadgeTone("executed")).toContain("emerald");
 });
 
 test("tasks methods build filters and preserve unknown job types", () => {

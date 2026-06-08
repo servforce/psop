@@ -715,7 +715,7 @@
                         <details class="px-4 py-3">
                           <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
                             <span>Closed-loop Evidence</span>
-                            <span class="ml-2 font-mono text-[11px] text-slate-500" x-text="`${liveRunReplayAgentRunCount()}A/${liveRunReplayModelCallCount()}M/${liveRunReplayToolCallCount()}T/${liveRunReplayEvaluationCount()}E`"></span>
+                            <span class="ml-2 font-mono text-[11px] text-slate-500" x-text="`${liveRunReplayAgentRunCount()}A/${liveRunReplayAgentEventCount()}Ev/${liveRunReplayModelCallCount()}M/${liveRunReplayToolCallCount()}T/${liveRunReplayEvaluationCount()}E`"></span>
                           </summary>
 
                           <div class="mt-3 divide-y divide-slate-800 border-y border-slate-800 text-sm">
@@ -737,6 +737,30 @@
                                         <p class="mt-1 mono-field break-all" x-text="agentRun.id"></p>
                                       </div>
                                       <span class="status-badge shrink-0" :class="statusBadgeTone(agentRun.status)" x-text="agentRun.status"></span>
+                                    </div>
+                                  </div>
+                                </template>
+                              </div>
+                            </section>
+
+                            <section class="py-3">
+                              <div class="flex items-center justify-between gap-3">
+                                <p class="field-label">Agent Events</p>
+                                <span class="mono-field" x-text="liveRunReplayAgentEventCount()"></span>
+                              </div>
+                              <template x-if="liveRunReplayAgentEvents().length === 0">
+                                <p class="mt-2 text-xs text-slate-500">暂无 AgentEvent 证据。</p>
+                              </template>
+                              <div class="mt-2 divide-y divide-slate-800">
+                                <template x-for="event in liveRunReplayAgentEvents()" :key="event.id">
+                                  <div class="py-2">
+                                    <div class="flex items-start justify-between gap-3">
+                                      <div class="min-w-0">
+                                        <p class="truncate font-semibold text-slate-100" x-text="event.event_type"></p>
+                                        <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayAgentEventSummary(event)"></p>
+                                        <p class="mt-1 mono-field break-all" x-text="event.id"></p>
+                                      </div>
+                                      <span class="status-badge shrink-0" :class="statusBadgeTone(event.phase)" x-text="event.phase || 'phase'"></span>
                                     </div>
                                   </div>
                                 </template>

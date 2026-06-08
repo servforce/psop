@@ -32,6 +32,7 @@ class WebSocketHub:
 
 run_ws_hub = WebSocketHub()
 tool_authorization_ws_hub = WebSocketHub()
+TOOL_AUTHORIZATION_WS_CHANNEL = "global"
 
 
 def run_event_ws_message(run_id: str, event: Any) -> dict[str, Any]:
@@ -52,14 +53,21 @@ def tool_authorization_ws_message(authorization: Any, *, action: str) -> dict[st
         "rejected": "tool.authorization_rejected",
         "expired": "tool.authorization_expired",
         "cancelled": "tool.authorization_cancelled",
+        "executed": "tool.authorization_executed",
     }.get(action, "tool.authorization_updated")
     return {
         "event_type": event_type,
         "authorization_id": authorization.id,
         "run_id": authorization.run_id,
         "agent_run_id": authorization.agent_run_id,
-        "occurred_at": authorization.responded_at.isoformat()
-        if authorization.responded_at
-        else authorization.created_at.isoformat(),
+        "occurred_at": _tool_authorization_occurred_at(authorization, action).isoformat(),
         "payload": authorization.model_dump(mode="json"),
     }
+
+
+def _tool_authorization_occurred_at(authorization: Any, action: str) -> Any:
+    if action == "executed" and authorization.executed_at:
+        return authorization.executed_at
+    if authorization.responded_at:
+        return authorization.responded_at
+    return authorization.created_at

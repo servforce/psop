@@ -156,6 +156,7 @@
           accepted: "已接受",
           approved: "已批准",
           authorized: "已授权",
+          executed: "已执行",
           succeeded: "成功",
           activated: "已激活",
           canary: "灰度中",
@@ -179,7 +180,7 @@
 
       statusBadgeTone(value) {
         const normalized = String(value || "").toLowerCase();
-        if (["active", "published", "succeeded", "success", "accepted", "approved", "activated", "ready"].includes(normalized)) {
+        if (["active", "published", "succeeded", "success", "accepted", "approved", "authorized", "executed", "activated", "ready"].includes(normalized)) {
           return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
         }
         if (["passed"].includes(normalized)) {

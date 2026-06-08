@@ -1567,6 +1567,12 @@
           : 0;
       },
 
+      liveRunReplayAgentEventCount() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.agent_events || []).length
+          : 0;
+      },
+
 
       liveRunReplayModelCallCount() {
         if (this.replayDetail?.run?.id !== this.liveRun?.id) {
@@ -1609,6 +1615,12 @@
       liveRunReplayAgentRuns() {
         return this.replayDetail?.run?.id === this.liveRun?.id
           ? (this.replayDetail.agent_runs || [])
+          : [];
+      },
+
+      liveRunReplayAgentEvents() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.agent_events || [])
           : [];
       },
 
@@ -1657,6 +1669,14 @@
           agentRun?.status || "unknown",
           agentRun?.owner_type || "owner:N/A"
         ].join(" · ");
+      },
+
+      liveRunReplayAgentEventSummary(event) {
+        return [
+          event?.phase || "phase:N/A",
+          event?.agent_run_id || "agent_run:N/A",
+          event?.seq_no !== undefined && event?.seq_no !== null ? `#${event.seq_no}` : ""
+        ].filter(Boolean).join(" · ");
       },
 
 

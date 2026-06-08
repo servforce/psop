@@ -17,6 +17,15 @@
     { value: 720, label: "30 天" }
   ];
 
+  const TOOL_AUTHORIZATION_STATUS_OPTIONS = [
+    "pending",
+    "approved",
+    "executed",
+    "rejected",
+    "expired",
+    "cancelled"
+  ];
+
   function normalizedWindowHours(value) {
     const hours = Number(value || 24);
     if (!Number.isFinite(hours)) {
@@ -648,7 +657,10 @@
     },
 
     observabilityToolAuthorizationStatusOptions() {
-      return Object.keys(this.observabilityMetrics?.agents?.tool_authorization_status_counts || {}).sort();
+      return Array.from(new Set([
+        ...TOOL_AUTHORIZATION_STATUS_OPTIONS,
+        ...Object.keys(this.observabilityMetrics?.agents?.tool_authorization_status_counts || {})
+      ]));
     },
 
     observabilityToolAuthorizationRiskOptions() {

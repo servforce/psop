@@ -37,6 +37,7 @@ from app.memory.schemas import MemoryEntryResponse
 from app.runtime.schemas import RunEventResponse
 from app.runtime.service import RuntimeService
 from app.runtime.websocket import (
+    TOOL_AUTHORIZATION_WS_CHANNEL,
     run_event_ws_message,
     run_ws_hub,
     tool_authorization_ws_hub,
@@ -54,7 +55,6 @@ tool_authorizations_router = APIRouter(prefix="/tool-authorizations", tags=["too
 run_tool_authorizations_router = APIRouter(prefix="/runs", tags=["tool-authorizations"])
 tool_authorizations_ws_router = APIRouter(prefix="/ws", tags=["ws"])
 agent_runs_ws_router = APIRouter(prefix="/ws", tags=["ws"])
-TOOL_AUTHORIZATION_WS_CHANNEL = "global"
 
 
 @agents_router.get("/agents", response_model=list[AgentDefinitionSummaryResponse])
