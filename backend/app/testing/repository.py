@@ -61,6 +61,39 @@ class SkillTestRepository:
             query = query.where(PSkillTestSuite.pskill_version_id.is_(None))
         return session.scalar(query.order_by(PSkillTestSuite.created_at.desc()))
 
+    def list_suites(
+        self,
+        session: Session,
+        *,
+        pskill_definition_id: str | None = None,
+        status: str | None = None,
+    ) -> list[PSkillTestSuite]:
+        query = select(PSkillTestSuite)
+        if pskill_definition_id:
+            query = query.where(PSkillTestSuite.pskill_definition_id == pskill_definition_id)
+        if status:
+            query = query.where(PSkillTestSuite.status == status)
+        else:
+            query = query.where(PSkillTestSuite.status != "archived")
+        return list(session.scalars(query.order_by(PSkillTestSuite.created_at.desc())).all())
+
+    def get_suite(self, session: Session, suite_id: str | None) -> PSkillTestSuite | None:
+        if not suite_id:
+            return None
+        return session.get(PSkillTestSuite, suite_id)
+
+    def list_scenarios_for_suite(self, session: Session, suite_id: str) -> list[SkillTestScenario]:
+        return list(
+            session.scalars(
+                select(SkillTestScenario)
+                .where(
+                    SkillTestScenario.suite_id == suite_id,
+                    SkillTestScenario.status != "archived",
+                )
+                .order_by(SkillTestScenario.updated_at.desc(), SkillTestScenario.created_at.desc())
+            ).all()
+        )
+
     def get_run(self, session: Session, run_id: str | None) -> Run | None:
         if not run_id:
             return None

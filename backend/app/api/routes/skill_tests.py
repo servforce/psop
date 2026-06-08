@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_skill_test_service
+from app.agents.schemas import AgentEventResponse
 from app.pskills.exceptions import SkillValidationError
 from app.runtime.schemas import InvocationResponse
 from app.testing.schemas import (
@@ -23,12 +24,72 @@ from app.testing.schemas import (
     SkillTestScenarioReviewResponse,
     SkillTestScenarioRunResponse,
     SkillTestScenarioUpdateRequest,
+    SkillTestSuiteCreateRequest,
+    SkillTestSuiteResponse,
+    SkillTestSuiteRunResponse,
     StartSkillTestScenarioRunRequest,
 )
 from app.testing.service import SkillTestService
 
 
 router = APIRouter(tags=["skill-tests"])
+
+
+@router.get("/testing/suites", response_model=list[SkillTestSuiteResponse])
+def list_test_suites(
+    pskill_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> list[SkillTestSuiteResponse]:
+    return service.list_suites(session, pskill_id=pskill_id, status=status)
+
+
+@router.post("/testing/suites", response_model=SkillTestSuiteResponse, status_code=201)
+def create_test_suite(
+    payload: SkillTestSuiteCreateRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> SkillTestSuiteResponse:
+    return service.create_suite(session, payload)
+
+
+@router.post("/testing/suites/{suite_id}/scenarios", response_model=SkillTestScenarioResponse, status_code=201)
+def create_test_suite_scenario(
+    suite_id: str,
+    payload: SkillTestScenarioCreateRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> SkillTestScenarioResponse:
+    return service.create_suite_scenario(session, suite_id, payload)
+
+
+@router.post("/testing/suites/{suite_id}/run", response_model=SkillTestSuiteRunResponse, status_code=202)
+def run_test_suite(
+    suite_id: str,
+    payload: StartSkillTestScenarioRunRequest | None = None,
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> SkillTestSuiteRunResponse:
+    return service.run_suite(session, suite_id, payload or StartSkillTestScenarioRunRequest())
+
+
+@router.get("/testing/runs/{test_run_id}", response_model=SkillTestScenarioRunResponse)
+def get_testing_run(
+    test_run_id: str,
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> SkillTestScenarioRunResponse:
+    return service.get_run(session, test_run_id)
+
+
+@router.get("/testing/runs/{test_run_id}/events", response_model=list[AgentEventResponse])
+def list_testing_run_events(
+    test_run_id: str,
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> list[AgentEventResponse]:
+    return service.list_run_events(session, test_run_id)
 
 
 @router.get("/pskills/{skill_id}/test-scenarios", response_model=list[SkillTestScenarioResponse])

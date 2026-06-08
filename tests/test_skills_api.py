@@ -1841,6 +1841,112 @@ def test_tester_agent_generates_test_scenarios() -> None:
     assert model_call["response_payload"]["parsed"]["scenarios"][0]["name"] == "自动生成发布前冒烟场景"
 
 
+def test_testing_suite_api_creates_and_runs_suite() -> None:
+    client, _, _ = create_test_client()
+
+    timeline = {
+        "schema_version": "psop-skill-test-timeline/v1",
+        "duration_ms": 5000,
+        "events": [
+            {
+                "id": "suite_user_request",
+                "lane_id": "input.text",
+                "at_ms": 0,
+                "event_kind": "terminal.text.input.v1",
+                "mime_type": "text/plain",
+                "payload_inline": "请完成一次套件测试任务。",
+            },
+            {
+                "id": "suite_expect_completion",
+                "lane_id": "expected.semantic",
+                "at_ms": 1000,
+                "expectation": "系统应确认现场步骤已完成。",
+            },
+        ],
+    }
+
+    with client:
+        created = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "testing-suite-demo",
+                "name": "Testing Suite Demo",
+                "description": "Validate testing suite API.",
+            },
+        ).json()
+        skill_id = created["id"]
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill_id}/publish",
+            json={"publish_reason": "Suite API"},
+        )
+        publish_payload = publish_response.json()
+        compile_request_id = publish_payload["compile_request"]["id"]
+        compile_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        compile_payload = compile_response.json()
+
+        create_suite_response = client.post(
+            "/api/v1/testing/suites",
+            json={
+                "pskill_id": skill_id,
+                "pskill_version_id": publish_payload["published_version"]["id"],
+                "name": "发布前回归套件",
+                "suite_type": "pre_publish",
+            },
+        )
+        suite_payload = create_suite_response.json()
+        list_suites_response = client.get(f"/api/v1/testing/suites?pskill_id={skill_id}")
+        create_scenario_response = client.post(
+            f"/api/v1/testing/suites/{suite_payload['id']}/scenarios",
+            json={
+                "name": "套件场景",
+                "description": "通过 testing/suites API 创建。",
+                "duration_ms": 5000,
+                "target_compile_artifact_id": compile_payload["artifact_id"],
+                "timeline": timeline,
+                "judge_policy": {"route_key": "text", "confidence_threshold": 0.7},
+            },
+        )
+        suite_run_response = client.post(f"/api/v1/testing/suites/{suite_payload['id']}/run", json={})
+        suite_run_payload = suite_run_response.json()
+        test_run_id = suite_run_payload["runs"][0]["id"]
+        get_run_response = client.get(f"/api/v1/testing/runs/{test_run_id}")
+        run_events_response = client.get(f"/api/v1/testing/runs/{test_run_id}/events")
+
+    assert publish_response.status_code == 202
+    assert compile_response.status_code == 200
+    assert create_suite_response.status_code == 201
+    assert suite_payload["pskill_definition_id"] == skill_id
+    assert suite_payload["pskill_version_id"] == publish_payload["published_version"]["id"]
+    assert suite_payload["suite_type"] == "pre_publish"
+    assert suite_payload["scenario_count"] == 0
+
+    assert list_suites_response.status_code == 200
+    assert list_suites_response.json()[0]["id"] == suite_payload["id"]
+
+    assert create_scenario_response.status_code == 201
+    scenario_payload = create_scenario_response.json()
+    assert scenario_payload["suite_id"] == suite_payload["id"]
+    assert scenario_payload["target_compile_artifact_id"] == compile_payload["artifact_id"]
+
+    assert suite_run_response.status_code == 202
+    assert suite_run_payload["suite"]["id"] == suite_payload["id"]
+    assert suite_run_payload["suite"]["scenario_count"] == 1
+    assert suite_run_payload["status"] == "passed"
+    assert suite_run_payload["result_summary"]["total"] == 1
+    assert suite_run_payload["runs"][0]["suite_id"] == suite_payload["id"]
+    assert suite_run_payload["runs"][0]["status"] == "passed"
+    assert suite_run_payload["runs"][0]["pskill_version_id"] == publish_payload["published_version"]["id"]
+
+    assert get_run_response.status_code == 200
+    assert get_run_response.json()["id"] == test_run_id
+    assert get_run_response.json()["status"] == "passed"
+
+    assert run_events_response.status_code == 200
+    event_types = [item["event_type"] for item in run_events_response.json()]
+    assert "testing.run.linked" in event_types
+    assert "testing.run.evaluation_completed" in event_types
+
+
 def test_manual_compile_request_does_not_publish_draft() -> None:
     client, _, _ = create_test_client()
 

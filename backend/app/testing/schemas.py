@@ -22,6 +22,26 @@ class SkillTestScenarioRunSummary(BaseModel):
     ended_at: datetime | None = None
 
 
+class SkillTestSuiteCreateRequest(BaseModel):
+    pskill_id: str = Field(min_length=1)
+    pskill_version_id: str | None = None
+    name: str = Field(min_length=1, max_length=255)
+    suite_type: str = Field(default="runtime_simulation", max_length=60)
+    status: str = Field(default="active", max_length=40)
+
+
+class SkillTestSuiteResponse(BaseModel):
+    id: str
+    pskill_definition_id: str
+    pskill_version_id: str | None = None
+    name: str
+    suite_type: str
+    status: str
+    created_by_agent_run_id: str | None = None
+    scenario_count: int = 0
+    created_at: datetime
+
+
 class SkillTestScenarioCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     description: str = ""
@@ -123,6 +143,13 @@ class SkillTestScenarioRunResponse(BaseModel):
     ended_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class SkillTestSuiteRunResponse(BaseModel):
+    suite: SkillTestSuiteResponse
+    runs: list[SkillTestScenarioRunResponse] = Field(default_factory=list)
+    status: str
+    result_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class DeleteSkillTestAssetResponse(BaseModel):

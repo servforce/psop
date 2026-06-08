@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
+from app.agents.schemas import AgentEventResponse, AppendAgentEventRequest, CreateAgentRunRequest
 from app.agents.service import AgentService
 from app.core.config import Settings
 from app.agent_prompts.service import AgentPromptService
@@ -56,6 +56,9 @@ from app.testing.schemas import (
     SkillTestStageOutputResponse,
     SkillTestScenarioUpdateRequest,
     StartSkillTestScenarioRunRequest,
+    SkillTestSuiteCreateRequest,
+    SkillTestSuiteResponse,
+    SkillTestSuiteRunResponse,
 )
 from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import PSkillDefinition, now_utc
@@ -130,6 +133,87 @@ class SkillTestService:
         self.job_repository = job_repository or JobRepository()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
         self.agent_service = agent_service or AgentService()
+
+    def list_suites(
+        self,
+        session: Session,
+        *,
+        pskill_id: str | None = None,
+        status: str | None = None,
+    ) -> list[SkillTestSuiteResponse]:
+        if pskill_id:
+            self._get_skill(session, pskill_id)
+        suites = self.repository.list_suites(session, pskill_definition_id=pskill_id, status=status)
+        return [self._build_suite_response(session, suite) for suite in suites]
+
+    def create_suite(self, session: Session, payload: SkillTestSuiteCreateRequest) -> SkillTestSuiteResponse:
+        skill = self._get_skill(session, payload.pskill_id)
+        version_id = payload.pskill_version_id
+        if version_id:
+            version = self.repository.get_pskill_version(session, version_id)
+            if not version or version.pskill_definition_id != skill.id:
+                raise SkillValidationError("测试套件指定的 PSkillVersion 无效。", details={"pskill_version_id": version_id})
+        if payload.status not in {"active", "draft", "archived"}:
+            raise SkillValidationError("测试套件状态无效。", details={"status": payload.status})
+        suite = PSkillTestSuite(
+            pskill_definition_id=skill.id,
+            pskill_version_id=version_id,
+            name=self._normalize_name(payload.name, field="name"),
+            suite_type=payload.suite_type or "runtime_simulation",
+            status=payload.status or "active",
+        )
+        session.add(suite)
+        session.commit()
+        return self._build_suite_response(session, suite)
+
+    def create_suite_scenario(
+        self,
+        session: Session,
+        suite_id: str,
+        payload: SkillTestScenarioCreateRequest,
+    ) -> SkillTestScenarioResponse:
+        suite = self._get_suite(session, suite_id)
+        skill = self._get_skill(session, suite.pskill_definition_id)
+        scenario = self._create_scenario_model(session, skill=skill, payload=payload, suite=suite)
+        session.commit()
+        return self._build_scenario_response(session, scenario)
+
+    def run_suite(
+        self,
+        session: Session,
+        suite_id: str,
+        payload: StartSkillTestScenarioRunRequest,
+    ) -> SkillTestSuiteRunResponse:
+        suite = self._get_suite(session, suite_id)
+        scenarios = self.repository.list_scenarios_for_suite(session, suite.id)
+        if not scenarios:
+            raise SkillValidationError("测试套件没有可运行的测试场景。", details={"suite_id": suite.id})
+        open_runs = [
+            {"scenario_id": scenario.id, "open_run_id": open_run.id}
+            for scenario in scenarios
+            if (open_run := self._get_open_scenario_run(session, scenario)) is not None
+        ]
+        if open_runs:
+            raise SkillConflictError("测试套件存在进行中的测试场景运行。", details={"suite_id": suite.id, "open_runs": open_runs})
+        runs = [
+            self.start_run(session, suite.pskill_definition_id, scenario.id, payload)
+            for scenario in scenarios
+        ]
+        status_counts: dict[str, int] = {}
+        for run in runs:
+            status_counts[run.status] = status_counts.get(run.status, 0) + 1
+        suite_status = self._suite_run_status(status_counts)
+        return SkillTestSuiteRunResponse(
+            suite=self._build_suite_response(session, suite),
+            runs=runs,
+            status=suite_status,
+            result_summary={
+                "total": len(runs),
+                "status_counts": status_counts,
+                "passed": status_counts.get("passed", 0),
+                "failed": status_counts.get("failed", 0),
+            },
+        )
 
     def list_scenarios(self, session: Session, skill_id: str) -> list[SkillTestScenarioResponse]:
         self._get_skill(session, skill_id)
@@ -465,6 +549,12 @@ class SkillTestService:
         self._sync_scenario_run_from_runtime(session, scenario_run)
         session.commit()
         return self._build_run_response(scenario_run)
+
+    def list_run_events(self, session: Session, scenario_run_id: str) -> list[AgentEventResponse]:
+        scenario_run = self._get_scenario_run(session, scenario_run_id)
+        if not scenario_run.agent_run_id:
+            return []
+        return self.agent_service.list_events(session, scenario_run.agent_run_id)
 
     def cancel_run(self, session: Session, scenario_run_id: str, *, reason: str = "cancelled by user") -> SkillTestScenarioRunResponse:
         scenario_run = self._get_scenario_run(session, scenario_run_id)
@@ -1299,17 +1389,35 @@ class SkillTestService:
         check_summary = ", ".join(f"{name}:{check.get('status')}" for name, check in checks.items())
         return f"publish gate {status} with score {score}; {check_summary}"
 
+    @staticmethod
+    def _suite_run_status(status_counts: dict[str, int]) -> str:
+        if not status_counts:
+            return "empty"
+        if status_counts.get("failed") or status_counts.get("cancelled"):
+            return "failed"
+        if status_counts.get("passed") == sum(status_counts.values()):
+            return "passed"
+        return "running"
+
     def _create_scenario_model(
         self,
         session: Session,
         *,
         skill: PSkillDefinition,
         payload: SkillTestScenarioCreateRequest,
+        suite: PSkillTestSuite | None = None,
     ) -> SkillTestScenario:
         self._validate_target_artifact(session, skill.id, payload.target_compile_artifact_id)
         timeline = self._normalize_timeline(payload.timeline, duration_ms=payload.duration_ms)
         artifact = self.repository.get_artifact(session, payload.target_compile_artifact_id)
-        suite = self._ensure_default_suite(session, skill=skill, pskill_version_id=artifact.pskill_version_id if artifact else None)
+        if suite and suite.pskill_definition_id != skill.id:
+            raise SkillValidationError("测试套件不属于当前 PSkill。", details={"suite_id": suite.id, "pskill_id": skill.id})
+        if suite and suite.pskill_version_id and artifact and artifact.pskill_version_id != suite.pskill_version_id:
+            raise SkillValidationError(
+                "测试场景编译产物与测试套件 PSkillVersion 不一致。",
+                details={"suite_id": suite.id, "compile_artifact_id": artifact.id, "pskill_version_id": suite.pskill_version_id},
+            )
+        suite = suite or self._ensure_default_suite(session, skill=skill, pskill_version_id=artifact.pskill_version_id if artifact else None)
         scenario = SkillTestScenario(
             pskill_definition_id=skill.id,
             suite_id=suite.id,
@@ -1671,7 +1779,8 @@ class SkillTestService:
         artifact = self.repository.get_artifact(session, scenario.target_compile_artifact_id)
         if artifact:
             return artifact.pskill_version_id, artifact.id
-        version_id = skill.latest_published_version_id or skill.latest_draft_version_id
+        suite = self.repository.get_suite(session, scenario.suite_id)
+        version_id = (suite.pskill_version_id if suite else None) or skill.latest_published_version_id or skill.latest_draft_version_id
         artifact = self.repository.get_latest_ready_artifact(session, version_id)
         return version_id, artifact.id if artifact else None
 
@@ -1825,6 +1934,12 @@ class SkillTestService:
         if not scenario or scenario.pskill_definition_id != skill_id or scenario.status == "archived":
             raise SkillNotFoundError("未找到测试场景。", details={"skill_id": skill_id, "scenario_id": scenario_id})
         return scenario
+
+    def _get_suite(self, session: Session, suite_id: str) -> PSkillTestSuite:
+        suite = self.repository.get_suite(session, suite_id)
+        if not suite or suite.status == "archived":
+            raise SkillNotFoundError("未找到测试套件。", details={"suite_id": suite_id})
+        return suite
 
     def _get_scenario_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRun:
         scenario_run = self.repository.get_scenario_run(session, scenario_run_id)
@@ -2601,6 +2716,19 @@ class SkillTestService:
             latest_run=self._build_run_summary(latest_run) if latest_run else None,
             created_at=scenario.created_at,
             updated_at=scenario.updated_at,
+        )
+
+    def _build_suite_response(self, session: Session, suite: PSkillTestSuite) -> SkillTestSuiteResponse:
+        return SkillTestSuiteResponse(
+            id=suite.id,
+            pskill_definition_id=suite.pskill_definition_id,
+            pskill_version_id=suite.pskill_version_id,
+            name=suite.name,
+            suite_type=suite.suite_type,
+            status=suite.status,
+            created_by_agent_run_id=suite.created_by_agent_run_id,
+            scenario_count=len(self.repository.list_scenarios_for_suite(session, suite.id)),
+            created_at=suite.created_at,
         )
 
     @staticmethod
