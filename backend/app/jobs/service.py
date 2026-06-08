@@ -16,14 +16,19 @@ from app.jobs.schemas import (
     RuntimeJobTokenUsageResponse,
 )
 from app.jobs.types import (
+    GOVERNANCE_PROPOSAL_JOB_TYPE,
     MATERIAL_ANALYSIS_JOB_TYPE,
+    MEMORY_COMPACTION_JOB_TYPE,
     PSKILL_BUILD_JOB_TYPE,
+    RUN_EVALUATION_JOB_TYPE,
+    SKILL_SYNC_JOB_TYPE,
     is_pskill_compile_job_type,
     is_pskill_test_job_type,
     is_runtime_step_job_type,
 )
 from app.runtime.models import Run
 from app.testing.models import SkillTestScenarioRun
+from app.pskills.exceptions import SkillNotFoundError
 from app.pskills.models import PSkillMaterialAnalysis, PSkillMaterialGeneration, now_utc
 
 
@@ -57,6 +62,12 @@ class JobQueryService:
             offset=offset,
         )
         return [self._build_job_response(session, job, now=now) for job in jobs]
+
+    def get_runtime_job(self, session: Session, job_id: str) -> RuntimeJobResponse:
+        job = self.repository.get_runtime_job(session, job_id)
+        if not job:
+            raise SkillNotFoundError("未找到 RuntimeJob。", details={"job_id": job_id})
+        return self._build_job_response(session, job, now=now_utc())
 
     def get_runtime_job_stats(self, session: Session, *, window_hours: int = 24) -> RuntimeJobStatsResponse:
         now = now_utc()
@@ -139,6 +150,14 @@ class JobQueryService:
             return self._material_analysis_progress(session, job)
         if job.job_type == PSKILL_BUILD_JOB_TYPE:
             return self._skill_generation_progress(session, job)
+        if job.job_type == RUN_EVALUATION_JOB_TYPE:
+            return self._run_evaluation_progress(job)
+        if job.job_type == GOVERNANCE_PROPOSAL_JOB_TYPE:
+            return self._governance_proposal_progress(job)
+        if job.job_type == MEMORY_COMPACTION_JOB_TYPE:
+            return self._memory_compaction_progress(job)
+        if job.job_type == SKILL_SYNC_JOB_TYPE:
+            return self._skill_sync_progress(job)
         return self._fallback_progress(job)
 
     def _compile_progress(self, job: RuntimeJob) -> RuntimeJobProgressResponse:
@@ -268,6 +287,97 @@ class JobQueryService:
             current_stage=current_stage,
             label=self._skill_generation_label(current_stage, job.status),
             detail=(generation.error_message if generation else "") or job.last_error or "",
+        )
+
+    def _run_evaluation_progress(self, job: RuntimeJob) -> RuntimeJobProgressResponse:
+        payload = job.payload or {}
+        metrics = job.metrics or {}
+        evaluation_id = str(payload.get("evaluation_id") or metrics.get("evaluation_id") or "")
+        outcome = str(payload.get("overall_outcome") or metrics.get("overall_outcome") or "")
+        quality_score = payload.get("quality_score", metrics.get("quality_score"))
+        finding_count = payload.get("finding_count", metrics.get("finding_count"))
+        detail_parts = []
+        if evaluation_id:
+            detail_parts.append(f"evaluation={evaluation_id}")
+        if outcome:
+            detail_parts.append(f"outcome={outcome}")
+        if quality_score is not None:
+            detail_parts.append(f"score={quality_score}")
+        if finding_count is not None:
+            detail_parts.append(f"findings={finding_count}")
+        return RuntimeJobProgressResponse(
+            percent=self._fallback_percent(job.status),
+            current_stage=job.status,
+            label=self._run_evaluation_label(job.status),
+            detail=" / ".join(detail_parts) if detail_parts else (job.last_error or ""),
+        )
+
+    def _governance_proposal_progress(self, job: RuntimeJob) -> RuntimeJobProgressResponse:
+        payload = job.payload or {}
+        metrics = job.metrics or {}
+        proposal_id = str(payload.get("proposal_id") or metrics.get("proposal_id") or "")
+        proposal_type = str(payload.get("proposal_type") or metrics.get("proposal_type") or "")
+        proposal_status = str(payload.get("proposal_status") or metrics.get("proposal_status") or "")
+        source_finding_count = payload.get("source_finding_count", metrics.get("source_finding_count"))
+        if source_finding_count is None and isinstance(payload.get("source_finding_ids"), list):
+            source_finding_count = len(payload["source_finding_ids"])
+        detail_parts = []
+        if proposal_id:
+            detail_parts.append(f"proposal={proposal_id}")
+        if proposal_type:
+            detail_parts.append(f"type={proposal_type}")
+        if proposal_status:
+            detail_parts.append(f"status={proposal_status}")
+        if source_finding_count is not None:
+            detail_parts.append(f"findings={source_finding_count}")
+        return RuntimeJobProgressResponse(
+            percent=self._fallback_percent(job.status),
+            current_stage=job.status,
+            label=self._governance_proposal_label(job.status),
+            detail=" / ".join(detail_parts) if detail_parts else (job.last_error or ""),
+        )
+
+    def _memory_compaction_progress(self, job: RuntimeJob) -> RuntimeJobProgressResponse:
+        payload = job.payload or {}
+        metrics = job.metrics or {}
+        memory_id = str(payload.get("compacted_memory_id") or metrics.get("compacted_memory_id") or "")
+        namespace = str(payload.get("target_namespace") or metrics.get("target_namespace") or "")
+        memory_type = str(payload.get("target_memory_type") or metrics.get("target_memory_type") or "")
+        source_count = payload.get("source_memory_count", metrics.get("source_memory_count"))
+        detail_parts = []
+        if memory_id:
+            detail_parts.append(f"memory={memory_id}")
+        if namespace:
+            detail_parts.append(f"namespace={namespace}")
+        if memory_type:
+            detail_parts.append(f"type={memory_type}")
+        if source_count is not None:
+            detail_parts.append(f"sources={source_count}")
+        return RuntimeJobProgressResponse(
+            percent=self._fallback_percent(job.status),
+            current_stage=job.status,
+            label=self._memory_compaction_label(job.status),
+            detail=" / ".join(detail_parts) if detail_parts else (job.last_error or ""),
+        )
+
+    def _skill_sync_progress(self, job: RuntimeJob) -> RuntimeJobProgressResponse:
+        result = (job.payload or {}).get("sync_result")
+        if not isinstance(result, dict):
+            result = {}
+        metrics = job.metrics or {}
+        package_count = int(result.get("package_count") or metrics.get("package_count") or 0)
+        version_count = int(result.get("version_count") or metrics.get("version_count") or 0)
+        scanned_count = int(result.get("scanned_count") or metrics.get("scanned_count") or 0)
+        changed = result.get("changed", metrics.get("changed"))
+        detail = (
+            f"scanned={scanned_count} / packages={package_count} / "
+            f"versions={version_count} / changed={bool(changed)}"
+        )
+        return RuntimeJobProgressResponse(
+            percent=self._fallback_percent(job.status),
+            current_stage=job.status,
+            label=self._skill_sync_label(job.status),
+            detail=detail if package_count or version_count or scanned_count else (job.last_error or ""),
         )
 
     def _fallback_progress(self, job: RuntimeJob) -> RuntimeJobProgressResponse:
@@ -431,3 +541,55 @@ class JobQueryService:
             "succeeded": "生成完成",
         }
         return labels.get(stage, "Skill 生成")
+
+    @staticmethod
+    def _run_evaluation_label(status: str) -> str:
+        labels = {
+            "pending": "等待评估 Run",
+            "retryable_failed": "等待重试 Run 评估",
+            "running": "Run 评估中",
+            "succeeded": "Run 评估完成",
+            "failed": "Run 评估失败",
+            "dead_letter": "Run 评估进入死信",
+            "deadletter": "Run 评估进入死信",
+        }
+        return labels.get(status, "Run 评估")
+
+    @staticmethod
+    def _governance_proposal_label(status: str) -> str:
+        labels = {
+            "pending": "等待生成治理提案",
+            "retryable_failed": "等待重试治理提案",
+            "running": "治理提案生成中",
+            "succeeded": "治理提案已生成",
+            "failed": "治理提案生成失败",
+            "dead_letter": "治理提案进入死信",
+            "deadletter": "治理提案进入死信",
+        }
+        return labels.get(status, "治理提案")
+
+    @staticmethod
+    def _memory_compaction_label(status: str) -> str:
+        labels = {
+            "pending": "等待压缩记忆",
+            "retryable_failed": "等待重试记忆压缩",
+            "running": "记忆压缩中",
+            "succeeded": "记忆压缩完成",
+            "failed": "记忆压缩失败",
+            "dead_letter": "记忆压缩进入死信",
+            "deadletter": "记忆压缩进入死信",
+        }
+        return labels.get(status, "记忆压缩")
+
+    @staticmethod
+    def _skill_sync_label(status: str) -> str:
+        labels = {
+            "pending": "等待同步 Skill 包",
+            "retryable_failed": "等待重试 Skill 包同步",
+            "running": "同步 Skill 包中",
+            "succeeded": "Skill 包同步完成",
+            "failed": "Skill 包同步失败",
+            "dead_letter": "Skill 包同步进入死信",
+            "deadletter": "Skill 包同步进入死信",
+        }
+        return labels.get(status, "Skill 包同步")

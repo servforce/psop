@@ -13,6 +13,9 @@ from app.evaluations.schemas import (
     RunEvaluationResponse,
     UpdateRunEvaluationFindingRequest,
 )
+from app.jobs.models import RuntimeJob
+from app.jobs.repository import JobRepository
+from app.jobs.types import RUN_EVALUATION_JOB_TYPE
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import generate_uuid, now_utc
 from app.runtime.models import Run, RunEvent, RunTrace
@@ -40,9 +43,11 @@ class EvaluationService:
         *,
         repository: EvaluationRepository | None = None,
         agent_service: AgentService | None = None,
+        job_repository: JobRepository | None = None,
     ) -> None:
         self.repository = repository or EvaluationRepository()
         self.agent_service = agent_service or AgentService()
+        self.job_repository = job_repository or JobRepository()
 
     def create_run_evaluation(self, session: Session, run_id: str) -> RunEvaluationResponse:
         run = self._get_terminal_run(session, run_id)
@@ -98,6 +103,67 @@ class EvaluationService:
         )
         session.commit()
         return self.get_evaluation(session, evaluation.id)
+
+    def enqueue_run_evaluation_job(self, session: Session, run_id: str) -> str:
+        run = self._get_terminal_run(session, run_id)
+        dedupe_key = f"job:run-evaluation:{run.id}"
+        existing = self.job_repository.get_runtime_job_by_dedupe_key(session, dedupe_key)
+        if existing:
+            return existing.id
+        job = RuntimeJob(
+            job_type=RUN_EVALUATION_JOB_TYPE,
+            status="pending",
+            payload={"operation": "run_evaluation", "run_id": run.id},
+            run_id=run.id,
+            dedupe_key=dedupe_key,
+        )
+        session.add(job)
+        session.commit()
+        return job.id
+
+    def process_run_evaluation_job(self, session: Session, job_id: str) -> RunEvaluationResponse:
+        job = self.job_repository.get_runtime_job(session, job_id)
+        if not job:
+            raise SkillNotFoundError("未找到 RunEvaluation 任务。", details={"job_id": job_id})
+        if job.job_type != RUN_EVALUATION_JOB_TYPE:
+            raise SkillValidationError("当前 worker 仅支持 RunEvaluation 任务。", details={"job_type": job.job_type})
+
+        payload = dict(job.payload or {})
+        evaluation_id = str(payload.get("evaluation_id") or "").strip()
+        if evaluation_id:
+            evaluation = self.get_evaluation(session, evaluation_id)
+        else:
+            run_id = str(job.run_id or payload.get("run_id") or "").strip()
+            if not run_id:
+                raise SkillValidationError("RunEvaluation 任务缺少 run_id。", details={"job_id": job.id})
+            evaluation = self.create_run_evaluation(session, run_id)
+
+        finding_count = len(evaluation.findings)
+        metrics = dict(job.metrics or {})
+        metrics.update(
+            {
+                "evaluation_id": evaluation.id,
+                "finding_count": finding_count,
+                "quality_score": evaluation.quality_score,
+                "overall_outcome": evaluation.overall_outcome,
+            }
+        )
+        job.payload = {
+            **payload,
+            "operation": "run_evaluation",
+            "run_id": evaluation.run_id,
+            "evaluation_id": evaluation.id,
+            "overall_outcome": evaluation.overall_outcome,
+            "quality_score": evaluation.quality_score,
+            "finding_count": finding_count,
+        }
+        job.run_id = evaluation.run_id
+        job.metrics = metrics
+        job.status = "succeeded"
+        job.last_error = ""
+        job.lease_until = None
+        session.commit()
+        return evaluation
 
     def get_evaluation(self, session: Session, evaluation_id: str) -> RunEvaluationResponse:
         evaluation = self.repository.get_evaluation(session, evaluation_id)

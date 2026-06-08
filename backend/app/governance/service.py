@@ -15,6 +15,9 @@ from app.governance.schemas import (
     GovernanceProposalResponse,
     GovernanceReviewRequest,
 )
+from app.jobs.models import RuntimeJob
+from app.jobs.repository import JobRepository
+from app.jobs.types import GOVERNANCE_PROPOSAL_JOB_TYPE
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import generate_uuid, now_utc
 
@@ -61,9 +64,11 @@ class GovernanceService:
         *,
         repository: GovernanceRepository | None = None,
         agent_service: AgentService | None = None,
+        job_repository: JobRepository | None = None,
     ) -> None:
         self.repository = repository or GovernanceRepository()
         self.agent_service = agent_service or AgentService()
+        self.job_repository = job_repository or JobRepository()
 
     def create_proposal(
         self,
@@ -125,6 +130,33 @@ class GovernanceService:
         session.commit()
         return self.get_proposal(session, proposal.id)
 
+    def enqueue_proposal_from_finding_job(self, session: Session, finding_id: str) -> str:
+        finding = self.repository.get_finding(session, finding_id)
+        if not finding:
+            raise SkillNotFoundError("未找到 RunEvaluationFinding。", details={"finding_id": finding_id})
+        evaluation = self.repository.get_evaluation(session, finding.evaluation_id)
+        if not evaluation:
+            raise SkillNotFoundError("未找到 RunEvaluation。", details={"evaluation_id": finding.evaluation_id})
+        dedupe_key = f"job:governance-proposal:finding:{finding.id}"
+        existing = self.job_repository.get_runtime_job_by_dedupe_key(session, dedupe_key)
+        if existing:
+            return existing.id
+        job = RuntimeJob(
+            job_type=GOVERNANCE_PROPOSAL_JOB_TYPE,
+            status="pending",
+            payload={
+                "operation": "governance_proposal",
+                "finding_id": finding.id,
+                "source_evaluation_id": evaluation.id,
+                "source_run_id": evaluation.run_id,
+            },
+            run_id=evaluation.run_id,
+            dedupe_key=dedupe_key,
+        )
+        session.add(job)
+        session.commit()
+        return job.id
+
     def create_proposal_from_agent_tool(
         self,
         session: Session,
@@ -173,6 +205,57 @@ class GovernanceService:
         if commit:
             session.commit()
         return self._build_proposal_response(session, proposal)
+
+    def process_governance_proposal_job(self, session: Session, job_id: str) -> GovernanceProposalResponse:
+        job = self.job_repository.get_runtime_job(session, job_id)
+        if not job:
+            raise SkillNotFoundError("未找到 Governance proposal 任务。", details={"job_id": job_id})
+        if job.job_type != GOVERNANCE_PROPOSAL_JOB_TYPE:
+            raise SkillValidationError("当前 worker 仅支持 Governance proposal 任务。", details={"job_type": job.job_type})
+
+        payload = dict(job.payload or {})
+        proposal_id = str(payload.get("proposal_id") or "").strip()
+        if proposal_id:
+            proposal = self.get_proposal(session, proposal_id)
+        else:
+            finding_id = str(payload.get("finding_id") or payload.get("source_finding_id") or "").strip()
+            if finding_id:
+                proposal = self.create_proposal_from_finding(session, finding_id)
+            else:
+                request_payload = payload.get("proposal", payload)
+                if not isinstance(request_payload, dict):
+                    raise SkillValidationError(
+                        "Governance proposal 任务缺少 proposal 对象。",
+                        details={"job_id": job.id},
+                    )
+                proposal = self.create_proposal(session, GovernanceProposalCreateRequest(**request_payload))
+
+        metrics = dict(job.metrics or {})
+        metrics.update(
+            {
+                "proposal_id": proposal.id,
+                "proposal_type": proposal.proposal_type,
+                "proposal_status": proposal.status,
+                "source_finding_count": len(proposal.source_finding_ids),
+            }
+        )
+        job.payload = {
+            **payload,
+            "operation": "governance_proposal",
+            "proposal_id": proposal.id,
+            "proposal_type": proposal.proposal_type,
+            "proposal_status": proposal.status,
+            "source_run_id": proposal.source_run_id,
+            "source_evaluation_id": proposal.source_evaluation_id,
+            "source_finding_ids": list(proposal.source_finding_ids),
+        }
+        job.run_id = proposal.source_run_id or job.run_id
+        job.metrics = metrics
+        job.status = "succeeded"
+        job.last_error = ""
+        job.lease_until = None
+        session.commit()
+        return proposal
 
     def list_proposals(self, session: Session, *, status: str | None = None) -> list[GovernanceProposalResponse]:
         if status is not None and status not in VALID_PROPOSAL_STATUSES:

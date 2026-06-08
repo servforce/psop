@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.jobs.repository import JobRepository
+from app.jobs.types import MEMORY_COMPACTION_JOB_TYPE
 from app.memory.models import AgentMemoryEntry
 from app.memory.repository import MemoryRepository
 from app.memory.schemas import (
@@ -19,8 +21,13 @@ VALID_MEMORY_STATUSES = {"pending_review", "active", "rejected", "archived"}
 
 
 class MemoryService:
-    def __init__(self, repository: MemoryRepository | None = None) -> None:
+    def __init__(
+        self,
+        repository: MemoryRepository | None = None,
+        job_repository: JobRepository | None = None,
+    ) -> None:
         self.repository = repository or MemoryRepository()
+        self.job_repository = job_repository or JobRepository()
 
     def list_entries(
         self,
@@ -173,6 +180,125 @@ class MemoryService:
         if commit:
             session.commit()
         return [self._build_entry_response(item) for item in entries]
+
+    def process_memory_compaction_job(self, session: Session, job_id: str) -> MemoryEntryResponse:
+        job = self.job_repository.get_runtime_job(session, job_id)
+        if not job:
+            raise SkillNotFoundError("未找到 Memory compaction 任务。", details={"job_id": job_id})
+        if job.job_type != MEMORY_COMPACTION_JOB_TYPE:
+            raise SkillValidationError("当前 worker 仅支持 Memory compaction 任务。", details={"job_type": job.job_type})
+
+        payload = dict(job.payload or {})
+        compacted_memory_id = str(payload.get("compacted_memory_id") or "").strip()
+        if compacted_memory_id:
+            compacted = self._get_entry(session, compacted_memory_id)
+        else:
+            sources = self.repository.list_entries(
+                session,
+                namespace=self._normalize_optional(payload.get("namespace")),
+                memory_type=self._normalize_optional(payload.get("memory_type")),
+                status=self._normalize_optional(payload.get("status")) or "active",
+                agent_key=self._normalize_optional(payload.get("agent_key")),
+                limit=max(1, min(200, int(payload.get("limit") or 50))),
+            )
+            if not sources:
+                raise SkillValidationError("Memory compaction 没有找到可压缩条目。", details={"job_id": job.id})
+            compacted = self._create_compacted_memory_entry(session, sources=sources, payload=payload)
+            if bool(payload.get("archive_source_entries")):
+                now = now_utc()
+                for source in sources:
+                    if source.id == compacted.id:
+                        continue
+                    source.status = "archived"
+                    source.reviewed_at = now
+                    source.updated_at = now
+            session.flush()
+
+        metrics = dict(job.metrics or {})
+        source_refs = list(compacted.source_refs or [])
+        source_count = len([item for item in source_refs if item.get("kind") == "agent_memory_entry"])
+        metrics.update(
+            {
+                "compacted_memory_id": compacted.id,
+                "source_memory_count": source_count,
+                "target_namespace": compacted.namespace,
+                "target_memory_type": compacted.memory_type,
+            }
+        )
+        job.payload = {
+            **payload,
+            "operation": "memory_compaction",
+            "compacted_memory_id": compacted.id,
+            "target_namespace": compacted.namespace,
+            "target_memory_type": compacted.memory_type,
+            "source_memory_count": source_count,
+            "archive_source_entries": bool(payload.get("archive_source_entries")),
+        }
+        job.metrics = metrics
+        job.status = "succeeded"
+        job.last_error = ""
+        job.lease_until = None
+        session.commit()
+        return self._build_entry_response(compacted)
+
+    def _create_compacted_memory_entry(
+        self,
+        session: Session,
+        *,
+        sources: list[AgentMemoryEntry],
+        payload: dict,
+    ) -> AgentMemoryEntry:
+        target_namespace = str(payload.get("target_namespace") or payload.get("namespace") or sources[0].namespace).strip()
+        target_memory_type = str(payload.get("target_memory_type") or "artifact").strip()
+        self._validate_memory_type(target_memory_type)
+        target_status = str(payload.get("target_status") or "pending_review").strip()
+        if target_status not in VALID_MEMORY_STATUSES:
+            raise SkillValidationError("target_status 无效。", details={"target_status": target_status})
+        title = str(payload.get("title") or "").strip() or f"Compacted memory: {target_namespace}/{target_memory_type}"
+        source_refs = [
+            {
+                "kind": "agent_memory_entry",
+                "id": source.id,
+                "namespace": source.namespace,
+                "memory_type": source.memory_type,
+                "status": source.status,
+            }
+            for source in sources
+        ]
+        content = self._compact_memory_content(sources)
+        confidence_values = [source.confidence for source in sources if isinstance(source.confidence, int)]
+        confidence = int(round(sum(confidence_values) / len(confidence_values))) if confidence_values else 50
+        tags = sorted({tag for source in sources for tag in list(source.tags or []) if str(tag).strip()} | {"compacted"})
+        compacted = AgentMemoryEntry(
+            namespace=target_namespace or "default",
+            memory_type=target_memory_type,
+            agent_key=str(payload.get("target_agent_key") or payload.get("agent_key") or sources[0].agent_key or "").strip(),
+            status=target_status,
+            confidence=max(0, min(100, confidence)),
+            title=title,
+            content=content,
+            source_refs=source_refs,
+            tags=tags,
+            metadata_json={
+                "schema": "psop-memory-compaction/v1",
+                "source_memory_count": len(sources),
+                "source_namespaces": sorted({source.namespace for source in sources}),
+                "source_memory_types": sorted({source.memory_type for source in sources}),
+            },
+            created_by_agent_run_id=self._normalize_optional(payload.get("created_by_agent_run_id")),
+        )
+        session.add(compacted)
+        return compacted
+
+    @staticmethod
+    def _compact_memory_content(sources: list[AgentMemoryEntry]) -> str:
+        lines = ["Compacted memory summary:"]
+        for index, source in enumerate(sources, start=1):
+            content = " ".join(str(source.content or "").split())
+            if len(content) > 500:
+                content = f"{content[:497]}..."
+            lines.append(f"{index}. [{source.memory_type}/{source.status}] {source.title}: {content}")
+        return "\n".join(lines)
 
     def _get_entry(self, session: Session, memory_id: str) -> AgentMemoryEntry:
         entry = self.repository.get_entry(session, memory_id)

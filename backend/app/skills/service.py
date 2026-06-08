@@ -9,6 +9,8 @@ from typing import Any
 import yaml
 from sqlalchemy.orm import Session
 
+from app.jobs.repository import JobRepository
+from app.jobs.types import SKILL_SYNC_JOB_TYPE
 from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
 from app.skills.models import SkillPackage, SkillResource, SkillVersion
@@ -44,10 +46,42 @@ class SkillPackageService:
         self,
         *,
         repository: SkillPackageRepository | None = None,
+        job_repository: JobRepository | None = None,
         skills_root: Path | None = None,
     ) -> None:
         self.repository = repository or SkillPackageRepository()
+        self.job_repository = job_repository or JobRepository()
         self.skills_root = skills_root or SKILLS_ROOT
+
+    def process_skill_sync_job(self, session: Session, job_id: str) -> SkillPackageSyncResponse:
+        job = self.job_repository.get_runtime_job(session, job_id)
+        if not job:
+            raise SkillNotFoundError("未找到 Skill package 同步任务。", details={"job_id": job_id})
+        if job.job_type != SKILL_SYNC_JOB_TYPE:
+            raise SkillValidationError("当前 worker 仅支持 Skill package 同步任务。", details={"job_type": job.job_type})
+
+        result = self.sync_packages(session)
+        result_payload = result.model_dump(mode="json")
+        metrics = dict(job.metrics or {})
+        metrics.update(
+            {
+                "scanned_count": result.scanned_count,
+                "package_count": result.package_count,
+                "version_count": result.version_count,
+                "changed": result.changed,
+            }
+        )
+        job.payload = {
+            **(job.payload or {}),
+            "operation": "skill_sync",
+            "sync_result": result_payload,
+        }
+        job.metrics = metrics
+        job.status = "succeeded"
+        job.last_error = ""
+        job.lease_until = None
+        session.commit()
+        return result
 
     def sync_packages(self, session: Session) -> SkillPackageSyncResponse:
         scanned = self._scan_packages()

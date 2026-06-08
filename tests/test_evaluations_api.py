@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from app.gateway.inference import LlmCompletion
+from app.jobs.types import GOVERNANCE_PROPOSAL_JOB_TYPE, RUN_EVALUATION_JOB_TYPE
+from app.jobs.worker import RuntimeJobWorker
 from tests.test_skills_api import create_test_client
 
 
@@ -130,6 +132,83 @@ def test_evaluation_activity_websocket_streams_report_snapshot() -> None:
     assert updated_payload["findings"][0]["id"] == finding["id"]
     assert updated_payload["findings"][0]["status"] == "accepted"
     assert updated_payload["evaluation"]["findings"][0]["status"] == "accepted"
+
+
+def test_evaluation_api_queues_evaluation_and_governance_jobs_for_worker_processing() -> None:
+    client, _, failing_inference = create_test_client()
+
+    with client:
+        run_id, _, _ = _publish_and_complete_failed_run(
+            client,
+            key="evaluation-job-producer",
+            restore_gateway=failing_inference,
+        )
+
+        queue_evaluation_response = client.post(f"/api/v1/evaluations/runs/{run_id}/queue")
+        duplicate_queue_response = client.post(f"/api/v1/evaluations/runs/{run_id}/queue")
+        evaluation_job_id = queue_evaluation_response.json()["id"]
+
+        worker = RuntimeJobWorker(
+            settings=client.app.state.settings,
+            database_manager=client.app.state.db_manager,
+            gitlab_gateway=client.app.state.gitlab_gateway,
+            inference_gateway=client.app.state.inference_gateway,
+            asr_gateway=client.app.state.asr_gateway,
+            object_store=client.app.state.object_store,
+        )
+        processed_evaluation = worker.run_once()
+        evaluation_job_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": RUN_EVALUATION_JOB_TYPE, "q": evaluation_job_id},
+        )
+        evaluation_job = evaluation_job_response.json()[0]
+        evaluation_response = client.get(f"/api/v1/evaluations/{evaluation_job['payload']['evaluation_id']}")
+        finding = evaluation_response.json()["findings"][0]
+
+        queue_proposal_response = client.post(f"/api/v1/evaluations/findings/{finding['id']}/queue-proposal")
+        duplicate_proposal_queue_response = client.post(
+            f"/api/v1/evaluations/findings/{finding['id']}/queue-proposal"
+        )
+        proposal_job_id = queue_proposal_response.json()["id"]
+        processed_proposal = worker.run_once()
+        proposal_job_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": GOVERNANCE_PROPOSAL_JOB_TYPE, "q": proposal_job_id},
+        )
+        proposal_job = proposal_job_response.json()[0]
+        proposal_response = client.get(f"/api/v1/governance/proposals/{proposal_job['payload']['proposal_id']}")
+
+    assert queue_evaluation_response.status_code == 202
+    assert queue_evaluation_response.json()["job_type"] == RUN_EVALUATION_JOB_TYPE
+    assert queue_evaluation_response.json()["status"] == "pending"
+    assert queue_evaluation_response.json()["run_id"] == run_id
+    assert duplicate_queue_response.status_code == 202
+    assert duplicate_queue_response.json()["id"] == evaluation_job_id
+
+    assert processed_evaluation is True
+    assert evaluation_job_response.status_code == 200
+    assert evaluation_job["status"] == "succeeded"
+    assert evaluation_job["payload"]["operation"] == "run_evaluation"
+    assert evaluation_job["payload"]["run_id"] == run_id
+    assert evaluation_response.status_code == 200
+    assert evaluation_response.json()["overall_outcome"] == "failed"
+    assert finding["status"] == "open"
+
+    assert queue_proposal_response.status_code == 202
+    assert queue_proposal_response.json()["job_type"] == GOVERNANCE_PROPOSAL_JOB_TYPE
+    assert queue_proposal_response.json()["status"] == "pending"
+    assert duplicate_proposal_queue_response.status_code == 202
+    assert duplicate_proposal_queue_response.json()["id"] == proposal_job_id
+
+    assert processed_proposal is True
+    assert proposal_job_response.status_code == 200
+    assert proposal_job["status"] == "succeeded"
+    assert proposal_job["payload"]["operation"] == "governance_proposal"
+    assert proposal_job["payload"]["source_finding_ids"] == [finding["id"]]
+    assert proposal_response.status_code == 200
+    assert proposal_response.json()["status"] == "draft"
+    assert proposal_response.json()["source_run_id"] == run_id
+    assert proposal_response.json()["source_finding_ids"] == [finding["id"]]
 
 
 def _publish_and_complete_successful_run(client, *, key: str) -> str:

@@ -10,18 +10,26 @@ from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
 from app.compiler.service import CompilerService
+from app.evaluations.service import EvaluationService
+from app.governance.service import GovernanceService
 from app.jobs.progress import ensure_publish_progress_payload, mark_publish_stage
 from app.jobs.repository import JobRepository
 from app.jobs.types import (
     DEAD_LETTER_JOB_STATUS,
+    GOVERNANCE_PROPOSAL_JOB_TYPE,
     MATERIAL_ANALYSIS_JOB_TYPE,
+    MEMORY_COMPACTION_JOB_TYPE,
     PSKILL_BUILD_JOB_TYPE,
+    RUN_EVALUATION_JOB_TYPE,
+    SKILL_SYNC_JOB_TYPE,
     WORKER_CLAIM_JOB_TYPES,
     is_pskill_compile_job_type,
     is_pskill_test_job_type,
     is_runtime_step_job_type,
 )
+from app.memory.service import MemoryService
 from app.runtime.service import RuntimeService
+from app.skills.service import SkillPackageService
 from app.testing.service import SkillTestService
 from app.pskills.service import SkillsService
 from app.pskills.models import now_utc
@@ -151,6 +159,18 @@ class RuntimeJobWorker:
                                 object_store=self.object_store,
                             )
                             skills_service.process_pskill_build_job(session, job_id)
+                        elif job_type == RUN_EVALUATION_JOB_TYPE:
+                            evaluation_service = EvaluationService()
+                            evaluation_service.process_run_evaluation_job(session, job_id)
+                        elif job_type == GOVERNANCE_PROPOSAL_JOB_TYPE:
+                            governance_service = GovernanceService()
+                            governance_service.process_governance_proposal_job(session, job_id)
+                        elif job_type == MEMORY_COMPACTION_JOB_TYPE:
+                            memory_service = MemoryService()
+                            memory_service.process_memory_compaction_job(session, job_id)
+                        elif job_type == SKILL_SYNC_JOB_TYPE:
+                            skill_package_service = SkillPackageService()
+                            skill_package_service.process_skill_sync_job(session, job_id)
                         else:
                             raise RuntimeError(f"Unsupported job_type={job_type}.")
                     except Exception as exc:

@@ -6,7 +6,7 @@ import json
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db_session, get_evaluation_service, get_governance_service
+from app.api.dependencies import get_db_session, get_evaluation_service, get_governance_service, get_job_query_service
 from app.evaluations.activity import EvaluationActivityService
 from app.evaluations.schemas import (
     RunEvaluationFindingResponse,
@@ -16,6 +16,8 @@ from app.evaluations.schemas import (
 from app.evaluations.service import EvaluationService
 from app.governance.schemas import GovernanceProposalResponse
 from app.governance.service import GovernanceService
+from app.jobs.schemas import RuntimeJobResponse
+from app.jobs.service import JobQueryService
 from app.pskills.exceptions import SkillsError
 
 
@@ -30,6 +32,17 @@ def create_run_evaluation(
     service: EvaluationService = Depends(get_evaluation_service),
 ) -> RunEvaluationResponse:
     return service.create_run_evaluation(session, run_id)
+
+
+@router.post("/runs/{run_id}/queue", response_model=RuntimeJobResponse, status_code=status.HTTP_202_ACCEPTED)
+def queue_run_evaluation(
+    run_id: str,
+    session: Session = Depends(get_db_session),
+    service: EvaluationService = Depends(get_evaluation_service),
+    job_query_service: JobQueryService = Depends(get_job_query_service),
+) -> RuntimeJobResponse:
+    job_id = service.enqueue_run_evaluation_job(session, run_id)
+    return job_query_service.get_runtime_job(session, job_id)
 
 
 @router.get("/findings", response_model=list[RunEvaluationFindingResponse])
@@ -73,6 +86,21 @@ def create_proposal_from_finding(
     governance_service: GovernanceService = Depends(get_governance_service),
 ) -> GovernanceProposalResponse:
     return governance_service.create_proposal_from_finding(session, finding_id)
+
+
+@router.post(
+    "/findings/{finding_id}/queue-proposal",
+    response_model=RuntimeJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def queue_proposal_from_finding(
+    finding_id: str,
+    session: Session = Depends(get_db_session),
+    governance_service: GovernanceService = Depends(get_governance_service),
+    job_query_service: JobQueryService = Depends(get_job_query_service),
+) -> RuntimeJobResponse:
+    job_id = governance_service.enqueue_proposal_from_finding_job(session, finding_id)
+    return job_query_service.get_runtime_job(session, job_id)
 
 
 @router.get("/{evaluation_id}", response_model=RunEvaluationResponse)
