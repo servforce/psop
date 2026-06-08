@@ -91,6 +91,12 @@
                   </div>
                   <pre class="mt-3 max-h-40 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="governanceJsonPreview(authorization.tool_arguments_summary)"></pre>
                 </div>
+                <template x-if="toolAuthorizationHasDiff(authorization)">
+                  <div class="p-4">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Diff / Patch</p>
+                    <pre class="mt-3 max-h-48 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="toolAuthorizationDiffText(authorization)"></pre>
+                  </div>
+                </template>
                 <div class="flex flex-wrap items-center gap-2 p-4">
                   <button type="button" class="button-secondary h-9 px-3" :disabled="busy.toolAuthorizationAction || authorization.status !== 'pending'" @click="decideToolAuthorization(authorization, 'approve')">
                     <span class="material-symbols-outlined text-[18px]">check_circle</span>

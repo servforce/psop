@@ -56,6 +56,40 @@ test("governance methods sync tool authorization filter from location", () => {
   expect(context.toolAuthorizationFilters.tool_name).toBe("psop.agent_version.activate");
 });
 
+test("governance methods extract tool authorization patch diffs", () => {
+  const methods = loadGovernanceMethods();
+  const context = { ...methods };
+  const patchAuthorization = {
+    tool_arguments_summary: {
+      patch: "--- a/SKILL.md\n+++ b/SKILL.md\n@@\n-old\n+new"
+    },
+    request_payload: {}
+  };
+  const changesAuthorization = {
+    tool_arguments_summary: {
+      changes: [
+        { path: "SKILL.md", diff: "@@\n-old\n+new" },
+        { path: "README.md", before: "old", after: "new" }
+      ]
+    },
+    request_payload: {}
+  };
+  const beforeAfterAuthorization = {
+    tool_arguments_summary: {
+      before: { status: "draft" },
+      after: { status: "published" }
+    },
+    request_payload: {}
+  };
+
+  expect(methods.toolAuthorizationHasDiff.call(context, patchAuthorization)).toBe(true);
+  expect(methods.toolAuthorizationDiffText.call(context, patchAuthorization)).toContain("+++ b/SKILL.md");
+  expect(methods.toolAuthorizationDiffText.call(context, changesAuthorization)).toContain("@@");
+  expect(methods.toolAuthorizationDiffText.call(context, changesAuthorization)).toContain('"path": "README.md"');
+  expect(methods.toolAuthorizationDiffText.call(context, beforeAfterAuthorization)).toContain("--- before");
+  expect(methods.toolAuthorizationDiffText.call(context, { tool_arguments_summary: {}, request_payload: {} })).toBe("");
+});
+
 test("governance methods flatten proposal experiments", () => {
   const methods = loadGovernanceMethods();
   const rows = methods.flattenGovernanceExperiments([

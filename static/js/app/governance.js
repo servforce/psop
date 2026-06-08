@@ -419,6 +419,67 @@
       return authorization?.reversible ? "可回滚" : "不可回滚";
     },
 
+    toolAuthorizationHasDiff(authorization) {
+      return Boolean(this.toolAuthorizationDiffText(authorization));
+    },
+
+    toolAuthorizationDiffText(authorization) {
+      const summary = authorization?.tool_arguments_summary || {};
+      const requestPayload = authorization?.request_payload || {};
+      const direct = this.firstToolAuthorizationDiffValue([
+        summary.patch_diff,
+        summary.patchDiff,
+        summary.unified_diff,
+        summary.unifiedDiff,
+        summary.diff,
+        summary.patch,
+        requestPayload.patch_diff,
+        requestPayload.patchDiff,
+        requestPayload.unified_diff,
+        requestPayload.unifiedDiff,
+        requestPayload.diff,
+        requestPayload.patch
+      ]);
+      if (direct) {
+        return direct;
+      }
+      const changes = Array.isArray(summary.changes) ? summary.changes : requestPayload.changes;
+      if (Array.isArray(changes) && changes.length) {
+        const changeDiffs = changes
+          .map((item) => this.firstToolAuthorizationDiffValue([
+            item?.patch_diff,
+            item?.patchDiff,
+            item?.unified_diff,
+            item?.unifiedDiff,
+            item?.diff,
+            item?.patch
+          ]) || this.governanceJsonPreview(item))
+          .filter(Boolean);
+        return changeDiffs.join("\n\n");
+      }
+      const before = summary.before ?? requestPayload.before;
+      const after = summary.after ?? requestPayload.after;
+      if (before !== undefined && after !== undefined) {
+        return this.toolAuthorizationBeforeAfterDiff(before, after);
+      }
+      return "";
+    },
+
+    firstToolAuthorizationDiffValue(values) {
+      for (const value of values) {
+        if (typeof value === "string" && value.trim()) {
+          return value.trim();
+        }
+      }
+      return "";
+    },
+
+    toolAuthorizationBeforeAfterDiff(before, after) {
+      const beforeLines = this.governanceJsonPreview(before).split("\n").map((line) => `- ${line}`);
+      const afterLines = this.governanceJsonPreview(after).split("\n").map((line) => `+ ${line}`);
+      return ["--- before", "+++ after", ...beforeLines, ...afterLines].join("\n");
+    },
+
     toolAuthorizationRiskTone(value) {
       const normalized = String(value || "").toLowerCase();
       if (normalized === "high") {
