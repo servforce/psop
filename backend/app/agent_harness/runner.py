@@ -543,7 +543,10 @@ class AgentRunner:
                 commit=False,
             )
             return {"result": activation}
-        return {"result": {"native_execution": "not_implemented", "tool_name": tool_call.tool_name}}
+        raise SkillValidationError(
+            "native_tool_not_implemented",
+            details={"tool_name": tool_call.tool_name},
+        )
 
     def _propose_repository_patch(self, session: Session, arguments: dict[str, Any]) -> dict[str, Any]:
         pskill_id = self._pskill_id_from_arguments(session, arguments)

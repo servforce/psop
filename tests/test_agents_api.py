@@ -1484,6 +1484,72 @@ def test_agent_runner_executes_builder_source_and_manifest_tools_without_committ
     assert after_source_response.json()["skill_md_content"] == source_payload["skill_md_content"]
 
 
+def test_agent_runner_fails_unimplemented_native_tool_instead_of_succeeding() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        before_response = client.get("/api/v1/agents/pskill.builder")
+        spec = {
+            **before_response.json()["active_version"]["spec_json"],
+            "goal": "错误地尝试执行尚未接入 native executor 的媒体处理工具。",
+            "allowed_tools": ["psop.media.compute"],
+            "allowed_skill_names": ["ffmpeg-video-processing"],
+        }
+        draft_response = client.post(
+            "/api/v1/agents/pskill.builder/versions",
+            json={"version_label": "builder-unimplemented-media-tool", "spec_json": spec},
+        )
+        draft = next(
+            item for item in draft_response.json()["versions"] if item["version_label"] == "builder-unimplemented-media-tool"
+        )
+        publish_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft['id']}/publish")
+        activate_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft['id']}/activate")
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.builder",
+                "owner_type": "pskill_draft",
+                "owner_id": "unimplemented-media-tool",
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.media.compute",
+                        "side_effect_level": "compute",
+                        "arguments_summary": {"operation": "extract_keyframes", "material_id": "material-1"},
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert before_response.status_code == 200
+    assert draft_response.status_code == 201
+    assert publish_response.status_code == 200
+    assert activate_response.status_code == 200
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "failed"
+    assert run_once_response.json()["error_message"] == "native_tool_not_implemented"
+    assert authorizations_response.json() == []
+
+    tool_call = tool_calls_response.json()[0]
+    assert tool_call["tool_name"] == "psop.media.compute"
+    assert tool_call["status"] == "failed"
+    assert tool_call["result_summary"]["executed"] is False
+    assert tool_call["result_summary"]["error"] == "native_tool_not_implemented"
+    assert tool_call["result_summary"]["details"] == {"tool_name": "psop.media.compute"}
+    assert "native_execution" not in tool_call["result_summary"]
+
+    event_types = [item["event_type"] for item in events_response.json()]
+    assert "tool.execution_started" in event_types
+    assert "tool.execution_failed" in event_types
+    assert "agent.tool_call.failed" in event_types
+
+
 def test_agent_runner_records_authorized_tool_execution_failure_event() -> None:
     client, _, _ = create_test_client()
 
