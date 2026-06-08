@@ -30,6 +30,7 @@ class InvocationResponse(BaseModel):
     pskill_definition_id: str
     pskill_version_id: str
     compile_artifact_id: str
+    compile_request_id: str = ""
     gateway_type: str
     input_envelope: dict[str, Any]
     terminal_context: dict[str, Any]
@@ -48,6 +49,7 @@ class RunResponse(BaseModel):
     pskill_definition_id: str
     pskill_version_id: str
     compile_artifact_id: str
+    compile_request_id: str = ""
     status: str
     runtime_phase: str
     latest_snapshot_seq: int

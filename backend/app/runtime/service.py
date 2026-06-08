@@ -2967,11 +2967,13 @@ class RuntimeService:
 
     def _build_invocation_response(self, session: Session, invocation: SkillInvocation) -> InvocationResponse:
         run = self.repository.get_run_for_invocation(session, invocation.id)
+        artifact = self.repository.get_artifact(session, invocation.compile_artifact_id)
         return InvocationResponse(
             id=invocation.id,
             pskill_definition_id=invocation.pskill_definition_id,
             pskill_version_id=invocation.pskill_version_id,
             compile_artifact_id=invocation.compile_artifact_id,
+            compile_request_id=artifact.compile_request_id if artifact else "",
             gateway_type=invocation.gateway_type,
             input_envelope=invocation.input_envelope,
             terminal_context=invocation.terminal_context,
@@ -2986,12 +2988,14 @@ class RuntimeService:
 
     def _build_run_response(self, session: Session, run: Run) -> RunResponse:
         wait_context = self._run_wait_context(session, run)
+        artifact = self.repository.get_artifact(session, run.compile_artifact_id)
         return RunResponse(
             id=run.id,
             invocation_id=run.invocation_id,
             pskill_definition_id=run.pskill_definition_id,
             pskill_version_id=run.pskill_version_id,
             compile_artifact_id=run.compile_artifact_id,
+            compile_request_id=artifact.compile_request_id if artifact else "",
             status=run.status,
             runtime_phase=run.runtime_phase,
             latest_snapshot_seq=run.latest_snapshot_seq,

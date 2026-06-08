@@ -188,13 +188,13 @@ static/
 | `create-skill-modal.html` | `create-skill-modal-page` | 创建 PSkill |
 | `delete-skill-modal.html` | `delete-skill-modal-page` | 删除 PSkill |
 | `publish-skill-drawer.html` | `publish-skill-drawer-page` | 发布与 compile progress |
-| `compiler-list.html` | `compiler-list-page` | 编译请求列表 |
-| `compiler-artifact-detail.html` | `compiler-artifact-page` | Artifact JSON/BPMN/节点详情 |
+| `compiler-list.html` | `compiler-list-page` | 编译请求列表，展示进度摘要并跳转 AgentRun / Artifact 证据 |
+| `compiler-artifact-detail.html` | `compiler-artifact-page` | Artifact JSON/BPMN/节点详情，显示 compile request / progress / AgentRun 回链 |
 | `agent-prompts-list.html` | `agent-prompts-list-page` | Prompt Pack 列表 |
 | `agent-prompt-detail.html` | `agent-prompt-detail-page` | Prompt Pack 详情 |
 | `tasks.html` | `tasks-page` | Runtime job 任务页 |
-| `invocations-list.html` | `invocations-list-page` | Invocation 列表 |
-| `run-live.html` | `run-live-page` | Run live/replay、terminal transcript |
+| `invocations-list.html` | `invocations-list-page` | Invocation 列表，展示 compile request 与 Artifact 证据入口 |
+| `run-live.html` | `run-live-page` | Run live/replay、terminal transcript，展示 Runtime compile provenance |
 | `skill-test-scenario-detail.html` | `skill-test-scenario-page` | 测试场景编辑 |
 | `skill-test-scenario-review.html` | `skill-test-scenario-review-page` | 测试运行 review |
 | `replay-list.html` | `replay-list-page` | Replay run 列表 |
@@ -247,12 +247,12 @@ static/
 | Repository Browser | `/api/v1/pskills/{skill_id}/repository/tree`、`/repository/files`、`/repository/folders` |
 | Materials | `/api/v1/pskills/{skill_id}/materials*` |
 | Publish Drawer | `POST /api/v1/pskills/{skill_id}/publish`、`GET /api/v1/compiler/requests/{id}/events`、`/progress` |
-| Compiler List | `GET /api/v1/compiler/requests` |
-| Artifact Detail | `GET/PUT /api/v1/compiler/artifacts/{id}` |
+| Compiler List | `GET /api/v1/compiler/requests`；每行使用 `progress` 摘要显示当前阶段/百分比，并通过 `agent_run_id`、`artifact_id` 跳转证据详情 |
+| Artifact Detail | `GET/PUT /api/v1/compiler/artifacts/{id}`；详情响应带 `compile_request` 摘要，用于回跳编译任务与 AgentRun |
 | Agent Prompts | `/api/v1/agent-prompts*`、`/api/v1/agent-prompt-bindings*` |
 | Tasks | `GET /api/v1/runtime/jobs`、`GET /api/v1/runtime/jobs/stats` |
-| Invocations | `GET/POST /api/v1/gateway/invocations` |
-| Run Live | `GET /api/v1/runs/{run_id}`、`POST /api/v1/runs/{run_id}/cancel`、`/snapshots`、`/traces`、`/bindings`、`/events` |
+| Invocations | `GET/POST /api/v1/gateway/invocations`；列表显示 `compile_request_id` 与 `compile_artifact_id` 回链 |
+| Run Live | `GET /api/v1/runs/{run_id}`、`POST /api/v1/runs/{run_id}/cancel`、`/snapshots`、`/traces`、`/bindings`、`/events`；侧栏展示 `compile_request_id` 与 Artifact 入口 |
 | Terminal WS | `/ws/runs/{run_id}` |
 | Replay | `GET /api/v1/replay/runs`、`GET /api/v1/replay/runs/{run_id}`、`GET /api/v1/replay/traces/{trace_id}` |
 | Skill Tests | `/api/v1/pskills/{skill_id}/test-scenarios*`、`/api/v1/skill-test-scenario-runs*` |
@@ -283,7 +283,7 @@ static/
 | Run Live run event | WebSocket `/ws/runs/{run_id}` 接收 `terminal.event.appended`，增量更新 transcript、Run Events 和 Replay timeline，REST 补齐 |
 | Run Live run trace | WebSocket `/ws/runs/{run_id}` 接收 `trace.event.appended`，增量更新 Replay timeline、EG Node Path 和 trace 列表，REST 补齐 |
 | Run Live snapshot | WebSocket `/ws/runs/{run_id}` 接收 `session_token.snapshot.appended`，增量更新 Replay snapshot 比较视图，REST 补齐 |
-| Run Live 状态 | WebSocket `/ws/runs/{run_id}` 接收 `run.updated` 增量更新状态栏和 Replay run metadata；REST 刷新 run、run events、run traces、bindings 补齐 |
+| Run Live 状态 | WebSocket `/ws/runs/{run_id}` 接收 `run.updated` 增量更新状态栏、compile provenance 和 Replay run metadata；REST 刷新 run、run events、run traces、bindings 补齐 |
 | Run Live binding | WebSocket `/ws/runs/{run_id}` 接收 `binding.updated`，增量更新 Binding 列表和 Replay binding evidence，REST 补齐 |
 | Tasks | 轮询 runtime jobs 和 stats |
 | Skill Test Review | REST 拉取 review DTO，必要时轮询运行状态 |

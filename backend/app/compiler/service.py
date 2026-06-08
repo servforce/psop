@@ -19,7 +19,7 @@ from app.compiler.formal_v5 import (
 )
 from app.core.config import Settings
 from app.core.logging import log_context
-from app.core.observability import record_span_exception, start_span
+from app.core.observability import record_span_exception, set_span_attributes, start_span
 from app.compiler.models import ArtifactObject, CompileDiagnostic, EgCompileArtifact, PSkillCompileRequest
 from app.compiler.repository import CompilerRepository
 from app.compiler.schemas import (
@@ -28,6 +28,7 @@ from app.compiler.schemas import (
     CompileArtifactValidationDiagnosticResponse,
     CompileArtifactValidationResponse,
     CompileDiagnosticResponse,
+    CompileRequestProgressSummaryResponse,
     CompileRequestResponse,
     PublishProgressResponse,
     PublishProgressStageResponse,
@@ -99,6 +100,81 @@ class CompilerService:
         self.repository = repository or CompilerRepository()
         self.job_repository = job_repository or JobRepository()
         self.agent_service = agent_service or AgentService()
+
+    def _compiler_span_attributes(
+        self,
+        *,
+        compile_request: PSkillCompileRequest | None = None,
+        pskill_definition: PSkillDefinition | None = None,
+        pskill_version: PSkillVersion | None = None,
+        job: RuntimeJob | None = None,
+        artifact: EgCompileArtifact | None = None,
+        artifact_object: ArtifactObject | None = None,
+        **overrides: Any,
+    ) -> dict[str, Any]:
+        attributes: dict[str, Any] = {}
+        if job is not None:
+            payload = job.payload or {}
+            pskill_definition_id = payload.get("pskill_definition_id")
+            pskill_version_id = payload.get("pskill_version_id")
+            attributes.update(
+                {
+                    "job_id": job.id,
+                    "job_type": job.job_type,
+                    "job_status": job.status,
+                    "compile_request_id": job.compile_request_id or payload.get("compile_request_id"),
+                    "publish_record_id": payload.get("publish_record_id"),
+                    "skill_id": pskill_definition_id,
+                    "pskill_definition_id": pskill_definition_id,
+                    "pskill_version_id": pskill_version_id,
+                    "skill_version_id": pskill_version_id,
+                    "source_commit_sha": payload.get("published_commit_sha"),
+                }
+            )
+        if compile_request is not None:
+            attributes.update(
+                {
+                    "compile_request_id": compile_request.id,
+                    "skill_id": compile_request.pskill_definition_id,
+                    "pskill_definition_id": compile_request.pskill_definition_id,
+                    "pskill_version_id": compile_request.pskill_version_id,
+                    "skill_version_id": compile_request.pskill_version_id,
+                    "compile_status": compile_request.status,
+                    "trigger_type": compile_request.trigger_type,
+                    "source_commit_sha": compile_request.source_commit_sha,
+                    "agent_run_id": compile_request.agent_run_id,
+                }
+            )
+        if pskill_definition is not None:
+            attributes.update(
+                {
+                    "skill_id": pskill_definition.id,
+                    "pskill_definition_id": pskill_definition.id,
+                    "skill_key": pskill_definition.key,
+                }
+            )
+        if pskill_version is not None:
+            attributes.update(
+                {
+                    "pskill_version_id": pskill_version.id,
+                    "skill_version_id": pskill_version.id,
+                    "pskill_version_no": pskill_version.version_no,
+                }
+            )
+        if artifact is not None:
+            attributes.update(
+                {
+                    "compile_artifact_id": artifact.id,
+                    "artifact_status": artifact.status,
+                    "formal_revision": artifact.formal_revision,
+                    "artifact_version": artifact.artifact_version,
+                    "artifact_object_id": artifact.artifact_object_id,
+                }
+            )
+        if artifact_object is not None:
+            attributes["artifact_object_id"] = artifact_object.id
+        attributes.update(overrides)
+        return attributes
 
     def create_compile_request_for_publish(
         self,
@@ -307,10 +383,11 @@ class CompilerService:
                 progress.mark("source_loaded", "running", "正在读取冻结 commit 下的 Skill source。")
             with start_span(
                 "compile.source_load",
-                skill_id=pskill_definition.id,
-                skill_key=pskill_definition.key,
-                compile_request_id=compile_request.id,
-                source_commit_sha=compile_request.source_commit_sha,
+                **self._compiler_span_attributes(
+                    compile_request=compile_request,
+                    pskill_definition=pskill_definition,
+                    pskill_version=pskill_version,
+                ),
             ):
                 source = self.gitlab_gateway.get_skill_source(
                     pskill_definition.gitlab_project_id,
@@ -334,9 +411,11 @@ class CompilerService:
                 progress.mark("manifest_checked", "running", "正在校验发布版本 manifest snapshot。")
             with start_span(
                 "compile.manifest_check",
-                skill_id=pskill_definition.id,
-                skill_key=pskill_definition.key,
-                compile_request_id=compile_request.id,
+                **self._compiler_span_attributes(
+                    compile_request=compile_request,
+                    pskill_definition=pskill_definition,
+                    pskill_version=pskill_version,
+                ),
             ):
                 document = document_from_manifest_snapshot(pskill_version.manifest_snapshot)
                 diagnostics = self._validate_document(pskill_definition, document)
@@ -373,10 +452,11 @@ class CompilerService:
 
             with start_span(
                 "compile.agent",
-                skill_id=pskill_definition.id,
-                skill_key=pskill_definition.key,
-                pskill_version_id=pskill_version.id,
-                compile_request_id=compile_request.id,
+                **self._compiler_span_attributes(
+                    compile_request=compile_request,
+                    pskill_definition=pskill_definition,
+                    pskill_version=pskill_version,
+                ),
             ):
                 artifact, agent_diagnostics = self._compile_with_agent(
                     session=session,
@@ -424,11 +504,12 @@ class CompilerService:
             )
             with start_span(
                 "compile.emit",
-                skill_id=pskill_definition.id,
-                skill_key=pskill_definition.key,
-                pskill_version_id=pskill_version.id,
-                compile_request_id=compile_request.id,
-            ):
+                **self._compiler_span_attributes(
+                    compile_request=compile_request,
+                    pskill_definition=pskill_definition,
+                    pskill_version=pskill_version,
+                ),
+            ) as span:
                 artifact_json = json.dumps(artifact, ensure_ascii=False, sort_keys=True).encode("utf-8")
                 checksum = hashlib.sha256(artifact_json).hexdigest()
                 artifact_object = ArtifactObject(
@@ -457,6 +538,16 @@ class CompilerService:
                 )
                 session.add(eg_artifact)
                 session.flush()
+                set_span_attributes(
+                    span,
+                    self._compiler_span_attributes(
+                        compile_request=compile_request,
+                        pskill_definition=pskill_definition,
+                        pskill_version=pskill_version,
+                        artifact=eg_artifact,
+                        artifact_object=artifact_object,
+                    ),
+                )
             if progress:
                 progress.mark("artifact_emitting", "succeeded", "EG 编译产物已写入。")
             compile_request.status = "succeeded"
@@ -537,7 +628,13 @@ class CompilerService:
         )
         with log_context(job_id=job.id, compile_request_id=compile_request_id):
             LOGGER.info("processing compile job")
-            with start_span("job.compile", job_id=job.id, compile_request_id=compile_request_id):
+            with start_span(
+                "job.compile",
+                **self._compiler_span_attributes(
+                    job=job,
+                    compile_request_id=compile_request_id,
+                ),
+            ) as span:
                 compile_request = self.process_compile_request(
                     session,
                     compile_request_id,
@@ -545,6 +642,14 @@ class CompilerService:
                     mark_job_terminal=False,
                 )
                 self._finalize_publish_job(session, job.id, compile_request)
+                set_span_attributes(
+                    span,
+                    self._compiler_span_attributes(
+                        compile_request=compile_request,
+                        artifact=self.repository.get_artifact_for_request(session, compile_request.id),
+                        job_status=job.status,
+                    ),
+                )
         return compile_request
 
     def process_compile_job_for_request(self, session: Session, compile_request_id: str) -> PSkillCompileRequest:
@@ -921,9 +1026,11 @@ class CompilerService:
                 progress.mark("agent_compiling", "running", message)
             with start_span(
                 "compile.agent.invoke",
-                skill_id=pskill_definition.id,
-                skill_key=pskill_definition.key,
-                pskill_version_id=pskill_version.id,
+                **self._compiler_span_attributes(
+                    compile_request=compile_request,
+                    pskill_definition=pskill_definition,
+                    pskill_version=pskill_version,
+                ),
                 attempt=attempt + 1,
             ) as span:
                 try:
@@ -981,9 +1088,11 @@ class CompilerService:
                 progress.mark("artifact_validating", "running", "正在执行 formal-v5 确定性校验。")
             with start_span(
                 "compile.validate",
-                skill_id=pskill_definition.id,
-                skill_key=pskill_definition.key,
-                pskill_version_id=pskill_version.id,
+                **self._compiler_span_attributes(
+                    compile_request=compile_request,
+                    pskill_definition=pskill_definition,
+                    pskill_version=pskill_version,
+                ),
                 attempt=attempt + 1,
             ):
                 validation = validate_and_normalize_artifact(candidate.artifact)
@@ -1158,6 +1267,7 @@ class CompilerService:
         compile_request: PSkillCompileRequest,
     ) -> CompileRequestResponse:
         artifact = self.repository.get_artifact_for_request(session, compile_request.id)
+        progress = self._build_compile_request_progress_summary(session, compile_request)
         return CompileRequestResponse(
             id=compile_request.id,
             pskill_definition_id=compile_request.pskill_definition_id,
@@ -1172,8 +1282,37 @@ class CompilerService:
             finished_at=compile_request.finished_at,
             error_message=compile_request.error_message,
             artifact_id=artifact.id if artifact else None,
+            progress=progress,
             created_at=compile_request.created_at,
             updated_at=compile_request.updated_at,
+        )
+
+    def _build_compile_request_progress_summary(
+        self,
+        session: Session,
+        compile_request: PSkillCompileRequest,
+    ) -> CompileRequestProgressSummaryResponse:
+        job = self.job_repository.get_compile_job(session, compile_request.id)
+        payload = ensure_publish_progress_payload(job.payload if job else {"compile_request_id": compile_request.id})
+        stages = payload["progress_stages"]
+        current_stage = str(payload.get("current_stage") or "")
+        current = next((stage for stage in stages if stage.get("key") == current_stage), None)
+        completed_stages = sum(1 for stage in stages if stage.get("status") == "succeeded")
+        total_stages = len(stages)
+        percent = round((completed_stages / total_stages) * 100) if total_stages else 0
+        if payload.get("terminal_status") == "succeeded":
+            percent = 100
+        return CompileRequestProgressSummaryResponse(
+            current_stage=current_stage,
+            current_stage_label=str((current or {}).get("label") or current_stage),
+            current_stage_status=str((current or {}).get("status") or "pending"),
+            terminal=bool(payload.get("terminal")),
+            terminal_status=payload.get("terminal_status"),
+            completed_stages=completed_stages,
+            total_stages=total_stages,
+            percent=percent,
+            error_message=str(payload.get("error_message") or compile_request.error_message or ""),
+            updated_at=payload.get("updated_at"),
         )
 
     @staticmethod
@@ -1199,10 +1338,16 @@ class CompilerService:
         include_payload: bool,
     ) -> CompileArtifactResponse:
         artifact_object = self.repository.get_artifact_object(session, artifact.artifact_object_id)
+        compile_request = self.repository.get_compile_request(session, artifact.compile_request_id)
         return CompileArtifactResponse(
             id=artifact.id,
             compile_request_id=artifact.compile_request_id,
             skill_compile_request_id=artifact.compile_request_id,
+            compile_request=(
+                self._build_compile_request_response(session, compile_request)
+                if compile_request
+                else None
+            ),
             pskill_version_id=artifact.pskill_version_id,
             artifact_object_id=artifact.artifact_object_id,
             formal_revision=artifact.formal_revision,

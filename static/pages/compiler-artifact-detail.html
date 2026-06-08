@@ -56,6 +56,23 @@
       <div class="mt-2 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs">
         <span class="mono-field max-w-full truncate" :title="compilerArtifact.id" x-text="compilerArtifact.id"></span>
         <span class="inline-flex min-w-0 items-center gap-2">
+          <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Compile</span>
+          <span class="mono-field max-w-[14rem] truncate" x-text="compilerArtifact.compile_request_id"></span>
+        </span>
+        <template x-if="compilerArtifactCompileRequest()">
+          <span class="inline-flex min-w-0 items-center gap-2">
+            <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">进度</span>
+            <span class="max-w-[16rem] truncate text-xs text-slate-300" x-text="compilerRequestProgressLabel(compilerArtifactCompileRequest())"></span>
+            <span class="mono-field shrink-0" x-text="compilerRequestProgressPercentLabel(compilerArtifactCompileRequest())"></span>
+          </span>
+        </template>
+        <template x-if="compilerArtifactCompileRequest()?.agent_run_id">
+          <button type="button" class="button-secondary h-7 px-2 text-xs" @click="openCompilerArtifactAgentRun()">
+            <span class="material-symbols-outlined text-[15px]">manage_history</span>
+            <span class="font-mono" x-text="formatShortId(compilerArtifactCompileRequest().agent_run_id)"></span>
+          </button>
+        </template>
+        <span class="inline-flex min-w-0 items-center gap-2">
           <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Formal</span>
           <span class="mono-field max-w-[14rem] truncate" x-text="compilerArtifact.formal_revision"></span>
         </span>

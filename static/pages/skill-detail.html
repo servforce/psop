@@ -1211,10 +1211,11 @@
 
           <template x-if="currentSkillFilteredInvocations().length > 0">
             <div class="min-h-0 flex-1 overflow-auto">
-              <div class="grid min-w-[72rem] grid-cols-[minmax(16rem,1.4fr)_8rem_minmax(14rem,1fr)_10rem_minmax(14rem,1fr)] border-b border-slate-800 bg-slate-950/35 px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              <div class="grid min-w-[82rem] grid-cols-[minmax(16rem,1.4fr)_8rem_minmax(14rem,1fr)_10rem_10rem_minmax(14rem,1fr)] border-b border-slate-800 bg-slate-950/35 px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                 <span>Invocation</span>
                 <span>状态</span>
                 <span>运行 ID</span>
+                <span>Compile</span>
                 <span>Artifact</span>
                 <span>创建时间</span>
               </div>
@@ -1222,7 +1223,7 @@
               <div class="divide-y divide-slate-800">
                 <template x-for="invocation in currentSkillFilteredInvocations()" :key="invocation.id">
                   <article
-                    class="grid min-w-[72rem] cursor-pointer grid-cols-[minmax(16rem,1.4fr)_8rem_minmax(14rem,1fr)_10rem_minmax(14rem,1fr)] items-center gap-4 px-3 py-3 transition hover:bg-slate-900/60"
+                    class="grid min-w-[82rem] cursor-pointer grid-cols-[minmax(16rem,1.4fr)_8rem_minmax(14rem,1fr)_10rem_10rem_minmax(14rem,1fr)] items-center gap-4 px-3 py-3 transition hover:bg-slate-900/60"
                     role="button"
                     tabindex="0"
                     @click="invocation.run_id && navigate(skillRunLivePath(invocation.run_id))"
@@ -1237,7 +1238,11 @@
                       <span class="status-badge" :class="statusBadgeTone(invocation.status)" x-text="formatStatus(invocation.status)"></span>
                     </div>
                     <span class="mono-field truncate" x-text="invocation.run_id || 'N/A'"></span>
-                    <span class="mono-field" x-text="formatShortId(invocation.compile_artifact_id)"></span>
+                    <span class="mono-field" x-text="formatShortId(invocation.compile_request_id) || 'N/A'"></span>
+                    <button type="button" class="button-secondary h-8 px-2.5 text-xs" @click.stop="openCompilerArtifact(invocation.compile_artifact_id)">
+                      <span class="material-symbols-outlined text-[16px]">account_tree</span>
+                      <span class="font-mono" x-text="formatShortId(invocation.compile_artifact_id)"></span>
+                    </button>
                     <span class="mono-field" x-text="formatDateTime(invocation.created_at)"></span>
                   </article>
                 </template>

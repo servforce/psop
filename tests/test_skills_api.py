@@ -2056,6 +2056,7 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
         compile_agent_events_response = client.get(f"/api/v1/compiler/requests/{compile_request_id}/agent-events")
         compile_agent_run_response = client.get(f"/api/v1/agent-runs/{compile_agent_run_id}")
         compile_agent_model_calls_response = client.get(f"/api/v1/agent-runs/{compile_agent_run_id}/model-calls")
+        artifact_response = client.get(f"/api/v1/compiler/artifacts/{compiled_payload['artifact_id']}")
         list_response = client.get("/api/v1/compiler/requests")
         detail_response = client.get(f"/api/v1/pskills/{skill_id}")
 
@@ -2064,12 +2065,18 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
     assert compile_payload["trigger_type"] == "manual"
     assert compile_payload["status"] == "pending"
     assert compile_agent_run_id
+    assert compile_payload["progress"]["current_stage"] == "compile_request_created"
+    assert compile_payload["progress"]["terminal"] is False
+    assert compile_payload["progress"]["percent"] > 0
     assert progress_response.status_code == 200
     assert progress_response.json()["stages"][-1]["label"] == "完成编译"
     assert retry_response.status_code == 200
     assert compiled_payload["status"] == "succeeded"
     assert compiled_payload["agent_run_id"] == compile_agent_run_id
     assert compiled_payload["artifact_id"]
+    assert compiled_payload["progress"]["terminal"] is True
+    assert compiled_payload["progress"]["terminal_status"] == "succeeded"
+    assert compiled_payload["progress"]["percent"] == 100
     assert compile_agent_run_response.status_code == 200
     assert compile_agent_run_response.json()["agent_key"] == "pskill.compiler"
     assert compile_agent_run_response.json()["status"] == "succeeded"
@@ -2083,6 +2090,12 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
     assert "compile.agent.model_call.completed" in event_types
     assert "compile.request.succeeded" in event_types
     assert list_response.json()[0]["agent_run_id"] == compile_agent_run_id
+    assert list_response.json()[0]["progress"]["terminal_status"] == "succeeded"
+    assert list_response.json()[0]["progress"]["percent"] == 100
+    assert artifact_response.status_code == 200
+    assert artifact_response.json()["compile_request"]["id"] == compile_request_id
+    assert artifact_response.json()["compile_request"]["agent_run_id"] == compile_agent_run_id
+    assert artifact_response.json()["compile_request"]["progress"]["percent"] == 100
     assert detail_response.json()["latest_published_version"] is None
 
 
@@ -2238,14 +2251,20 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert invocation_response.status_code == 201
     assert invocation_payload["status"] == "running"
     assert invocation_payload["gateway_type"] == "terminal"
+    assert invocation_payload["compile_artifact_id"] == artifact_id
+    assert invocation_payload["compile_request_id"] == compile_request_id
     assert invocation_payload["terminal_session_id"]
     initial_run_payload = initial_run_response.json()
     assert initial_run_payload["status"] == "waiting_input"
+    assert initial_run_payload["compile_artifact_id"] == artifact_id
+    assert initial_run_payload["compile_request_id"] == compile_request_id
     assert initial_run_payload["current_step"] == "collect_context"
     assert initial_run_payload["checkpoint_id"] == "collect_context_evidence"
     run_payload = run_response.json()
     assert run_payload["status"] == "succeeded"
     assert run_payload["terminal_session_id"] == invocation_payload["terminal_session_id"]
+    assert run_payload["compile_artifact_id"] == artifact_id
+    assert run_payload["compile_request_id"] == compile_request_id
     assert run_payload["latest_run_event_seq"] == 6
     assert run_payload["latest_terminal_seq"] == 6
     assert run_payload["latest_trace_seq"] == 7

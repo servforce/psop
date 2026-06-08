@@ -55,6 +55,16 @@ test("skill detail page does not expose the debug tab", () => {
   expect(html).not.toContain("调试历史");
 });
 
+test("runtime entry pages surface compile provenance links", () => {
+  const invocationsHtml = fs.readFileSync(path.join(__dirname, "../../../pages/invocations-list.html"), "utf8");
+  const skillDetailHtml = fs.readFileSync(path.join(__dirname, "../../../pages/skill-detail.html"), "utf8");
+
+  expect(invocationsHtml).toContain("invocation.compile_request_id");
+  expect(invocationsHtml).toContain("openCompilerArtifact(invocation.compile_artifact_id)");
+  expect(skillDetailHtml).toContain("invocation.compile_request_id");
+  expect(skillDetailHtml).toContain("openCompilerArtifact(invocation.compile_artifact_id)");
+});
+
 test("skill compiler artifact opens as an independent detail page", () => {
   const indexHtml = fs.readFileSync(path.join(__dirname, "../../../index.html"), "utf8");
   const compilerHtml = fs.readFileSync(path.join(__dirname, "../../../pages/compiler-artifact-detail.html"), "utf8");

@@ -12,6 +12,7 @@
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
     buildSkillCompilerArtifactPath,
+    buildPlatformAgentRunPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -658,6 +659,62 @@
           return;
         }
         await this.navigate(buildCompilerArtifactPath(artifactId));
+      },
+
+
+      compilerRequestAgentRunPath(compileRequest) {
+        const agentRunId = String(compileRequest?.agent_run_id || "").trim();
+        return agentRunId ? buildPlatformAgentRunPath(agentRunId, { tab: "events" }) : "";
+      },
+
+
+      openCompilerAgentRun(compileRequest) {
+        const path = this.compilerRequestAgentRunPath(compileRequest);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
+      },
+
+
+      compilerArtifactCompileRequest() {
+        return this.compilerArtifact?.compile_request || null;
+      },
+
+
+      openCompilerArtifactAgentRun() {
+        const compileRequest = this.compilerArtifactCompileRequest();
+        if (!compileRequest) {
+          return;
+        }
+        this.openCompilerAgentRun(compileRequest);
+      },
+
+
+      compilerRequestProgressLabel(compileRequest) {
+        const progress = compileRequest?.progress || {};
+        const label = progress.current_stage_label || progress.current_stage || "等待执行";
+        const status = progress.current_stage_status || compileRequest?.status || "pending";
+        return `${label} · ${this.formatStatus(status)}`;
+      },
+
+
+      compilerRequestProgressPercent(compileRequest) {
+        const percent = Number(compileRequest?.progress?.percent ?? 0);
+        if (!Number.isFinite(percent)) {
+          return 0;
+        }
+        return Math.max(0, Math.min(100, Math.round(percent)));
+      },
+
+
+      compilerRequestProgressPercentLabel(compileRequest) {
+        return `${this.compilerRequestProgressPercent(compileRequest)}%`;
+      },
+
+
+      compilerRequestProgressBarWidth(compileRequest) {
+        return `${this.compilerRequestProgressPercent(compileRequest)}%`;
       },
 
 

@@ -89,7 +89,16 @@
             </div>
             <div>
               <dt class="field-label">Artifact</dt>
-              <dd class="mt-1 mono-field break-all" x-text="liveRun.compile_artifact_id"></dd>
+              <dd class="mt-1">
+                <button type="button" class="button-secondary h-8 max-w-full px-2.5 text-xs" @click="openCompilerArtifact(liveRun.compile_artifact_id)">
+                  <span class="material-symbols-outlined text-[16px]">account_tree</span>
+                  <span class="truncate font-mono" x-text="liveRun.compile_artifact_id"></span>
+                </button>
+              </dd>
+            </div>
+            <div>
+              <dt class="field-label">Compile Request</dt>
+              <dd class="mt-1 mono-field break-all" x-text="liveRun.compile_request_id || replayDetail?.provenance?.compile_request_id || 'N/A'"></dd>
             </div>
             <div x-show="replayDetail?.provenance">
               <dt class="field-label">Replay Provenance</dt>

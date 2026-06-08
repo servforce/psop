@@ -147,6 +147,96 @@ def test_compiler_emits_mvp_formal_v5_artifact(runtime_stack) -> None:
     assert any(item.code == "compile.agent.prompt_pack" for item in diagnostics)
 
 
+def test_compiler_spans_include_publish_compile_provenance_context(runtime_stack, monkeypatch) -> None:
+    database_manager, _, _, compiler_service, skills_service, _ = runtime_stack
+    captured_spans: list[dict] = []
+
+    class CapturedSpan:
+        def __init__(self, name: str, attributes: dict) -> None:
+            self.name = name
+            self.attributes = dict(attributes)
+            captured_spans.append({"name": name, "attributes": self.attributes})
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc_info):
+            return False
+
+        def set_attribute(self, key: str, value) -> None:
+            self.attributes[key] = value
+
+        def add_event(self, _name: str, attributes: dict | None = None) -> None:
+            return None
+
+        def record_exception(self, _exception: Exception) -> None:
+            return None
+
+        def set_status(self, _status) -> None:
+            return None
+
+    def fake_start_span(name: str, **attributes):
+        return CapturedSpan(name, attributes)
+
+    monkeypatch.setattr("app.compiler.service.start_span", fake_start_span)
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="compiler-span-provenance",
+                name="Compiler Span Provenance",
+                description="Validate Compiler OTel span correlation.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Compiler span provenance publish"),
+        )
+        assert published.compile_request is not None
+        compile_request_id = published.compile_request.id
+        pskill_version_id = published.published_version.id
+        source_commit_sha = published.published_version.source_commit_sha
+        compiled = process_publish_job(session, compiler_service, compile_request_id)
+        artifact_id = compiled.artifact_id or ""
+
+    assert compiled.status == "succeeded"
+    assert artifact_id
+    expected_names = {
+        "job.compile",
+        "compile.source_load",
+        "compile.manifest_check",
+        "compile.agent",
+        "compile.agent.invoke",
+        "compile.validate",
+        "compile.emit",
+    }
+    compiler_spans = [span for span in captured_spans if span["name"] in expected_names]
+    assert {span["name"] for span in compiler_spans} == expected_names
+
+    for span in compiler_spans:
+        attributes = span["attributes"]
+        assert attributes["compile_request_id"] == compile_request_id
+        assert attributes["skill_id"] == skill.id
+        assert attributes["pskill_definition_id"] == skill.id
+        assert attributes["pskill_version_id"] == pskill_version_id
+        assert attributes["skill_version_id"] == pskill_version_id
+        assert attributes["source_commit_sha"] == source_commit_sha
+
+    invoke_span = next(span for span in compiler_spans if span["name"] == "compile.agent.invoke")
+    validate_span = next(span for span in compiler_spans if span["name"] == "compile.validate")
+    emit_span = next(span for span in compiler_spans if span["name"] == "compile.emit")
+    job_span = next(span for span in compiler_spans if span["name"] == "job.compile")
+
+    assert invoke_span["attributes"]["attempt"] == 1
+    assert validate_span["attributes"]["attempt"] == 1
+    assert emit_span["attributes"]["compile_artifact_id"] == artifact_id
+    assert emit_span["attributes"]["artifact_object_id"]
+    assert job_span["attributes"]["compile_artifact_id"] == artifact_id
+    assert job_span["attributes"]["compile_status"] == "succeeded"
+
+
 def test_compiler_records_diagnostics_for_unsupported_formal_revision(runtime_stack) -> None:
     database_manager, gitlab_gateway, _, compiler_service, skills_service, _ = runtime_stack
 

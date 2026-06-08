@@ -39,10 +39,12 @@
       </div>
     </div>
 
-    <div class="grid min-w-[82rem] grid-cols-[1.15fr_1fr_120px_160px_160px_1fr] gap-4 border-b border-slate-800 bg-slate-950/70 px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+    <div class="grid min-w-[108rem] grid-cols-[1.15fr_1fr_120px_200px_160px_160px_160px_1fr] gap-4 border-b border-slate-800 bg-slate-950/70 px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
       <span>Skill</span>
       <span>编译任务</span>
       <span>状态</span>
+      <span>进度</span>
+      <span>AgentRun</span>
       <span>冻结 Commit</span>
       <span>Artifact</span>
       <span>时间</span>
@@ -61,14 +63,7 @@
         <div class="divide-y divide-slate-800">
           <template x-for="compileRequest in filteredCompilerRequests()" :key="compileRequest.id">
             <article
-              class="grid min-w-[82rem] grid-cols-[1.15fr_1fr_120px_160px_160px_1fr] items-center gap-4 bg-slate-950/20 px-5 py-4 transition"
-              :class="compileRequest.artifact_id ? 'cursor-pointer hover:bg-slate-900/60' : 'cursor-default opacity-80'"
-              :role="compileRequest.artifact_id ? 'button' : null"
-              :tabindex="compileRequest.artifact_id ? 0 : -1"
-              :aria-label="compileRequest.artifact_id ? '查看编译详情' : '暂无编译详情'"
-              @click="compileRequest.artifact_id && openCompilerArtifact(compileRequest.artifact_id)"
-              @keydown.enter.prevent="compileRequest.artifact_id && openCompilerArtifact(compileRequest.artifact_id)"
-              @keydown.space.prevent="compileRequest.artifact_id && openCompilerArtifact(compileRequest.artifact_id)"
+              class="grid min-w-[108rem] grid-cols-[1.15fr_1fr_120px_200px_160px_160px_160px_1fr] items-center gap-4 bg-slate-950/20 px-5 py-4 transition hover:bg-slate-900/40"
             >
               <div class="min-w-0">
                 <p class="truncate text-sm font-semibold text-slate-100" x-text="skillNameForCompileRequest(compileRequest)"></p>
@@ -79,10 +74,33 @@
                 <p class="mt-1 text-xs text-slate-500" x-text="compileRequest.trigger_type"></p>
               </div>
               <div><span class="status-badge" :class="statusBadgeTone(compileRequest.status)" x-text="formatStatus(compileRequest.status)"></span></div>
+              <div class="min-w-0">
+                <p class="truncate text-xs text-slate-300" x-text="compilerRequestProgressLabel(compileRequest)"></p>
+                <div class="mt-2 flex items-center gap-2">
+                  <span class="h-1.5 w-24 shrink-0 rounded-full bg-slate-800">
+                    <span class="block h-full rounded-full bg-orange-400" :style="{ width: compilerRequestProgressBarWidth(compileRequest) }"></span>
+                  </span>
+                  <span class="mono-field shrink-0" x-text="compilerRequestProgressPercentLabel(compileRequest)"></span>
+                </div>
+              </div>
+              <div>
+                <template x-if="compileRequest.agent_run_id">
+                  <button type="button" class="button-secondary h-8 px-2.5 text-xs" @click="openCompilerAgentRun(compileRequest)">
+                    <span class="material-symbols-outlined text-[16px]">manage_history</span>
+                    <span class="font-mono" x-text="formatShortId(compileRequest.agent_run_id)"></span>
+                  </button>
+                </template>
+                <template x-if="!compileRequest.agent_run_id">
+                  <span class="text-sm text-slate-400">N/A</span>
+                </template>
+              </div>
               <div class="mono-field" x-text="formatShortId(compileRequest.source_commit_sha)"></div>
               <div>
                 <template x-if="compileRequest.artifact_id">
-                  <span class="mono-field" x-text="formatShortId(compileRequest.artifact_id)"></span>
+                  <button type="button" class="button-secondary h-8 px-2.5 text-xs" @click="openCompilerArtifact(compileRequest.artifact_id)">
+                    <span class="material-symbols-outlined text-[16px]">account_tree</span>
+                    <span class="font-mono" x-text="formatShortId(compileRequest.artifact_id)"></span>
+                  </button>
                 </template>
                 <template x-if="!compileRequest.artifact_id">
                   <span class="text-sm text-slate-400">N/A</span>

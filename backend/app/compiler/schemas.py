@@ -6,6 +6,19 @@ from typing import Any
 from pydantic import BaseModel
 
 
+class CompileRequestProgressSummaryResponse(BaseModel):
+    current_stage: str = ""
+    current_stage_label: str = ""
+    current_stage_status: str = "pending"
+    terminal: bool = False
+    terminal_status: str | None = None
+    completed_stages: int = 0
+    total_stages: int = 0
+    percent: int = 0
+    error_message: str = ""
+    updated_at: datetime | None = None
+
+
 class CompileRequestResponse(BaseModel):
     id: str
     pskill_definition_id: str
@@ -20,6 +33,7 @@ class CompileRequestResponse(BaseModel):
     finished_at: datetime | None = None
     error_message: str = ""
     artifact_id: str | None = None
+    progress: CompileRequestProgressSummaryResponse | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -41,6 +55,7 @@ class CompileArtifactResponse(BaseModel):
     id: str
     compile_request_id: str
     skill_compile_request_id: str | None = None
+    compile_request: CompileRequestResponse | None = None
     pskill_version_id: str
     artifact_object_id: str
     formal_revision: str
