@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.agent_harness.agent_decision import AgentDecision
+from app.agent_harness.guardrails import OutputGuardrail
 from app.agent_harness.tools import ToolPolicy
 from app.agents.models import AgentRun
 from app.agents.schemas import (
@@ -41,12 +42,14 @@ class AgentRunner:
         skill_repository: SkillPackageRepository | None = None,
         tool_policy: ToolPolicy | None = None,
         memory_service: MemoryService | None = None,
+        output_guardrail: OutputGuardrail | None = None,
     ) -> None:
         self.agent_service = agent_service or AgentService()
         self.skill_service = skill_service or SkillPackageService()
         self.skill_repository = skill_repository or SkillPackageRepository()
         self.tool_policy = tool_policy or ToolPolicy()
         self.memory_service = memory_service or MemoryService()
+        self.output_guardrail = output_guardrail or OutputGuardrail()
 
     def run_once(self, session: Session, agent_run_id: str) -> AgentRunResponse:
         agent_run = self.agent_service.get_run_model(session, agent_run_id)
@@ -98,6 +101,40 @@ class AgentRunner:
         )
 
         if decision.decision_type == "final_output":
+            guardrail_result = self.output_guardrail.check(
+                agent_key=agent_run.agent_key,
+                output_payload=decision.output_payload,
+            )
+            self.agent_service.append_event(
+                session,
+                agent_run.id,
+                AppendAgentEventRequest(
+                    event_type="agent.output_guardrail.checked",
+                    phase="guardrails",
+                    payload=guardrail_result.as_event_payload(),
+                ),
+                commit=False,
+            )
+            if not guardrail_result.passed:
+                agent_run.output_payload = {
+                    "rejected_output": decision.output_payload,
+                    "guardrail_findings": [item.as_dict() for item in guardrail_result.findings],
+                }
+                agent_run.status = "failed"
+                agent_run.error_message = "output_guardrail_failed"
+                agent_run.ended_at = now_utc()
+                self.agent_service.append_event(
+                    session,
+                    agent_run.id,
+                    AppendAgentEventRequest(
+                        event_type="agent.output_guardrail.failed",
+                        phase="guardrails",
+                        payload={"findings": [item.as_dict() for item in guardrail_result.findings]},
+                    ),
+                    commit=False,
+                )
+                session.commit()
+                return self.agent_service._build_run_response(agent_run)
             agent_run.output_payload = decision.output_payload
             memory_count = self._write_memory_candidates(session, agent_run=agent_run, output_payload=decision.output_payload)
             agent_run.status = "succeeded"
@@ -108,7 +145,12 @@ class AgentRunner:
                 AppendAgentEventRequest(
                     event_type="agent.final_output",
                     phase="output",
-                    payload={"output_schema": spec.get("output_schema", {}), "memory_candidate_count": memory_count},
+                    payload={
+                        "output_schema": spec.get("output_schema", {}),
+                        "memory_candidate_count": memory_count,
+                        "business_wait_state": guardrail_result.business_wait_state,
+                        "non_hitl_business_state": bool(guardrail_result.business_wait_state),
+                    },
                 ),
                 commit=False,
             )

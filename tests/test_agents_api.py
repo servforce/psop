@@ -358,3 +358,108 @@ def test_agent_runner_executes_authorized_skill_version_activation_tool() -> Non
     ]
     assert tool_calls_response.json()[0]["result_summary"]["result"]["package_name"] == "pskill-builder"
     assert executed_authorization_response.json()["status"] == "executed"
+
+
+def test_agent_runner_output_guardrail_records_business_wait_as_non_hitl() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.builder",
+                "owner_type": "pskill_draft",
+                "owner_id": "draft-needs-input",
+                "input_payload": {
+                    "expected_output": {
+                        "draft_summary": "需要用户补充设备铭牌照片。",
+                        "clarifying_questions": ["请补充设备铭牌照片和额定电压。"],
+                        "memory_candidates": [
+                            {
+                                "namespace": "builder",
+                                "memory_type": "semantic",
+                                "title": "铭牌照片是设备参数证据",
+                                "content": "设备铭牌照片可作为型号、电压和安全约束的 source ref。",
+                                "confidence": 88,
+                                "source_refs": [{"kind": "pskill_material", "id": "material-nameplate-1"}],
+                                "tags": ["evidence", "device"],
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        memory_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/memory-entries")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "succeeded"
+    assert authorizations_response.json() == []
+
+    events = events_response.json()
+    guardrail_event = next(item for item in events if item["event_type"] == "agent.output_guardrail.checked")
+    final_event = next(item for item in events if item["event_type"] == "agent.final_output")
+    assert guardrail_event["payload"]["passed"] is True
+    assert guardrail_event["payload"]["business_wait_state"] == "clarifying_questions"
+    assert guardrail_event["payload"]["non_hitl_business_state"] is True
+    assert final_event["payload"]["business_wait_state"] == "clarifying_questions"
+    assert final_event["payload"]["non_hitl_business_state"] is True
+
+    memory_entries = memory_response.json()
+    assert len(memory_entries) == 1
+    assert memory_entries[0]["memory_type"] == "semantic"
+    assert memory_entries[0]["source_refs"] == [{"kind": "pskill_material", "id": "material-nameplate-1"}]
+
+
+def test_agent_runner_output_guardrail_rejects_memory_candidate_without_source_refs() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.evaluator",
+                "owner_type": "run_evaluation",
+                "owner_id": "evaluation-guardrail",
+                "input_payload": {
+                    "expected_output": {
+                        "summary": "Evaluator attempted to persist an unsupported memory candidate.",
+                        "memory_candidates": [
+                            {
+                                "namespace": "evaluation",
+                                "memory_type": "episodic",
+                                "title": "Unattributed runtime failure",
+                                "content": "Runtime failures should be debugged through replay.",
+                                "confidence": 84,
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        memory_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/memory-entries")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    payload = run_once_response.json()
+    assert payload["status"] == "failed"
+    assert payload["error_message"] == "output_guardrail_failed"
+    assert payload["output_payload"]["guardrail_findings"][0]["code"] == "memory_candidate_missing_source_refs"
+    assert memory_response.json() == []
+
+    guardrail_event = next(
+        item for item in events_response.json() if item["event_type"] == "agent.output_guardrail.checked"
+    )
+    failed_event = next(
+        item for item in events_response.json() if item["event_type"] == "agent.output_guardrail.failed"
+    )
+    assert guardrail_event["payload"]["passed"] is False
+    assert guardrail_event["payload"]["findings"][0]["path"] == "memory_candidates[0].source_refs"
+    assert failed_event["payload"]["findings"][0]["code"] == "memory_candidate_missing_source_refs"
