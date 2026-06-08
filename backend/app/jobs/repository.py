@@ -23,6 +23,47 @@ class JobRepository:
     def get_compile_job(self, session: Session, compile_request_id: str) -> RuntimeJob | None:
         return session.scalar(select(RuntimeJob).where(RuntimeJob.compile_request_id == compile_request_id).limit(1))
 
+    def recover_expired_leases(
+        self,
+        session: Session,
+        *,
+        retry_delay_base_seconds: int = 5,
+        limit: int = 100,
+    ) -> list[RuntimeJob]:
+        now = now_utc()
+        query = (
+            select(RuntimeJob)
+            .where(
+                RuntimeJob.status == "running",
+                RuntimeJob.lease_until.is_not(None),
+                RuntimeJob.lease_until <= now,
+            )
+            .order_by(RuntimeJob.lease_until.asc(), RuntimeJob.created_at.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        jobs = list(session.scalars(query).all())
+        for job in jobs:
+            retryable = job.attempt_no < job.max_attempts
+            metrics = dict(job.metrics or {})
+            metrics["lease_recovery_count"] = int(metrics.get("lease_recovery_count") or 0) + 1
+            metrics["last_lease_recovered_at"] = now.isoformat()
+            job.metrics = metrics
+            job.last_error = "runtime_job lease expired before worker completed the job."
+            job.worker_name = ""
+            job.lease_until = None
+            if retryable:
+                job.status = "pending"
+                job.available_at = now + timedelta(seconds=retry_delay_base_seconds * max(1, job.attempt_no))
+            else:
+                job.status = "failed"
+                job.available_at = now
+        if jobs:
+            session.commit()
+            for job in jobs:
+                session.refresh(job)
+        return jobs
+
     def claim_next_job(
         self,
         session: Session,

@@ -70,6 +70,12 @@ class RuntimeJobWorker:
     def run_once(self) -> bool:
         try:
             with self.database_manager.session() as session:
+                recovered_jobs = self.job_repository.recover_expired_leases(session)
+                if recovered_jobs:
+                    LOGGER.warning(
+                        "runtime job worker recovered expired leases",
+                        extra={"recovered_job_count": len(recovered_jobs)},
+                    )
                 job = None
                 for job_type in WORKER_CLAIM_JOB_TYPES:
                     with start_span("job.claim", job_type=job_type):
@@ -82,7 +88,7 @@ class RuntimeJobWorker:
                     if job:
                         break
                 if not job:
-                    return False
+                    return bool(recovered_jobs)
                 job_id = job.id
                 job_type = job.job_type
                 LOGGER.info(
