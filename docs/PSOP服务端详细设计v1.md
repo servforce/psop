@@ -339,24 +339,24 @@ Claim 规则：
 
 当前没有 `/api/v1/system/summary` 或 `/api/v1/system/config`。
 
-### 9.2 Skills
+### 9.2 PSkills / Materials
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/v1/skills` | Skill 列表；支持 `search`、`status`、`is_published` |
-| `POST` | `/api/v1/skills` | 创建 Skill 和 GitLab project |
-| `GET` | `/api/v1/skills/{skill_id}` | Skill 详情 |
-| `PATCH` | `/api/v1/skills/{skill_id}` | 更新名称/描述 |
-| `DELETE` | `/api/v1/skills/{skill_id}` | 按确认名称归档 Skill |
-| `GET` | `/api/v1/skills/{skill_id}/source` | 读取 `README.md`、`SKILL.md`、`skill.yaml` |
-| `PUT` | `/api/v1/skills/{skill_id}/source` | 保存三类 source |
-| `GET` | `/api/v1/skills/{skill_id}/repository/tree` | GitLab 仓库树 |
-| `GET` | `/api/v1/skills/{skill_id}/repository/files` | 读取仓库文件 |
-| `PUT` | `/api/v1/skills/{skill_id}/repository/files` | 保存仓库文件 |
-| `POST` | `/api/v1/skills/{skill_id}/repository/files` | 新建仓库文件 |
-| `POST` | `/api/v1/skills/{skill_id}/repository/folders` | 新建文件夹 `.gitkeep` |
-| `POST` | `/api/v1/skills/{skill_id}/publish` | 发布并创建 compile job |
-| `GET` | `/api/v1/skills/{skill_id}/publishes` | 发布记录 |
+| `GET` | `/api/v1/pskills` | PSkill 列表；支持 `search`、`status`、`is_published` |
+| `POST` | `/api/v1/pskills` | 创建 PSkill 和 GitLab project |
+| `GET` | `/api/v1/pskills/{skill_id}` | PSkill 详情 |
+| `PATCH` | `/api/v1/pskills/{skill_id}` | 更新名称/描述 |
+| `DELETE` | `/api/v1/pskills/{skill_id}` | 按确认名称归档 PSkill |
+| `GET` | `/api/v1/pskills/{skill_id}/source` | 读取 `README.md`、`SKILL.md`、`skill.yaml` |
+| `PUT` | `/api/v1/pskills/{skill_id}/source` | 保存三类 source |
+| `GET` | `/api/v1/pskills/{skill_id}/repository/tree` | GitLab 仓库树 |
+| `GET` | `/api/v1/pskills/{skill_id}/repository/files` | 读取仓库文件 |
+| `PUT` | `/api/v1/pskills/{skill_id}/repository/files` | 保存仓库文件 |
+| `POST` | `/api/v1/pskills/{skill_id}/repository/files` | 新建仓库文件 |
+| `POST` | `/api/v1/pskills/{skill_id}/repository/folders` | 新建文件夹 `.gitkeep` |
+| `POST` | `/api/v1/pskills/{skill_id}/publish` | 发布 PSkill 并创建 compile job |
+| `GET` | `/api/v1/pskills/{skill_id}/publishes` | 发布记录 |
 | `POST` | `/api/v1/pskills/{skill_id}/materials` | 上传素材 |
 | `GET` | `/api/v1/pskills/{skill_id}/materials` | 素材列表 |
 | `POST` | `/api/v1/pskills/{skill_id}/materials/generate-skill-draft` | 从素材生成 PSkill draft |
@@ -416,7 +416,19 @@ Claim 规则：
 
 当前没有 provider/model/route 的 CRUD API。
 
-### 9.6 Agent Prompts
+### 9.6 Skill Packages
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/v1/skills` | Skill 包列表 |
+| `POST` | `/api/v1/skills/sync` | 同步 `skills/psop` 和 `skills/public` 下的 Skill 包 |
+| `GET` | `/api/v1/skills/{package_name}` | Skill 包详情 |
+| `GET` | `/api/v1/skills/{package_name}/versions` | Skill 包版本列表 |
+| `POST` | `/api/v1/skills/{package_name}/versions` | 创建 Skill 包候选版本 |
+| `POST` | `/api/v1/skills/{package_name}/versions/{version_id}/validate` | 校验 Skill 包版本 |
+| `POST` | `/api/v1/skills/{package_name}/versions/{version_id}/activate` | 激活 Skill 包版本 |
+
+### 9.7 Agent Prompts
 
 | Method | Path | 说明 |
 | --- | --- | --- |
@@ -431,21 +443,21 @@ Claim 规则：
 | `GET` | `/api/v1/agent-prompt-bindings` | binding 列表 |
 | `PUT` | `/api/v1/agent-prompt-bindings/{usage_key}` | 更新 binding |
 
-### 9.7 Skill Tests
+### 9.8 Skill Tests
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/v1/skills/{skill_id}/test-scenarios` | 场景列表 |
-| `POST` | `/api/v1/skills/{skill_id}/test-scenarios` | 创建场景 |
-| `GET` | `/api/v1/skills/{skill_id}/test-scenarios/{scenario_id}` | 场景详情 |
-| `PATCH` | `/api/v1/skills/{skill_id}/test-scenarios/{scenario_id}` | 更新场景 |
-| `DELETE` | `/api/v1/skills/{skill_id}/test-scenarios/{scenario_id}` | 归档场景 |
-| `POST` | `/api/v1/skills/{skill_id}/test-scenarios/{scenario_id}/assets` | 上传场景资源 |
-| `GET` | `/api/v1/skills/{skill_id}/test-scenarios/{scenario_id}/assets` | 资源列表 |
-| `GET` | `/api/v1/skills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}/content` | 资源内容 |
-| `DELETE` | `/api/v1/skills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}` | 删除资源引用 |
-| `POST` | `/api/v1/skills/{skill_id}/test-scenarios/{scenario_id}/runs` | 启动场景运行 |
-| `GET` | `/api/v1/skills/{skill_id}/test-scenarios/{scenario_id}/runs` | 场景运行历史 |
+| `GET` | `/api/v1/pskills/{skill_id}/test-scenarios` | 场景列表 |
+| `POST` | `/api/v1/pskills/{skill_id}/test-scenarios` | 创建场景 |
+| `GET` | `/api/v1/pskills/{skill_id}/test-scenarios/{scenario_id}` | 场景详情 |
+| `PATCH` | `/api/v1/pskills/{skill_id}/test-scenarios/{scenario_id}` | 更新场景 |
+| `DELETE` | `/api/v1/pskills/{skill_id}/test-scenarios/{scenario_id}` | 归档场景 |
+| `POST` | `/api/v1/pskills/{skill_id}/test-scenarios/{scenario_id}/assets` | 上传场景资源 |
+| `GET` | `/api/v1/pskills/{skill_id}/test-scenarios/{scenario_id}/assets` | 资源列表 |
+| `GET` | `/api/v1/pskills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}/content` | 资源内容 |
+| `DELETE` | `/api/v1/pskills/{skill_id}/test-scenarios/{scenario_id}/assets/{asset_id}` | 删除资源引用 |
+| `POST` | `/api/v1/pskills/{skill_id}/test-scenarios/{scenario_id}/runs` | 启动场景运行 |
+| `GET` | `/api/v1/pskills/{skill_id}/test-scenarios/{scenario_id}/runs` | 场景运行历史 |
 | `GET` | `/api/v1/skill-test-scenario-runs/{scenario_run_id}` | 场景运行详情 |
 | `POST` | `/api/v1/skill-test-scenario-runs/{scenario_run_id}/cancel` | 取消场景运行 |
 | `GET` | `/api/v1/skill-test-scenario-runs/{scenario_run_id}/review` | review |

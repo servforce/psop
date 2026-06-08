@@ -53,3 +53,21 @@ def test_api_routes_use_pskill_and_materials_naming() -> None:
     assert "/api/v1/compiler/pskills/{skill_id}/compile" in route_paths
     assert "/api/v1/pskills/{skill_id}/materials" in route_paths
     assert "/api/v1/skills" in route_paths
+
+
+def test_server_design_keeps_pskill_api_paths_distinct_from_skill_packages() -> None:
+    design = (PROJECT_ROOT / "docs" / "PSOP服务端详细设计v1.md").read_text(encoding="utf-8")
+
+    forbidden_fragments = {
+        "/api/v1/skills/{skill_id}",
+        "/api/v1/compiler/skills/",
+        "/raw-materials",
+        "/agent-skills",
+        "raw materials",
+    }
+    violations = sorted(fragment for fragment in forbidden_fragments if fragment in design)
+
+    assert violations == []
+    assert "### 9.2 PSkills / Materials" in design
+    assert "`GET` | `/api/v1/pskills` | PSkill 列表" in design
+    assert "`GET` | `/api/v1/skills` | Skill 包列表" in design
