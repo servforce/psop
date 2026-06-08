@@ -1176,7 +1176,8 @@
       const evaluationId = this.toolAuthorizationFirstNestedValue(authorization, [
         "evaluation_id",
         "evaluation_report_id",
-        "run_evaluation_id"
+        "run_evaluation_id",
+        "source_evaluation_id"
       ]);
       const findingId = this.toolAuthorizationFirstNestedValue(authorization, [
         "finding_id",

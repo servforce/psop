@@ -4,10 +4,12 @@
     buildEvaluationReportsPath,
     buildEvaluationFindingsPath,
     buildGovernanceProposalsPath,
+    buildGovernanceExperimentsPath,
     buildPlatformAgentRunsPath,
     buildPlatformSkillsPath,
     buildPlatformToolsPath,
     buildPlatformMemoryPath,
+    buildPlatformObservabilityPath,
     buildToolAuthorizationsPath
   } = window.PSOPConsoleHelpers;
 
@@ -83,8 +85,16 @@
       return buildEvaluationFindingsPath();
     },
 
-    dashboardGovernanceProposalsPath() {
-      return buildGovernanceProposalsPath();
+    dashboardGovernanceProposalsPath(filters = {}) {
+      return buildGovernanceProposalsPath(filters);
+    },
+
+    dashboardGovernanceExperimentsPath(filters = {}) {
+      return buildGovernanceExperimentsPath(filters);
+    },
+
+    dashboardObservabilityPath() {
+      return buildPlatformObservabilityPath();
     },
 
     dashboardAgentRunsPath(filters = {}) {

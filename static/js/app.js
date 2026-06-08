@@ -281,28 +281,52 @@
     return query ? `/admin/tasks?${query}` : "/admin/tasks";
   }
 
-  function buildEvaluationReportsPath() {
-    return "/admin/evaluations";
+  function buildFilteredPath(basePath, filters = {}, keys = []) {
+    const params = new URLSearchParams();
+    for (const key of keys) {
+      const value = String(filters?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `${basePath}?${query}` : basePath;
+  }
+
+  function buildEvaluationReportsPath(filters = {}) {
+    return buildFilteredPath(
+      "/admin/evaluations",
+      filters,
+      ["run_id", "pskill_definition_id", "overall_outcome"]
+    );
   }
 
   function buildEvaluationReportPath(evaluationId) {
     return `/admin/evaluations/${evaluationId}`;
   }
 
-  function buildEvaluationFindingsPath() {
-    return "/admin/evaluations/findings";
+  function buildEvaluationFindingsPath(filters = {}) {
+    return buildFilteredPath(
+      "/admin/evaluations/findings",
+      filters,
+      ["status", "category", "severity", "run_id", "pskill_definition_id"]
+    );
   }
 
-  function buildGovernanceProposalsPath() {
-    return "/admin/governance/proposals";
+  function buildGovernanceProposalsPath(filters = {}) {
+    return buildFilteredPath("/admin/governance/proposals", filters, ["status"]);
   }
 
   function buildGovernanceProposalPath(proposalId) {
     return `/admin/governance/proposals/${proposalId}`;
   }
 
-  function buildGovernanceExperimentsPath() {
-    return "/admin/governance/experiments";
+  function buildGovernanceExperimentsPath(filters = {}) {
+    return buildFilteredPath(
+      "/admin/governance/experiments",
+      filters,
+      ["experiment_id", "proposal_id", "status", "experiment_type"]
+    );
   }
 
   function buildToolAuthorizationsPath(filters = {}) {

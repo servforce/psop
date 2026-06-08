@@ -102,6 +102,17 @@ def test_observability_dashboard_metrics_aggregate_system_health() -> None:
                         status="canary",
                         created_at=now - timedelta(minutes=1),
                     ),
+                    PsopImprovementExperiment(
+                        id="experiment-dashboard-1",
+                        proposal_id="proposal-dashboard-1",
+                        experiment_type="canary",
+                        status="running",
+                        summary="dashboard canary experiment",
+                        before_metrics={},
+                        after_metrics={},
+                        result_json={},
+                        created_at=now - timedelta(minutes=1),
+                    ),
                     agent_run,
                     AgentToolCall(
                         agent_run_id=agent_run.id,
@@ -170,6 +181,7 @@ def test_observability_dashboard_metrics_aggregate_system_health() -> None:
     assert payload["evaluations"]["average_quality_score"] == 94.0
     assert payload["evaluations"]["high_severity_finding_count"] == 1
     assert payload["governance"]["canary_proposal_count"] == 1
+    assert payload["governance"]["experiment_count"] == 1
     runner_metrics = next(item for item in payload["agents"] if item["agent_key"] == "pskill.runner")
     assert runner_metrics["recent_run_count"] == 1
     assert runner_metrics["model_call_count"] == 1

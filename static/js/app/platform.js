@@ -1281,7 +1281,9 @@
         ref.run_event_id ||
         ref.event_id ||
         ref.evaluation_id ||
+        ref.source_evaluation_id ||
         ref.finding_id ||
+        ref.source_finding_id ||
         ref.experiment_id ||
         ref.compile_artifact_id ||
         ref.artifact_id ||
@@ -1299,6 +1301,7 @@
         ref.memory_entry_id ||
         ref.memory_id ||
         ref.run_id ||
+        ref.source_run_id ||
         ref.agent_run_id ||
         ref.proposal_id ||
         ""
@@ -1311,7 +1314,9 @@
         !ref.memory_entry_id &&
         !ref.memory_id &&
         !ref.evaluation_id &&
+        !ref.source_evaluation_id &&
         !ref.finding_id &&
+        !ref.source_finding_id &&
         !ref.experiment_id &&
         !ref.compile_artifact_id &&
         !ref.artifact_id &&
@@ -1333,20 +1338,20 @@
         const memoryId = String(ref.memory_entry_id || ref.memory_id || id).trim();
         return { key: `memory-${memoryId}`, label: `Memory ${memoryId}`, href: this.platformMemoryEntryPath(memoryId) };
       }
-      if (["run_evaluation_finding", "evaluation_finding", "finding"].includes(kind) || ref.finding_id) {
-        const findingId = String(ref.finding_id || id).trim();
-        const evaluationId = String(ref.evaluation_id || "").trim();
+      if (["run_evaluation_finding", "evaluation_finding", "finding"].includes(kind) || ref.finding_id || ref.source_finding_id) {
+        const findingId = String(ref.finding_id || ref.source_finding_id || id).trim();
+        const evaluationId = String(ref.evaluation_id || ref.source_evaluation_id || "").trim();
         const href = evaluationId
           ? buildEvaluationReportPath(evaluationId)
           : buildEvaluationFindingsPath({
-            run_id: ref.run_id || "",
+            run_id: ref.run_id || ref.source_run_id || "",
             status: ref.status || "",
             category: ref.category || ""
           });
         return { key: `evaluation-finding-${findingId}`, label: `Finding ${findingId}`, href };
       }
-      if (["run_evaluation", "evaluation"].includes(kind) || ref.evaluation_id) {
-        const evaluationId = String(ref.evaluation_id || id).trim();
+      if (["run_evaluation", "evaluation"].includes(kind) || ref.evaluation_id || ref.source_evaluation_id) {
+        const evaluationId = String(ref.evaluation_id || ref.source_evaluation_id || id).trim();
         return { key: `evaluation-${evaluationId}`, label: `Evaluation ${evaluationId}`, href: buildEvaluationReportPath(evaluationId) };
       }
       if (["psop_improvement_experiment", "governance_experiment", "experiment"].includes(kind) || ref.experiment_id) {
@@ -1386,7 +1391,7 @@
         return { key: `tool-auth-${authorizationId}`, label: `ToolAuth ${authorizationId}`, href };
       }
       if (["run_trace", "trace"].includes(kind)) {
-        const runId = String(ref.run_id || "").trim();
+        const runId = String(ref.run_id || ref.source_run_id || "").trim();
         const traceId = String(ref.run_trace_id || ref.trace_id || id).trim();
         const seqNo = String(ref.seq_no || ref.trace_seq_no || "").trim();
         const href = runId
@@ -1395,7 +1400,7 @@
         return { key: `run-trace-${id || `${runId}-${seqNo}`}`, label: `RunTrace ${id || seqNo || runId}`, href };
       }
       if (["run_event", "event"].includes(kind)) {
-        const runId = String(ref.run_id || "").trim();
+        const runId = String(ref.run_id || ref.source_run_id || "").trim();
         const eventId = String(ref.run_event_id || ref.event_id || id).trim();
         const href = runId
           ? buildReplayPath(runId, { event_id: eventId })
@@ -1403,7 +1408,7 @@
         return { key: `run-event-${eventId}`, label: `RunEvent ${eventId}`, href };
       }
       if (["session_token_snapshot", "snapshot"].includes(kind) || ref.session_token_snapshot_id || ref.snapshot_id) {
-        const runId = String(ref.run_id || "").trim();
+        const runId = String(ref.run_id || ref.source_run_id || "").trim();
         const snapshotId = String(ref.session_token_snapshot_id || ref.snapshot_id || id).trim();
         const snapshotSeq = String(ref.snapshot_seq || ref.seq_no || ref.seq || "").trim();
         const href = runId
@@ -1415,8 +1420,8 @@
         const agentRunId = String(ref.agent_run_id || id).trim();
         return { key: `agent-run-${agentRunId}`, label: `AgentRun ${agentRunId}`, href: this.platformAgentRunPath(agentRunId) };
       }
-      if (["run", "runtime_run"].includes(kind) || ref.run_id) {
-        const runId = String(ref.run_id || id).trim();
+      if (["run", "runtime_run"].includes(kind) || ref.run_id || ref.source_run_id) {
+        const runId = String(ref.run_id || ref.source_run_id || id).trim();
         return { key: `run-${runId}`, label: `Run ${runId}`, href: this.platformRunLivePath(runId) };
       }
       if (["governance_proposal", "proposal"].includes(kind) || ref.proposal_id) {

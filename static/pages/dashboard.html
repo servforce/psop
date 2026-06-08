@@ -32,6 +32,10 @@
           <span class="material-symbols-outlined text-[18px]">find_in_page</span>
           <span class="hidden sm:inline">Findings</span>
         </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(dashboardObservabilityPath())">
+          <span class="material-symbols-outlined text-[18px]">query_stats</span>
+          <span class="hidden sm:inline">Observability</span>
+        </button>
         <div class="ml-auto shrink-0 text-right text-[11px] text-slate-500">
           <p>Generated</p>
           <p class="font-mono text-slate-400" x-text="dashboardGeneratedAt()"></p>
@@ -144,28 +148,37 @@
                   <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Governance</p>
                   <p class="mt-1 text-sm font-medium text-slate-100">提案与实验状态</p>
                 </div>
-                <button type="button" class="button-secondary h-8 px-2" @click="navigate(dashboardGovernanceProposalsPath())">
-                  <span class="material-symbols-outlined text-[17px]">account_tree</span>
-                </button>
+                <div class="flex items-center gap-2">
+                  <button type="button" class="button-secondary h-8 px-2" @click="navigate(dashboardGovernanceProposalsPath())">
+                    <span class="material-symbols-outlined text-[17px]">account_tree</span>
+                  </button>
+                  <button type="button" class="button-secondary h-8 px-2" @click="navigate(dashboardGovernanceExperimentsPath())">
+                    <span class="material-symbols-outlined text-[17px]">science</span>
+                  </button>
+                </div>
               </div>
               <div class="mt-4 grid grid-cols-4 gap-3 text-xs">
-                <div>
+                <button type="button" class="min-w-0 rounded-md px-2 py-1 text-left transition hover:bg-slate-950/40" @click="navigate(dashboardGovernanceProposalsPath())">
                   <p class="text-slate-500">Open</p>
                   <p class="mt-1 font-mono text-2xl font-semibold text-slate-100 tabular-nums" x-text="dashboardNumber(dashboardMetrics.governance.open_proposal_count)"></p>
-                </div>
-                <div>
+                </button>
+                <button type="button" class="min-w-0 rounded-md px-2 py-1 text-left transition hover:bg-slate-950/40" @click="navigate(dashboardGovernanceProposalsPath({ status: 'testing' }))">
                   <p class="text-slate-500">Testing</p>
                   <p class="mt-1 font-mono text-2xl font-semibold text-sky-200 tabular-nums" x-text="dashboardNumber(dashboardMetrics.governance.testing_proposal_count)"></p>
-                </div>
-                <div>
+                </button>
+                <button type="button" class="min-w-0 rounded-md px-2 py-1 text-left transition hover:bg-slate-950/40" @click="navigate(dashboardGovernanceProposalsPath({ status: 'canary' }))">
                   <p class="text-slate-500">Canary</p>
                   <p class="mt-1 font-mono text-2xl font-semibold text-amber-200 tabular-nums" x-text="dashboardNumber(dashboardMetrics.governance.canary_proposal_count)"></p>
-                </div>
-                <div>
+                </button>
+                <button type="button" class="min-w-0 rounded-md px-2 py-1 text-left transition hover:bg-slate-950/40" @click="navigate(dashboardGovernanceProposalsPath({ status: 'rolled_back' }))">
                   <p class="text-slate-500">Rollback</p>
                   <p class="mt-1 font-mono text-2xl font-semibold text-rose-200 tabular-nums" x-text="dashboardNumber(dashboardMetrics.governance.rollback_proposal_count)"></p>
-                </div>
+                </button>
               </div>
+              <button type="button" class="mt-4 flex min-w-0 items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950/30 px-3 py-2 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(dashboardGovernanceExperimentsPath())">
+                <span class="text-slate-400">Experiments</span>
+                <span class="font-mono text-sky-200 tabular-nums" x-text="dashboardNumber(dashboardMetrics.governance.experiment_count)"></span>
+              </button>
             </section>
 
             <section class="rounded-md border border-slate-800 bg-slate-900/40 p-4">
@@ -174,8 +187,11 @@
                   <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Observability</p>
                   <p class="mt-1 text-sm font-medium text-slate-100">Trace / OTel / Gateway</p>
                 </div>
-                <span class="rounded-full border px-2 py-0.5 text-[11px]" :class="dashboardOtelTone(dashboardMetrics.observability.otel_enabled)" x-text="dashboardMetrics.observability.otel_enabled ? 'OTel on' : 'OTel off'"></span>
+                <button type="button" class="button-secondary h-8 px-2" @click="navigate(dashboardObservabilityPath())">
+                  <span class="material-symbols-outlined text-[17px]">query_stats</span>
+                </button>
               </div>
+              <span class="mt-4 inline-flex rounded-full border px-2 py-0.5 text-[11px]" :class="dashboardOtelTone(dashboardMetrics.observability.otel_enabled)" x-text="dashboardMetrics.observability.otel_enabled ? 'OTel on' : 'OTel off'"></span>
               <div class="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
                 <div class="flex items-center justify-between gap-3">
                   <span class="text-slate-500">RunTrace</span>

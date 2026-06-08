@@ -429,6 +429,7 @@ class ObservabilityService:
             testing_proposal_count=status_counts.get("testing", 0),
             canary_proposal_count=status_counts.get("canary", 0),
             rollback_proposal_count=status_counts.get("rolled_back", 0),
+            experiment_count=self._count(session, PsopImprovementExperiment),
             status_counts=status_counts,
         )
 

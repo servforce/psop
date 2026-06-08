@@ -10,7 +10,24 @@ function loadDashboardMethods() {
         buildDashboardPath: () => "/admin/dashboard",
         buildEvaluationReportsPath: () => "/admin/evaluations",
         buildEvaluationFindingsPath: () => "/admin/evaluations/findings",
-        buildGovernanceProposalsPath: () => "/admin/governance/proposals",
+        buildGovernanceProposalsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          if (filters.status) {
+            params.set("status", filters.status);
+          }
+          const query = params.toString();
+          return query ? `/admin/governance/proposals?${query}` : "/admin/governance/proposals";
+        },
+        buildGovernanceExperimentsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["experiment_id", "proposal_id", "status", "experiment_type"]) {
+            if (filters[key]) {
+              params.set(key, filters[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/governance/experiments?${query}` : "/admin/governance/experiments";
+        },
         buildPlatformAgentRunsPath: (filters = {}) => {
           const params = new URLSearchParams();
           for (const key of ["agent_key", "status", "owner_type", "owner_id"]) {
@@ -24,6 +41,7 @@ function loadDashboardMethods() {
         buildPlatformSkillsPath: () => "/admin/platform/skills",
         buildPlatformToolsPath: () => "/admin/platform/tools",
         buildPlatformMemoryPath: () => "/admin/platform/memory",
+        buildPlatformObservabilityPath: () => "/admin/platform/observability",
         buildToolAuthorizationsPath: (filters = {}) => {
           const params = new URLSearchParams();
           if (filters.status) {
@@ -95,6 +113,13 @@ test("dashboard methods load metrics through the observability API", async () =>
   expect(methods.dashboardToolAuthorizationsPath({ status: "pending" })).toBe(
     "/admin/platform/tool-authorizations?status=pending"
   );
+  expect(methods.dashboardGovernanceProposalsPath({ status: "testing" })).toBe(
+    "/admin/governance/proposals?status=testing"
+  );
+  expect(methods.dashboardGovernanceExperimentsPath({ status: "running" })).toBe(
+    "/admin/governance/experiments?status=running"
+  );
+  expect(methods.dashboardObservabilityPath()).toBe("/admin/platform/observability");
 });
 
 test("dashboard methods format metrics and preserve the six-agent row order", () => {
@@ -152,6 +177,9 @@ test("dashboard page exposes agent and pending authorization drilldown links", (
   expect(html).toContain("dashboardAgentRunsForAgentPath(agent.agent_key)");
   expect(html).toContain("dashboardWaitingAuthorizationsForAgentPath(agent.agent_key)");
   expect(html).toContain("dashboardToolAuthorizationsPath({ status: 'pending' })");
+  expect(html).toContain("dashboardGovernanceProposalsPath({ status: 'testing' })");
+  expect(html).toContain("dashboardGovernanceExperimentsPath()");
+  expect(html).toContain("dashboardObservabilityPath()");
   expect(html).toContain("agent.model_failure_rate");
   expect(html).toContain("agent.failed_model_call_count");
 });

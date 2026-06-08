@@ -39,8 +39,10 @@ const {
 } = require("../router.node.cjs");
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");
 
 const ROUTER_ES_MODULE_PATH = path.join(__dirname, "../router.js");
+const APP_JS_PATH = path.join(__dirname, "../../app.js");
 
 test("normalizePath handles root", () => {
   expect(normalizePath("/")).toBe("/");
@@ -186,6 +188,35 @@ test("router ES module exposes the closed-loop route helpers", () => {
   for (const routeName of ["evaluation-report", "governance-proposal", "platform-agent-run", "platform-memory-entry"]) {
     expect(source).toContain(`name: "${routeName}"`);
   }
+});
+
+test("browser console helpers preserve closed-loop route filters", () => {
+  const source = fs.readFileSync(APP_JS_PATH, "utf8");
+  const sandbox = {
+    window: {
+      location: { origin: "http://localhost", port: "8000" },
+      PSOPSkillKey: { generateSkillKey: (name) => String(name || "") }
+    },
+    document: { addEventListener: jest.fn() },
+    URL,
+    URLSearchParams
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox);
+
+  const helpers = sandbox.window.PSOPConsoleHelpers;
+  expect(helpers.buildEvaluationReportsPath({ run_id: "run-1", overall_outcome: "failed" })).toBe(
+    "/admin/evaluations?run_id=run-1&overall_outcome=failed"
+  );
+  expect(helpers.buildEvaluationFindingsPath({ status: "open", category: "runner_issue" })).toBe(
+    "/admin/evaluations/findings?status=open&category=runner_issue"
+  );
+  expect(helpers.buildGovernanceProposalsPath({ status: "canary" })).toBe(
+    "/admin/governance/proposals?status=canary"
+  );
+  expect(helpers.buildGovernanceExperimentsPath({ experiment_id: "experiment-1" })).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-1"
+  );
 });
 
 test("resolveAdminRoute extracts skill detail params", () => {

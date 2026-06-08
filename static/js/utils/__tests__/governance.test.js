@@ -386,7 +386,7 @@ test("governance methods build tool authorization context links", () => {
     tool_arguments_summary: {
       package_name: "pskill.runner",
       nested: {
-        evaluation_id: "eval-1",
+        source_evaluation_id: "eval-1",
         run_evaluation_finding_id: "finding-1",
         run_trace_id: "trace-1"
       }

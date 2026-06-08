@@ -41,6 +41,7 @@ class GovernanceDashboardMetrics(BaseModel):
     testing_proposal_count: int = 0
     canary_proposal_count: int = 0
     rollback_proposal_count: int = 0
+    experiment_count: int = 0
     status_counts: dict[str, int] = Field(default_factory=dict)
 
 
