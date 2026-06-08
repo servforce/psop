@@ -193,6 +193,31 @@ test("run replay selection follows event id from location", () => {
   expect(methods.selectedLiveRunReplayItem.call(context)).toBe(replayEvent);
 });
 
+test("run replay selection follows trace source id from location", () => {
+  const methods = loadRuntimeMethods("?event_id=trace-1");
+  const traceEvent = {
+    seq_no: 1,
+    event_type: "runtime.failed",
+    occurred_at: "2026-01-01T00:00:01.000Z",
+    source_kind: "run_trace",
+    source_id: "trace-1",
+    payload: { error: "provider failed" }
+  };
+  const context = {
+    ...methods,
+    liveRun: { id: "run-1" },
+    replayDetail: {
+      run: { id: "run-1" },
+      timeline: [traceEvent]
+    },
+    selectedLiveRunReplayItemKey: ""
+  };
+
+  methods.syncLiveRunReplaySelectionFromLocation.call(context);
+
+  expect(context.selectedLiveRunReplayItemKey).toBe(methods.liveRunReplayItemKey(traceEvent));
+});
+
 test("run replay exposes closed-loop evidence counts", () => {
   const methods = loadRuntimeMethods();
   const context = {
@@ -297,6 +322,259 @@ test("run replay exposes closed-loop evidence counts", () => {
   expect(html).toContain("liveRunReplayFindingCount()");
   expect(html).toContain("liveRunReplayAgentRunSummary(agentRun)");
   expect(html).toContain("liveRunReplayFindingSummary(finding)");
+});
+
+test("run replay finding evidence refs select matching timeline item", () => {
+  const methods = loadRuntimeMethods();
+  const traceItem = {
+    seq_no: 7,
+    phase: "runtime",
+    event_type: "runtime.failed",
+    occurred_at: "2026-01-01T00:00:07.000Z",
+    source_kind: "run_trace",
+    source_id: "trace-1",
+    payload: { summary: "provider failed" }
+  };
+  const eventItem = {
+    seq_no: 8,
+    phase: "terminal",
+    event_type: "terminal.event.appended",
+    occurred_at: "2026-01-01T00:00:08.000Z",
+    source_kind: "run_event",
+    source_id: "event-1",
+    payload: { id: "event-1", event_kind: "agent_output" }
+  };
+  const context = {
+    ...methods,
+    liveRun: { id: "run-1" },
+    replayDetail: {
+      run: { id: "run-1" },
+      timeline: [eventItem, traceItem]
+    },
+    selectedLiveRunReplayItemKey: "",
+    showNotice: jest.fn()
+  };
+
+  const traceRef = { kind: "run_trace", id: "trace-1", event_type: "runtime.failed" };
+  const eventRef = { kind: "terminal_event", id: "event-1", event_kind: "agent_output" };
+
+  expect(methods.liveRunReplayEvidenceRefs({ evidence_refs: [traceRef] })).toEqual([traceRef]);
+  expect(methods.liveRunReplayEvidenceRefLabel(traceRef)).toBe("run_trace:runtime.failed");
+  expect(methods.liveRunReplayFindEvidenceItem.call(context, traceRef)).toBe(traceItem);
+  expect(methods.liveRunReplayFindEvidenceItem.call(context, eventRef)).toBe(eventItem);
+  expect(methods.liveRunReplayEvidenceRefClass.call(context, traceRef)).toContain("text-sky-200");
+
+  expect(methods.selectLiveRunReplayEvidenceRef.call(context, traceRef)).toBe(traceItem);
+  expect(context.selectedLiveRunReplayItemKey).toBe(methods.liveRunReplayItemKey(traceItem));
+
+  expect(methods.selectLiveRunReplayEvidenceRef.call(context, { kind: "run_trace", id: "missing" })).toBeNull();
+  expect(context.showNotice).toHaveBeenCalledWith("error", "未找到对应 Replay 证据。");
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
+  expect(html).toContain("liveRunReplayEvidenceRefs(finding)");
+  expect(html).toContain("liveRunReplayEvidenceRefLabel(ref)");
+  expect(html).toContain("selectLiveRunReplayEvidenceRef(ref)");
+});
+
+test("run replay compares arbitrary session token snapshots", () => {
+  const methods = loadRuntimeMethods();
+  const context = {
+    ...methods,
+    liveRun: { id: "run-1" },
+    replayDetail: {
+      run: { id: "run-1" },
+      snapshots: [
+        {
+          id: "snapshot-1",
+          seq_no: 1,
+          created_at: "2026-01-01T00:00:01.000Z",
+          enabled_set: ["a"],
+          selection_summary: { checkpoint: { id: "collect" }, phase: "input", retained: "same" },
+          token_payload: { phase: "input" },
+          snapshot_hash: "hash-1"
+        },
+        {
+          id: "snapshot-2",
+          seq_no: 2,
+          created_at: "2026-01-01T00:00:02.000Z",
+          enabled_set: ["a", "b"],
+          selection_summary: { checkpoint: { id: "collect" }, phase: "waiting", retained: "same" },
+          token_payload: { phase: "waiting" },
+          snapshot_hash: "hash-2"
+        },
+        {
+          id: "snapshot-3",
+          seq_no: 3,
+          created_at: "2026-01-01T00:00:03.000Z",
+          enabled_set: ["a", "b", "c"],
+          selection_summary: { checkpoint: { id: "finish" }, phase: "complete", retained: "same", result: "ok" },
+          token_payload: { phase: "complete" },
+          snapshot_hash: "hash-3"
+        }
+      ]
+    },
+    selectedLiveRunSnapshotBaseSeq: "",
+    selectedLiveRunSnapshotTargetSeq: "",
+    formatDateTime: (value) => value || ""
+  };
+
+  methods.ensureLiveRunSnapshotCompareSelection.call(context);
+
+  expect(context.selectedLiveRunSnapshotBaseSeq).toBe("2");
+  expect(context.selectedLiveRunSnapshotTargetSeq).toBe("3");
+
+  context.selectedLiveRunSnapshotBaseSeq = "1";
+  context.selectedLiveRunSnapshotTargetSeq = "3";
+  const diff = methods.liveRunReplaySnapshotCompare.call(context);
+
+  expect(diff.enabled_added).toEqual(["b", "c"]);
+  expect(diff.enabled_removed).toEqual([]);
+  expect(diff.summary_added_keys).toEqual(["result"]);
+  expect(diff.summary_removed_keys).toEqual([]);
+  expect(diff.summary_changed_keys).toEqual(["checkpoint", "phase"]);
+  expect(diff.token_payload_changed).toBe(true);
+  expect(diff.snapshot_hash_changed).toBe(true);
+  expect(methods.liveRunReplaySnapshotDiffStats.call(context)).toEqual([
+    { label: "Enabled Added", value: 2 },
+    { label: "Enabled Removed", value: 0 },
+    { label: "Summary Keys", value: 3 },
+    { label: "Token Payload", value: "changed" }
+  ]);
+  expect(methods.liveRunReplaySnapshotCompareSummary.call(context)).toContain("enabled +2/-0");
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
+  const appJs = fs.readFileSync(path.join(__dirname, "../../app.js"), "utf8");
+  expect(appJs).toContain("selectedLiveRunSnapshotBaseSeq");
+  expect(appJs).toContain("selectedLiveRunSnapshotTargetSeq");
+  expect(html).toContain("Base Snapshot");
+  expect(html).toContain("Target Snapshot");
+  expect(html).toContain("liveRunReplaySnapshotCompare()");
+  expect(html).toContain("liveRunReplaySnapshotDiffStats()");
+});
+
+test("run replay exposes clickable eg node execution path", () => {
+  const methods = loadRuntimeMethods();
+  const traceItem = {
+    seq_no: 3,
+    phase: "instruct_collect_context",
+    event_type: "runtime.wait_checkpoint.entered",
+    occurred_at: "2026-01-01T00:00:03.000Z",
+    source_kind: "run_trace",
+    source_id: "trace-node-1",
+    payload: { wait: { checkpoint_id: "collect_context_evidence" } }
+  };
+  const pathItem = {
+    seq_no: 3,
+    trace_id: "trace-node-1",
+    node_id: "instruct_collect_context",
+    node_kind: "llm",
+    phase: "instruct_collect_context",
+    event_type: "runtime.wait_checkpoint.entered",
+    title: "等待现场证据",
+    summary: "等待用户提交现场证据。",
+    checkpoint_id: "collect_context_evidence",
+    agent_run_id: "agent-run-1",
+    occurred_at: "2026-01-01T00:00:03.000Z"
+  };
+  const context = {
+    ...methods,
+    liveRun: { id: "run-1" },
+    replayDetail: {
+      run: { id: "run-1" },
+      timeline: [traceItem],
+      eg_node_path: [pathItem]
+    },
+    selectedLiveRunReplayItemKey: "",
+    showNotice: jest.fn()
+  };
+
+  expect(methods.liveRunReplayEgNodePathCount.call(context)).toBe(1);
+  expect(methods.liveRunReplayEgNodePathItemKey(pathItem)).toBe("3:trace-node-1:instruct_collect_context");
+  expect(methods.liveRunReplayEgNodePathSummary(pathItem)).toBe(
+    "runtime.wait_checkpoint.entered · llm · checkpoint collect_context_evidence"
+  );
+  expect(methods.liveRunReplayEgNodePathItemClass.call(context, pathItem)).toContain("hover:bg-slate-900/60");
+  expect(methods.selectLiveRunReplayEgNodePathItem.call(context, pathItem)).toBe(traceItem);
+  expect(context.selectedLiveRunReplayItemKey).toBe(methods.liveRunReplayItemKey(traceItem));
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
+  expect(html).toContain("EG Node Path");
+  expect(html).toContain("liveRunReplayEgNodePathCount()");
+  expect(html).toContain("liveRunReplayEgNodePathSummary(item)");
+  expect(html).toContain("selectLiveRunReplayEgNodePathItem(item)");
+});
+
+test("run live raw events tab filters and exports original run events", () => {
+  const methods = loadRuntimeMethods();
+  const context = {
+    ...methods,
+    liveRun: { id: "run-1" },
+    liveRunEventFilters: {
+      q: "",
+      direction: "",
+      event_kind: ""
+    },
+    liveRunTerminalEvents: [
+      {
+        id: "event-2",
+        run_id: "run-1",
+        seq_no: 2,
+        direction: "output",
+        event_kind: "terminal.text.output.v1",
+        mime_type: "text/plain",
+        payload_inline: "请上传现场照片。",
+        source_ref: { kind: "runtime", node_id: "instruct_collect_context" },
+        parts: [],
+        occurred_at: "2026-01-01T00:00:02.000Z"
+      },
+      {
+        id: "event-1",
+        run_id: "run-1",
+        seq_no: 1,
+        direction: "input",
+        event_kind: "terminal.multimodal.input.v1",
+        mime_type: "multipart/mixed",
+        payload_inline: "现场证据",
+        source_ref: { kind: "web", connection_id: "terminal" },
+        parts: [{ part_id: "image_1", kind: "image", mime_type: "image/png", metadata: { filename: "fault.png" } }],
+        occurred_at: "2026-01-01T00:00:01.000Z"
+      }
+    ],
+    formatJson: (value) => JSON.stringify(value, null, 2)
+  };
+
+  expect(methods.liveRunRawEvents.call(context).map((event) => event.id)).toEqual(["event-1", "event-2"]);
+  expect(methods.liveRunRawEventKinds.call(context)).toEqual([
+    "terminal.multimodal.input.v1",
+    "terminal.text.output.v1"
+  ]);
+  expect(methods.liveRunRawEventPartsSummary(context.liveRunTerminalEvents[1])).toBe("1 parts · image:image/png");
+
+  context.liveRunEventFilters.direction = "input";
+  context.liveRunEventFilters.q = "fault.png";
+
+  expect(methods.liveRunRawFilteredEvents.call(context).map((event) => event.id)).toEqual(["event-1"]);
+  expect(methods.liveRunRawEventSourceLabel(context.liveRunTerminalEvents[1])).toBe("web · terminal");
+  expect(methods.liveRunRawEventJsonText.call(context, context.liveRunTerminalEvents[1])).toContain("fault.png");
+
+  const payload = methods.liveRunRawEventsDownloadPayload.call(context);
+  expect(payload.schema).toBe("psop-run-events-export/v1");
+  expect(payload.run_id).toBe("run-1");
+  expect(payload.filters).toEqual({
+    q: "fault.png",
+    direction: "input",
+    event_kind: ""
+  });
+  expect(payload.event_count).toBe(1);
+  expect(payload.events[0].id).toBe("event-1");
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
+  const appJs = fs.readFileSync(path.join(__dirname, "../../app.js"), "utf8");
+  expect(appJs).toContain("liveRunEventFilters");
+  expect(html).toContain("liveRunInteractionTab === 'events'");
+  expect(html).toContain("liveRunRawFilteredEvents()");
+  expect(html).toContain("downloadLiveRunRawEvents()");
+  expect(html).toContain("liveRunRawEventJsonText(rawEvent)");
 });
 
 test("run live authorization decisions update local list and refresh run", async () => {

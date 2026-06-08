@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field
 class RunEvaluationFindingResponse(BaseModel):
     id: str
     evaluation_id: str
+    run_id: str = ""
+    pskill_definition_id: str = ""
+    pskill_version_id: str = ""
     category: str
     severity: str
     confidence: int

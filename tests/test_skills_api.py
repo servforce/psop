@@ -2283,6 +2283,18 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert len(replay_payload["terminal_events"]) == 6
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
+    eg_node_path = replay_payload["eg_node_path"]
+    assert [item["node_id"] for item in eg_node_path] == [
+        "start",
+        "instruct_collect_context",
+        "instruct_collect_context",
+        "evaluate_collect_context",
+        "final_verify",
+        "terminal",
+    ]
+    assert eg_node_path[1]["checkpoint_id"] == "collect_context_evidence"
+    assert eg_node_path[1]["event_type"] == "runtime.wait_checkpoint.entered"
+    assert {item["trace_id"] for item in eg_node_path} <= {item["id"] for item in replay_payload["run_traces"]}
 
     jobs = jobs_response.json()
     assert {job["job_type"] for job in jobs} >= {PSKILL_COMPILE_JOB_TYPE, RUNTIME_STEP_JOB_TYPE}

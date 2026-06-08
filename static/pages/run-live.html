@@ -110,6 +110,11 @@
                 <span>terminal</span>
                 <span class="mono-field" x-text="`${liveRunTerminalEvents.length} events`"></span>
               </button>
+              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'events' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'events'">
+                <span class="material-symbols-outlined text-[18px]">data_object</span>
+                <span>events</span>
+                <span class="mono-field" x-text="`${liveRunRawFilteredEvents().length}/${liveRunRawEvents().length}`"></span>
+              </button>
               <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'replay' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'replay'">
                 <span class="material-symbols-outlined text-[18px]">history</span>
                 <span>replay</span>
@@ -225,6 +230,79 @@
                         </div>
                       </div>
                     </article>
+                  </template>
+                </div>
+              </div>
+            </section>
+
+            <section x-show="liveRunInteractionTab === 'events'" class="min-h-0 flex-1 overflow-hidden">
+              <div class="flex h-full min-h-0 flex-col bg-slate-950/40">
+                <header class="shrink-0 border-b border-slate-800 bg-slate-950/95 px-4 py-3">
+                  <div class="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
+                    <div class="relative min-w-56 flex-1">
+                      <span class="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-500">search</span>
+                      <input x-model="liveRunEventFilters.q" class="input-field h-9 min-w-56 pl-9" placeholder="搜索 event_kind / payload / source / parts" />
+                    </div>
+                    <select x-model="liveRunEventFilters.direction" class="input-field h-9 w-32 shrink-0 py-0" aria-label="RunEvent 方向筛选">
+                      <option value="">全部方向</option>
+                      <option value="input">input</option>
+                      <option value="output">output</option>
+                    </select>
+                    <select x-model="liveRunEventFilters.event_kind" class="input-field h-9 w-56 shrink-0 py-0" aria-label="RunEvent 类型筛选">
+                      <option value="">全部类型</option>
+                      <template x-for="kind in liveRunRawEventKinds()" :key="kind">
+                        <option :value="kind" x-text="kind"></option>
+                      </template>
+                    </select>
+                    <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="downloadLiveRunRawEvents()">
+                      <span class="material-symbols-outlined text-[18px]">download</span>
+                      <span class="hidden sm:inline">下载</span>
+                    </button>
+                  </div>
+                </header>
+
+                <template x-if="liveRunRawFilteredEvents().length === 0">
+                  <div class="empty-state h-full min-h-80">
+                    <span class="material-symbols-outlined text-[30px] text-slate-500">data_object</span>
+                    <p class="mt-3 text-sm text-slate-400">暂无匹配的原始 RunEvent。</p>
+                  </div>
+                </template>
+
+                <div class="min-h-0 flex-1 overflow-auto divide-y divide-slate-800">
+                  <template x-for="rawEvent in liveRunRawFilteredEvents()" :key="rawEvent.id || rawEvent.seq_no">
+                    <details class="px-4 py-3">
+                      <summary class="cursor-pointer list-none">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                          <div class="min-w-0">
+                            <div class="flex flex-wrap items-center gap-2">
+                              <span class="status-badge" :class="statusBadgeTone(rawEvent.direction)" x-text="rawEvent.direction"></span>
+                              <span class="status-badge border-slate-700 bg-slate-900/60 text-slate-300" x-text="rawEvent.event_kind"></span>
+                              <span class="status-badge border-slate-700 bg-slate-900/60 text-slate-300" x-text="rawEvent.mime_type"></span>
+                            </div>
+                            <p class="mt-2 mono-field break-all" x-text="rawEvent.id"></p>
+                            <p class="mt-1 truncate text-xs text-slate-400" x-text="`${liveRunRawEventSourceLabel(rawEvent)} · ${liveRunRawEventPartsSummary(rawEvent)}`"></p>
+                          </div>
+                          <div class="flex shrink-0 items-center gap-2">
+                            <span class="mono-field" x-text="formatDateTime(rawEvent.occurred_at)"></span>
+                            <span class="status-badge border-slate-700 bg-slate-900/60 text-slate-300" x-text="`#${rawEvent.seq_no}`"></span>
+                            <span class="material-symbols-outlined text-[18px] text-slate-500">expand_more</span>
+                          </div>
+                        </div>
+                      </summary>
+                      <div class="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
+                        <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="liveRunRawEventJsonText(rawEvent)"></pre>
+                        <div class="space-y-3 text-sm">
+                          <div>
+                            <p class="field-label">Source</p>
+                            <pre class="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="formatJson(rawEvent.source_ref || {})"></pre>
+                          </div>
+                          <div>
+                            <p class="field-label">Parts</p>
+                            <pre class="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 text-xs leading-5 text-slate-200" x-text="formatJson(terminalEventParts(rawEvent))"></pre>
+                          </div>
+                        </div>
+                      </div>
+                    </details>
                   </template>
                 </div>
               </div>
@@ -401,6 +479,7 @@
                       <div class="flex flex-wrap gap-1.5 text-[11px]">
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayTerminalCount()} terminal`"></span>
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayTraceCount()} trace`"></span>
+                        <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayEgNodePathCount()} eg path`"></span>
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayAgentRunCount()} agents`"></span>
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayModelCallCount()} model`"></span>
                         <span class="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300" x-text="`${liveRunReplayToolCallCount()} tools`"></span>
@@ -507,12 +586,94 @@
 
                         <details class="px-4 py-3">
                           <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <span>EG Node Path</span>
+                            <span class="ml-2 font-mono text-[11px] text-slate-500" x-text="liveRunReplayEgNodePathCount()"></span>
+                          </summary>
+
+                          <template x-if="liveRunReplayEgNodePath().length === 0">
+                            <div class="mt-3 rounded-md border border-slate-800 bg-slate-900/50 px-3 py-4 text-sm text-slate-400">暂无 EG node 执行路径。</div>
+                          </template>
+
+                          <div class="mt-3 divide-y divide-slate-800 border-y border-slate-800">
+                            <template x-for="item in liveRunReplayEgNodePath()" :key="liveRunReplayEgNodePathItemKey(item)">
+                              <button
+                                type="button"
+                                class="block w-full px-0 py-2.5 text-left transition"
+                                :class="liveRunReplayEgNodePathItemClass(item)"
+                                @click="selectLiveRunReplayEgNodePathItem(item)"
+                              >
+                                <div class="flex items-start justify-between gap-3">
+                                  <div class="min-w-0">
+                                    <p class="truncate text-sm font-semibold text-slate-100" x-text="item.node_id"></p>
+                                    <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayEgNodePathSummary(item)"></p>
+                                    <p class="mt-1 mono-field break-all" x-text="item.trace_id"></p>
+                                  </div>
+                                  <span class="status-badge shrink-0 border-slate-700 bg-slate-900/60 text-slate-300" x-text="`#${item.seq_no}`"></span>
+                                </div>
+                              </button>
+                            </template>
+                          </div>
+                        </details>
+
+                        <details class="px-4 py-3">
+                          <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
                             <span>Session Token Snapshots</span>
                             <span class="ml-2 font-mono text-[11px] text-slate-500" x-text="liveRunReplaySnapshots().length"></span>
                           </summary>
 
                           <template x-if="liveRunReplaySnapshots().length === 0">
                             <div class="mt-3 rounded-md border border-slate-800 bg-slate-900/50 px-3 py-4 text-sm text-slate-400">暂无 Session Token 快照。</div>
+                          </template>
+
+                          <template x-if="liveRunReplaySnapshots().length > 1">
+                            <div class="mt-3 border-y border-slate-800 py-3">
+                              <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                <label class="block">
+                                  <span class="field-label">Base Snapshot</span>
+                                  <select x-model="selectedLiveRunSnapshotBaseSeq" class="input-field mt-1 h-9 py-0 text-xs" @change="ensureLiveRunSnapshotCompareSelection()">
+                                    <template x-for="snapshot in liveRunReplaySnapshots()" :key="`base-${snapshot.id || snapshot.seq_no}`">
+                                      <option :value="liveRunReplaySnapshotKey(snapshot)" x-text="liveRunReplaySnapshotLabel(snapshot)"></option>
+                                    </template>
+                                  </select>
+                                </label>
+                                <label class="block">
+                                  <span class="field-label">Target Snapshot</span>
+                                  <select x-model="selectedLiveRunSnapshotTargetSeq" class="input-field mt-1 h-9 py-0 text-xs" @change="ensureLiveRunSnapshotCompareSelection()">
+                                    <template x-for="snapshot in liveRunReplaySnapshots()" :key="`target-${snapshot.id || snapshot.seq_no}`">
+                                      <option :value="liveRunReplaySnapshotKey(snapshot)" x-text="liveRunReplaySnapshotLabel(snapshot)"></option>
+                                    </template>
+                                  </select>
+                                </label>
+                              </div>
+
+                              <template x-if="liveRunReplaySnapshotCompare()">
+                                <div class="mt-3 space-y-3">
+                                  <p class="text-xs leading-5 text-slate-400" x-text="liveRunReplaySnapshotCompareSummary()"></p>
+                                  <div class="grid grid-cols-2 gap-2">
+                                    <template x-for="stat in liveRunReplaySnapshotDiffStats()" :key="stat.label">
+                                      <div class="border border-slate-800 bg-slate-950/40 px-2.5 py-2">
+                                        <p class="field-label" x-text="stat.label"></p>
+                                        <p class="mt-1 font-mono text-sm text-slate-100" x-text="stat.value"></p>
+                                      </div>
+                                    </template>
+                                  </div>
+                                  <div class="grid grid-cols-1 gap-3 text-xs lg:grid-cols-2">
+                                    <div>
+                                      <p class="field-label">Enabled Added</p>
+                                      <pre class="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 leading-5 text-slate-200" x-text="formatJson(liveRunReplaySnapshotCompare().enabled_added)"></pre>
+                                    </div>
+                                    <div>
+                                      <p class="field-label">Enabled Removed</p>
+                                      <pre class="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 leading-5 text-slate-200" x-text="formatJson(liveRunReplaySnapshotCompare().enabled_removed)"></pre>
+                                    </div>
+                                    <div class="lg:col-span-2">
+                                      <p class="field-label">Selection Summary Keys</p>
+                                      <pre class="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-black/40 p-3 leading-5 text-slate-200" x-text="formatJson({ added: liveRunReplaySnapshotCompare().summary_added_keys, removed: liveRunReplaySnapshotCompare().summary_removed_keys, changed: liveRunReplaySnapshotCompare().summary_changed_keys })"></pre>
+                                    </div>
+                                  </div>
+                                </div>
+                              </template>
+                            </div>
                           </template>
 
                           <div class="mt-3 divide-y divide-slate-800 border-y border-slate-800">
@@ -666,6 +827,23 @@
                                         <p class="line-clamp-2 font-semibold text-slate-100" x-text="finding.description"></p>
                                         <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayFindingSummary(finding)"></p>
                                         <p class="mt-1 mono-field break-all" x-text="finding.id"></p>
+                                        <template x-if="liveRunReplayEvidenceRefs(finding).length > 0">
+                                          <div class="mt-2 flex flex-wrap gap-1.5">
+                                            <template x-for="ref in liveRunReplayEvidenceRefs(finding)" :key="liveRunReplayEvidenceRefLabel(ref)">
+                                              <button
+                                                type="button"
+                                                class="inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-1 text-left text-[11px] transition disabled:opacity-60"
+                                                :class="liveRunReplayEvidenceRefClass(ref)"
+                                                :disabled="!liveRunReplayFindEvidenceItem(ref)"
+                                                @click="selectLiveRunReplayEvidenceRef(ref)"
+                                                :title="liveRunReplayEvidenceRefLabel(ref)"
+                                              >
+                                                <span class="material-symbols-outlined shrink-0 text-[14px]">target</span>
+                                                <span class="truncate font-mono" x-text="liveRunReplayEvidenceRefLabel(ref)"></span>
+                                              </button>
+                                            </template>
+                                          </div>
+                                        </template>
                                       </div>
                                       <span class="status-badge shrink-0" :class="statusBadgeTone(finding.status)" x-text="finding.status"></span>
                                     </div>

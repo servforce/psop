@@ -175,13 +175,17 @@ class EvaluationService:
         evaluation = self.repository.get_evaluation(session, evaluation_id)
         if not evaluation:
             raise SkillNotFoundError("未找到 RunEvaluation。", details={"evaluation_id": evaluation_id})
-        return [self._build_finding_response(item) for item in self.repository.list_evaluation_findings(session, evaluation_id)]
+        return [
+            self._build_finding_response(item, evaluation=evaluation)
+            for item in self.repository.list_evaluation_findings(session, evaluation_id)
+        ]
 
     def get_finding(self, session: Session, finding_id: str) -> RunEvaluationFindingResponse:
         finding = self.repository.get_finding(session, finding_id)
         if not finding:
             raise SkillNotFoundError("未找到 RunEvaluationFinding。", details={"finding_id": finding_id})
-        return self._build_finding_response(finding)
+        evaluation = self.repository.get_evaluation(session, finding.evaluation_id)
+        return self._build_finding_response(finding, evaluation=evaluation)
 
     def list_findings(
         self,
@@ -196,16 +200,24 @@ class EvaluationService:
         self._validate_optional_filter("status", status, VALID_FINDING_STATUSES)
         self._validate_optional_filter("category", category, VALID_FINDING_CATEGORIES)
         self._validate_optional_filter("severity", severity, VALID_FINDING_SEVERITIES)
-        return [
-            self._build_finding_response(item)
-            for item in self.repository.list_findings(
+        findings = self.repository.list_findings(
+            session,
+            status=status,
+            category=category,
+            severity=severity,
+            run_id=run_id,
+            pskill_definition_id=pskill_definition_id,
+        )
+        evaluations = {
+            item.id: item
+            for item in self.repository.list_evaluations_by_ids(
                 session,
-                status=status,
-                category=category,
-                severity=severity,
-                run_id=run_id,
-                pskill_definition_id=pskill_definition_id,
+                {finding.evaluation_id for finding in findings},
             )
+        }
+        return [
+            self._build_finding_response(item, evaluation=evaluations.get(item.evaluation_id))
+            for item in findings
         ]
 
     def update_finding_status(
@@ -221,8 +233,9 @@ class EvaluationService:
         if status not in VALID_FINDING_STATUSES:
             raise SkillValidationError("finding status 无效。", details={"status": status})
         finding.status = status
+        evaluation = self.repository.get_evaluation(session, finding.evaluation_id)
         session.commit()
-        return self._build_finding_response(finding)
+        return self._build_finding_response(finding, evaluation=evaluation)
 
     def write_diagnostics_from_agent_tool(
         self,
@@ -280,7 +293,7 @@ class EvaluationService:
             session.add(finding)
             created_findings.append(finding)
         session.flush()
-        finding_responses = [self._build_finding_response(item) for item in created_findings]
+        finding_responses = [self._build_finding_response(item, evaluation=evaluation) for item in created_findings]
         self.agent_service.append_event(
             session,
             agent_run_id,
@@ -635,17 +648,24 @@ class EvaluationService:
             summary=evaluation.summary,
             attribution=evaluation.attribution_json,
             findings=[
-                self._build_finding_response(item)
+                self._build_finding_response(item, evaluation=evaluation)
                 for item in self.repository.list_evaluation_findings(session, evaluation.id)
             ],
             created_at=evaluation.created_at,
         )
 
     @staticmethod
-    def _build_finding_response(finding: RunEvaluationFinding) -> RunEvaluationFindingResponse:
+    def _build_finding_response(
+        finding: RunEvaluationFinding,
+        *,
+        evaluation: RunEvaluation | None = None,
+    ) -> RunEvaluationFindingResponse:
         return RunEvaluationFindingResponse(
             id=finding.id,
             evaluation_id=finding.evaluation_id,
+            run_id=evaluation.run_id if evaluation else "",
+            pskill_definition_id=evaluation.pskill_definition_id if evaluation else "",
+            pskill_version_id=evaluation.pskill_version_id if evaluation else "",
             category=finding.category,
             severity=finding.severity,
             confidence=finding.confidence,

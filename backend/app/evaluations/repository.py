@@ -19,6 +19,13 @@ class EvaluationRepository:
     def get_finding(self, session: Session, finding_id: str) -> RunEvaluationFinding | None:
         return session.get(RunEvaluationFinding, finding_id)
 
+    def list_evaluations_by_ids(self, session: Session, evaluation_ids: set[str]) -> list[RunEvaluation]:
+        if not evaluation_ids:
+            return []
+        return list(
+            session.scalars(select(RunEvaluation).where(RunEvaluation.id.in_(sorted(evaluation_ids)))).all()
+        )
+
     def list_snapshots(self, session: Session, run_id: str) -> list[SessionTokenSnapshot]:
         return list(
             session.scalars(

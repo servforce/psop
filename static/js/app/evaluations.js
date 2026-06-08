@@ -1,5 +1,5 @@
 (function () {
-  const { resolveWsUrl } = window.PSOPConsoleHelpers || {};
+  const { resolveWsUrl, buildReplayPath } = window.PSOPConsoleHelpers || {};
 
   const FINDING_STATUS_OPTIONS = [
     { value: "open", label: "未处理" },
@@ -272,8 +272,55 @@
       return "/admin/evaluations/findings";
     },
 
-    evaluationRunReplayPath(evaluation) {
-      return evaluation?.run_id ? `/admin/replay/runs/${evaluation.run_id}` : "/admin/replay";
+    evaluationRunReplayPath(evaluation, focus = {}) {
+      if (!evaluation?.run_id) {
+        return "/admin/evaluations";
+      }
+      if (typeof buildReplayPath === "function") {
+        return buildReplayPath(evaluation.run_id, focus);
+      }
+      const params = new URLSearchParams();
+      for (const key of ["event_id", "seq_no", "snapshot_seq"]) {
+        const value = String(focus?.[key] || "").trim();
+        if (value) {
+          params.set(key, value);
+        }
+      }
+      const query = params.toString();
+      return query ? `/admin/runs/${evaluation.run_id}/live/replay?${query}` : `/admin/runs/${evaluation.run_id}/live/replay`;
+    },
+
+    findingRunReplayPath(finding, ref = null, evaluation = this.currentEvaluation) {
+      const runId = finding?.run_id || evaluation?.run_id || "";
+      if (!runId) {
+        return "";
+      }
+      return this.evaluationRunReplayPath({ run_id: runId }, this.findingEvidenceReplayFocus(ref));
+    },
+
+    findingEvidenceReplayFocus(ref) {
+      if (!ref || typeof ref !== "object") {
+        return {};
+      }
+      const id = String(ref.id || ref.source_id || ref.run_trace_id || ref.run_event_id || ref.event_id || "").trim();
+      if (id) {
+        return { event_id: id };
+      }
+      const seqNo = String(ref.seq_no ?? "").trim();
+      return seqNo ? { seq_no: seqNo } : {};
+    },
+
+    canOpenFindingEvidenceReplay(finding, evaluation = this.currentEvaluation) {
+      return Boolean(finding?.run_id || evaluation?.run_id);
+    },
+
+    openFindingEvidenceReplay(finding, ref = null, evaluation = this.currentEvaluation) {
+      const path = this.findingRunReplayPath(finding, ref, evaluation);
+      if (!path) {
+        this.showNotice?.("error", "Finding 缺少 Run 关联，无法打开 Replay。");
+        return;
+      }
+      return this.navigate(path);
     },
 
     findingStatusOptions() {

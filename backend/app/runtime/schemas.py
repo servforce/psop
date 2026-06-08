@@ -241,11 +241,28 @@ class ReplayTimelineItem(BaseModel):
     summary: str
     payload: dict[str, Any]
     occurred_at: datetime
+    source_kind: str | None = None
+    source_id: str | None = None
+
+
+class ReplayEgNodePathItem(BaseModel):
+    seq_no: int
+    trace_id: str
+    node_id: str
+    node_kind: str = ""
+    phase: str
+    event_type: str
+    title: str
+    summary: str = ""
+    checkpoint_id: str = ""
+    agent_run_id: str | None = None
+    occurred_at: datetime
 
 
 class ReplayDetailResponse(BaseModel):
     run: RunResponse
     timeline: list[ReplayTimelineItem]
+    eg_node_path: list[ReplayEgNodePathItem] = Field(default_factory=list)
     snapshots: list[SessionTokenSnapshotResponse]
     run_traces: list[RunTraceResponse]
     trace_events: list[RunTraceResponse] = Field(default_factory=list)

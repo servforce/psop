@@ -78,6 +78,7 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
             f"/api/v1/evaluations/findings/{finding['id']}",
             json={"status": "accepted"},
         )
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
 
     assert invocation_response.status_code == 201
     assert run_payload["status"] == "failed"
@@ -88,8 +89,23 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
     assert finding["severity"] == "high"
     assert finding["status"] == "open"
     assert finding["evidence_refs"][0]["kind"] == "run_trace"
+    assert finding["run_id"] == run_id
+    assert finding["pskill_definition_id"] == evaluation["pskill_definition_id"]
+    assert finding["pskill_version_id"] == evaluation["pskill_version_id"]
     assert finding_list_response.json()[0]["id"] == finding["id"]
+    assert finding_list_response.json()[0]["run_id"] == run_id
     assert update_response.json()["status"] == "accepted"
+    assert update_response.json()["run_id"] == run_id
+    replay_payload = replay_response.json()
+    evidence_ref = finding["evidence_refs"][0]
+    matching_timeline_items = [
+        item
+        for item in replay_payload["timeline"]
+        if item["source_kind"] == evidence_ref["kind"] and item["source_id"] == evidence_ref["id"]
+    ]
+    assert matching_timeline_items
+    assert matching_timeline_items[0]["event_type"] == evidence_ref["event_type"]
+    assert replay_payload["run_evaluation_findings"][0]["evidence_refs"][0]["id"] == evidence_ref["id"]
 
 
 def test_evaluation_activity_websocket_streams_report_snapshot() -> None:

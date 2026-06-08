@@ -565,6 +565,9 @@
   .max-h-32 {
     max-height: calc(var(--spacing) * 32);
   }
+  .max-h-36 {
+    max-height: calc(var(--spacing) * 36);
+  }
   .max-h-40 {
     max-height: calc(var(--spacing) * 40);
   }
@@ -1921,6 +1924,9 @@
   .pb-5 {
     padding-bottom: calc(var(--spacing) * 5);
   }
+  .pl-9 {
+    padding-left: calc(var(--spacing) * 9);
+  }
   .pl-10 {
     padding-left: calc(var(--spacing) * 10);
   }
@@ -2576,6 +2582,16 @@
       }
     }
   }
+  .hover\:bg-sky-500\/15 {
+    &:hover {
+      @media (hover: hover) {
+        background-color: color-mix(in srgb, oklch(68.5% 0.169 237.323) 15%, transparent);
+        @supports (color: color-mix(in lab, red, red)) {
+          background-color: color-mix(in oklab, var(--color-sky-500) 15%, transparent);
+        }
+      }
+    }
+  }
   .hover\:bg-slate-50 {
     &:hover {
       @media (hover: hover) {
@@ -2752,6 +2768,34 @@
       padding-left: calc(var(--spacing) * 5);
     }
   }
+  .disabled\:cursor-not-allowed {
+    &:disabled {
+      cursor: not-allowed;
+    }
+  }
+  .disabled\:border-slate-800 {
+    &:disabled {
+      border-color: var(--color-slate-800);
+    }
+  }
+  .disabled\:bg-slate-900\/40 {
+    &:disabled {
+      background-color: color-mix(in srgb, oklch(20.8% 0.042 265.755) 40%, transparent);
+      @supports (color: color-mix(in lab, red, red)) {
+        background-color: color-mix(in oklab, var(--color-slate-900) 40%, transparent);
+      }
+    }
+  }
+  .disabled\:text-slate-500 {
+    &:disabled {
+      color: var(--color-slate-500);
+    }
+  }
+  .disabled\:opacity-60 {
+    &:disabled {
+      opacity: 60%;
+    }
+  }
   .sm\:block {
     @media (width >= 40rem) {
       display: block;
@@ -2855,6 +2899,11 @@
       }
     }
   }
+  .lg\:col-span-2 {
+    @media (width >= 64rem) {
+      grid-column: span 2 / span 2;
+    }
+  }
   .lg\:flex {
     @media (width >= 64rem) {
       display: flex;
@@ -2898,6 +2947,11 @@
   .lg\:grid-cols-\[minmax\(0\,0\.95fr\)_minmax\(0\,1\.35fr\)\] {
     @media (width >= 64rem) {
       grid-template-columns: minmax(0,0.95fr) minmax(0,1.35fr);
+    }
+  }
+  .lg\:grid-cols-\[minmax\(0\,1fr\)_18rem\] {
+    @media (width >= 64rem) {
+      grid-template-columns: minmax(0,1fr) 18rem;
     }
   }
   .lg\:grid-cols-\[minmax\(18rem\,0\.82fr\)_minmax\(0\,1\.18fr\)\] {

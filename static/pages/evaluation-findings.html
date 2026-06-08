@@ -109,7 +109,15 @@
                   <span>转提案</span>
                 </button>
                 <template x-for="ref in finding.evidence_refs" :key="`${finding.id}-${ref.kind}-${ref.id || ref.seq_no}`">
-                  <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-[11px] text-slate-400" x-text="findingEvidenceLabel(ref)"></span>
+                  <button
+                    type="button"
+                    class="inline-flex h-8 max-w-full items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 font-mono text-[11px] text-sky-200 transition hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/40 disabled:text-slate-500"
+                    :disabled="!canOpenFindingEvidenceReplay(finding)"
+                    @click="openFindingEvidenceReplay(finding, ref)"
+                  >
+                    <span class="material-symbols-outlined shrink-0 text-[14px]">target</span>
+                    <span class="truncate" x-text="findingEvidenceLabel(ref)"></span>
+                  </button>
                 </template>
               </div>
             </article>

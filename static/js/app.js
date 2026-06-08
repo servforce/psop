@@ -992,9 +992,16 @@
       liveRunTraceEvents: [],
       liveRunToolAuthorizations: [],
       liveRunInteractionTab: "terminal",
+      liveRunEventFilters: {
+        q: "",
+        direction: "",
+        event_kind: ""
+      },
       liveRunLoadedRunId: "",
       selectedLiveRunReplayItemKey: "",
       selectedLiveRunProcessEventKey: "",
+      selectedLiveRunSnapshotBaseSeq: "",
+      selectedLiveRunSnapshotTargetSeq: "",
       terminalMediaPreview: {
         open: false,
         kind: "",

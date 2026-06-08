@@ -423,7 +423,7 @@ test("run live page exposes input and output process swimlanes", () => {
   expect(html).toContain("terminalEventMediaUrl(item.event)");
   expect(appJs).toContain("selectedLiveRunProcessEventKey");
   expect(shellJs).toContain("selectedLiveRunProcessEventKey");
-  expect(appJs).toContain('new Set(["terminal", "io", "replay", "authorizations"])');
+  expect(appJs).toContain('new Set(["terminal", "events", "io", "replay", "authorizations"])');
   expect(appJs).toContain("liveRunProcessTerminalEvents()");
   expect(appJs).toContain("liveRunProcessEventKind(event)");
   expect(appJs).toContain("liveRunProcessLanes()");

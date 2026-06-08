@@ -120,6 +120,8 @@
           if (!isSameRun) {
             this.selectedLiveRunReplayItemKey = "";
             this.selectedLiveRunProcessEventKey = "";
+            this.selectedLiveRunSnapshotBaseSeq = "";
+            this.selectedLiveRunSnapshotTargetSeq = "";
           }
           const [run, bindings, terminalSession, terminalEvents, traceEvents, replayDetail, toolAuthorizations] = await Promise.all([
             this.apiRequest(`/runs/${runId}`),
@@ -141,6 +143,7 @@
           this.scrollTerminalTranscriptToBottom();
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], traceEvents);
           this.replayDetail = replayDetail;
+          this.ensureLiveRunSnapshotCompareSelection();
           this.syncLiveRunInteractionTabFromRoute(isSameRun);
           this.syncLiveRunReplaySelectionFromLocation();
           this.connectRunWebSocket(runId);
@@ -151,7 +154,7 @@
 
 
       syncLiveRunInteractionTabFromRoute(isSameRun = false) {
-        const allowedTabs = new Set(["terminal", "io", "replay", "authorizations"]);
+        const allowedTabs = new Set(["terminal", "events", "io", "replay", "authorizations"]);
         if (this.route?.params?.view === "replay") {
           this.liveRunInteractionTab = "replay";
           return;
@@ -1005,6 +1008,134 @@
       },
 
 
+      liveRunRawEvents() {
+        return (this.liveRunTerminalEvents || [])
+          .slice()
+          .sort((left, right) => {
+            const leftSeq = Number(left?.seq_no || 0);
+            const rightSeq = Number(right?.seq_no || 0);
+            if (leftSeq !== rightSeq) {
+              return leftSeq - rightSeq;
+            }
+            return String(left?.id || "").localeCompare(String(right?.id || ""));
+          });
+      },
+
+
+      liveRunRawEventKinds() {
+        return [...new Set(this.liveRunRawEvents().map((item) => item?.event_kind).filter(Boolean))].sort();
+      },
+
+
+      liveRunRawEventSearchText(rawEvent) {
+        return [
+          rawEvent?.id,
+          rawEvent?.direction,
+          rawEvent?.event_kind,
+          rawEvent?.mime_type,
+          rawEvent?.external_event_id,
+          rawEvent?.source_ref,
+          rawEvent?.payload_inline,
+          rawEvent?.parts
+        ]
+          .map((value) => {
+            if (value === null || value === undefined) {
+              return "";
+            }
+            return typeof value === "string" ? value : JSON.stringify(value);
+          })
+          .join("\n")
+          .toLowerCase();
+      },
+
+
+      liveRunRawEventMatchesFilters(rawEvent) {
+        const filters = this.liveRunEventFilters || {};
+        const direction = String(filters.direction || "").trim().toLowerCase();
+        const eventKind = String(filters.event_kind || "").trim();
+        const query = String(filters.q || "").trim().toLowerCase();
+        if (direction && String(rawEvent?.direction || "").toLowerCase() !== direction) {
+          return false;
+        }
+        if (eventKind && rawEvent?.event_kind !== eventKind) {
+          return false;
+        }
+        if (query && !this.liveRunRawEventSearchText(rawEvent).includes(query)) {
+          return false;
+        }
+        return true;
+      },
+
+
+      liveRunRawFilteredEvents() {
+        return this.liveRunRawEvents().filter((rawEvent) => this.liveRunRawEventMatchesFilters(rawEvent));
+      },
+
+
+      liveRunRawEventSourceLabel(rawEvent) {
+        const source = rawEvent?.source_ref && typeof rawEvent.source_ref === "object" ? rawEvent.source_ref : {};
+        return [source.kind, source.connection_id, source.node_id].filter(Boolean).join(" · ") || "source:N/A";
+      },
+
+
+      liveRunRawEventPartsSummary(rawEvent) {
+        const parts = this.terminalEventParts(rawEvent);
+        if (!parts.length) {
+          return "0 parts";
+        }
+        const labels = parts.map((part) => [part.kind, part.mime_type].filter(Boolean).join(":") || part.part_id || "part");
+        return `${parts.length} parts · ${labels.join(", ")}`;
+      },
+
+
+      liveRunRawEventJsonText(rawEvent) {
+        return typeof this.formatJson === "function"
+          ? this.formatJson(rawEvent || {})
+          : JSON.stringify(rawEvent || {}, null, 2);
+      },
+
+
+      liveRunRawEventsDownloadPayload() {
+        const filters = this.liveRunEventFilters || {};
+        const events = this.liveRunRawFilteredEvents();
+        return {
+          schema: "psop-run-events-export/v1",
+          run_id: this.liveRun?.id || "",
+          exported_at: new Date().toISOString(),
+          filters: {
+            q: String(filters.q || ""),
+            direction: String(filters.direction || ""),
+            event_kind: String(filters.event_kind || "")
+          },
+          event_count: events.length,
+          events
+        };
+      },
+
+
+      downloadLiveRunRawEvents() {
+        const payload = this.liveRunRawEventsDownloadPayload();
+        const filename = `psop-run-events-${payload.run_id || "run"}.json`;
+        const content = JSON.stringify(payload, null, 2);
+        if (typeof document === "undefined" || typeof Blob === "undefined" || typeof URL === "undefined") {
+          return payload;
+        }
+        const blob = new Blob([content], { type: "application/json" });
+        const href = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = href;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(href);
+        if (typeof this.showNotice === "function") {
+          this.showNotice("success", "RunEvent 数据已导出。");
+        }
+        return payload;
+      },
+
+
       openTerminalMediaPreview(event, part = null) {
         const src = part ? this.terminalEventPartMediaUrl(event, part) : this.terminalEventMediaUrl(event);
         const isImage = part ? this.terminalEventPartIsImage(part) : this.terminalEventIsImage(event);
@@ -1056,6 +1187,7 @@
         this.busy.replayDetail = true;
         try {
           this.replayDetail = await this.apiRequest(`/replay/runs/${runId}`);
+          this.ensureLiveRunSnapshotCompareSelection();
         } finally {
           this.busy.replayDetail = false;
         }
@@ -1130,7 +1262,15 @@
         const timeline = this.liveRunReplayTimeline();
         const selected = timeline.find((item) => {
           const payload = item?.payload || {};
-          const payloadEventId = String(payload.id || payload.event_id || payload.run_event_id || "").trim();
+          const payloadEventId = String(
+            item?.source_id ||
+              payload.id ||
+              payload.event_id ||
+              payload.run_event_id ||
+              payload.run_trace_id ||
+              payload.trace_event_id ||
+              ""
+          ).trim();
           return Boolean(eventId && payloadEventId === eventId);
         }) || timeline.find((item) => Boolean(seqNo && String(item?.seq_no ?? "") === seqNo));
         if (selected) {
@@ -1201,7 +1341,142 @@
         if (!this.replayDetail || this.replayDetail.run?.id !== this.liveRun?.id) {
           return [];
         }
-        return this.replayDetail.snapshots || [];
+        return (this.replayDetail.snapshots || [])
+          .slice()
+          .sort((left, right) => Number(left?.seq_no || 0) - Number(right?.seq_no || 0));
+      },
+
+
+      liveRunReplaySnapshotKey(snapshot) {
+        return String(snapshot?.seq_no ?? snapshot?.id ?? "");
+      },
+
+
+      liveRunReplaySnapshotLabel(snapshot) {
+        const seq = snapshot?.seq_no ?? "N/A";
+        return [`#${seq}`, this.formatDateTime(snapshot?.created_at)].filter(Boolean).join(" · ");
+      },
+
+
+      liveRunReplaySnapshotByKey(key) {
+        const normalized = String(key || "");
+        return this.liveRunReplaySnapshots().find(
+          (snapshot) => this.liveRunReplaySnapshotKey(snapshot) === normalized
+        ) || null;
+      },
+
+
+      ensureLiveRunSnapshotCompareSelection() {
+        const snapshots = this.liveRunReplaySnapshots();
+        if (snapshots.length < 2) {
+          this.selectedLiveRunSnapshotBaseSeq = "";
+          this.selectedLiveRunSnapshotTargetSeq = "";
+          return;
+        }
+        const keys = snapshots.map((snapshot) => this.liveRunReplaySnapshotKey(snapshot));
+        if (!keys.includes(String(this.selectedLiveRunSnapshotBaseSeq || ""))) {
+          this.selectedLiveRunSnapshotBaseSeq = keys[Math.max(0, keys.length - 2)];
+        }
+        if (!keys.includes(String(this.selectedLiveRunSnapshotTargetSeq || ""))) {
+          this.selectedLiveRunSnapshotTargetSeq = keys[keys.length - 1];
+        }
+        if (this.selectedLiveRunSnapshotBaseSeq === this.selectedLiveRunSnapshotTargetSeq) {
+          const targetIndex = keys.indexOf(this.selectedLiveRunSnapshotTargetSeq);
+          this.selectedLiveRunSnapshotBaseSeq = keys[Math.max(0, targetIndex - 1)];
+          if (this.selectedLiveRunSnapshotBaseSeq === this.selectedLiveRunSnapshotTargetSeq) {
+            this.selectedLiveRunSnapshotTargetSeq = keys[Math.min(keys.length - 1, targetIndex + 1)];
+          }
+        }
+      },
+
+
+      liveRunReplayStableJson(value) {
+        if (Array.isArray(value)) {
+          return `[${value.map((item) => this.liveRunReplayStableJson(item)).join(",")}]`;
+        }
+        if (value && typeof value === "object") {
+          return `{${Object.keys(value)
+            .sort()
+            .map((key) => `${JSON.stringify(key)}:${this.liveRunReplayStableJson(value[key])}`)
+            .join(",")}}`;
+        }
+        return JSON.stringify(value);
+      },
+
+
+      liveRunReplaySnapshotCompare() {
+        const snapshots = this.liveRunReplaySnapshots();
+        if (snapshots.length < 2) {
+          return null;
+        }
+        let base = this.liveRunReplaySnapshotByKey(this.selectedLiveRunSnapshotBaseSeq) || snapshots[Math.max(0, snapshots.length - 2)];
+        let target = this.liveRunReplaySnapshotByKey(this.selectedLiveRunSnapshotTargetSeq) || snapshots[snapshots.length - 1];
+        if (this.liveRunReplaySnapshotKey(base) === this.liveRunReplaySnapshotKey(target)) {
+          const targetIndex = snapshots.findIndex(
+            (snapshot) => this.liveRunReplaySnapshotKey(snapshot) === this.liveRunReplaySnapshotKey(target)
+          );
+          base = snapshots[Math.max(0, targetIndex - 1)];
+          if (this.liveRunReplaySnapshotKey(base) === this.liveRunReplaySnapshotKey(target)) {
+            target = snapshots[Math.min(snapshots.length - 1, targetIndex + 1)];
+          }
+        }
+        const baseEnabled = new Set(Array.isArray(base?.enabled_set) ? base.enabled_set : []);
+        const targetEnabled = new Set(Array.isArray(target?.enabled_set) ? target.enabled_set : []);
+        const baseSummary = base?.selection_summary && typeof base.selection_summary === "object" && !Array.isArray(base.selection_summary)
+          ? base.selection_summary
+          : {};
+        const targetSummary = target?.selection_summary && typeof target.selection_summary === "object" && !Array.isArray(target.selection_summary)
+          ? target.selection_summary
+          : {};
+        const baseKeys = new Set(Object.keys(baseSummary));
+        const targetKeys = new Set(Object.keys(targetSummary));
+        const sharedKeys = [...baseKeys].filter((key) => targetKeys.has(key));
+        return {
+          base,
+          target,
+          enabled_added: [...targetEnabled].filter((item) => !baseEnabled.has(item)).sort(),
+          enabled_removed: [...baseEnabled].filter((item) => !targetEnabled.has(item)).sort(),
+          summary_added_keys: [...targetKeys].filter((key) => !baseKeys.has(key)).sort(),
+          summary_removed_keys: [...baseKeys].filter((key) => !targetKeys.has(key)).sort(),
+          summary_changed_keys: sharedKeys
+            .filter((key) => this.liveRunReplayStableJson(baseSummary[key]) !== this.liveRunReplayStableJson(targetSummary[key]))
+            .sort(),
+          token_payload_changed:
+            this.liveRunReplayStableJson(base?.token_payload || {}) !== this.liveRunReplayStableJson(target?.token_payload || {}),
+          snapshot_hash_changed: String(base?.snapshot_hash || "") !== String(target?.snapshot_hash || "")
+        };
+      },
+
+
+      liveRunReplaySnapshotCompareSummary() {
+        const diff = this.liveRunReplaySnapshotCompare();
+        if (!diff) {
+          return "需要至少两个 Session Token 快照。";
+        }
+        const changedKeys =
+          diff.summary_added_keys.length + diff.summary_removed_keys.length + diff.summary_changed_keys.length;
+        return [
+          `${this.liveRunReplaySnapshotLabel(diff.base)} -> ${this.liveRunReplaySnapshotLabel(diff.target)}`,
+          `enabled +${diff.enabled_added.length}/-${diff.enabled_removed.length}`,
+          `${changedKeys} summary keys changed`,
+          diff.token_payload_changed ? "token payload changed" : "token payload unchanged"
+        ].join(" · ");
+      },
+
+
+      liveRunReplaySnapshotDiffStats() {
+        const diff = this.liveRunReplaySnapshotCompare();
+        if (!diff) {
+          return [];
+        }
+        const changedKeys =
+          diff.summary_added_keys.length + diff.summary_removed_keys.length + diff.summary_changed_keys.length;
+        return [
+          { label: "Enabled Added", value: diff.enabled_added.length },
+          { label: "Enabled Removed", value: diff.enabled_removed.length },
+          { label: "Summary Keys", value: changedKeys },
+          { label: "Token Payload", value: diff.token_payload_changed ? "changed" : "same" }
+        ];
       },
 
 
@@ -1216,6 +1491,48 @@
         return this.replayDetail?.run?.id === this.liveRun?.id
           ? (this.replayDetail.run_traces || this.replayDetail.trace_events || []).length
           : 0;
+      },
+
+
+      liveRunReplayEgNodePath() {
+        return this.replayDetail?.run?.id === this.liveRun?.id
+          ? (this.replayDetail.eg_node_path || [])
+          : [];
+      },
+
+
+      liveRunReplayEgNodePathCount() {
+        return this.liveRunReplayEgNodePath().length;
+      },
+
+
+      liveRunReplayEgNodePathItemKey(item) {
+        return [item?.seq_no ?? "", item?.trace_id || "", item?.node_id || ""].join(":");
+      },
+
+
+      liveRunReplayEgNodePathSummary(item) {
+        return [
+          item?.event_type || "event:N/A",
+          item?.node_kind || "kind:N/A",
+          item?.checkpoint_id ? `checkpoint ${item.checkpoint_id}` : ""
+        ].filter(Boolean).join(" · ");
+      },
+
+
+      liveRunReplayEgNodePathItemClass(item) {
+        return this.liveRunReplayFindEvidenceItem({ kind: "run_trace", id: item?.trace_id })
+          ? "border-slate-800 hover:bg-slate-900/60"
+          : "border-slate-800 opacity-60";
+      },
+
+
+      selectLiveRunReplayEgNodePathItem(item) {
+        return this.selectLiveRunReplayEvidenceRef({
+          kind: "run_trace",
+          id: item?.trace_id,
+          event_type: item?.event_type
+        });
       },
 
 
@@ -1354,6 +1671,138 @@
           finding?.severity || "severity:N/A",
           finding?.status || "status:N/A"
         ].join(" · ");
+      },
+
+
+      liveRunReplayEvidenceRefs(finding) {
+        return Array.isArray(finding?.evidence_refs) ? finding.evidence_refs : [];
+      },
+
+
+      liveRunReplayEvidenceRefLabel(ref) {
+        if (!ref || typeof ref !== "object") {
+          return "evidence:N/A";
+        }
+        const kind = ref.kind || ref.source_kind || "evidence";
+        const descriptor =
+          ref.event_type ||
+          ref.event_kind ||
+          ref.id ||
+          ref.seq_no ||
+          ref.agent_run_id ||
+          "N/A";
+        return `${kind}:${descriptor}`;
+      },
+
+
+      liveRunReplayEvidenceRefClass(ref) {
+        return this.liveRunReplayFindEvidenceItem(ref)
+          ? "border-sky-500/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/15"
+          : "cursor-not-allowed border-slate-800 bg-slate-900/40 text-slate-500";
+      },
+
+
+      liveRunReplayNormalizeEvidenceKind(kind) {
+        const value = String(kind || "").trim().toLowerCase();
+        if (value === "trace_event") {
+          return "run_trace";
+        }
+        if (value === "terminal_event") {
+          return "run_event";
+        }
+        return value;
+      },
+
+
+      liveRunReplayEvidenceItemKind(item) {
+        const sourceKind = this.liveRunReplayNormalizeEvidenceKind(item?.source_kind);
+        if (sourceKind) {
+          return sourceKind;
+        }
+        const eventType = String(item?.event_type || "").toLowerCase();
+        if (eventType.includes("terminal")) {
+          return "run_event";
+        }
+        return "run_trace";
+      },
+
+
+      liveRunReplayEvidenceCandidateIds(item) {
+        const payload = item?.payload && typeof item.payload === "object" ? item.payload : {};
+        return [
+          item?.source_id,
+          payload.id,
+          payload.event_id,
+          payload.run_event_id,
+          payload.run_trace_id,
+          payload.trace_event_id,
+          payload.trace_id
+        ]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean);
+      },
+
+
+      liveRunReplayFindEvidenceItem(ref) {
+        if (!ref || typeof ref !== "object") {
+          return null;
+        }
+        const refKind = this.liveRunReplayNormalizeEvidenceKind(ref.kind || ref.source_kind);
+        const refId = String(ref.id || ref.source_id || ref.run_trace_id || ref.run_event_id || ref.event_id || "").trim();
+        const refSeqNo = String(ref.seq_no ?? "").trim();
+        const refEventType = String(ref.event_type || "").trim();
+        const refEventKind = String(ref.event_kind || "").trim();
+        const isKindCompatible = (item) => {
+          const itemKind = this.liveRunReplayEvidenceItemKind(item);
+          return !refKind || !itemKind || itemKind === refKind;
+        };
+        const timeline = this.liveRunReplayTimeline();
+        if (refId) {
+          const byId = timeline.find(
+            (item) => isKindCompatible(item) && this.liveRunReplayEvidenceCandidateIds(item).includes(refId)
+          );
+          if (byId) {
+            return byId;
+          }
+        }
+        if (refSeqNo) {
+          const bySeq = timeline.find(
+            (item) => isKindCompatible(item) && String(item?.seq_no ?? "") === refSeqNo
+          );
+          if (bySeq) {
+            return bySeq;
+          }
+        }
+        if (refEventType) {
+          const byEventType = timeline.find(
+            (item) => isKindCompatible(item) && String(item?.event_type || "") === refEventType
+          );
+          if (byEventType) {
+            return byEventType;
+          }
+        }
+        if (refEventKind) {
+          return (
+            timeline.find((item) => {
+              const payload = item?.payload && typeof item.payload === "object" ? item.payload : {};
+              return isKindCompatible(item) && String(payload.event_kind || "") === refEventKind;
+            }) || null
+          );
+        }
+        return null;
+      },
+
+
+      selectLiveRunReplayEvidenceRef(ref) {
+        const item = this.liveRunReplayFindEvidenceItem(ref);
+        if (item) {
+          this.selectLiveRunReplayItem(item);
+          return item;
+        }
+        if (typeof this.showNotice === "function") {
+          this.showNotice("error", "未找到对应 Replay 证据。");
+        }
+        return null;
       },
 
 

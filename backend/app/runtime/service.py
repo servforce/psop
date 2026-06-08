@@ -48,6 +48,7 @@ from app.runtime.schemas import (
     CreateInvocationRequest,
     InvocationResponse,
     ReplayDetailResponse,
+    ReplayEgNodePathItem,
     ReplayTimelineItem,
     ResolveRunBindingsRequest,
     RunCapabilityBindingResponse,
@@ -982,6 +983,7 @@ class RuntimeService:
         return ReplayDetailResponse(
             run=self._build_run_response(session, run),
             timeline=timeline,
+            eg_node_path=self._build_eg_node_path(run_traces),
             snapshots=snapshots,
             run_traces=run_traces,
             trace_events=run_traces,
@@ -1006,6 +1008,64 @@ class RuntimeService:
                 self._build_run_evaluation_finding_response(item) for item in run_evaluation_findings
             ],
         )
+
+    def _build_eg_node_path(self, run_traces: list[RunTraceResponse]) -> list[ReplayEgNodePathItem]:
+        path: list[ReplayEgNodePathItem] = []
+        for trace in run_traces:
+            node_id = self._eg_node_id_from_trace(trace)
+            if not node_id:
+                continue
+            timeline_item = self._build_timeline_item(trace)
+            path.append(
+                ReplayEgNodePathItem(
+                    seq_no=trace.seq_no,
+                    trace_id=trace.id,
+                    node_id=node_id,
+                    node_kind=self._eg_node_kind_from_trace(trace),
+                    phase=trace.phase,
+                    event_type=trace.event_type,
+                    title=timeline_item.title,
+                    summary=timeline_item.summary,
+                    checkpoint_id=self._eg_checkpoint_id_from_trace(trace),
+                    agent_run_id=trace.agent_run_id,
+                    occurred_at=trace.occurred_at,
+                )
+            )
+        return path
+
+    @staticmethod
+    def _eg_node_id_from_trace(trace: RunTraceResponse) -> str:
+        payload = trace.payload if isinstance(trace.payload, dict) else {}
+        node_id = payload.get("node_id")
+        if isinstance(node_id, str) and node_id:
+            return node_id
+        wait = payload.get("wait") if isinstance(payload.get("wait"), dict) else {}
+        entered_by_node = wait.get("entered_by_node") if isinstance(wait, dict) else None
+        if isinstance(entered_by_node, str) and entered_by_node:
+            return entered_by_node
+        if (
+            trace.phase
+            and trace.phase not in {"binding", "fork", "failed", "cancelled"}
+            and trace.event_type.startswith(("runtime.", "gateway."))
+        ):
+            return trace.phase
+        return ""
+
+    @staticmethod
+    def _eg_node_kind_from_trace(trace: RunTraceResponse) -> str:
+        payload = trace.payload if isinstance(trace.payload, dict) else {}
+        node_kind = payload.get("node_kind")
+        return str(node_kind or "")
+
+    @staticmethod
+    def _eg_checkpoint_id_from_trace(trace: RunTraceResponse) -> str:
+        payload = trace.payload if isinstance(trace.payload, dict) else {}
+        checkpoint_id = payload.get("checkpoint_id")
+        if isinstance(checkpoint_id, str) and checkpoint_id:
+            return checkpoint_id
+        wait = payload.get("wait") if isinstance(payload.get("wait"), dict) else {}
+        wait_checkpoint_id = wait.get("checkpoint_id") if isinstance(wait, dict) else None
+        return str(wait_checkpoint_id or "")
 
     def _list_replay_agent_runs(
         self,
@@ -3168,6 +3228,8 @@ class RuntimeService:
             summary=str(summary),
             payload=event.payload,
             occurred_at=event.occurred_at,
+            source_kind="run_trace",
+            source_id=event.id,
         )
 
     @staticmethod
@@ -3197,6 +3259,8 @@ class RuntimeService:
             summary=summary,
             payload=event.model_dump(mode="json"),
             occurred_at=event.occurred_at,
+            source_kind="run_event",
+            source_id=event.id,
         )
 
 
