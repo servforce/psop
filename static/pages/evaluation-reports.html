@@ -180,6 +180,27 @@
             </div>
 
             <div class="p-4">
+              <div class="flex items-center justify-between gap-3">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Memory Candidates</p>
+                <span class="font-mono text-[11px] text-slate-500 tabular-nums" x-text="(evaluationMemoryEntries || []).length"></span>
+              </div>
+              <template x-if="(evaluationMemoryEntries || []).length === 0">
+                <p class="mt-2 text-sm text-slate-400">N/A</p>
+              </template>
+              <div class="mt-3 space-y-2">
+                <template x-for="memory in (evaluationMemoryEntries || [])" :key="memory.id">
+                  <button type="button" class="block w-full min-w-0 rounded-md border border-slate-800 bg-slate-950/30 px-3 py-2 text-left transition hover:bg-slate-900/70" @click="openEvaluationMemoryEntry(memory)">
+                    <span class="block truncate text-xs font-medium text-slate-100" x-text="memory.title"></span>
+                    <span class="mt-1 flex min-w-0 items-center gap-2 text-[11px]">
+                      <span class="status-badge border-slate-700 bg-slate-900/60 text-slate-300" x-text="memory.memory_type"></span>
+                      <span class="truncate font-mono text-slate-500" x-text="memory.id"></span>
+                    </span>
+                  </button>
+                </template>
+              </div>
+            </div>
+
+            <div class="p-4">
               <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Attribution</p>
               <template x-if="evaluationAttributionCategories(currentEvaluation).length === 0">
                 <p class="mt-2 text-sm text-slate-400">N/A</p>

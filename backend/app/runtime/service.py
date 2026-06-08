@@ -2438,7 +2438,23 @@ class RuntimeService:
                             route_key=route_key,
                         )
             except Exception as exc:
-                self._mark_runtime_agent_failed(session, agent_run_id=agent_run_id, node=node, error_message=str(exc))
+                error_payload = self._runtime_exception_trace_payload(exc)
+                failed_model_call = self._record_runtime_agent_model_call_failed(
+                    session,
+                    agent_run_id=agent_run_id,
+                    node=node,
+                    route_key=route_key,
+                    input_summary=input_summary,
+                    input_parts=input_parts,
+                    error_payload=error_payload,
+                )
+                self._mark_runtime_agent_failed(
+                    session,
+                    agent_run_id=agent_run_id,
+                    node=node,
+                    error_message=str(exc),
+                    model_call_id=failed_model_call.id,
+                )
                 self._append_run_trace(
                     session,
                     run=run,
@@ -2449,7 +2465,8 @@ class RuntimeService:
                         "node_id": str(node.get("id") or ""),
                         "node_kind": str(node.get("kind") or ""),
                         "route_key": route_key,
-                        **self._runtime_exception_trace_payload(exc),
+                        "model_call_id": failed_model_call.id,
+                        **error_payload,
                     },
                 )
                 raise
@@ -2596,6 +2613,7 @@ class RuntimeService:
         agent_run_id: str,
         node: dict[str, Any],
         error_message: str,
+        model_call_id: str | None = None,
     ) -> None:
         agent_run = self.agent_service.get_run_model(session, agent_run_id)
         agent_run.status = "failed"
@@ -2607,8 +2625,46 @@ class RuntimeService:
             AppendAgentEventRequest(
                 event_type="runtime.agent.failed",
                 phase=str(node.get("id") or ""),
-                payload={"node_id": str(node.get("id") or ""), "error_message": error_message},
+                payload={
+                    "node_id": str(node.get("id") or ""),
+                    "error_message": error_message,
+                    "model_call_id": model_call_id or "",
+                },
             ),
+            commit=False,
+        )
+
+    def _record_runtime_agent_model_call_failed(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        node: dict[str, Any],
+        route_key: str,
+        input_summary: dict[str, Any],
+        input_parts: list[dict[str, Any]],
+        error_payload: dict[str, Any],
+    ) -> AgentModelCallResponse:
+        error_details = error_payload.get("error_details") if isinstance(error_payload.get("error_details"), dict) else {}
+        return self.agent_service.record_model_call(
+            session,
+            agent_run_id=agent_run_id,
+            provider="llm_inference_gateway",
+            route_key=route_key,
+            model_name=str(error_details.get("model") or ""),
+            status="failed",
+            request_payload={
+                "node": self._runtime_agent_node_payload(node),
+                "input_summary": input_summary,
+                "input_parts": input_parts,
+            },
+            response_payload={
+                "schema": "RuntimeAgentObservation",
+                "status": "failed",
+                **error_payload,
+            },
+            usage_json={},
+            error_message=str(error_payload.get("error") or ""),
             commit=False,
         )
 

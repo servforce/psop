@@ -497,6 +497,7 @@
         if (!["evaluation-reports", "evaluation-report"].includes(this.route.name)) {
           this.disconnectEvaluationActivityWebSocket?.();
           this.currentEvaluation = null;
+          this.evaluationMemoryEntries = [];
         }
         if (!["governance-proposals", "governance-proposal"].includes(this.route.name)) {
           this.disconnectGovernanceProposalActivityWebSocket?.();

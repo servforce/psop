@@ -76,7 +76,8 @@ function loadEvaluationHarness() {
           }
           const query = params.toString();
           return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
-        }
+        },
+        buildPlatformMemoryEntryPath: (memoryId) => `/admin/platform/memory/${memoryId}`
       }
     },
     WebSocket: FakeWebSocket,
@@ -468,6 +469,7 @@ test("evaluation methods stream activity snapshots into current report", async (
     evaluationAgentRun: null,
     evaluationAgentEvents: [],
     evaluationModelCalls: [],
+    evaluationMemoryEntries: [],
     apiRequest: jest.fn(async () => evaluation),
     showNotice: jest.fn()
   };
@@ -482,7 +484,8 @@ test("evaluation methods stream activity snapshots into current report", async (
       findings: [{ ...finding, status: "accepted" }],
       agent_run: { id: "agent-run-1", agent_key: "pskill.evaluator", status: "succeeded" },
       agent_events: [{ id: "event-1", event_type: "evaluation.run.completed" }],
-      model_calls: [{ id: "model-call-1", provider: "deterministic" }]
+      model_calls: [{ id: "model-call-1", provider: "deterministic" }],
+      memory_entries: [{ id: "memory-1", memory_type: "artifact", title: "Replay artifact" }]
     }
   });
 
@@ -496,11 +499,19 @@ test("evaluation methods stream activity snapshots into current report", async (
   expect(context.evaluationAgentRun.agent_key).toBe("pskill.evaluator");
   expect(context.evaluationAgentEvents).toHaveLength(1);
   expect(context.evaluationModelCalls).toHaveLength(1);
+  expect(context.evaluationMemoryEntries).toHaveLength(1);
+  expect(methods.evaluationMemoryEntryPath.call(context, context.evaluationMemoryEntries[0])).toBe(
+    "/admin/platform/memory/memory-1"
+  );
 
   methods.disconnectEvaluationActivityWebSocket.call(context);
 
   expect(context.evaluationActivityWs).toBeNull();
   expect(context.evaluationActivityWsStatus).toBe("idle");
+
+  const htmlReport = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-reports.html"), "utf8");
+  expect(htmlReport).toContain("evaluationMemoryEntries");
+  expect(htmlReport).toContain("openEvaluationMemoryEntry(memory)");
 });
 
 test("evaluation methods create governance proposal from finding and navigate", async () => {

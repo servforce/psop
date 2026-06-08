@@ -1,5 +1,5 @@
 (function () {
-  const { resolveWsUrl, buildReplayPath, buildPlatformAgentRunPath } = window.PSOPConsoleHelpers || {};
+  const { resolveWsUrl, buildReplayPath, buildPlatformAgentRunPath, buildPlatformMemoryEntryPath } = window.PSOPConsoleHelpers || {};
 
   const FINDING_STATUS_OPTIONS = [
     { value: "open", label: "未处理" },
@@ -200,6 +200,9 @@
       if (Array.isArray(snapshot.model_calls)) {
         this.evaluationModelCalls = snapshot.model_calls;
       }
+      if (Array.isArray(snapshot.memory_entries)) {
+        this.evaluationMemoryEntries = snapshot.memory_entries;
+      }
       const findings = Array.isArray(snapshot.findings)
         ? snapshot.findings
         : Array.isArray(evaluation?.findings)
@@ -240,6 +243,22 @@
 
     openEvaluationAgentRun(evaluationOrAgentRun = this.currentEvaluation, focus = { tab: "events" }) {
       const path = this.evaluationAgentRunPath(evaluationOrAgentRun, focus);
+      if (!path) {
+        return;
+      }
+      this.navigate(path);
+    },
+
+    evaluationMemoryEntryPath(memory) {
+      const memoryId = String(memory?.id || memory || "").trim();
+      if (!memoryId || typeof buildPlatformMemoryEntryPath !== "function") {
+        return "";
+      }
+      return buildPlatformMemoryEntryPath(memoryId);
+    },
+
+    openEvaluationMemoryEntry(memory) {
+      const path = this.evaluationMemoryEntryPath(memory);
       if (!path) {
         return;
       }

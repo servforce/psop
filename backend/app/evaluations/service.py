@@ -16,6 +16,7 @@ from app.evaluations.schemas import (
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.types import RUN_EVALUATION_JOB_TYPE
+from app.memory.service import MemoryService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import generate_uuid, now_utc
 from app.runtime.models import Run, RunEvent, RunTrace
@@ -45,10 +46,12 @@ class EvaluationService:
         repository: EvaluationRepository | None = None,
         agent_service: AgentService | None = None,
         job_repository: JobRepository | None = None,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self.repository = repository or EvaluationRepository()
         self.agent_service = agent_service or AgentService()
         self.job_repository = job_repository or JobRepository()
+        self.memory_service = memory_service or MemoryService()
 
     def create_run_evaluation(self, session: Session, run_id: str) -> RunEvaluationResponse:
         run = self._get_terminal_run(session, run_id)
@@ -95,6 +98,17 @@ class EvaluationService:
             "summary": evaluation.summary,
             "attribution": evaluation.attribution_json,
             "findings": [self._finding_result_payload(item) for item in finding_models],
+        }
+        memory_entries = self._write_evaluation_memory_candidates(
+            session,
+            agent_run_id=agent_run_id,
+            evaluation=evaluation,
+            findings=finding_models,
+            facts=facts,
+        )
+        output_payload["memory_candidates"] = {
+            "written_count": len(memory_entries),
+            "memory_entry_ids": [item.id for item in memory_entries],
         }
         self._mark_evaluator_agent_succeeded(
             session,
@@ -624,6 +638,110 @@ class EvaluationService:
             ),
             commit=False,
         )
+
+    def _write_evaluation_memory_candidates(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        evaluation: RunEvaluation,
+        findings: list[RunEvaluationFinding],
+        facts: dict[str, Any],
+    ) -> list[Any]:
+        candidates = self._evaluation_memory_candidates(evaluation=evaluation, findings=findings, facts=facts)
+        if not candidates:
+            return []
+        entries = self.memory_service.write_candidates(
+            session,
+            agent_key="pskill.evaluator",
+            created_by_agent_run_id=agent_run_id,
+            candidates=candidates,
+            commit=False,
+        )
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="evaluation.memory_candidates.written",
+                phase="memory",
+                payload={
+                    "evaluation_id": evaluation.id,
+                    "run_id": evaluation.run_id,
+                    "memory_entry_ids": [item.id for item in entries],
+                    "memory_entry_count": len(entries),
+                    "used_as_runtime_state": False,
+                },
+            ),
+            commit=False,
+        )
+        return entries
+
+    def _evaluation_memory_candidates(
+        self,
+        *,
+        evaluation: RunEvaluation,
+        findings: list[RunEvaluationFinding],
+        facts: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        fact_counts = facts.get("counts") if isinstance(facts.get("counts"), dict) else {}
+        candidates: list[dict[str, Any]] = [
+            {
+                "namespace": "evaluation",
+                "memory_type": "artifact",
+                "title": f"Run replay evaluation artifact: {evaluation.run_id}",
+                "content": (
+                    f"Run {evaluation.run_id} evaluated as {evaluation.overall_outcome} "
+                    f"with quality_score={evaluation.quality_score}; "
+                    f"snapshots={fact_counts.get('snapshots', 0)}, "
+                    f"run_events={fact_counts.get('run_events', 0)}, "
+                    f"run_traces={fact_counts.get('run_traces', 0)}, "
+                    f"findings={len(findings)}."
+                ),
+                "confidence": max(0, min(100, evaluation.quality_score)),
+                "source_refs": [
+                    {"kind": "run_evaluation", "id": evaluation.id},
+                    {"kind": "run", "id": evaluation.run_id},
+                    {"kind": "eg_compile_artifact", "id": evaluation.artifact_id},
+                ],
+                "tags": ["evaluation", "replay", evaluation.overall_outcome],
+                "metadata": {
+                    "schema": "psop-run-evaluation-memory/v1",
+                    "run_id": evaluation.run_id,
+                    "evaluation_id": evaluation.id,
+                    "quality_score": evaluation.quality_score,
+                    "overall_outcome": evaluation.overall_outcome,
+                    "fact_counts": fact_counts,
+                },
+            }
+        ]
+        for finding in findings:
+            candidates.append(
+                {
+                    "namespace": "evaluation",
+                    "memory_type": "episodic",
+                    "title": f"{finding.category}: {finding.severity} finding for {evaluation.run_id}",
+                    "content": (
+                        f"{finding.description} Recommended action: {finding.recommended_action} "
+                        f"Confidence={finding.confidence}."
+                    ),
+                    "confidence": finding.confidence,
+                    "source_refs": [
+                        {"kind": "run_evaluation", "id": evaluation.id},
+                        {"kind": "run_evaluation_finding", "id": finding.id},
+                        *list(finding.evidence_refs or []),
+                    ],
+                    "tags": ["evaluation", "finding", finding.category, finding.severity],
+                    "metadata": {
+                        "schema": "psop-run-evaluation-memory/v1",
+                        "run_id": evaluation.run_id,
+                        "evaluation_id": evaluation.id,
+                        "finding_id": finding.id,
+                        "category": finding.category,
+                        "severity": finding.severity,
+                    },
+                }
+            )
+        return candidates
 
     @staticmethod
     def _trace_ref(trace: RunTrace) -> dict[str, Any]:

@@ -52,6 +52,9 @@ class AgentDashboardMetrics(BaseModel):
     waiting_tool_authorization_count: int = 0
     success_rate: float = 0.0
     average_duration_ms: int = 0
+    model_call_count: int = 0
+    failed_model_call_count: int = 0
+    model_failure_rate: float = 0.0
     tool_call_count: int = 0
     failed_tool_call_count: int = 0
     tool_failure_rate: float = 0.0

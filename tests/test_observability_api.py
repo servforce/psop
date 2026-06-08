@@ -118,10 +118,11 @@ def test_observability_dashboard_metrics_aggregate_system_health() -> None:
                         provider="deterministic",
                         route_key="json",
                         model_name="test-model",
-                        status="succeeded",
+                        status="failed",
                         request_payload={},
-                        response_payload={},
+                        response_payload={"error": "dashboard provider failed"},
                         usage_json={"total_tokens": 10},
+                        error_message="dashboard provider failed",
                         created_at=now - timedelta(minutes=1),
                     ),
                     AgentEvent(
@@ -171,8 +172,12 @@ def test_observability_dashboard_metrics_aggregate_system_health() -> None:
     assert payload["governance"]["canary_proposal_count"] == 1
     runner_metrics = next(item for item in payload["agents"] if item["agent_key"] == "pskill.runner")
     assert runner_metrics["recent_run_count"] == 1
+    assert runner_metrics["model_call_count"] == 1
+    assert runner_metrics["failed_model_call_count"] == 1
+    assert runner_metrics["model_failure_rate"] == 1.0
     assert runner_metrics["tool_failure_rate"] == 1.0
     assert payload["observability"]["run_trace_count"] == 1
+    assert payload["observability"]["model_call_count"] == 1
     assert payload["observability"]["pending_tool_authorization_count"] == 1
 
 
@@ -430,6 +435,7 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
     assert payload["agents"]["agent_run_key_counts"]["pskill.runner"] == 1
     assert payload["agents"]["agent_event_type_counts"]["tool.authorization_requested"] == 1
     assert payload["agents"]["model_call_provider_counts"]["deterministic"] == 1
+    assert payload["agents"]["model_call_status_counts"]["succeeded"] == 1
     assert payload["agents"]["tool_call_status_counts"]["failed"] == 1
     assert payload["agents"]["tool_call_side_effect_counts"]["high_write"] == 1
     assert payload["agents"]["skill_activation_count"] == 1

@@ -445,11 +445,16 @@ class ObservabilityService:
             )
             status_counts = self._status_counts_from_items(runs)
             run_ids = [run.id for run in runs]
+            model_calls = []
             tool_calls = []
             if run_ids:
+                model_calls = list(
+                    session.scalars(select(AgentModelCall).where(AgentModelCall.agent_run_id.in_(run_ids))).all()
+                )
                 tool_calls = list(
                     session.scalars(select(AgentToolCall).where(AgentToolCall.agent_run_id.in_(run_ids))).all()
                 )
+            failed_model_call_count = sum(1 for call in model_calls if call.status == "failed")
             failed_tool_call_count = sum(1 for call in tool_calls if call.status in TOOL_FAILURE_STATUSES)
             result.append(
                 AgentDashboardMetrics(
@@ -460,6 +465,9 @@ class ObservabilityService:
                     waiting_tool_authorization_count=status_counts.get("waiting_tool_authorization", 0),
                     success_rate=self._rate(status_counts.get("succeeded", 0), len(runs)),
                     average_duration_ms=self._average_duration_ms(runs),
+                    model_call_count=len(model_calls),
+                    failed_model_call_count=failed_model_call_count,
+                    model_failure_rate=self._rate(failed_model_call_count, len(model_calls)),
                     tool_call_count=len(tool_calls),
                     failed_tool_call_count=failed_tool_call_count,
                     tool_failure_rate=self._rate(failed_tool_call_count, len(tool_calls)),

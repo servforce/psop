@@ -1124,6 +1124,24 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
     assert failed_gateway_trace.payload["node_kind"] == "llm"
     assert failed_gateway_trace.payload["route_key"] == "text"
     assert failed_gateway_trace.payload["error"] == "LLM provider unavailable"
+    failed_model_calls = [
+        item for item in replay.model_calls if item.agent_run_id == failed_gateway_trace.agent_run_id
+    ]
+    assert len(failed_model_calls) == 1
+    failed_model_call = failed_model_calls[0]
+    assert failed_gateway_trace.payload["model_call_id"] == failed_model_call.id
+    assert failed_model_call.provider == "llm_inference_gateway"
+    assert failed_model_call.route_key == "text"
+    assert failed_model_call.status == "failed"
+    assert failed_model_call.error_message == "LLM provider unavailable"
+    assert failed_model_call.request_payload["node"]["id"] == "instruct_collect_context"
+    assert failed_model_call.response_payload["error"] == "LLM provider unavailable"
+    assert any(
+        item.event_type == "runtime.agent.failed"
+        and item.agent_run_id == failed_gateway_trace.agent_run_id
+        and item.payload["model_call_id"] == failed_model_call.id
+        for item in replay.agent_events
+    )
     runner_runs = [item for item in replay.agent_runs if item.agent_key == "pskill.runner"]
     assert len(runner_runs) == 1
     assert runner_runs[0].id == failed_gateway_trace.agent_run_id
@@ -1172,10 +1190,15 @@ def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(r
             ),
         )
         run_traces = failing_runtime.list_run_traces(session, invocation.run_id or "")
+        replay = failing_runtime.build_replay(session, invocation.run_id or "")
 
     failed_gateway_trace = next(item for item in run_traces if item.event_type == "gateway.inference.failed")
     assert failed_gateway_trace.agent_run_id
     assert failed_gateway_trace.payload["error_details"]["request_id"] == "request-test"
+    failed_model_call = next(item for item in replay.model_calls if item.id == failed_gateway_trace.payload["model_call_id"])
+    assert failed_model_call.status == "failed"
+    assert failed_model_call.model_name == "qwen3.7-plus"
+    assert failed_model_call.response_payload["error_details"]["request_id"] == "request-test"
     payload = run_traces[-1].payload
     details = payload["error_details"]
     assert run_traces[-1].event_type == "runtime.failed"

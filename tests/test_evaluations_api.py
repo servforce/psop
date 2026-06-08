@@ -25,6 +25,7 @@ def test_evaluation_api_creates_report_for_completed_run_and_records_evaluator_a
         agent_run_response = client.get(f"/api/v1/agent-runs/{evaluation['agent_run_id']}")
         agent_events_response = client.get(f"/api/v1/agent-runs/{evaluation['agent_run_id']}/events")
         agent_model_calls_response = client.get(f"/api/v1/agent-runs/{evaluation['agent_run_id']}/model-calls")
+        agent_memory_response = client.get(f"/api/v1/agent-runs/{evaluation['agent_run_id']}/memory-entries")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
 
     assert evaluation_response.status_code == 201
@@ -41,6 +42,7 @@ def test_evaluation_api_creates_report_for_completed_run_and_records_evaluator_a
     assert agent_run_response.json()["owner_type"] == "run_evaluation"
     assert agent_run_response.json()["owner_id"] == evaluation["id"]
     assert agent_run_response.json()["output_payload"]["schema"] == "RunEvaluationResult"
+    assert agent_run_response.json()["output_payload"]["memory_candidates"]["written_count"] == 1
     evaluator_facts = agent_run_response.json()["input_payload"]["facts"]
     assert "run_trace_event_types" in evaluator_facts
     assert "trace_event_types" not in evaluator_facts
@@ -51,8 +53,22 @@ def test_evaluation_api_creates_report_for_completed_run_and_records_evaluator_a
         "agent.run.created",
         "evaluation.run.started",
         "evaluation.agent.model_call.completed",
+        "evaluation.memory_candidates.written",
         "evaluation.run.completed",
     } <= {item["event_type"] for item in agent_events_response.json()}
+    memory_event = next(
+        item for item in agent_events_response.json() if item["event_type"] == "evaluation.memory_candidates.written"
+    )
+    assert memory_event["payload"]["used_as_runtime_state"] is False
+    assert memory_event["payload"]["memory_entry_count"] == 1
+    memory_entries = agent_memory_response.json()
+    assert agent_memory_response.status_code == 200
+    assert [item["memory_type"] for item in memory_entries] == ["artifact"]
+    assert memory_entries[0]["namespace"] == "evaluation"
+    assert memory_entries[0]["agent_key"] == "pskill.evaluator"
+    assert memory_entries[0]["status"] == "pending_review"
+    assert {"kind": "run_evaluation", "id": evaluation["id"]} in memory_entries[0]["source_refs"]
+    assert {"kind": "run", "id": run_id} in memory_entries[0]["source_refs"]
     replay_payload = replay_response.json()
     assert evaluation["id"] in {item["id"] for item in replay_payload["run_evaluations"]}
     assert evaluation["agent_run_id"] in {item["id"] for item in replay_payload["agent_runs"]}
@@ -127,6 +143,7 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
             f"/api/v1/evaluations/findings/{finding['id']}",
             json={"status": "accepted"},
         )
+        agent_memory_response = client.get(f"/api/v1/agent-runs/{evaluation['agent_run_id']}/memory-entries")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
 
     assert invocation_response.status_code == 201
@@ -150,6 +167,17 @@ def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -
     assert update_response.json()["status"] == "accepted"
     assert update_response.json()["run_id"] == run_id
     assert update_response.json()["quality_score"] == evaluation["quality_score"]
+    memory_entries = agent_memory_response.json()
+    assert agent_memory_response.status_code == 200
+    assert {item["memory_type"] for item in memory_entries} == {"episodic", "artifact"}
+    episodic_memory = next(item for item in memory_entries if item["memory_type"] == "episodic")
+    assert episodic_memory["namespace"] == "evaluation"
+    assert episodic_memory["agent_key"] == "pskill.evaluator"
+    assert episodic_memory["created_by_agent_run_id"] == evaluation["agent_run_id"]
+    assert {"kind": "run_evaluation_finding", "id": finding["id"]} in episodic_memory["source_refs"]
+    assert any(item.get("kind") == "run_trace" and item.get("id") == finding["evidence_refs"][0]["id"] for item in episodic_memory["source_refs"])
+    assert episodic_memory["metadata"]["schema"] == "psop-run-evaluation-memory/v1"
+    assert episodic_memory["metadata"]["finding_id"] == finding["id"]
     replay_payload = replay_response.json()
     evidence_ref = finding["evidence_refs"][0]
     matching_timeline_items = [

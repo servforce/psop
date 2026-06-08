@@ -849,6 +849,7 @@
       evaluationAgentRun: null,
       evaluationAgentEvents: [],
       evaluationModelCalls: [],
+      evaluationMemoryEntries: [],
       evaluationReports: [],
       evaluationForm: {
         run_id: "",

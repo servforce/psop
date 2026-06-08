@@ -109,6 +109,9 @@ test("dashboard methods format metrics and preserve the six-agent row order", ()
           succeeded_count: 1,
           success_rate: 0.5,
           average_duration_ms: 3000,
+          model_call_count: 3,
+          failed_model_call_count: 1,
+          model_failure_rate: 0.3333,
           tool_call_count: 2,
           failed_tool_call_count: 1,
           tool_failure_rate: 0.5
@@ -133,6 +136,8 @@ test("dashboard methods format metrics and preserve the six-agent row order", ()
     "psop.governance"
   ]);
   expect(rows[3].recent_run_count).toBe(2);
+  expect(rows[3].model_failure_rate).toBe(0.3333);
+  expect(rows[0].model_call_count).toBe(0);
   expect(methods.dashboardAgentLabel("psop.governance")).toBe("Governance");
   expect(methods.dashboardPercent(0.6667)).toBe("67%");
   expect(methods.dashboardNumber(12345)).toBe("12,345");
@@ -147,4 +152,6 @@ test("dashboard page exposes agent and pending authorization drilldown links", (
   expect(html).toContain("dashboardAgentRunsForAgentPath(agent.agent_key)");
   expect(html).toContain("dashboardWaitingAuthorizationsForAgentPath(agent.agent_key)");
   expect(html).toContain("dashboardToolAuthorizationsPath({ status: 'pending' })");
+  expect(html).toContain("agent.model_failure_rate");
+  expect(html).toContain("agent.failed_model_call_count");
 });

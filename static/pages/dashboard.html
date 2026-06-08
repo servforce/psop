@@ -206,7 +206,7 @@
             <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
               <div>
                 <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Agent Overview</p>
-                <p class="mt-1 text-sm text-slate-300">六智能体最近运行次数、成功率、平均耗时与工具失败率。</p>
+                <p class="mt-1 text-sm text-slate-300">六智能体最近运行次数、成功率、平均耗时与模型/工具失败率。</p>
               </div>
               <button type="button" class="button-secondary h-9 px-3" @click="navigate(dashboardAgentRunsPath())">
                 <span class="material-symbols-outlined text-[18px]">manage_history</span>
@@ -223,6 +223,7 @@
                     <th class="px-4 py-3 font-medium">Success</th>
                     <th class="px-4 py-3 font-medium">Waiting Auth</th>
                     <th class="px-4 py-3 font-medium">Avg Duration</th>
+                    <th class="px-4 py-3 font-medium">Model Failure</th>
                     <th class="px-4 py-3 font-medium">Tool Failure</th>
                   </tr>
                 </thead>
@@ -243,6 +244,14 @@
                         <button type="button" class="font-mono text-amber-200 tabular-nums transition hover:text-orange-200" @click="navigate(dashboardWaitingAuthorizationsForAgentPath(agent.agent_key))" x-text="dashboardNumber(agent.waiting_tool_authorization_count)"></button>
                       </td>
                       <td class="px-4 py-3 font-mono text-slate-300 tabular-nums" x-text="dashboardDuration(agent.average_duration_ms)"></td>
+                      <td class="px-4 py-3">
+                        <p class="font-mono font-semibold tabular-nums" :class="dashboardFailureTone(agent.model_failure_rate)" x-text="dashboardPercent(agent.model_failure_rate)"></p>
+                        <p class="mt-1 font-mono text-[11px] text-slate-500">
+                          <span x-text="dashboardNumber(agent.failed_model_call_count)"></span>
+                          <span>/</span>
+                          <span x-text="dashboardNumber(agent.model_call_count)"></span>
+                        </p>
+                      </td>
                       <td class="px-4 py-3">
                         <p class="font-mono font-semibold tabular-nums" :class="dashboardFailureTone(agent.tool_failure_rate)" x-text="dashboardPercent(agent.tool_failure_rate)"></p>
                         <p class="mt-1 font-mono text-[11px] text-slate-500">
