@@ -238,6 +238,57 @@
       }
     },
 
+    async createSkillPackageVersion() {
+      if (!this.currentSkillPackage?.name) {
+        return;
+      }
+      const parent = this.currentSkillPackage.active_version || (this.currentSkillPackage.versions || [])[0] || null;
+      const defaultLabel = this.nextSkillPackageVersionLabel();
+      const versionLabel = String(this.promptSkillPackageVersionLabel(defaultLabel) || "").trim();
+      if (!versionLabel) {
+        return;
+      }
+      const manifestText = this.promptSkillPackageVersionManifest(parent?.manifest_json || {
+        name: this.currentSkillPackage.name,
+        description: this.currentSkillPackage.description || ""
+      });
+      if (manifestText === null || manifestText === undefined) {
+        return;
+      }
+      let manifest;
+      try {
+        manifest = JSON.parse(String(manifestText));
+      } catch (error) {
+        this.showNotice("error", "Skill package manifest 必须是有效 JSON。");
+        return;
+      }
+      this.busy.skillPackageAction = true;
+      try {
+        const payload = {
+          version_label: versionLabel,
+          parent_version_id: parent?.id || null,
+          manifest_json: manifest,
+          body_object_key: this.skillPackageUploadBodyObjectKey(versionLabel),
+          resource_index: this.skillPackageVersionResourceIndex(parent),
+          allowed_tools: this.skillPackageAllowedToolsFromManifest(manifest, parent?.allowed_tools || [])
+        };
+        this.currentSkillPackage = await this.apiRequest(
+          `/skills/${encodeURIComponent(this.currentSkillPackage.name)}/versions`,
+          {
+            method: "POST",
+            body: JSON.stringify(payload)
+          }
+        );
+        this.replaceSkillPackage(this.currentSkillPackage);
+        await this.loadSkillPackages();
+        this.showNotice("success", "Skill package version 已创建。");
+      } catch (error) {
+        this.showNotice("error", error.message || "Skill package version 创建失败。");
+      } finally {
+        this.busy.skillPackageAction = false;
+      }
+    },
+
     async validateSkillPackageVersion(version) {
       if (!this.currentSkillPackage?.name || !version?.id) {
         return;
@@ -821,6 +872,68 @@
     skillPackageResourceCountByKind(skillPackage, kind) {
       const resources = skillPackage?.resources || skillPackage?.active_version?.resource_index || [];
       return (resources || []).filter((item) => item.resource_kind === kind || item.kind === kind).length;
+    },
+
+    nextSkillPackageVersionLabel() {
+      const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
+      return `candidate-${stamp}`;
+    },
+
+    promptSkillPackageVersionLabel(defaultLabel) {
+      if (typeof window === "undefined" || typeof window.prompt !== "function") {
+        return defaultLabel;
+      }
+      return window.prompt("Version label", defaultLabel);
+    },
+
+    promptSkillPackageVersionManifest(manifest) {
+      const text = JSON.stringify(manifest || {}, null, 2);
+      if (typeof window === "undefined" || typeof window.prompt !== "function") {
+        return text;
+      }
+      return window.prompt("Manifest JSON", text);
+    },
+
+    skillPackageUploadBodyObjectKey(versionLabel) {
+      const packageName = String(this.currentSkillPackage?.name || "skill-package").trim();
+      const slug = String(versionLabel || "candidate")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "candidate";
+      return `uploads/${packageName}/${slug}/SKILL.md`;
+    },
+
+    skillPackageVersionResourceIndex(parentVersion) {
+      const source = Array.isArray(parentVersion?.resource_index) && parentVersion.resource_index.length
+        ? parentVersion.resource_index
+        : (this.currentSkillPackage?.resources || []);
+      const normalized = source.map((item) => ({
+        path: item.path || item.resource_path,
+        kind: item.kind || item.resource_kind,
+        content_hash: item.content_hash || "",
+        size_bytes: Number(item.size_bytes || 0)
+      })).filter((item) => item.path);
+      if (normalized.some((item) => item.path === "SKILL.md")) {
+        return normalized;
+      }
+      return [
+        {
+          path: "SKILL.md",
+          kind: "skill",
+          content_hash: "",
+          size_bytes: 0
+        },
+        ...normalized
+      ];
+    },
+
+    skillPackageAllowedToolsFromManifest(manifest, fallback) {
+      const tools = manifest?.["allowed-tools"] || manifest?.allowed_tools;
+      if (Array.isArray(tools)) {
+        return tools.map((tool) => String(tool).trim()).filter(Boolean);
+      }
+      return (fallback || []).map((tool) => String(tool).trim()).filter(Boolean);
     },
 
     skillPackageValidationTone(value) {

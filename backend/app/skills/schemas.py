@@ -25,6 +25,16 @@ class SkillActivationResponse(BaseModel):
     created_at: datetime
 
 
+class CreateSkillVersionRequest(BaseModel):
+    version_label: str | None = Field(default=None, max_length=80)
+    parent_version_id: str | None = None
+    manifest_json: dict[str, Any] | None = None
+    body_object_key: str | None = None
+    resource_index: list[dict[str, Any]] | None = None
+    allowed_tools: list[str] | None = None
+    content_hash: str | None = Field(default=None, max_length=128)
+
+
 class SkillVersionResponse(BaseModel):
     id: str
     package_id: str

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,11 +9,12 @@ from typing import Any
 import yaml
 from sqlalchemy.orm import Session
 
-from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
+from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
 from app.skills.models import SkillPackage, SkillResource, SkillVersion
 from app.skills.repository import SkillPackageRepository
 from app.skills.schemas import (
+    CreateSkillVersionRequest,
     SkillPackageDetailResponse,
     SkillPackageSummaryResponse,
     SkillPackageSyncResponse,
@@ -158,6 +160,80 @@ class SkillPackageService:
             raise SkillNotFoundError("未找到 Skill package。", details={"package_name": package_name})
         return [self._build_version_response(session, item) for item in self.repository.list_versions(session, package.id)]
 
+    def create_version(
+        self,
+        session: Session,
+        package_name: str,
+        payload: CreateSkillVersionRequest,
+    ) -> SkillPackageDetailResponse:
+        package = self.repository.get_package_by_name(session, package_name)
+        if not package:
+            raise SkillNotFoundError("未找到 Skill package。", details={"package_name": package_name})
+
+        parent = self._resolve_parent_version(session, package=package, parent_version_id=payload.parent_version_id)
+        if payload.manifest_json is None and not parent:
+            raise SkillValidationError(
+                "创建 SkillVersion 必须提供 manifest_json。",
+                details={"package_name": package_name},
+            )
+
+        manifest = _json_clone(payload.manifest_json if payload.manifest_json is not None else parent.manifest_json)
+        if not isinstance(manifest, dict):
+            raise SkillValidationError("manifest_json 必须是对象。", details={"package_name": package_name})
+        resource_index = self._normalize_resource_index(
+            payload.resource_index if payload.resource_index is not None else (parent.resource_index if parent else [])
+        )
+        allowed_tools = self._resolve_allowed_tools(
+            manifest=manifest,
+            payload_allowed_tools=payload.allowed_tools,
+            parent=parent,
+        )
+        version_label = (payload.version_label or "").strip() or self._next_candidate_version_label(session, package)
+        body_object_key = (payload.body_object_key or "").strip()
+        if not body_object_key:
+            body_object_key = parent.body_object_key if parent else f"skills/{package.name}/versions/{version_label}/SKILL.md"
+        content_hash = (payload.content_hash or "").strip() or self._hash_version_payload(
+            manifest_json=manifest,
+            body_object_key=body_object_key,
+            resource_index=resource_index,
+            allowed_tools=allowed_tools,
+        )
+        if self.repository.get_version_by_hash(session, package_id=package.id, content_hash=content_hash):
+            raise SkillConflictError(
+                "相同 content_hash 的 SkillVersion 已存在。",
+                details={"package_name": package.name, "content_hash": content_hash},
+            )
+
+        version = SkillVersion(
+            package_id=package.id,
+            version_label=version_label,
+            status="candidate",
+            content_hash=content_hash,
+            manifest_json=manifest,
+            body_object_key=body_object_key,
+            resource_index=resource_index,
+            allowed_tools=allowed_tools,
+            validation_status="pending",
+            validation_diagnostics=[],
+        )
+        version.validation_diagnostics = self._validate_version_diagnostics(package, version)
+        version.validation_status = self._validation_status_from_diagnostics(version.validation_diagnostics)
+        session.add(version)
+        session.flush()
+        for resource in resource_index:
+            session.add(
+                SkillResource(
+                    version_id=version.id,
+                    resource_path=str(resource["path"]),
+                    resource_kind=str(resource["kind"]),
+                    content_hash=str(resource["content_hash"]),
+                    size_bytes=int(resource["size_bytes"]),
+                )
+            )
+        package.updated_at = now_utc()
+        session.commit()
+        return self.get_package(session, package_name)
+
     def validate_version(self, session: Session, package_name: str, version_id: str) -> SkillVersionResponse:
         package, version = self._get_package_version(session, package_name, version_id)
         diagnostics = self._validate_version_diagnostics(package, version)
@@ -246,6 +322,99 @@ class SkillPackageService:
                 details={"package_name": package_name, "version_id": version_id},
             )
         return package, version
+
+    def _resolve_parent_version(
+        self,
+        session: Session,
+        *,
+        package: SkillPackage,
+        parent_version_id: str | None,
+    ) -> SkillVersion | None:
+        if parent_version_id:
+            version = self.repository.get_version(session, parent_version_id)
+            if not version or version.package_id != package.id:
+                raise SkillNotFoundError(
+                    "未找到父级 Skill package version。",
+                    details={"package_name": package.name, "parent_version_id": parent_version_id},
+                )
+            return version
+        active_version = self.repository.get_version(session, package.active_version_id)
+        if active_version:
+            return active_version
+        versions = self.repository.list_versions(session, package.id)
+        return versions[0] if versions else None
+
+    def _next_candidate_version_label(self, session: Session, package: SkillPackage) -> str:
+        return f"candidate-{len(self.repository.list_versions(session, package.id)) + 1}"
+
+    def _resolve_allowed_tools(
+        self,
+        *,
+        manifest: dict[str, Any],
+        payload_allowed_tools: list[str] | None,
+        parent: SkillVersion | None,
+    ) -> list[str]:
+        if payload_allowed_tools is not None:
+            return _normalize_string_list(payload_allowed_tools)
+        manifest_tools = _allowed_tools(manifest)
+        if manifest_tools or "allowed-tools" in manifest or "allowed_tools" in manifest:
+            return manifest_tools
+        if parent:
+            return _normalize_string_list(parent.allowed_tools)
+        return []
+
+    def _normalize_resource_index(self, resource_index: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not isinstance(resource_index, list):
+            raise SkillValidationError("resource_index 必须是数组。")
+        normalized: list[dict[str, Any]] = []
+        for index, item in enumerate(resource_index):
+            if not isinstance(item, dict):
+                raise SkillValidationError("resource_index 条目必须是对象。", details={"index": index})
+            path = str(item.get("path") or item.get("resource_path") or "").strip()
+            if not path:
+                raise SkillValidationError("resource_index 条目缺少 path。", details={"index": index})
+            self._validate_resource_path(path, index=index)
+            kind = str(item.get("kind") or item.get("resource_kind") or _resource_kind(path)).strip() or "file"
+            content_hash = str(item.get("content_hash") or "").strip()
+            if not content_hash:
+                content_hash = _hash_bytes(json.dumps(item, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+            try:
+                size_bytes = int(item.get("size_bytes") or 0)
+            except (TypeError, ValueError) as exc:
+                raise SkillValidationError("resource_index.size_bytes 必须是整数。", details={"index": index}) from exc
+            if size_bytes < 0:
+                raise SkillValidationError("resource_index.size_bytes 不能小于 0。", details={"index": index})
+            normalized.append(
+                {
+                    "path": path,
+                    "kind": kind,
+                    "content_hash": content_hash,
+                    "size_bytes": size_bytes,
+                }
+            )
+        return normalized
+
+    @staticmethod
+    def _validate_resource_path(path: str, *, index: int) -> None:
+        parts = Path(path).parts
+        if path.startswith("/") or "\\" in path or not parts or any(part in {"", ".", ".."} for part in parts):
+            raise SkillValidationError("resource_index.path 必须是安全相对路径。", details={"index": index, "path": path})
+
+    @staticmethod
+    def _hash_version_payload(
+        *,
+        manifest_json: dict[str, Any],
+        body_object_key: str,
+        resource_index: list[dict[str, Any]],
+        allowed_tools: list[str],
+    ) -> str:
+        payload = {
+            "manifest_json": manifest_json,
+            "body_object_key": body_object_key,
+            "resource_index": resource_index,
+            "allowed_tools": allowed_tools,
+        }
+        return _hash_bytes(json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
     @staticmethod
     def _validate_version_diagnostics(package: SkillPackage, version: SkillVersion) -> list[dict[str, Any]]:
@@ -417,11 +586,19 @@ def _allowed_tools(manifest: dict[str, Any]) -> list[str]:
     value = manifest.get("allowed-tools", manifest.get("allowed_tools", []))
     if not isinstance(value, list):
         return []
-    return [str(tool) for tool in value]
+    return _normalize_string_list(value)
 
 
 def _hash_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def _normalize_string_list(value: list[Any]) -> list[str]:
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _json_clone(value: Any) -> Any:
+    return json.loads(json.dumps(value))
 
 
 def _resource_kind(path: str) -> str:

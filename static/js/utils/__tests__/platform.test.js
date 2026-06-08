@@ -149,7 +149,7 @@ test("platform methods load agent runs with detail observability streams", async
   expect(methods.agentRunModelTokenUsage(context.currentAgentRunModelCalls[0])).toBe(42);
 });
 
-test("platform methods sync, load, validate, and activate skill packages", async () => {
+test("platform methods sync, load, create, validate, and activate skill packages", async () => {
   const methods = loadPlatformMethods();
   const summary = {
     id: "pkg-1",
@@ -185,6 +185,19 @@ test("platform methods sync, load, validate, and activate skill packages", async
     ...detail.versions[0],
     validation_diagnostics: [{ severity: "warning", code: "missing_references", message: "missing refs" }]
   };
+  const candidate = {
+    ...detail.versions[0],
+    id: "ver-2",
+    version_label: "builder-candidate",
+    status: "candidate",
+    validation_status: "valid",
+    validation_diagnostics: []
+  };
+  const createdDetail = {
+    ...detail,
+    version_count: 2,
+    versions: [candidate, ...detail.versions]
+  };
   const context = {
     ...methods,
     busy: {
@@ -217,29 +230,49 @@ test("platform methods sync, load, validate, and activate skill packages", async
       if (url === "/skills/pskill-builder") {
         return detail;
       }
+      if (url === "/skills/pskill-builder/versions") {
+        return createdDetail;
+      }
       if (url === "/skills/pskill-builder/versions/ver-1/validate") {
         return validated;
       }
       if (url === "/skills/pskill-builder/versions/ver-1/activate") {
-        return { ...detail, active_version_id: "ver-1" };
+        return { ...createdDetail, active_version_id: "ver-1" };
       }
       return null;
     }),
+    promptSkillPackageVersionLabel: jest.fn(() => "builder-candidate"),
+    promptSkillPackageVersionManifest: jest.fn(() => JSON.stringify({
+      name: "pskill-builder",
+      description: "Candidate builder package",
+      "allowed-tools": ["psop.pskills.read", "psop.materials.read"]
+    })),
     showNotice: jest.fn()
   };
 
   await methods.syncSkillPackages.call(context);
-  await methods.validateSkillPackageVersion.call(context, context.currentSkillPackage.versions[0]);
-  await methods.activateSkillPackageVersion.call(context, context.currentSkillPackage.versions[0]);
+  await methods.createSkillPackageVersion.call(context);
+  await methods.validateSkillPackageVersion.call(context, detail.versions[0]);
+  await methods.activateSkillPackageVersion.call(context, detail.versions[0]);
 
   expect(context.apiRequest).toHaveBeenCalledWith("/skills/sync", { method: "POST" });
   expect(context.apiRequest).toHaveBeenCalledWith("/skills?scope=psop");
   expect(context.apiRequest).toHaveBeenCalledWith("/skills/pskill-builder");
+  expect(context.apiRequest).toHaveBeenCalledWith(
+    "/skills/pskill-builder/versions",
+    expect.objectContaining({ method: "POST" })
+  );
   expect(context.apiRequest).toHaveBeenCalledWith("/skills/pskill-builder/versions/ver-1/validate", { method: "POST" });
   expect(context.apiRequest).toHaveBeenCalledWith("/skills/pskill-builder/versions/ver-1/activate", { method: "POST" });
+  const createCall = context.apiRequest.mock.calls.find(([url]) => url === "/skills/pskill-builder/versions");
+  const createBody = JSON.parse(createCall[1].body);
+  expect(createBody.version_label).toBe("builder-candidate");
+  expect(createBody.manifest_json["allowed-tools"]).toEqual(["psop.pskills.read", "psop.materials.read"]);
+  expect(createBody.resource_index[0].path).toBe("SKILL.md");
+  expect(createBody.allowed_tools).toEqual(["psop.pskills.read", "psop.materials.read"]);
   expect(context.skillPackageSyncResult.package_count).toBe(1);
   expect(context.currentSkillPackage.name).toBe("pskill-builder");
-  expect(context.currentSkillPackage.versions[0].validation_diagnostics).toHaveLength(1);
+  expect(context.currentSkillPackage.versions.find((version) => version.id === "ver-1").validation_diagnostics).toHaveLength(1);
   expect(methods.skillPackageUsedByAgents.call(context, context.currentSkillPackage).map((agent) => agent.key)).toEqual(["pskill.builder"]);
 });
 

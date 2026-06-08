@@ -116,6 +116,10 @@
                   <span class="material-symbols-outlined text-[18px]" x-text="copyIcon(`skill-package-${currentSkillPackage.name}`)"></span>
                   <span>复制</span>
                 </button>
+                <button type="button" class="button-primary h-9 px-3" :disabled="busy.skillPackageAction" @click="createSkillPackageVersion()">
+                  <span class="material-symbols-outlined text-[18px]">upload_file</span>
+                  <span>新版本</span>
+                </button>
               </div>
             </header>
 

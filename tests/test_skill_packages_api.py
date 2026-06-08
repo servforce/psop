@@ -54,3 +54,51 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
     assert activate_response.json()["active_version_id"] == version_id
     assert pskills_list_response.status_code == 200
     assert pskills_list_response.json() == []
+
+
+def test_skill_package_version_create_validate_and_activate_lifecycle() -> None:
+    client, _, _ = create_test_client()
+
+    payload = {
+        "version_label": "builder-candidate",
+        "manifest_json": {
+            "name": "pskill-builder",
+            "description": "Candidate builder package",
+            "allowed-tools": ["psop.pskills.read", "psop.materials.read"],
+        },
+        "body_object_key": "uploads/pskill-builder/builder-candidate/SKILL.md",
+        "resource_index": [
+            {
+                "path": "SKILL.md",
+                "kind": "skill",
+                "content_hash": "skill-md-hash",
+                "size_bytes": 128,
+            },
+            {
+                "path": "references/README.md",
+                "kind": "references",
+                "content_hash": "reference-hash",
+                "size_bytes": 64,
+            },
+        ],
+    }
+
+    with client:
+        create_response = client.post("/api/v1/skills/pskill-builder/versions", json=payload)
+        detail = create_response.json()
+        created = next(item for item in detail["versions"] if item["version_label"] == "builder-candidate")
+        validate_response = client.post(f"/api/v1/skills/pskill-builder/versions/{created['id']}/validate")
+        activate_response = client.post(f"/api/v1/skills/pskill-builder/versions/{created['id']}/activate")
+        duplicate_response = client.post("/api/v1/skills/pskill-builder/versions", json=payload)
+
+    assert create_response.status_code == 201
+    assert created["status"] == "candidate"
+    assert created["validation_status"] == "valid"
+    assert created["allowed_tools"] == ["psop.pskills.read", "psop.materials.read"]
+    assert created["resource_count"] == 2
+    assert validate_response.status_code == 200
+    assert validate_response.json()["validation_status"] == "valid"
+    assert activate_response.status_code == 200
+    assert activate_response.json()["active_version_id"] == created["id"]
+    assert activate_response.json()["active_version"]["version_label"] == "builder-candidate"
+    assert duplicate_response.status_code == 409

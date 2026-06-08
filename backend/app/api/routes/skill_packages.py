@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_skill_package_service
 from app.skills.schemas import (
+    CreateSkillVersionRequest,
     SkillPackageDetailResponse,
     SkillPackageSummaryResponse,
     SkillPackageSyncResponse,
@@ -53,6 +54,17 @@ def list_skill_package_versions(
 ) -> list[SkillVersionResponse]:
     service.sync_packages(session)
     return service.list_versions(session, package_name)
+
+
+@router.post("/{package_name}/versions", response_model=SkillPackageDetailResponse, status_code=status.HTTP_201_CREATED)
+def create_skill_package_version(
+    package_name: str,
+    payload: CreateSkillVersionRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillPackageService = Depends(get_skill_package_service),
+) -> SkillPackageDetailResponse:
+    service.sync_packages(session)
+    return service.create_version(session, package_name, payload)
 
 
 @router.post("/{package_name}/versions/{version_id}/validate", response_model=SkillVersionResponse)
