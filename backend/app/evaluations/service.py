@@ -380,12 +380,14 @@ class EvaluationService:
                     [item for item in run_traces if item.event_type == "runtime.message_processing.failed"]
                 ),
             },
-            "trace_event_types": [item.event_type for item in run_traces],
+            "run_trace_event_types": [item.event_type for item in run_traces],
             "evidence": {
-                "last_trace": self._trace_ref(run_traces[-1]) if run_traces else None,
+                "last_run_trace": self._trace_ref(run_traces[-1]) if run_traces else None,
                 "last_run_event": self._run_event_ref(run_events[-1]) if run_events else None,
-                "runtime_failed": [self._trace_ref(item) for item in run_traces if item.event_type == "runtime.failed"],
-                "recoverable_failures": [
+                "runtime_failed_run_traces": [
+                    self._trace_ref(item) for item in run_traces if item.event_type == "runtime.failed"
+                ],
+                "recoverable_failure_run_traces": [
                     self._trace_ref(item) for item in run_traces if item.event_type == "runtime.message_processing.failed"
                 ],
             },
@@ -418,7 +420,7 @@ class EvaluationService:
                     severity="high",
                     confidence=90,
                     description=f"Run 以 failed 结束：{run.exit_reason or '未记录失败原因'}",
-                    evidence_refs=evidence.get("runtime_failed") or [evidence.get("last_trace")],
+                    evidence_refs=evidence.get("runtime_failed_run_traces") or [evidence.get("last_run_trace")],
                     recommended_action="查看 runtime.failed trace 和关联 AgentRun，补充失败场景测试后再修复 Runtime 或 PSkill。",
                 )
             )
@@ -429,7 +431,7 @@ class EvaluationService:
                     severity="high",
                     confidence=82,
                     description=f"Run 被语义中止：{run.exit_reason or '未记录中止原因'}",
-                    evidence_refs=[evidence.get("last_trace")],
+                    evidence_refs=[evidence.get("last_run_trace")],
                     recommended_action="复核现场约束和安全停止条件，必要时补充 PSkill 的安全分支与测试场景。",
                 )
             )
@@ -440,7 +442,7 @@ class EvaluationService:
                     severity="medium",
                     confidence=75,
                     description="Run 被取消，无法证明任务完成质量。",
-                    evidence_refs=[evidence.get("last_trace")],
+                    evidence_refs=[evidence.get("last_run_trace")],
                     recommended_action="确认取消原因，并判断是否需要补充恢复流程或用户提示。",
                 )
             )
@@ -452,7 +454,7 @@ class EvaluationService:
                     severity="medium",
                     confidence=80,
                     description=f"运行过程中出现 {recoverable_count} 次可恢复消息处理失败。",
-                    evidence_refs=evidence.get("recoverable_failures") or [],
+                    evidence_refs=evidence.get("recoverable_failure_run_traces") or [],
                     recommended_action="复盘失败 trace，补充回归测试并优化 provider 错误恢复策略。",
                 )
             )
@@ -463,7 +465,7 @@ class EvaluationService:
                     severity="low",
                     confidence=70,
                     description="Run 没有记录用户输入 run_event，评估证据链不完整。",
-                    evidence_refs=[evidence.get("last_trace")],
+                    evidence_refs=[evidence.get("last_run_trace")],
                     recommended_action="确保 Gateway 在调用入口写入原始输入或要求用户补充现场证据。",
                 )
             )

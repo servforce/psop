@@ -41,6 +41,11 @@ def test_evaluation_api_creates_report_for_completed_run_and_records_evaluator_a
     assert agent_run_response.json()["owner_type"] == "run_evaluation"
     assert agent_run_response.json()["owner_id"] == evaluation["id"]
     assert agent_run_response.json()["output_payload"]["schema"] == "RunEvaluationResult"
+    evaluator_facts = agent_run_response.json()["input_payload"]["facts"]
+    assert "run_trace_event_types" in evaluator_facts
+    assert "trace_event_types" not in evaluator_facts
+    assert "last_run_trace" in evaluator_facts["evidence"]
+    assert "last_trace" not in evaluator_facts["evidence"]
     assert agent_model_calls_response.json()[0]["provider"] == "deterministic"
     assert {
         "agent.run.created",
