@@ -12,7 +12,6 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
-    buildTasksPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -663,6 +662,27 @@
       },
 
 
+      rawMaterialDraftMaterialIds() {
+        return (this.rawMaterials || []).map((material) => material.id).filter(Boolean);
+      },
+
+
+      rawMaterialDraftPatchFileChanges() {
+        const changes = this.rawMaterialGenerationResult?.patch?.file_changes;
+        return Array.isArray(changes) ? changes : [];
+      },
+
+
+      canApplyRawMaterialDraftPatch() {
+        if (this.rawMaterialGenerationResult?.status !== "patch_proposed") {
+          return false;
+        }
+        return this.rawMaterialDraftPatchFileChanges().some(
+          (change) => change?.path && typeof change.proposed_content === "string"
+        );
+      },
+
+
       openRawMaterialGenerateModal() {
         if (this.rawMaterials.length === 0) {
           this.showCenterToast("error", "请先上传素材。");
@@ -685,7 +705,7 @@
 
 
       closeRawMaterialGenerateModal() {
-        if (this.busy.rawMaterialGenerate) {
+        if (this.busy.rawMaterialGenerate || this.busy.rawMaterialApply) {
           return;
         }
         this.rawMaterialGenerateModalOpen = false;
@@ -705,46 +725,73 @@
         this.clearNotice();
         try {
           const skillId = this.currentSkill.id;
-          const result = await this.apiRequest(`/pskills/${skillId}/materials/generate-skill-draft`, {
+          const result = await this.apiRequest(`/pskills/${skillId}/draft/generate`, {
             method: "POST",
             body: JSON.stringify({
               user_description: this.rawMaterialGenerateForm.user_description.trim(),
+              material_ids: this.rawMaterialDraftMaterialIds(),
               base_commit_sha: this.currentSkill.latest_draft_head_sha
             })
           });
           this.rawMaterialGenerationResult = result;
-          if (result.status === "succeeded") {
-            this.sourceLoadedSkillId = null;
-            this.repositoryLoadedSkillId = null;
-            this.currentSkill = await this.apiRequest(`/pskills/${skillId}`);
-            await this.loadRawMaterials(skillId, true);
-            this.rawMaterialGenerateModalOpen = false;
-            this.showCenterToast("success", "Skill 草稿已生成。");
-            this.showNotice("success", "Skill 草稿已生成并提交到 GitLab draft。");
+          if (result.status === "patch_proposed") {
+            this.showCenterToast("success", "PSkill 草稿 patch 已生成。");
+            this.showNotice("success", "pskill.builder 已生成可审查 patch，请确认后应用到 GitLab draft。");
           } else if (result.status === "failed") {
             this.showCenterToast("error", result.error_message || "生成 Skill 草稿失败。");
           } else {
-            const jobId = result.job_id || result.prompt_metadata?.job_id || result.id;
-            this.rawMaterialGenerateModalOpen = false;
-            const taskFilters = {
-              job_type: "pskill_build",
-              status: "",
-              q: jobId || "",
-              created_from: "",
-              created_to: ""
-            };
-            this.taskFilters = taskFilters;
-            await this.navigate(buildTasksPath(taskFilters));
-            this.showCenterToast("success", "Skill 生成任务已提交。");
-            this.showNotice(
-              "success",
-              jobId ? `Skill 生成任务已提交：${this.formatShortId(jobId)}` : "Skill 生成任务已提交。"
-            );
+            this.showCenterToast("success", "PSkill 草稿已生成。");
           }
         } catch (error) {
           this.showCenterToast("error", error.message || "生成 Skill 草稿失败。");
         } finally {
           this.busy.rawMaterialGenerate = false;
+        }
+      },
+
+
+      async applyRawMaterialDraftPatch() {
+        if (!this.currentSkill || !this.canApplyRawMaterialDraftPatch()) {
+          return;
+        }
+
+        const files = {};
+        for (const change of this.rawMaterialDraftPatchFileChanges()) {
+          if (change?.path && typeof change.proposed_content === "string") {
+            files[change.path] = change.proposed_content;
+          }
+        }
+
+        this.busy.rawMaterialApply = true;
+        this.clearNotice();
+        try {
+          const skillId = this.currentSkill.id;
+          const result = await this.apiRequest(`/pskills/${skillId}/draft/apply-patch`, {
+            method: "POST",
+            body: JSON.stringify({
+              base_commit_sha: this.rawMaterialGenerationResult.base_commit_sha,
+              files,
+              commit_message: "Apply pskill.builder material draft"
+            })
+          });
+          this.rawMaterialGenerationResult = {
+            ...this.rawMaterialGenerationResult,
+            status: "applied",
+            applied: result.applied,
+            changed_files: result.changed_files || [],
+            committed_commit_sha: result.committed_commit_sha,
+            source: result.source
+          };
+          this.sourceLoadedSkillId = null;
+          this.repositoryLoadedSkillId = null;
+          this.currentSkill = await this.apiRequest(`/pskills/${skillId}`);
+          await this.loadRawMaterials(skillId, true);
+          this.showCenterToast("success", "PSkill 草稿已应用。");
+          this.showNotice("success", "pskill.builder patch 已应用到 GitLab draft。");
+        } catch (error) {
+          this.showCenterToast("error", error.message || "应用 PSkill 草稿失败。");
+        } finally {
+          this.busy.rawMaterialApply = false;
         }
       },
 

@@ -35,13 +35,24 @@ def test_materials_to_governance_closed_loop(monkeypatch) -> None:
         )
         material_id = material_response.json()["id"]
         generate_response = client.post(
-            f"/api/v1/pskills/{skill_id}/materials/generate-skill-draft",
+            f"/api/v1/pskills/{skill_id}/draft/generate",
             json={
                 "user_description": "请基于素材生成一个现场支持 PSkill。",
+                "material_ids": [material_id],
                 "base_commit_sha": created["latest_draft_head_sha"],
             },
         )
         generated = generate_response.json()
+        file_changes = generated["patch"]["file_changes"]
+        apply_response = client.post(
+            f"/api/v1/pskills/{skill_id}/draft/apply-patch",
+            json={
+                "base_commit_sha": generated["base_commit_sha"],
+                "files": {item["path"]: item["proposed_content"] for item in file_changes},
+                "commit_message": "Apply builder material draft for closed-loop acceptance",
+            },
+        )
+        applied = apply_response.json()
         source_response = client.get(f"/api/v1/pskills/{skill_id}/source")
 
         publish_response = client.post(
@@ -82,12 +93,17 @@ def test_materials_to_governance_closed_loop(monkeypatch) -> None:
 
     assert material_response.status_code == 201
     assert material_response.json()["status"] == "ready"
-    assert generate_response.status_code == 200
-    assert generated["status"] == "succeeded"
+    assert generate_response.status_code == 201
+    assert generated["status"] == "patch_proposed"
+    assert generated["agent_run"]["agent_key"] == "pskill.builder"
+    assert generated["agent_run"]["status"] == "succeeded"
     assert generated["material_ids"] == [material_id]
-    assert {"README.md", "SKILL.md", "tests/checklist.md"} <= set(generated["generated_files"])
-    assert source_response.json()["head_commit_sha"] == generated["committed_commit_sha"]
-    assert fake_gateway.projects[created["gitlab_project_id"]].files["README.md"].startswith("# Generated Skill")
+    assert generated["patch"]["committed"] is False
+    assert generated["patch"]["requires_human_apply"] is True
+    assert apply_response.status_code == 200
+    assert applied["changed_files"] == ["SKILL.md"]
+    assert source_response.json()["head_commit_sha"] == applied["committed_commit_sha"]
+    assert "## Builder Draft Proposal" in fake_gateway.projects[created["gitlab_project_id"]].files["SKILL.md"]
 
     assert publish_response.status_code == 202
     assert publish_payload["publish_record"]["publish_status"] == "compiling"

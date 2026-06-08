@@ -1147,6 +1147,7 @@
         rawMaterialUpload: false,
         rawMaterialDelete: false,
         rawMaterialGenerate: false,
+        rawMaterialApply: false,
         publishRecords: false,
         pskillVersions: false,
         publishGate: false,

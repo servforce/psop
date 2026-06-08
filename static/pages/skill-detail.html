@@ -719,9 +719,9 @@
                 <div class="flex shrink-0 items-start justify-between gap-4 border-b border-slate-800 px-5 py-4">
                   <div>
                     <p class="panel-kicker">Skill 生成</p>
-                    <h3 class="panel-title">基于素材生成源码草稿</h3>
+                    <h3 class="panel-title">基于素材生成可审查草稿</h3>
                   </div>
-                  <button type="button" class="icon-button" title="关闭" aria-label="关闭" :disabled="busy.rawMaterialGenerate" @click="closeRawMaterialGenerateModal()">
+                  <button type="button" class="icon-button" title="关闭" aria-label="关闭" :disabled="busy.rawMaterialGenerate || busy.rawMaterialApply" @click="closeRawMaterialGenerateModal()">
                     <span class="material-symbols-outlined text-[18px]">close</span>
                   </button>
                 </div>
@@ -742,26 +742,43 @@
                       <span class="field-label">生成描述</span>
                       <textarea x-model.trim="rawMaterialGenerateForm.user_description" class="textarea-field h-36" placeholder="请描述希望生成的 Skill 目标、使用场景、边界和输出风格。" required></textarea>
                     </label>
-                    <template x-if="rawMaterialGenerationResult && rawMaterialGenerationResult.status !== 'succeeded'">
+                    <template x-if="rawMaterialGenerationResult && rawMaterialGenerationResult.status === 'patch_proposed'">
                       <div class="rounded-md border border-sky-500/25 bg-sky-500/10 px-3 py-3 text-sm leading-6 text-sky-100">
-                        <p class="font-semibold">已提交后台任务</p>
-                        <p class="mt-1 text-sky-100">可在任务页面查看生成进度。</p>
-                        <p class="mt-2 mono-field break-all" x-text="rawMaterialGenerationResult.job_id || rawMaterialGenerationResult.prompt_metadata?.job_id || rawMaterialGenerationResult.id"></p>
-                        <template x-if="rawMaterialGenerationResult.error_message">
-                          <p class="mt-2 text-rose-200" x-text="rawMaterialGenerationResult.error_message"></p>
-                        </template>
+                        <p class="font-semibold">pskill.builder 已生成可审查 patch</p>
+                        <p class="mt-1 text-sky-100">确认 diff 后可应用到 GitLab draft，再进入发布与编译。</p>
+                        <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                          <div>
+                            <p class="field-label">AgentRun</p>
+                            <p class="mono-field mt-1 break-all" x-text="rawMaterialGenerationResult.agent_run?.id"></p>
+                          </div>
+                          <div>
+                            <p class="field-label">Base Commit</p>
+                            <p class="mono-field mt-1 break-all" x-text="rawMaterialGenerationResult.base_commit_sha"></p>
+                          </div>
+                        </div>
+                        <div class="mt-3 border-t border-sky-500/25 pt-3">
+                          <p class="font-semibold">变更文件</p>
+                          <div class="mt-2 flex flex-wrap gap-2">
+                            <template x-for="change in rawMaterialDraftPatchFileChanges()" :key="change.path">
+                              <span class="inline-flex max-w-full items-center gap-2 rounded-md border border-sky-500/25 bg-slate-950/40 px-2.5 py-1 text-xs font-medium text-sky-100">
+                                <span class="material-symbols-outlined text-[15px]" x-text="change.changed === false ? 'visibility' : 'edit'"></span>
+                                <span class="truncate" x-text="change.path"></span>
+                              </span>
+                            </template>
+                          </div>
+                        </div>
+                        <pre class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-slate-800 bg-slate-950/80 p-3 text-xs leading-5 text-slate-200" x-text="rawMaterialGenerationResult.patch?.diff || 'No diff.'"></pre>
                       </div>
                     </template>
-                    <template x-if="rawMaterialGenerationResult && rawMaterialGenerationResult.status === 'succeeded'">
+                    <template x-if="rawMaterialGenerationResult && rawMaterialGenerationResult.status === 'applied'">
                       <div class="rounded-md border border-emerald-500/25 bg-emerald-500/10 px-3 py-3 text-sm leading-6 text-emerald-100">
-                        <p class="font-semibold">已提交 GitLab draft</p>
+                        <p class="font-semibold">已应用到 GitLab draft</p>
                         <p class="mt-1 mono-field break-all" x-text="rawMaterialGenerationResult.committed_commit_sha"></p>
-                        <p class="mt-2 text-emerald-100" x-text="rawMaterialGenerationResult.generation_reason"></p>
-                        <template x-if="rawMaterialGenerationResult.prompt_metadata?.reference_files?.length">
+                        <template x-if="rawMaterialGenerationResult.changed_files?.length">
                           <div class="mt-3 border-t border-emerald-500/25 pt-3">
-                            <p class="font-semibold">关键帧已写入 references/</p>
+                            <p class="font-semibold">已提交文件</p>
                             <div class="mt-2 max-h-72 overflow-y-auto">
-                              <template x-for="path in rawMaterialGenerationResult.prompt_metadata.reference_files" :key="path">
+                              <template x-for="path in rawMaterialGenerationResult.changed_files" :key="path">
                                 <p class="mono-field mt-1 break-all" x-text="path"></p>
                               </template>
                             </div>
@@ -769,13 +786,23 @@
                         </template>
                       </div>
                     </template>
+                    <template x-if="rawMaterialGenerationResult && rawMaterialGenerationResult.status === 'failed'">
+                      <div class="rounded-md border border-rose-500/25 bg-rose-500/10 px-3 py-3 text-sm leading-6 text-rose-100">
+                        <p class="font-semibold">生成失败</p>
+                        <p class="mt-2 text-rose-100" x-text="rawMaterialGenerationResult.error_message || 'pskill.builder 未生成有效草稿。'"></p>
+                      </div>
+                    </template>
                   </div>
                   <div class="flex shrink-0 justify-end gap-3 border-t border-slate-800 px-5 py-4">
-                    <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.rawMaterialGenerate" @click="closeRawMaterialGenerateModal()">
+                    <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.rawMaterialGenerate || busy.rawMaterialApply" @click="closeRawMaterialGenerateModal()">
                       <span class="material-symbols-outlined text-[18px]">close</span>
                       <span>取消</span>
                     </button>
-                    <button type="submit" class="button-primary" title="生成源码草稿" aria-label="生成源码草稿" :disabled="busy.rawMaterialGenerate || !rawMaterialGenerateForm.user_description || !canGenerateSkillDraftFromRawMaterials()">
+                    <button type="button" class="button-secondary" title="应用草稿 patch" aria-label="应用草稿 patch" x-show="rawMaterialGenerationResult?.status === 'patch_proposed'" :disabled="busy.rawMaterialGenerate || busy.rawMaterialApply || !canApplyRawMaterialDraftPatch()" @click="applyRawMaterialDraftPatch()">
+                      <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterialApply ? 'animate-spin' : ''" x-text="busy.rawMaterialApply ? 'progress_activity' : 'done'"></span>
+                      <span x-text="busy.rawMaterialApply ? '应用中...' : '应用 patch'"></span>
+                    </button>
+                    <button type="submit" class="button-primary" title="生成源码草稿" aria-label="生成源码草稿" :disabled="busy.rawMaterialGenerate || busy.rawMaterialApply || !rawMaterialGenerateForm.user_description || !canGenerateSkillDraftFromRawMaterials()">
                       <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterialGenerate ? 'animate-spin' : ''" x-text="busy.rawMaterialGenerate ? 'progress_activity' : 'auto_fix_high'"></span>
                       <span x-text="busy.rawMaterialGenerate ? '生成中...' : '生成源码草稿'"></span>
                     </button>
