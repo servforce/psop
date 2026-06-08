@@ -415,6 +415,105 @@ def test_agent_runner_executes_authorized_skill_version_activation_tool() -> Non
     assert executed_authorization_response.json()["status"] == "executed"
 
 
+def test_agent_runner_executes_auto_allowed_memory_tools() -> None:
+    client, _, _ = create_test_client()
+
+    memory_candidate = {
+        "namespace": "builder",
+        "memory_type": "semantic",
+        "title": "Nameplate voltage evidence",
+        "content": "Nameplate photos are strong source evidence for device voltage and model constraints.",
+        "confidence": 86,
+        "source_refs": [{"kind": "pskill_material", "id": "material-nameplate-tool-1"}],
+        "tags": ["evidence", "voltage"],
+    }
+
+    with client:
+        write_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.builder",
+                "owner_type": "pskill_draft",
+                "owner_id": "builder-memory-tool-write",
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.memory.write_candidate",
+                        "side_effect_level": "low_write",
+                        "arguments_summary": {"candidates": [memory_candidate]},
+                    }
+                },
+            },
+        )
+        write_run_id = write_run_response.json()["id"]
+        write_once_response = client.post(f"/api/v1/agent-runs/{write_run_id}/run-once")
+        write_tool_calls_response = client.get(f"/api/v1/agent-runs/{write_run_id}/tool-calls")
+        write_events_response = client.get(f"/api/v1/agent-runs/{write_run_id}/events")
+        write_authorizations_response = client.get(f"/api/v1/agent-runs/{write_run_id}/tool-authorizations")
+        write_memory_response = client.get(f"/api/v1/agent-runs/{write_run_id}/memory-entries")
+
+        memory_entry_id = write_once_response.json()["output_payload"]["tool_result"]["result"]["memory_entry_ids"][0]
+        search_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.builder",
+                "owner_type": "pskill_draft",
+                "owner_id": "builder-memory-tool-search",
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.memory.search",
+                        "side_effect_level": "read",
+                        "arguments_summary": {
+                            "query": "voltage",
+                            "namespace": "builder",
+                            "status": "pending_review",
+                            "agent_key": "pskill.builder",
+                            "limit": 5,
+                        },
+                    }
+                },
+            },
+        )
+        search_run_id = search_run_response.json()["id"]
+        search_once_response = client.post(f"/api/v1/agent-runs/{search_run_id}/run-once")
+        search_tool_calls_response = client.get(f"/api/v1/agent-runs/{search_run_id}/tool-calls")
+        search_events_response = client.get(f"/api/v1/agent-runs/{search_run_id}/events")
+        search_authorizations_response = client.get(f"/api/v1/agent-runs/{search_run_id}/tool-authorizations")
+
+    assert write_run_response.status_code == 201
+    assert write_once_response.status_code == 200
+    write_payload = write_once_response.json()
+    assert write_payload["status"] == "succeeded"
+    assert write_payload["output_payload"]["tool_result"]["tool_name"] == "psop.memory.write_candidate"
+    assert write_payload["output_payload"]["tool_result"]["result"]["memory_entry_count"] == 1
+    assert write_authorizations_response.json() == []
+
+    write_tool_call = write_tool_calls_response.json()[0]
+    assert write_tool_call["status"] == "succeeded"
+    assert write_tool_call["result_summary"]["executed"] is True
+    assert write_tool_call["result_summary"]["result"]["memory_entry_ids"] == [memory_entry_id]
+
+    write_event_types = [item["event_type"] for item in write_events_response.json()]
+    assert "tool.execution_started" in write_event_types
+    assert "tool.execution_succeeded" in write_event_types
+    assert "agent.tool_call.succeeded" in write_event_types
+
+    memory_entries = write_memory_response.json()
+    assert [item["id"] for item in memory_entries] == [memory_entry_id]
+    assert memory_entries[0]["status"] == "pending_review"
+    assert memory_entries[0]["agent_key"] == "pskill.builder"
+
+    assert search_run_response.status_code == 201
+    assert search_once_response.status_code == 200
+    search_payload = search_once_response.json()
+    assert search_payload["status"] == "succeeded"
+    assert search_payload["output_payload"]["tool_result"]["result"]["memory_entry_ids"] == [memory_entry_id]
+    assert search_authorizations_response.json() == []
+    assert search_tool_calls_response.json()[0]["result_summary"]["result"]["memory_entry_count"] == 1
+    assert "tool.execution_succeeded" in [item["event_type"] for item in search_events_response.json()]
+
+
 def test_agent_runner_records_authorized_tool_execution_failure_event() -> None:
     client, _, _ = create_test_client()
 

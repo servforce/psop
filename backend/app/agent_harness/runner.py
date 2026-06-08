@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.agent_harness.agent_decision import AgentDecision
@@ -16,6 +17,7 @@ from app.agents.schemas import (
     AgentRunResponse,
 )
 from app.agents.service import AgentService
+from app.memory.schemas import MemorySearchRequest
 from app.memory.service import MemoryService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
@@ -346,6 +348,68 @@ class AgentRunner:
 
     def _execute_native_tool_call(self, session: Session, *, tool_call: Any) -> dict[str, Any]:
         arguments = tool_call.arguments_summary or {}
+        if tool_call.tool_name == "psop.memory.search":
+            try:
+                payload = MemorySearchRequest(
+                    query=str(arguments.get("query") or arguments.get("q") or ""),
+                    namespace=arguments.get("namespace"),
+                    memory_type=arguments.get("memory_type"),
+                    status=arguments.get("status", "active"),
+                    agent_key=arguments.get("agent_key"),
+                    limit=int(arguments.get("limit") or 25),
+                )
+            except (TypeError, ValueError, ValidationError) as error:
+                raise SkillValidationError(
+                    "psop.memory.search 参数无效。",
+                    details={"arguments_summary": arguments, "error": str(error)},
+                ) from error
+            entries = self.memory_service.search(session, payload)
+            return {
+                "result": {
+                    "memory_entry_count": len(entries),
+                    "memory_entry_ids": [item.id for item in entries],
+                    "entries": [item.model_dump(mode="json") for item in entries],
+                }
+            }
+        if tool_call.tool_name == "psop.memory.write_candidate":
+            agent_run = self.agent_service.get_run_model(session, tool_call.agent_run_id)
+            candidates = arguments.get("candidates", arguments.get("memory_candidates", []))
+            if isinstance(candidates, dict):
+                candidates = [candidates]
+            if not isinstance(candidates, list) or not candidates:
+                raise SkillValidationError(
+                    "psop.memory.write_candidate 缺少 candidates。",
+                    details={"arguments_summary": arguments},
+                )
+            guardrail_result = self.output_guardrail.check(
+                agent_key=agent_run.agent_key,
+                output_payload={"memory_candidates": candidates},
+            )
+            if not guardrail_result.passed:
+                raise SkillValidationError(
+                    "memory_candidate_guardrail_failed",
+                    details={"findings": [item.as_dict() for item in guardrail_result.findings]},
+                )
+            try:
+                entries = self.memory_service.write_candidates(
+                    session,
+                    agent_key=agent_run.agent_key,
+                    created_by_agent_run_id=agent_run.id,
+                    candidates=candidates,
+                    commit=False,
+                )
+            except ValidationError as error:
+                raise SkillValidationError(
+                    "psop.memory.write_candidate 参数无效。",
+                    details={"arguments_summary": arguments, "error": str(error)},
+                ) from error
+            return {
+                "result": {
+                    "memory_entry_count": len(entries),
+                    "memory_entry_ids": [item.id for item in entries],
+                    "entries": [item.model_dump(mode="json") for item in entries],
+                }
+            }
         if tool_call.tool_name == "psop.agent_version.activate":
             agent_key = str(arguments.get("agent_key") or "").strip()
             version_id = str(arguments.get("version_id") or "").strip()
@@ -378,7 +442,7 @@ class AgentRunner:
                 commit=False,
             )
             return {"result": activation}
-        return {"result": {"authorized_execution": True}}
+        return {"result": {"native_execution": "not_implemented", "tool_name": tool_call.tool_name}}
 
     def _activate_skills(self, session: Session, *, agent_run: AgentRun, spec: dict[str, Any]) -> tuple[set[str], list[str]]:
         self.skill_service.sync_packages(session)
@@ -493,18 +557,78 @@ class AgentRunner:
 
         model = self.agent_service.repository.get_tool_call(session, tool_call.id)
         if model:
+            model.status = "executing"
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="tool.execution_started",
+                phase="tool",
+                payload={
+                    "tool_call_id": tool_call.id,
+                    "tool_name": decision.tool_name,
+                    "tool_provider": decision.tool_provider,
+                    "side_effect_level": policy_decision.side_effect_level,
+                    "authorization_id": "",
+                },
+            ),
+            commit=False,
+        )
+        try:
+            tool_result = self._execute_native_tool_call(session, tool_call=model or tool_call)
+        except (SkillNotFoundError, SkillValidationError) as error:
+            if model:
+                model.status = "failed"
+                model.result_summary = {"executed": False, "error": error.message, "details": error.details}
+            agent_run.status = "failed"
+            agent_run.error_message = error.message
+            agent_run.ended_at = now_utc()
+            self.agent_service.append_event(
+                session,
+                agent_run.id,
+                AppendAgentEventRequest(
+                    event_type="tool.execution_failed",
+                    phase="tool",
+                    payload={"tool_call_id": tool_call.id, "tool_name": decision.tool_name, "error": error.message},
+                ),
+                commit=False,
+            )
+            self.agent_service.append_event(
+                session,
+                agent_run.id,
+                AppendAgentEventRequest(
+                    event_type="agent.tool_call.failed",
+                    phase="tool",
+                    payload={"tool_call_id": tool_call.id, "tool_name": decision.tool_name, "error": error.message},
+                ),
+                commit=False,
+            )
+            session.commit()
+            return self.agent_service._build_run_response(agent_run)
+
+        if model:
             model.status = "succeeded"
-            model.result_summary = {"executed": True, "policy": policy_decision.reason}
+            model.result_summary = {"executed": True, "policy": policy_decision.reason, **tool_result}
         agent_run.status = "succeeded"
-        agent_run.output_payload = {"tool_result": {"tool_name": decision.tool_name, "status": "succeeded"}}
+        agent_run.output_payload = {"tool_result": {"tool_name": decision.tool_name, "status": "succeeded", **tool_result}}
         agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="tool.execution_succeeded",
+                phase="tool",
+                payload={"tool_call_id": tool_call.id, "tool_name": decision.tool_name, "result": tool_result},
+            ),
+            commit=False,
+        )
         self.agent_service.append_event(
             session,
             agent_run.id,
             AppendAgentEventRequest(
                 event_type="agent.tool_call.succeeded",
                 phase="tool",
-                payload={"tool_call_id": tool_call.id, "tool_name": decision.tool_name},
+                payload={"tool_call_id": tool_call.id, "tool_name": decision.tool_name, "result": tool_result},
             ),
             commit=False,
         )
