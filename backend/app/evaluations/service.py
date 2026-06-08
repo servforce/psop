@@ -158,6 +158,85 @@ class EvaluationService:
         session.commit()
         return self._build_finding_response(finding)
 
+    def write_diagnostics_from_agent_tool(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        evaluation_id: str,
+        payload: dict[str, Any],
+        commit: bool = True,
+    ) -> dict[str, Any]:
+        evaluation = self.repository.get_evaluation(session, evaluation_id)
+        if not evaluation:
+            raise SkillNotFoundError("未找到 RunEvaluation。", details={"evaluation_id": evaluation_id})
+        raw_findings = payload.get("findings", payload.get("diagnostics"))
+        if isinstance(raw_findings, dict):
+            raw_findings = [raw_findings]
+        if not isinstance(raw_findings, list) or not raw_findings:
+            raise SkillValidationError(
+                "psop.evaluations.write_diagnostics 缺少 findings。",
+                details={"evaluation_id": evaluation_id},
+            )
+
+        created_findings: list[RunEvaluationFinding] = []
+        for raw_finding in raw_findings:
+            if not isinstance(raw_finding, dict):
+                raise SkillValidationError(
+                    "evaluation finding 必须是对象。",
+                    details={"evaluation_id": evaluation_id, "finding": raw_finding},
+                )
+            finding = RunEvaluationFinding(
+                evaluation_id=evaluation.id,
+                category=self._validated_finding_field(
+                    raw_finding,
+                    "category",
+                    VALID_FINDING_CATEGORIES,
+                    default="runner_issue",
+                ),
+                severity=self._validated_finding_field(
+                    raw_finding,
+                    "severity",
+                    VALID_FINDING_SEVERITIES,
+                    default="medium",
+                ),
+                confidence=self._bounded_int(raw_finding.get("confidence"), default=70, minimum=0, maximum=100),
+                description=self._required_finding_text(raw_finding, "description", fallback_key="message"),
+                evidence_refs=list(raw_finding.get("evidence_refs") or []),
+                recommended_action=str(raw_finding.get("recommended_action") or raw_finding.get("action") or "").strip(),
+                status=self._validated_finding_field(
+                    raw_finding,
+                    "status",
+                    VALID_FINDING_STATUSES,
+                    default="open",
+                ),
+            )
+            session.add(finding)
+            created_findings.append(finding)
+        session.flush()
+        finding_responses = [self._build_finding_response(item) for item in created_findings]
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="evaluation.diagnostics.written",
+                phase="evaluation",
+                payload={
+                    "evaluation_id": evaluation.id,
+                    "finding_ids": [item.id for item in created_findings],
+                    "finding_count": len(created_findings),
+                },
+            ),
+            commit=False,
+        )
+        if commit:
+            session.commit()
+        return {
+            "evaluation_id": evaluation.id,
+            "finding_count": len(created_findings),
+            "findings": [item.model_dump(mode="json") for item in finding_responses],
+        }
+
     def _get_terminal_run(self, session: Session, run_id: str) -> Run:
         run = self.repository.get_run(session, run_id)
         if not run:
@@ -515,3 +594,34 @@ class EvaluationService:
     def _validate_optional_filter(name: str, value: str | None, allowed: set[str]) -> None:
         if value is not None and value not in allowed:
             raise SkillValidationError(f"{name} filter 无效。", details={name: value})
+
+    @staticmethod
+    def _validated_finding_field(
+        payload: dict[str, Any],
+        field_name: str,
+        allowed: set[str],
+        *,
+        default: str,
+    ) -> str:
+        value = str(payload.get(field_name) or default).strip()
+        if value not in allowed:
+            raise SkillValidationError(f"{field_name} 无效。", details={field_name: value})
+        return value
+
+    @staticmethod
+    def _required_finding_text(payload: dict[str, Any], field_name: str, *, fallback_key: str) -> str:
+        value = str(payload.get(field_name) or payload.get(fallback_key) or "").strip()
+        if not value:
+            raise SkillValidationError(f"{field_name} 不能为空。")
+        return value
+
+    @staticmethod
+    def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+        if value is None or value == "":
+            parsed = default
+        else:
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError) as error:
+                raise SkillValidationError("整数参数无效。", details={"value": value}) from error
+        return max(minimum, min(parsed, maximum))

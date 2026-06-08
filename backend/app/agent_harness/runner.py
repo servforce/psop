@@ -478,6 +478,8 @@ class AgentRunner:
             return {"result": self._read_runtime_facts(session, tool_call=tool_call, arguments=arguments)}
         if tool_call.tool_name == "psop.evaluations.read":
             return {"result": self._read_evaluation_facts(session, arguments)}
+        if tool_call.tool_name == "psop.evaluations.write_diagnostics":
+            return {"result": self._write_evaluation_diagnostics(session, tool_call=tool_call, arguments=arguments)}
         if tool_call.tool_name == "psop.governance.write_proposal":
             proposal_arguments = arguments.get("proposal", arguments)
             if not isinstance(proposal_arguments, dict):
@@ -664,6 +666,25 @@ class AgentRunner:
             commit=False,
         )
         return result
+
+    def _write_evaluation_diagnostics(self, session: Session, *, tool_call: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+        evaluation_id = str(arguments.get("evaluation_id") or "").strip()
+        if not evaluation_id:
+            agent_run = self.agent_service.get_run_model(session, tool_call.agent_run_id)
+            if agent_run.owner_type == "run_evaluation":
+                evaluation_id = str(agent_run.owner_id or "").strip()
+        if not evaluation_id:
+            raise SkillValidationError(
+                "psop.evaluations.write_diagnostics 缺少 evaluation_id。",
+                details={"required_any_of": ["arguments_summary.evaluation_id", "agent_run.owner_id"]},
+            )
+        return self.evaluation_service.write_diagnostics_from_agent_tool(
+            session,
+            agent_run_id=tool_call.agent_run_id,
+            evaluation_id=evaluation_id,
+            payload=arguments,
+            commit=False,
+        )
 
     def _read_evaluation_facts(self, session: Session, arguments: dict[str, Any]) -> dict[str, Any]:
         evaluation_id = str(arguments.get("evaluation_id") or "").strip()

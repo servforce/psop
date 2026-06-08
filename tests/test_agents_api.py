@@ -937,6 +937,113 @@ def test_agent_runner_executes_governance_evaluations_read_tool() -> None:
     assert "agent.tool_call.succeeded" in event_types
 
 
+def test_agent_runner_executes_evaluator_write_diagnostics_tool() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        skill = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "evaluator-write-diagnostics-tool",
+                "name": "Evaluator Write Diagnostics Tool",
+                "description": "Validate evaluator Agent can write diagnostics.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill['id']}/publish",
+            json={"publish_reason": "Evaluator diagnostics tool test"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/gateway/invocations",
+            json={
+                "skill_key": "evaluator-write-diagnostics-tool",
+                "input_envelope": {"user_input": "请处理现场任务"},
+                "gateway_type": "web",
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+        client.post(
+            f"/api/v1/runs/{run_id}/events",
+            json={
+                "direction": "input",
+                "event_kind": "terminal.text.input.v1",
+                "mime_type": "text/plain",
+                "payload_inline": "现场步骤已完成，请核验。",
+                "external_event_id": "evaluator-write-diagnostics-tool-evidence",
+            },
+        )
+        evaluation_response = client.post(f"/api/v1/evaluations/runs/{run_id}")
+        evaluation = evaluation_response.json()
+        agent_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.evaluator",
+                "owner_type": "run_evaluation",
+                "owner_id": evaluation["id"],
+                "run_id": run_id,
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.evaluations.write_diagnostics",
+                        "side_effect_level": "low_write",
+                        "arguments_summary": {
+                            "findings": [
+                                {
+                                    "category": "test_gap",
+                                    "severity": "medium",
+                                    "confidence": 81,
+                                    "description": "发布前缺少现场完成后核验提示的回归测试。",
+                                    "evidence_refs": [{"kind": "run", "id": run_id}],
+                                    "recommended_action": "补充覆盖现场完成后核验提示的测试场景。",
+                                }
+                            ]
+                        },
+                    }
+                },
+            },
+        )
+        agent_run_id = agent_run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        findings_response = client.get(f"/api/v1/evaluations/{evaluation['id']}/findings")
+        detail_response = client.get(f"/api/v1/evaluations/{evaluation['id']}")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert invocation_response.status_code == 201
+    assert evaluation_response.status_code == 201
+    assert evaluation["findings"] == []
+    assert agent_run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    payload = run_once_response.json()
+    assert payload["status"] == "succeeded"
+    result = payload["output_payload"]["tool_result"]["result"]
+    assert result["evaluation_id"] == evaluation["id"]
+    assert result["finding_count"] == 1
+    assert result["findings"][0]["category"] == "test_gap"
+    assert result["findings"][0]["status"] == "open"
+    assert result["findings"][0]["evidence_refs"] == [{"kind": "run", "id": run_id}]
+    assert authorizations_response.json() == []
+
+    findings = findings_response.json()
+    assert [item["id"] for item in findings] == [result["findings"][0]["id"]]
+    assert detail_response.json()["findings"][0]["id"] == result["findings"][0]["id"]
+
+    tool_call = tool_calls_response.json()[0]
+    assert tool_call["tool_name"] == "psop.evaluations.write_diagnostics"
+    assert tool_call["status"] == "succeeded"
+    assert tool_call["result_summary"]["executed"] is True
+    assert tool_call["result_summary"]["result"]["finding_count"] == 1
+    assert "native_execution" not in tool_call["result_summary"]["result"]
+
+    event_types = [item["event_type"] for item in events_response.json()]
+    assert "evaluation.diagnostics.written" in event_types
+    assert "tool.execution_succeeded" in event_types
+    assert "agent.tool_call.succeeded" in event_types
+
+
 def test_agent_runner_executes_auto_allowed_memory_tools() -> None:
     client, _, _ = create_test_client()
 
