@@ -664,6 +664,9 @@
       },
       publishRecordsLoadedSkillId: null,
       publishRecords: [],
+      pskillVersionsLoadedSkillId: null,
+      pskillVersions: [],
+      publishGateResult: null,
       publishEventSource: null,
       publishPollTimer: null,
       publishProgress: {
@@ -972,6 +975,8 @@
         rawMaterialDelete: false,
         rawMaterialGenerate: false,
         publishRecords: false,
+        pskillVersions: false,
+        publishGate: false,
         publish: false,
         delete: false,
         compilerRequests: false,

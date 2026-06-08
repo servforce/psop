@@ -894,6 +894,9 @@
   .grid-cols-\[18rem_minmax\(0\,1fr\)\] {
     grid-template-columns: 18rem minmax(0,1fr);
   }
+  .grid-cols-\[auto_minmax\(0\,1fr\)_auto\] {
+    grid-template-columns: auto minmax(0,1fr) auto;
+  }
   .grid-cols-\[minmax\(0\,1\.2fr\)_8rem_7rem_8rem_8rem\] {
     grid-template-columns: minmax(0,1.2fr) 8rem 7rem 8rem 8rem;
   }
@@ -2043,6 +2046,10 @@
     --tw-tracking: 0.2em;
     letter-spacing: 0.2em;
   }
+  .tracking-\[0\.12em\] {
+    --tw-tracking: 0.12em;
+    letter-spacing: 0.12em;
+  }
   .tracking-\[0\.14em\] {
     --tw-tracking: 0.14em;
     letter-spacing: 0.14em;
@@ -2735,6 +2742,11 @@
       padding-left: calc(var(--spacing) * 5);
     }
   }
+  .sm\:block {
+    @media (width >= 40rem) {
+      display: block;
+    }
+  }
   .sm\:inline {
     @media (width >= 40rem) {
       display: inline;
@@ -2780,6 +2792,11 @@
       grid-template-columns: minmax(0,0.8fr) minmax(0,1fr) 10rem;
     }
   }
+  .md\:grid-cols-\[minmax\(0\,1fr\)_minmax\(18rem\,0\.75fr\)\] {
+    @media (width >= 48rem) {
+      grid-template-columns: minmax(0,1fr) minmax(18rem,0.75fr);
+    }
+  }
   .md\:flex-row {
     @media (width >= 48rem) {
       flex-direction: row;
@@ -2793,6 +2810,23 @@
   .md\:justify-between {
     @media (width >= 48rem) {
       justify-content: space-between;
+    }
+  }
+  .md\:divide-x {
+    @media (width >= 48rem) {
+      :where(& > :not(:last-child)) {
+        --tw-divide-x-reverse: 0;
+        border-inline-style: var(--tw-border-style);
+        border-inline-start-width: calc(1px * var(--tw-divide-x-reverse));
+        border-inline-end-width: calc(1px * calc(1 - var(--tw-divide-x-reverse)));
+      }
+    }
+  }
+  .md\:divide-slate-800 {
+    @media (width >= 48rem) {
+      :where(& > :not(:last-child)) {
+        border-color: var(--color-slate-800);
+      }
     }
   }
   .lg\:flex {

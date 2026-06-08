@@ -119,6 +119,9 @@
           if (this.activeDetailTab === "materials") {
             await this.loadRawMaterials(detail.id);
           }
+          if (this.activeDetailTab === "publish") {
+            await this.loadPublishWorkspaceData(detail.id);
+          }
           if (this.activeDetailTab === "compiler") {
             await this.loadCompilerRequests(detail.id);
           }
@@ -167,6 +170,9 @@
         this.closeRawMaterialImagePreview();
         this.publishRecordsLoadedSkillId = null;
         this.publishRecords = [];
+        this.pskillVersionsLoadedSkillId = null;
+        this.pskillVersions = [];
+        this.publishGateResult = null;
         this.sourceForm = {
           readme_content: "",
           skill_md_content: "",
@@ -223,8 +229,8 @@
       },
 
 
-      async loadPublishRecords(skillId) {
-        if (this.publishRecordsLoadedSkillId === skillId) {
+      async loadPublishRecords(skillId, force = false) {
+        if (!force && this.publishRecordsLoadedSkillId === skillId) {
           return;
         }
 
@@ -234,6 +240,56 @@
           this.publishRecordsLoadedSkillId = skillId;
         } finally {
           this.busy.publishRecords = false;
+        }
+      },
+
+      async loadSkillVersions(skillId, force = false) {
+        if (!force && this.pskillVersionsLoadedSkillId === skillId) {
+          return;
+        }
+
+        this.busy.pskillVersions = true;
+        try {
+          this.pskillVersions = await this.apiRequest(`/pskills/${skillId}/versions`);
+          this.pskillVersionsLoadedSkillId = skillId;
+        } finally {
+          this.busy.pskillVersions = false;
+        }
+      },
+
+      async loadPublishWorkspaceData(skillId, force = false) {
+        await Promise.all([
+          this.loadPublishRecords(skillId, force),
+          this.loadSkillVersions(skillId, force)
+        ]);
+      },
+
+      async runPublishGate() {
+        if (!this.currentSkill?.id) {
+          return;
+        }
+
+        this.busy.publishGate = true;
+        this.clearNotice();
+        try {
+          const payload = {
+            pskill_id: this.currentSkill.id,
+            pskill_version_id: this.currentSkill.latest_published_version?.id || null
+          };
+          this.publishGateResult = await this.apiRequest(`/pskills/${this.currentSkill.id}/publish-gate`, {
+            method: "POST",
+            body: JSON.stringify(payload)
+          });
+          const message = this.publishGateResult.status === "passed"
+            ? "发布门禁通过。"
+            : this.publishGateResult.status === "failed"
+              ? "发布门禁失败，请检查阻塞项。"
+              : "发布门禁需要人工复核。";
+          this.showNotice(this.publishGateResult.status === "failed" ? "error" : "success", message);
+        } catch (error) {
+          this.showNotice("error", error.message || "运行发布门禁失败。");
+        } finally {
+          this.busy.publishGate = false;
         }
       },
 
@@ -1223,8 +1279,6 @@
         this.busy.publish = false;
         if (this.currentSkill) {
           await this.loadSkillDetail(this.currentSkill.id);
-          this.publishRecordsLoadedSkillId = null;
-          await this.loadPublishRecords(this.currentSkill.id);
         }
 
         if (progress.terminal_status === "succeeded") {
@@ -1284,8 +1338,7 @@
               : stage)
           };
           if (this.currentSkill) {
-            this.publishRecordsLoadedSkillId = null;
-            await this.loadPublishRecords(this.currentSkill.id);
+            await this.loadPublishWorkspaceData(this.currentSkill.id, true);
           }
           this.showNotice("error", errorMessage);
           this.busy.publish = false;
@@ -1311,7 +1364,7 @@
             await this.loadRawMaterials(this.currentSkill.id, true);
           }
           if (this.activeDetailTab === "publish") {
-            await this.loadPublishRecords(this.currentSkill.id);
+            await this.loadPublishWorkspaceData(this.currentSkill.id, true);
           }
           this.showNotice("success", "已刷新当前 Skill。");
         } catch (error) {
@@ -1374,7 +1427,7 @@
             await this.loadRawMaterials(this.currentSkill.id);
           }
           if (tabName === "publish") {
-            await this.loadPublishRecords(this.currentSkill.id);
+            await this.loadPublishWorkspaceData(this.currentSkill.id);
           }
           if (tabName === "compiler") {
             await this.loadCompilerRequests(this.currentSkill.id);
@@ -1624,6 +1677,14 @@
             )
           );
         });
+      },
+
+      publishGateWarnings() {
+        return this.publishGateResult?.result_json?.warnings || [];
+      },
+
+      publishGateBlockingFindings() {
+        return this.publishGateResult?.result_json?.blocking_findings || [];
       },
   };
 })();
