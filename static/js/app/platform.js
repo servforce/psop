@@ -9,6 +9,7 @@
     buildPlatformMemoryPath,
     buildPlatformMemoryEntryPath,
     buildToolAuthorizationsPath,
+    buildGovernanceProposalPath,
     buildRunLivePath
   } = window.PSOPConsoleHelpers;
 
@@ -1019,6 +1020,52 @@
 
     memorySourceRefCount(entry) {
       return Array.isArray(entry?.source_refs) ? entry.source_refs.length : 0;
+    },
+
+    memorySourceLinks(entry) {
+      const links = [];
+      const createdBy = String(entry?.created_by_agent_run_id || "").trim();
+      if (createdBy) {
+        links.push({
+          key: `created-by-${createdBy}`,
+          label: `AgentRun ${createdBy}`,
+          href: this.platformAgentRunPath(createdBy)
+        });
+      }
+      for (const ref of Array.isArray(entry?.source_refs) ? entry.source_refs : []) {
+        const link = this.memorySourceRefLink(ref);
+        if (link) {
+          links.push(link);
+        }
+      }
+      return links;
+    },
+
+    memorySourceRefLink(ref) {
+      if (!ref || typeof ref !== "object") {
+        return null;
+      }
+      const kind = String(ref.kind || ref.type || "").trim().toLowerCase().replace(/-/g, "_");
+      const id = String(ref.id || ref.run_id || ref.agent_run_id || ref.proposal_id || ref.authorization_id || "").trim();
+      if (!id && !ref.run_id && !ref.agent_run_id && !ref.proposal_id) {
+        return null;
+      }
+      if (["agent_run", "agentrun"].includes(kind) || ref.agent_run_id) {
+        const agentRunId = String(ref.agent_run_id || id).trim();
+        return { key: `agent-run-${agentRunId}`, label: `AgentRun ${agentRunId}`, href: this.platformAgentRunPath(agentRunId) };
+      }
+      if (["run", "runtime_run"].includes(kind) || ref.run_id) {
+        const runId = String(ref.run_id || id).trim();
+        return { key: `run-${runId}`, label: `Run ${runId}`, href: this.platformRunLivePath(runId) };
+      }
+      if (["governance_proposal", "proposal"].includes(kind) || ref.proposal_id) {
+        const proposalId = String(ref.proposal_id || id).trim();
+        return { key: `proposal-${proposalId}`, label: `Proposal ${proposalId}`, href: buildGovernanceProposalPath(proposalId) };
+      }
+      if (["agent_tool_authorization", "tool_authorization"].includes(kind)) {
+        return { key: `tool-auth-${id}`, label: `ToolAuth ${id}`, href: buildToolAuthorizationsPath() };
+      }
+      return null;
     },
 
     platformFailureRateLabel(tool) {

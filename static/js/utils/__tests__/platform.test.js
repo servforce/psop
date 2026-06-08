@@ -16,6 +16,7 @@ function loadPlatformMethods() {
         buildPlatformMemoryPath: () => "/admin/platform/memory",
         buildPlatformMemoryEntryPath: (memoryId) => `/admin/platform/memory/${memoryId}`,
         buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations",
+        buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
         buildRunLivePath: (runId) => `/admin/runs/${runId}/live`
       }
     },
@@ -345,7 +346,11 @@ test("platform methods search and save memory entries", async () => {
     confidence: 62,
     title: "Finding pattern",
     content: "A regression finding pattern.",
-    source_refs: [],
+    source_refs: [
+      { kind: "run", id: "runtime-run-1" },
+      { kind: "governance_proposal", proposal_id: "proposal-1" }
+    ],
+    created_by_agent_run_id: "agent-run-1",
     tags: ["finding"],
     metadata: {}
   };
@@ -412,5 +417,22 @@ test("platform methods search and save memory entries", async () => {
   });
   expect(context.memoryEntries[0].status).toBe("active");
   expect(context.currentMemoryEntry.title).toBe("Updated pattern");
+  expect(methods.memorySourceLinks.call(context, context.currentMemoryEntry)).toEqual([
+    {
+      key: "created-by-agent-run-1",
+      label: "AgentRun agent-run-1",
+      href: "/admin/platform/agent-runs/agent-run-1"
+    },
+    {
+      key: "run-runtime-run-1",
+      label: "Run runtime-run-1",
+      href: "/admin/runs/runtime-run-1/live"
+    },
+    {
+      key: "proposal-proposal-1",
+      label: "Proposal proposal-1",
+      href: "/admin/governance/proposals/proposal-1"
+    }
+  ]);
   expect(context.busy.memoryUpdate).toBe(false);
 });

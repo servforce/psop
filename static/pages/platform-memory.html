@@ -203,6 +203,16 @@
                       <dd class="font-mono text-slate-300" x-text="formatDateTime(currentMemoryEntry.updated_at)"></dd>
                     </div>
                   </dl>
+                  <template x-if="memorySourceLinks(currentMemoryEntry).length > 0">
+                    <div class="mt-4 flex flex-wrap gap-2">
+                      <template x-for="link in memorySourceLinks(currentMemoryEntry)" :key="link.key">
+                        <button type="button" class="button-secondary h-8 px-3" @click="navigate(link.href)">
+                          <span class="material-symbols-outlined text-[17px]">open_in_new</span>
+                          <span class="font-mono text-[11px]" x-text="link.label"></span>
+                        </button>
+                      </template>
+                    </div>
+                  </template>
                 </div>
                 <div class="p-4">
                   <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Source Refs</p>
