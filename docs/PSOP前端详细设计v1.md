@@ -10,20 +10,25 @@
 
 当前前端已覆盖：
 
-- Skills 列表、创建、删除、详情。
-- Skill source 和 repository file 编辑。
-- Raw materials 上传、分析、派生资产预览、素材生成 Skill draft。
+- Dashboard 汇总视图。
+- PSkills 列表、创建、删除、详情。
+- PSkill source 和 repository file 编辑。
+- Materials 上传、分析、派生资产预览、素材生成 PSkill draft。
 - 发布抽屉、编译进度 SSE、编译列表、artifact 详情。
 - EG JSON 视图和 bpmn-js 静态图预览。
 - Agent Prompt Pack 列表、详情、版本、文件、校验、发布、激活。
+- Platform Agents、Agent Runs、Skill Packages、Tools、Memory。
 - Runtime job 任务页和统计。
 - Invocation 列表、Run Live、Terminal transcript、多模态输入、WebSocket 增量提示。
 - Skill Test Scenario、timeline、asset、run、review、evaluate、fork。
 - Replay run 列表和 run replay 视图。
+- Run Evaluation Reports、Findings。
+- Governance Proposals、Experiments。
+- Platform Tool Authorizations。
+- Platform Observability 工作台。
 
 当前前端未实现为一级页面或正式功能：
 
-- 独立 Observability 工作台。
 - MCP Gateway Console。
 - Inference provider/route 配置页。
 - 租户、用户、权限、组织管理。
@@ -57,11 +62,17 @@ static/
     app.js                    全局 helper、路由、初始状态
     app/
       core.js                 boot、页面片段加载、基础 UI 行为
-      skill-detail.js         Skills、source、repository、raw materials
+      dashboard.js            Dashboard 汇总
+      skill-detail.js         PSkills、source、repository、materials
       compiler.js             compile request、artifact、BPMN
       agent-prompts.js        Agent Prompt Pack
       skill-test.js           测试场景、timeline、review
       tasks.js                runtime jobs
+      evaluations.js          Run evaluations、findings
+      governance.js           Governance proposals、experiments、tool authorization helper
+      platform-agents.js      Agent definitions、AgentRun 详情
+      platform.js             Skill packages、tools、memory
+      observability.js        OTel / runtime / agent / tool 查询工作台
       runtime.js              invocation、run live、terminal、replay
       formatters.js           展示格式化
     utils/
@@ -100,11 +111,21 @@ static/
 
 | 菜单 | 路由 | 对象 |
 | --- | --- | --- |
-| `Skills` | `/admin/skills` | Skill 生命周期 |
-| `智能体` | `/admin/agent-prompts` | Agent Prompt Pack |
+| `Dashboard` | `/admin/dashboard` | 全局指标和闭环概览 |
+| `Skills` | `/admin/skills` | PSkill 生命周期 |
+| `Prompt Packs` | `/admin/agent-prompts` | Agent Prompt Pack |
+| `Agents` | `/admin/platform/agents` | Agent 定义、版本和绑定 |
+| `Agent Runs` | `/admin/platform/agent-runs` | AgentRun 运行事实 |
+| `Skill Packages` | `/admin/platform/skills` | Skills 包 |
 | `任务` | `/admin/tasks` | Runtime jobs |
+| `Evaluations` | `/admin/evaluations` | RunEvaluation reports / findings |
+| `Governance` | `/admin/governance/proposals` | 治理提案和实验 |
+| `工具授权` | `/admin/platform/tool-authorizations` | 高副作用工具授权 |
+| `Tools` | `/admin/platform/tools` | ToolPolicy 与工具调用 |
+| `Memory` | `/admin/platform/memory` | Agent memory |
+| `Observability` | `/admin/platform/observability` | OTel / runtime / agent 查询 |
 
-编译、运行、测试和 Replay 通过 Skill 详情内动作、列表动作或 deep link 进入，不在当前 sidebar 中作为一级菜单展示。
+编译、运行、测试和 Replay 通过 PSkill 详情内动作、列表动作或 deep link 进入，不在当前 sidebar 中作为一级菜单展示。
 
 ## 6. 路由表
 
@@ -112,11 +133,12 @@ static/
 
 | Path | route.name | 说明 |
 | --- | --- | --- |
-| `/`、`/admin`、`/admin/skills` | `skills-list` | Skill 列表 |
+| `/`、`/admin`、`/admin/dashboard` | `dashboard` | Dashboard |
+| `/admin/skills` | `skills-list` | PSkill 列表 |
 | `/admin/tasks` | `tasks-list` | Runtime job 任务页 |
-| `/admin/skills/:skillId` | `skill-detail` | Skill 详情 |
-| `/admin/skills/:skillId/runs/:runId/live` | `skill-run-live` | Skill 下 run live |
-| `/admin/skills/:skillId/runs/:runId/live/replay` | `skill-run-live` + `view=replay` | Skill 下 run replay 视图 |
+| `/admin/skills/:skillId` | `skill-detail` | PSkill 详情 |
+| `/admin/skills/:skillId/runs/:runId/live` | `skill-run-live` | PSkill 下 run live |
+| `/admin/skills/:skillId/runs/:runId/live/replay` | `skill-run-live` + `view=replay` | PSkill 下 run replay 视图 |
 | `/admin/skills/:skillId/runs/:runId/replay` | `skill-run-live` + `view=replay` | 兼容 replay path |
 | `/admin/skills/:skillId/debug/runs/:runId/live` | `skill-debug-live` | 调试 run live |
 | `/admin/skills/:skillId/tests/new` | `skill-test-scenario-new` | 新建测试场景 |
@@ -132,6 +154,24 @@ static/
 | `/admin/runs/:runId/live/replay` | `run-live` + `view=replay` | Run replay 视图 |
 | `/admin/replay` | `replay-list` | Replay run 列表 |
 | `/admin/replay/runs/:runId` | `run-live` + `view=replay` | Replay detail |
+| `/admin/evaluations` | `evaluation-reports` | RunEvaluation reports |
+| `/admin/evaluations/:evaluationId` | `evaluation-report` | RunEvaluation report |
+| `/admin/evaluations/findings` | `evaluation-findings` | RunEvaluation findings |
+| `/admin/governance`、`/admin/governance/proposals` | `governance-proposals` | Governance proposals |
+| `/admin/governance/proposals/:proposalId` | `governance-proposal` | Governance proposal |
+| `/admin/governance/experiments` | `governance-experiments` | Governance experiments |
+| `/admin/platform/tool-authorizations` | `tool-authorizations` | Tool authorizations |
+| `/admin/platform/agents` | `platform-agents` | Agents |
+| `/admin/platform/agents/:agentKey` | `platform-agent` | Agent detail |
+| `/admin/platform/agent-runs` | `platform-agent-runs` | AgentRuns |
+| `/admin/platform/agent-runs/:agentRunId` | `platform-agent-run` | AgentRun detail |
+| `/admin/platform/skills` | `platform-skills` | Skill packages |
+| `/admin/platform/skills/:packageName` | `platform-skill` | Skill package detail |
+| `/admin/platform/tools` | `platform-tools` | Tools |
+| `/admin/platform/tools/:toolName` | `platform-tool` | Tool detail |
+| `/admin/platform/memory` | `platform-memory` | Memory entries |
+| `/admin/platform/memory/:memoryId` | `platform-memory-entry` | Memory entry |
+| `/admin/platform/observability` | `platform-observability` | Observability 工作台 |
 
 `static/js/utils/router.js` 和 `router.node.cjs` 用于复用与测试；实际页面当前以 `app.js` 中的全局 helper 为准。
 
@@ -141,10 +181,11 @@ static/
 
 | 文件 | 容器 | 说明 |
 | --- | --- | --- |
-| `skills-list.html` | `skills-list-page` | Skill 列表 |
-| `skill-detail.html` | `skill-detail-page` | Skill 详情、source、repository、raw materials、publish、compile、runs、tests |
-| `create-skill-modal.html` | `create-skill-modal-page` | 创建 Skill |
-| `delete-skill-modal.html` | `delete-skill-modal-page` | 删除 Skill |
+| `dashboard.html` | `dashboard-page` | Dashboard |
+| `skills-list.html` | `skills-list-page` | PSkill 列表 |
+| `skill-detail.html` | `skill-detail-page` | PSkill 详情、source、repository、materials、publish、compile、runs、tests |
+| `create-skill-modal.html` | `create-skill-modal-page` | 创建 PSkill |
+| `delete-skill-modal.html` | `delete-skill-modal-page` | 删除 PSkill |
 | `publish-skill-drawer.html` | `publish-skill-drawer-page` | 发布与 compile progress |
 | `compiler-list.html` | `compiler-list-page` | 编译请求列表 |
 | `compiler-artifact-detail.html` | `compiler-artifact-page` | Artifact JSON/BPMN/节点详情 |
@@ -156,6 +197,17 @@ static/
 | `skill-test-scenario-detail.html` | `skill-test-scenario-page` | 测试场景编辑 |
 | `skill-test-scenario-review.html` | `skill-test-scenario-review-page` | 测试运行 review |
 | `replay-list.html` | `replay-list-page` | Replay run 列表 |
+| `evaluation-reports.html` | `evaluation-reports-page` | RunEvaluation reports |
+| `evaluation-findings.html` | `evaluation-findings-page` | RunEvaluation findings |
+| `governance-proposals.html` | `governance-proposals-page` | Governance proposals |
+| `governance-experiments.html` | `governance-experiments-page` | Governance experiments |
+| `tool-authorizations.html` | `tool-authorizations-page` | Platform tool authorizations |
+| `platform-agents.html` | `platform-agents-page` | Agents |
+| `platform-agent-runs.html` | `platform-agent-runs-page` | AgentRuns |
+| `platform-skills.html` | `platform-skills-page` | Skill packages |
+| `platform-tools.html` | `platform-tools-page` | Tools |
+| `platform-memory.html` | `platform-memory-page` | Memory entries |
+| `platform-observability.html` | `platform-observability-page` | Observability 工作台 |
 
 页面片段必须保持片段形态，不包含 `<!doctype>`、`<html>`、`<head>`、`<body>` 或脚本标签。
 
@@ -168,13 +220,19 @@ static/
 | 状态域 | 字段示例 | 所属文件 |
 | --- | --- | --- |
 | App / Route | `apiBaseUrl`、`route`、`loadingPage`、`notice`、`centerToast` | `app.js`、`core.js` |
+| Dashboard | `dashboardMetrics`、`dashboardFilters` | `dashboard.js` |
 | Skills | `skills`、`currentSkill`、`sourceLoadedSkillId`、`repositoryEntries` | `skill-detail.js` |
-| Raw Materials | `rawMaterials`、`rawMaterialDetail`、`rawMaterialAnalysis`、upload/generate modal state | `skill-detail.js` |
+| Materials | `rawMaterials`、`rawMaterialDetail`、`rawMaterialAnalysis`、upload/generate modal state | `skill-detail.js` |
 | Publish / Compiler | `publishProgress`、`compilerRequests`、`compilerArtifact`、BPMN viewer state | `compiler.js` |
 | Agent Prompts | `agentPrompts`、`agentPromptDetail`、`agentPromptBindings` | `agent-prompts.js` |
 | Tasks | `tasks`、`taskStats`、`taskFilters`、`taskPollTimer` | `tasks.js` |
 | Runtime | `invocations`、`liveRun`、`terminalEvents`、`runWs`、`liveRunPollTimer` | `runtime.js` |
 | Skill Tests | `skillTestCases`、`skillTestCase`、`skillTestRuns`、`skillTestReview`、timeline state | `skill-test.js` |
+| Evaluations | `currentEvaluation`、`evaluationFindings`、`evaluationActivityWs` | `evaluations.js` |
+| Governance | `governanceProposals`、`governanceExperimentRows`、`governanceProposalActivityWs` | `governance.js` |
+| Platform Agents | `platformAgents`、`platformAgentRuns`、`platformAgentToolAuthorizations` | `platform-agents.js` |
+| Platform Skills / Tools / Memory | `skillPackages`、`platformTools`、`memoryEntries` | `platform.js` |
+| Observability | `observabilityMetrics`、`observabilityRunEvents`、`observabilityRunTraces` | `observability.js` |
 
 当前不是多 store 架构；文档和后续改动不应假设存在独立 `appStore/runStore/gatewayStore`。
 
@@ -182,22 +240,30 @@ static/
 
 | 页面/能力 | 当前调用接口 |
 | --- | --- |
-| Skills List | `GET /api/v1/skills`、`POST /api/v1/skills` |
-| Skill Detail | `GET/PATCH/DELETE /api/v1/skills/{skill_id}` |
-| Source Editor | `GET/PUT /api/v1/skills/{skill_id}/source` |
-| Repository Browser | `/api/v1/skills/{skill_id}/repository/tree`、`/repository/files`、`/repository/folders` |
-| Raw Materials | `/api/v1/skills/{skill_id}/raw-materials*` |
-| Publish Drawer | `POST /api/v1/skills/{skill_id}/publish`、`GET /api/v1/compiler/requests/{id}/events`、`/progress` |
+| PSkills List | `GET /api/v1/pskills`、`POST /api/v1/pskills` |
+| PSkill Detail | `GET/PATCH/DELETE /api/v1/pskills/{skill_id}` |
+| Source Editor | `GET/PUT /api/v1/pskills/{skill_id}/source` |
+| Repository Browser | `/api/v1/pskills/{skill_id}/repository/tree`、`/repository/files`、`/repository/folders` |
+| Materials | `/api/v1/pskills/{skill_id}/materials*` |
+| Publish Drawer | `POST /api/v1/pskills/{skill_id}/publish`、`GET /api/v1/compiler/requests/{id}/events`、`/progress` |
 | Compiler List | `GET /api/v1/compiler/requests` |
 | Artifact Detail | `GET/PUT /api/v1/compiler/artifacts/{id}` |
 | Agent Prompts | `/api/v1/agent-prompts*`、`/api/v1/agent-prompt-bindings*` |
 | Tasks | `GET /api/v1/runtime/jobs`、`GET /api/v1/runtime/jobs/stats` |
 | Invocations | `GET/POST /api/v1/gateway/invocations` |
-| Run Live | `GET /api/v1/runs/{run_id}`、`/snapshots`、`/trace-events`、`/bindings`、`/terminal/sessions/{run_id}`、`/terminal/sessions/{run_id}/events` |
+| Run Live | `GET /api/v1/runs/{run_id}`、`POST /api/v1/runs/{run_id}/cancel`、`/snapshots`、`/traces`、`/bindings`、`/events`、`/terminal/sessions/{run_id}` |
 | Terminal WS | `/ws/runs/{run_id}` |
 | Replay | `GET /api/v1/replay/runs`、`GET /api/v1/replay/runs/{run_id}` |
-| Skill Tests | `/api/v1/skills/{skill_id}/test-scenarios*`、`/api/v1/skill-test-scenario-runs*` |
+| Skill Tests | `/api/v1/pskills/{skill_id}/test-scenarios*`、`/api/v1/skill-test-scenario-runs*` |
 | Inference Models | `GET /api/v1/gateway/inference/models` |
+| Evaluations | `/api/v1/evaluations*` |
+| Governance | `/api/v1/governance/proposals*`、`/api/v1/governance/experiments*` |
+| Tool Authorizations | `/api/v1/tool-authorizations*`、`/api/v1/runs/{run_id}/tool-authorizations`、`/api/v1/agent-runs/{agent_run_id}/tool-authorizations` |
+| Platform Agents | `/api/v1/agents*`、`/api/v1/agent-runs*` |
+| Platform Skill Packages | `/api/v1/skills*` |
+| Platform Tools | `/api/v1/tools*` |
+| Platform Memory | `/api/v1/memory*` |
+| Platform Observability | `/api/v1/observability/*` |
 
 当前前端不应调用以下未实现接口：
 
@@ -209,20 +275,20 @@ static/
 - `/api/v1/runtime/workers`
 - `/api/v1/runtime/sandboxes`
 - `/api/v1/replay/traces/{trace_id}`
-- `/api/v1/runs/{run_id}/cancel`
-
 ## 10. 同步策略
 
 | 场景 | 当前方式 |
 | --- | --- |
 | Publish progress | SSE：`/api/v1/compiler/requests/{id}/events`，断线可读 `/progress` |
 | Run Live terminal event | WebSocket `/ws/runs/{run_id}` 接收 `terminal.event.appended`，REST 补齐 |
-| Run Live 状态 | REST 刷新 run、terminal events、trace events、bindings |
+| Run Live 状态 | REST 刷新 run、run events、run traces、bindings |
 | Tasks | 轮询 runtime jobs 和 stats |
 | Skill Test Review | REST 拉取 review DTO，必要时轮询运行状态 |
 | Replay | REST 一次性拉取 replay detail |
+| Evaluation / Governance activity | WebSocket 活动快照 + REST 补齐 |
+| Observability | REST 查询 dashboard、metrics、run events、run traces、agent/tool/model facts |
 
-WebSocket 不是状态源。断线、刷新或 seq 不连续时必须通过 REST 从 `latest_seq + 1` 补齐 terminal events。
+WebSocket 不是状态源。断线、刷新或 seq 不连续时必须通过 REST 从 `latest_seq + 1` 补齐 run events。
 
 ## 11. Terminal UI
 
@@ -285,7 +351,7 @@ npm run dev
 - terminal media 渲染 helper。
 - button tooltip 和 danger action 行为。
 - skill test timeline normalize/layout。
-- raw materials 与 tasks helper。
+- materials 与 tasks helper。
 
 ## 15. 设计约束
 

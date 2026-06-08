@@ -150,7 +150,6 @@ def list_snapshots(
 
 
 @runs_router.get("/{run_id}/traces", response_model=list[RunTraceResponse])
-@runs_router.get("/{run_id}/trace-events", response_model=list[RunTraceResponse])
 def list_run_traces(
     run_id: str,
     event_type: str | None = Query(default=None),

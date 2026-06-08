@@ -1317,7 +1317,7 @@ class SkillsService:
             branch=draft_version.source_ref,
             files=files_to_commit,
             binary_files=reference_binary_files or {},
-            commit_message="Generate skill draft from raw materials via PSOP WEB IDE",
+            commit_message="Generate PSkill draft from materials via PSOP WEB IDE",
         )
         draft_version.source_commit_sha = new_commit_sha
         draft_version.manifest_snapshot = manifest_snapshot(document)

@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 from app.app import create_app
+from app.agents.service import DEFAULT_AGENT_SPECS
 from tests.test_skills_api import create_test_settings
 
 
@@ -40,6 +41,8 @@ def test_api_routes_use_pskill_and_materials_naming() -> None:
 
     forbidden_fragments = {
         "/raw-materials",
+        "/terminal-events",
+        "/trace-events",
         "/agent-skills",
         "/api/v1/compiler/skills/",
     }
@@ -52,7 +55,26 @@ def test_api_routes_use_pskill_and_materials_naming() -> None:
     assert violations == []
     assert "/api/v1/compiler/pskills/{skill_id}/compile" in route_paths
     assert "/api/v1/pskills/{skill_id}/materials" in route_paths
+    assert "/api/v1/runs/{run_id}/events" in route_paths
+    assert "/api/v1/runs/{run_id}/traces" in route_paths
     assert "/api/v1/skills" in route_paths
+
+
+def test_default_agents_keep_closed_loop_keys_and_runner_boundary() -> None:
+    specs = {spec["key"]: spec for spec in DEFAULT_AGENT_SPECS}
+
+    assert list(specs) == [
+        "pskill.builder",
+        "pskill.compiler",
+        "pskill.tester",
+        "pskill.runner",
+        "pskill.evaluator",
+        "psop.governance",
+    ]
+    assert specs["pskill.runner"]["output_schema"]["name"] == "RuntimeAgentObservation"
+    assert specs["pskill.runner"]["allowed_tools"] == ["psop.runtime.read"]
+    assert specs["pskill.runner"]["allowed_skill_names"] == ["pskill-runner-field-assistant"]
+    assert specs["psop.governance"]["output_schema"]["name"] == "GovernanceProposalResult"
 
 
 def test_server_design_keeps_pskill_api_paths_distinct_from_skill_packages() -> None:
@@ -71,3 +93,31 @@ def test_server_design_keeps_pskill_api_paths_distinct_from_skill_packages() -> 
     assert "### 9.2 PSkills / Materials" in design
     assert "`GET` | `/api/v1/pskills` | PSkill 列表" in design
     assert "`GET` | `/api/v1/skills` | Skill 包列表" in design
+    assert "`POST` | `/api/v1/runs/{run_id}/cancel`" in design
+    assert "无 `/api/v1/runs/{run_id}/cancel`" not in design
+
+
+def test_frontend_design_uses_pskill_materials_and_run_trace_paths() -> None:
+    design = (PROJECT_ROOT / "docs" / "PSOP前端详细设计v1.md").read_text(encoding="utf-8")
+
+    forbidden_fragments = {
+        "/api/v1/skills/{skill_id}",
+        "/raw-materials",
+        "raw materials",
+        "/terminal-events",
+        "/trace-events",
+    }
+    violations = sorted(fragment for fragment in forbidden_fragments if fragment in design)
+
+    assert violations == []
+    assert "`GET /api/v1/pskills`" in design
+    assert "`POST /api/v1/runs/{run_id}/cancel`" in design
+    assert "`/api/v1/pskills/{skill_id}/materials*`" in design
+    assert "`/traces`" in design
+    assert "独立 Observability 工作台" not in design
+    assert "Platform Observability 工作台" in design
+    assert "`/admin/platform/observability`" in design
+    assert "`/admin/governance/proposals`" in design
+    assert "`/admin/platform/tool-authorizations`" in design
+    assert "`/api/v1/observability/*`" in design
+    assert "- `/api/v1/runs/{run_id}/cancel`" not in design

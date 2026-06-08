@@ -676,6 +676,54 @@ def test_agent_runner_cannot_write_run_events_directly() -> None:
     assert "agent.tool_call.blocked" in event_types
 
 
+def test_tool_authorization_cannot_expand_agent_or_skill_tool_permissions() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.runner",
+                "owner_type": "runtime_run",
+                "owner_id": "permission-boundary-run",
+                "run_id": "permission-boundary-run",
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.repository.commit_patch",
+                        "side_effect_level": "high_write",
+                        "arguments_summary": {"path_count": 1},
+                        "authorization_reason": "This must not create an authorization outside effective tools.",
+                        "expected_effect_summary": "Commit a patch without runner permission.",
+                        "idempotency_key": "permission-boundary-commit-patch",
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "failed"
+    assert run_once_response.json()["error_message"] == "tool_not_allowed_by_agent_or_skill"
+    assert authorizations_response.status_code == 200
+    assert authorizations_response.json() == []
+
+    tool_call = tool_calls_response.json()[0]
+    assert tool_call["tool_name"] == "psop.repository.commit_patch"
+    assert tool_call["status"] == "blocked"
+    assert tool_call["side_effect_level"] == "high_write"
+
+    event_types = [item["event_type"] for item in events_response.json()]
+    assert "agent.tool_call.blocked" in event_types
+    assert "tool.authorization_requested" not in event_types
+    assert "agent.waiting_tool_authorization" not in event_types
+
+
 def test_agent_runner_executes_runtime_read_tool_from_persisted_facts() -> None:
     client, _, _ = create_test_client()
 

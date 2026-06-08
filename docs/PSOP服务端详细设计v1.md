@@ -390,6 +390,7 @@ Claim 规则：
 | `GET` | `/api/v1/gateway/invocations/{invocation_id}` | invocation 详情 |
 | `GET` | `/api/v1/runs` | run 列表；支持 `status`、`skill_id` |
 | `GET` | `/api/v1/runs/{run_id}` | run 详情 |
+| `POST` | `/api/v1/runs/{run_id}/cancel` | 取消 run；同时取消该 run 下未决工具授权 |
 | `GET` | `/api/v1/runs/{run_id}/snapshots` | Session Token snapshots |
 | `GET` | `/api/v1/runs/{run_id}/traces` | run traces；支持 `event_type` |
 | `GET` | `/api/v1/runs/{run_id}/binding-requirements` | 当前 MVP 固定 terminal input/output requirement |
@@ -405,8 +406,6 @@ Claim 规则：
 | `GET` | `/api/v1/replay/runs/{run_id}` | replay detail |
 | `GET` | `/api/v1/runtime/jobs/stats` | job 统计；支持 `window_hours` |
 | `GET` | `/api/v1/runtime/jobs` | job 列表；支持状态、类型、关键字、时间和分页 |
-
-当前没有 `/api/v1/runs/{run_id}/cancel` 路由，尽管 service 层已有 `RuntimeService.cancel_run()`。
 
 ### 9.5 Inference
 
@@ -518,7 +517,6 @@ Claim 规则：
 - 无 MCP Gateway REST API。
 - 无独立 CapabilityHost 类；当前由 RuntimeService 内聚执行。
 - 无 sandbox 执行。
-- 无 `/api/v1/runs/{run_id}/cancel` 路由。
 - 无 `/api/v1/replay/traces/{trace_id}`。
 - 无 `/api/v1/runtime/workers` 或 `/api/v1/runtime/sandboxes`。
 - 无 FastAPI 静态文件挂载；Web 控制台由独立静态宿主运行。
