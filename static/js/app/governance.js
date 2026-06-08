@@ -1179,10 +1179,13 @@
         "run_evaluation_id",
         "source_evaluation_id"
       ]);
-      const findingId = this.toolAuthorizationFirstNestedValue(authorization, [
+      const findingIds = this.toolAuthorizationNestedValues(authorization, [
         "finding_id",
         "run_evaluation_finding_id",
-        "source_finding_id"
+        "source_finding_id",
+        "source_finding_ids",
+        "finding_ids",
+        "run_evaluation_finding_ids"
       ]);
       const runId = String(authorization?.run_id || this.toolAuthorizationFirstNestedValue(authorization, [
         "run_id",
@@ -1241,7 +1244,7 @@
           icon: "fact_check"
         });
       }
-      if (findingId) {
+      for (const findingId of findingIds) {
         const href = evaluationId
           ? buildEvaluationReportPath(evaluationId)
           : buildEvaluationFindingsPath({ run_id: runId });
@@ -1323,6 +1326,10 @@
     },
 
     toolAuthorizationFirstNestedValue(authorization, keys) {
+      return this.toolAuthorizationNestedValues(authorization, keys)[0] || "";
+    },
+
+    toolAuthorizationNestedValues(authorization, keys) {
       const keySet = new Set(keys);
       const sources = [
         authorization?.business_context,
@@ -1336,51 +1343,59 @@
         authorization?.response_payload?.proposal
       ];
       const seen = new Set();
+      const values = [];
+
+      const collect = (item, depth) => {
+        if (item === null || item === undefined || depth > 8) {
+          return;
+        }
+        if (Array.isArray(item)) {
+          for (const nested of item) {
+            collect(nested, depth + 1);
+          }
+          return;
+        }
+        if (typeof item === "object") {
+          walk(item, depth + 1);
+          return;
+        }
+        const normalized = String(item || "").trim();
+        if (normalized && !values.includes(normalized)) {
+          values.push(normalized);
+        }
+      };
 
       const walk = (value, depth = 0) => {
         if (value === null || value === undefined || depth > 8) {
-          return "";
+          return;
         }
         if (typeof value !== "object") {
-          return "";
+          return;
         }
         if (seen.has(value)) {
-          return "";
+          return;
         }
         seen.add(value);
         if (Array.isArray(value)) {
           for (const item of value) {
-            const nested = walk(item, depth + 1);
-            if (nested) {
-              return nested;
-            }
+            walk(item, depth + 1);
           }
-          return "";
+          return;
         }
         for (const [key, item] of Object.entries(value)) {
           if (keySet.has(key)) {
-            const normalized = String(item || "").trim();
-            if (normalized && typeof item !== "object") {
-              return normalized;
-            }
+            collect(item, depth + 1);
           }
         }
         for (const item of Object.values(value)) {
-          const nested = walk(item, depth + 1);
-          if (nested) {
-            return nested;
-          }
+          walk(item, depth + 1);
         }
-        return "";
       };
 
       for (const source of sources) {
-        const value = walk(source);
-        if (value) {
-          return value;
-        }
+        walk(source);
       }
-      return "";
+      return values;
     },
 
     governanceProposalSourceLabel(proposal) {
@@ -1695,7 +1710,50 @@
     },
 
     toolAuthorizationReversibleLabel(authorization) {
-      return authorization?.reversible ? "可回滚" : "不可回滚";
+      const state = authorization?.reversible ? "可回滚" : "不可回滚";
+      const summary = this.toolAuthorizationRollbackSummary(authorization);
+      return summary ? `${state} · ${summary}` : state;
+    },
+
+    toolAuthorizationRollbackSummary(authorization) {
+      const summary = authorization?.tool_arguments_summary || {};
+      const requestPayload = authorization?.request_payload || {};
+      const responsePayload = authorization?.response_payload || {};
+      return this.firstToolAuthorizationTextValue([
+        authorization?.rollback_summary,
+        authorization?.rollbackSummary,
+        authorization?.rollback_plan,
+        authorization?.rollbackPlan,
+        authorization?.rollback_strategy,
+        authorization?.rollbackStrategy,
+        authorization?.irreversible_reason,
+        authorization?.non_reversible_reason,
+        summary.rollback_summary,
+        summary.rollbackSummary,
+        summary.rollback_plan,
+        summary.rollbackPlan,
+        summary.rollback_strategy,
+        summary.rollbackStrategy,
+        summary.rollback,
+        summary.irreversible_reason,
+        summary.non_reversible_reason,
+        requestPayload.rollback_summary,
+        requestPayload.rollbackSummary,
+        requestPayload.rollback_plan,
+        requestPayload.rollbackPlan,
+        requestPayload.rollback_strategy,
+        requestPayload.rollbackStrategy,
+        requestPayload.rollback,
+        requestPayload.irreversible_reason,
+        requestPayload.non_reversible_reason,
+        responsePayload.rollback_summary,
+        responsePayload.rollbackSummary,
+        responsePayload.rollback_plan,
+        responsePayload.rollbackPlan,
+        responsePayload.rollback,
+        responsePayload.irreversible_reason,
+        responsePayload.non_reversible_reason
+      ]);
     },
 
     toolAuthorizationHasDiff(authorization) {
@@ -1748,6 +1806,31 @@
       for (const value of values) {
         if (typeof value === "string" && value.trim()) {
           return value.trim();
+        }
+      }
+      return "";
+    },
+
+    firstToolAuthorizationTextValue(values) {
+      for (const value of values) {
+        if (value === null || value === undefined || value === "") {
+          continue;
+        }
+        if (typeof value === "string") {
+          const normalized = value.trim();
+          if (normalized) {
+            return normalized;
+          }
+          continue;
+        }
+        if (typeof value === "number" || typeof value === "boolean") {
+          return String(value);
+        }
+        if (typeof value === "object") {
+          const text = this.governanceJsonPreview(value);
+          if (text && text !== "null" && text !== "{}" && text !== "[]") {
+            return text;
+          }
         }
       }
       return "";

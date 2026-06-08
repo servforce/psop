@@ -478,6 +478,23 @@
                             <p class="field-label">风险说明</p>
                             <p class="mt-2 text-sm leading-6 text-slate-300" x-text="authorization.authorization_reason || 'N/A'"></p>
                           </section>
+                          <section class="mt-4" x-show="liveRunToolAuthorizationContextLinks(authorization).length">
+                            <p class="field-label">Context</p>
+                            <div class="mt-2 flex flex-wrap gap-1.5">
+                              <template x-for="link in liveRunToolAuthorizationContextLinks(authorization)" :key="link.key">
+                                <button
+                                  type="button"
+                                  class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-left text-[11px] text-slate-200 transition hover:border-orange-500/40 hover:bg-orange-500/10 hover:text-orange-100"
+                                  @click="navigate(link.href)"
+                                  :title="`${link.label}: ${link.value}`"
+                                >
+                                  <span class="material-symbols-outlined shrink-0 text-[14px]" x-text="link.icon"></span>
+                                  <span class="shrink-0 font-semibold" x-text="link.label"></span>
+                                  <span class="max-w-36 truncate font-mono text-slate-400" x-text="link.value"></span>
+                                </button>
+                              </template>
+                            </div>
+                          </section>
                         </div>
 
                         <aside class="min-w-0 space-y-3">
@@ -924,6 +941,21 @@
                                         <p class="truncate font-semibold text-slate-100" x-text="authorization.tool_name"></p>
                                         <p class="mt-1 truncate text-xs text-slate-400" x-text="`${authorization.risk_level || 'risk:N/A'} · ${authorization.side_effect_level || 'effect:N/A'}`"></p>
                                         <p class="mt-1 mono-field break-all" x-text="authorization.id"></p>
+                                        <template x-if="liveRunToolAuthorizationContextLinks(authorization).length > 0">
+                                          <div class="mt-2 flex flex-wrap gap-1.5">
+                                            <template x-for="link in liveRunToolAuthorizationContextLinks(authorization)" :key="link.key">
+                                              <button
+                                                type="button"
+                                                class="inline-flex max-w-full items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-left text-[11px] text-slate-200 transition hover:border-orange-500/40 hover:bg-orange-500/10 hover:text-orange-100"
+                                                @click="navigate(link.href)"
+                                                :title="`${link.label}: ${link.value}`"
+                                              >
+                                                <span class="material-symbols-outlined shrink-0 text-[14px]" x-text="link.icon"></span>
+                                                <span class="max-w-32 truncate" x-text="link.label"></span>
+                                              </button>
+                                            </template>
+                                          </div>
+                                        </template>
                                       </div>
                                       <div class="flex shrink-0 items-center gap-2">
                                         <button

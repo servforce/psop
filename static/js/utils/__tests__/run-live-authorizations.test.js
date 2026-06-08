@@ -131,6 +131,18 @@ function loadRuntimeHarness(locationSearch = "") {
     URLSearchParams
   };
   context.window.PSOPConsoleHelpers.buildRunEventsPath = (runId) => `/admin/runs/${runId}/events`;
+  context.window.PSOPConsoleHelpers.buildSkillDetailPath = (skillId) => `/admin/skills/${skillId}`;
+  context.window.PSOPConsoleHelpers.buildReplayPath = (runId, focus = {}) => {
+    const params = new URLSearchParams();
+    for (const key of ["event_id", "trace_id", "seq_no", "snapshot_seq"]) {
+      const value = String(focus?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
+  };
   context.window.PSOPConsoleHelpers.buildSkillRunEventsPath = (skillId, runId) => (
     `/admin/skills/${skillId}/runs/${runId}/events`
   );
@@ -207,6 +219,89 @@ test("run live page exposes embedded tool authorization tab", () => {
   expect(html).toContain("openCompilerArtifact(liveRun.compile_artifact_id)");
   expect(html).toContain("replayDetail?.provenance?.compile_request_id");
   expect(html).toContain("replayDetail?.provenance?.latest_session_token_snapshot_id");
+});
+
+test("run live tool authorization context links include source evidence", () => {
+  const methods = loadRuntimeMethods();
+  const context = {
+    ...methods,
+    liveRun: { id: "run-current" }
+  };
+  const authorization = {
+    id: "auth-context",
+    agent_run_id: "agent-run-1",
+    agent_tool_call_id: "tool-call-1",
+    run_event_id: "event-1",
+    business_context: {
+      proposal_id: "proposal-business",
+      experiment_id: "experiment-business",
+      source_evaluation_id: "evaluation-business",
+      source_finding_ids: ["finding-business", "finding-business-2"],
+      source_run_id: "run-business",
+      run_trace_id: "trace-business",
+      snapshot_seq: 7,
+      pskill_definition_id: "pskill-business"
+    }
+  };
+
+  const links = methods.liveRunToolAuthorizationContextLinks.call(context, authorization);
+
+  expect(links.map((item) => item.key)).toEqual([
+    "agent-run-agent-run-1",
+    "tool-call-tool-call-1",
+    "run-replay-run-business",
+    "run-event-event-1",
+    "proposal-proposal-business",
+    "experiment-experiment-business",
+    "evaluation-evaluation-business",
+    "finding-finding-business",
+    "finding-finding-business-2",
+    "run-trace-trace-business",
+    "snapshot-7",
+    "pskill-pskill-business"
+  ]);
+  expect(links.find((item) => item.key === "agent-run-agent-run-1").href).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-context"
+  );
+  expect(links.find((item) => item.key === "tool-call-tool-call-1").href).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-call-1"
+  );
+  expect(links.find((item) => item.key === "run-replay-run-business").href).toBe(
+    "/admin/runs/run-business/live/replay"
+  );
+  expect(links.find((item) => item.key === "run-event-event-1").href).toBe(
+    "/admin/runs/run-business/live/replay?event_id=event-1"
+  );
+  expect(links.find((item) => item.key === "proposal-proposal-business").href).toBe(
+    "/admin/governance/proposals/proposal-business"
+  );
+  expect(links.find((item) => item.key === "experiment-experiment-business").href).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-business"
+  );
+  expect(links.find((item) => item.key === "evaluation-evaluation-business").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "finding-finding-business").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "finding-finding-business-2").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "run-trace-trace-business").href).toBe(
+    "/admin/runs/run-business/live/replay?trace_id=trace-business"
+  );
+  expect(links.find((item) => item.key === "snapshot-7").href).toBe(
+    "/admin/runs/run-business/live/replay?snapshot_seq=7"
+  );
+  expect(links.find((item) => item.key === "pskill-pskill-business").href).toBe(
+    "/admin/skills/pskill-business"
+  );
+  expect(methods.liveRunToolAuthorizationFirstNestedValue.call(context, authorization, ["source_finding_ids"])).toBe(
+    "finding-business"
+  );
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
+  expect(html).toContain("liveRunToolAuthorizationContextLinks(authorization)");
 });
 
 test("run live compile request evidence link opens compiler request filter", () => {

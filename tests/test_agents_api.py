@@ -92,7 +92,7 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
                 "owner_type": "governance",
                 "owner_id": "proposal-1",
                 "input_payload": {
-                    "source_finding_ids": ["finding-context-1"],
+                    "source_finding_ids": ["finding-context-1", "finding-context-2"],
                     "source_evaluation_id": "evaluation-context-1",
                     "source_run_id": "run-context-1",
                 },
@@ -106,6 +106,10 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
                 "tool_name": "psop.agent_version.activate",
                 "side_effect_level": "high_write",
                 "authorization_reason": "激活 AgentVersion 属于高副作用写操作。",
+                "tool_arguments_summary": {"source_finding_ids": ["finding-context-2", "finding-context-3"]},
+                "request_payload": {
+                    "business_context": {"source_finding_ids": ["finding-context-0", "finding-context-1"]}
+                },
             },
         )
         reject_authorization = reject_authorization_response.json()
@@ -192,14 +196,33 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert approved_run_response.json()["status"] == "queued"
 
     assert reject_authorization["business_context"]["proposal_id"] == "proposal-1"
-    assert reject_authorization["business_context"]["source_finding_id"] == "finding-context-1"
+    assert reject_authorization["business_context"]["source_finding_id"] == "finding-context-0"
+    assert reject_authorization["business_context"]["source_finding_ids"] == [
+        "finding-context-0",
+        "finding-context-1",
+        "finding-context-2",
+        "finding-context-3",
+    ]
     assert reject_authorization["business_context"]["source_evaluation_id"] == "evaluation-context-1"
     assert reject_authorization["business_context"]["source_run_id"] == "run-context-1"
     assert reject_authorization["request_payload"]["business_context"]["proposal_id"] == "proposal-1"
+    assert reject_authorization["request_payload"]["business_context"]["source_finding_id"] == "finding-context-0"
+    assert reject_authorization["request_payload"]["business_context"]["source_finding_ids"] == [
+        "finding-context-0",
+        "finding-context-1",
+        "finding-context-2",
+    ]
     assert reject_authorization["request_payload"]["business_context"]["source_evaluation_id"] == "evaluation-context-1"
     assert reject_response.status_code == 200
     assert reject_response.json()["status"] == "rejected"
     assert reject_response.json()["business_context"]["proposal_id"] == "proposal-1"
+    assert reject_response.json()["business_context"]["source_finding_id"] == "finding-context-0"
+    assert reject_response.json()["business_context"]["source_finding_ids"] == [
+        "finding-context-0",
+        "finding-context-1",
+        "finding-context-2",
+        "finding-context-3",
+    ]
     assert reject_response.json()["business_context"]["source_run_id"] == "run-context-1"
     assert rejected_run_response.json()["status"] == "failed"
     assert rejected_run_response.json()["error_message"] == "tool_authorization_denied"

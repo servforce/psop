@@ -18,6 +18,7 @@ function loadObservabilityMethods() {
     window: {
       PSOPConsoleHelpers: {
         buildPlatformObservabilityPath: () => "/admin/platform/observability",
+        buildSkillDetailPath: (skillId) => `/admin/skills/${skillId}`,
         buildPlatformAgentRunsPath: (filters = {}) => {
           const params = new URLSearchParams();
           for (const key of ["agent_key", "status", "owner_type", "owner_id"]) {
@@ -49,6 +50,7 @@ function loadObservabilityMethods() {
           const query = params.toString();
           return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
         },
+        buildEvaluationReportPath: (evaluationId) => `/admin/evaluations/${evaluationId}`,
         buildEvaluationReportsPath: (filters = {}) => buildFilteredPath(
           "/admin/evaluations",
           filters,
@@ -64,10 +66,11 @@ function loadObservabilityMethods() {
           filters,
           ["status"]
         ),
+        buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
         buildGovernanceExperimentsPath: (filters = {}) => buildFilteredPath(
           "/admin/governance/experiments",
           filters,
-          ["proposal_id", "status", "experiment_type"]
+          ["experiment_id", "proposal_id", "status", "experiment_type"]
         ),
         buildRunLivePath: (runId) => `/admin/runs/${runId}/live`,
         buildReplayPath: (runId, focus = {}) => {
@@ -81,6 +84,9 @@ function loadObservabilityMethods() {
           if (focus.seq_no) {
             params.set("seq_no", focus.seq_no);
           }
+          if (focus.snapshot_seq) {
+            params.set("snapshot_seq", focus.snapshot_seq);
+          }
           const query = params.toString();
           return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
         }
@@ -93,6 +99,7 @@ function loadObservabilityMethods() {
     String,
     Array,
     Object,
+    Set,
     Map,
     JSON
   };
@@ -759,6 +766,89 @@ test("observability methods query agent run observability streams", async () => 
   expect(context.observabilityAgentRunDetail).toBeNull();
   expect(context.observabilityToolAuthorizations).toEqual([]);
   expect(context.observabilityMemoryEntries).toEqual([]);
+});
+
+test("observability tool authorization context links expose source evidence", () => {
+  const methods = loadObservabilityMethods();
+  const context = {
+    ...methods,
+    observabilityAgentRunDetail: { id: "agent-run-context" }
+  };
+  const authorization = {
+    id: "auth-context",
+    agent_run_id: "agent-run-1",
+    agent_tool_call_id: "tool-call-1",
+    run_event_id: "event-1",
+    business_context: {
+      proposal_id: "proposal-business",
+      experiment_id: "experiment-business",
+      source_evaluation_id: "evaluation-business",
+      source_finding_ids: ["finding-business", "finding-business-2"],
+      source_run_id: "run-business",
+      run_trace_id: "trace-business",
+      snapshot_seq: 5,
+      pskill_definition_id: "pskill-business"
+    }
+  };
+
+  const links = methods.observabilityToolAuthorizationContextLinks.call(context, authorization);
+
+  expect(links.map((item) => item.key)).toEqual([
+    "agent-run-agent-run-1",
+    "tool-call-tool-call-1",
+    "run-replay-run-business",
+    "run-event-event-1",
+    "proposal-proposal-business",
+    "experiment-experiment-business",
+    "evaluation-evaluation-business",
+    "finding-finding-business",
+    "finding-finding-business-2",
+    "run-trace-trace-business",
+    "snapshot-5",
+    "pskill-pskill-business"
+  ]);
+  expect(links.find((item) => item.key === "agent-run-agent-run-1").href).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-context"
+  );
+  expect(links.find((item) => item.key === "tool-call-tool-call-1").href).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-call-1"
+  );
+  expect(links.find((item) => item.key === "run-replay-run-business").href).toBe(
+    "/admin/runs/run-business/live/replay"
+  );
+  expect(links.find((item) => item.key === "run-event-event-1").href).toBe(
+    "/admin/runs/run-business/live/replay?event_id=event-1"
+  );
+  expect(links.find((item) => item.key === "proposal-proposal-business").href).toBe(
+    "/admin/governance/proposals/proposal-business"
+  );
+  expect(links.find((item) => item.key === "experiment-experiment-business").href).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-business"
+  );
+  expect(links.find((item) => item.key === "evaluation-evaluation-business").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "finding-finding-business").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "finding-finding-business-2").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "run-trace-trace-business").href).toBe(
+    "/admin/runs/run-business/live/replay?trace_id=trace-business"
+  );
+  expect(links.find((item) => item.key === "snapshot-5").href).toBe(
+    "/admin/runs/run-business/live/replay?snapshot_seq=5"
+  );
+  expect(links.find((item) => item.key === "pskill-pskill-business").href).toBe(
+    "/admin/skills/pskill-business"
+  );
+  expect(methods.observabilityToolAuthorizationFirstNestedValue.call(context, authorization, ["source_finding_ids"])).toBe(
+    "finding-business"
+  );
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/platform-observability.html"), "utf8");
+  expect(html).toContain("observabilityToolAuthorizationContextLinks(authorization)");
 });
 
 test("observability methods sort distribution entries and derive trace event options", () => {

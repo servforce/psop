@@ -7,7 +7,8 @@ BUSINESS_CONTEXT_ALIASES: dict[str, tuple[str, ...]] = {
     "proposal_id": ("proposal_id", "governance_proposal_id"),
     "experiment_id": ("experiment_id", "governance_experiment_id"),
     "source_evaluation_id": ("source_evaluation_id", "evaluation_id", "evaluation_report_id", "run_evaluation_id"),
-    "source_finding_id": ("source_finding_id", "source_finding_ids", "finding_id", "finding_ids", "run_evaluation_finding_id"),
+    "source_finding_ids": ("source_finding_ids", "finding_ids", "run_evaluation_finding_ids"),
+    "source_finding_id": ("source_finding_id", "finding_id", "run_evaluation_finding_id"),
     "source_run_id": ("source_run_id", "run_id"),
     "run_trace_id": ("run_trace_id", "trace_id", "trace_event_id"),
     "run_event_id": ("run_event_id", "event_id"),
@@ -17,6 +18,8 @@ BUSINESS_CONTEXT_ALIASES: dict[str, tuple[str, ...]] = {
     "agent_key": ("agent_key",),
     "memory_id": ("memory_id", "memory_entry_id"),
 }
+
+PLURAL_CONTEXT_KEYS = {"source_finding_ids"}
 
 
 def agent_run_business_context(agent_run: Any) -> dict[str, Any]:
@@ -98,9 +101,12 @@ def merge_business_context(*contexts: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(context, dict):
             continue
         for key, value in context.items():
-            if _has_value(value) and not _has_value(merged.get(key)):
-                merged[key] = value
-    return merged
+            normalized = _normalize_business_context_value(key, value)
+            if key in PLURAL_CONTEXT_KEYS and _has_value(normalized):
+                merged[key] = _merge_context_lists(merged.get(key), normalized)
+            elif _has_value(normalized) and not _has_value(merged.get(key)):
+                merged[key] = normalized
+    return _complete_business_context(merged)
 
 
 def _derive_context_from_nested(value: Any) -> dict[str, Any]:
@@ -108,8 +114,8 @@ def _derive_context_from_nested(value: Any) -> dict[str, Any]:
     for canonical_key, aliases in BUSINESS_CONTEXT_ALIASES.items():
         found = _first_nested_value(value, aliases)
         if _has_value(found):
-            context[canonical_key] = _normalize_context_value(found)
-    return context
+            context[canonical_key] = _normalize_business_context_value(canonical_key, found)
+    return _complete_business_context(context)
 
 
 def _first_nested_value(value: Any, keys: tuple[str, ...]) -> Any:
@@ -142,5 +148,51 @@ def _normalize_context_value(value: Any) -> Any:
     return value
 
 
+def _normalize_context_list(value: Any) -> list[str]:
+    values: list[str] = []
+
+    def collect(item: Any) -> None:
+        if isinstance(item, list):
+            for nested in item:
+                collect(nested)
+            return
+        if isinstance(item, dict):
+            return
+        normalized = str(item or "").strip()
+        if normalized and normalized not in values:
+            values.append(normalized)
+
+    collect(value)
+    return values
+
+
+def _merge_context_lists(left: Any, right: Any) -> list[str]:
+    values: list[str] = []
+    for item in [*_normalize_context_list(left), *_normalize_context_list(right)]:
+        if item not in values:
+            values.append(item)
+    return values
+
+
+def _normalize_business_context_value(key: str, value: Any) -> Any:
+    if key in PLURAL_CONTEXT_KEYS:
+        return _normalize_context_list(value)
+    return _normalize_context_value(value)
+
+
+def _complete_business_context(context: dict[str, Any]) -> dict[str, Any]:
+    finding_ids = _normalize_context_list(context.get("source_finding_ids"))
+    if finding_ids:
+        context["source_finding_ids"] = finding_ids
+        context["source_finding_id"] = finding_ids[0]
+    elif _has_value(context.get("source_finding_id")):
+        context["source_finding_ids"] = _normalize_context_list(context["source_finding_id"])
+    return context
+
+
 def _has_value(value: Any) -> bool:
-    return value is not None and value != ""
+    if value is None or value == "":
+        return False
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True

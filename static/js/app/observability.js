@@ -1,12 +1,15 @@
 (function () {
   const {
     buildPlatformObservabilityPath,
+    buildSkillDetailPath,
     buildPlatformAgentRunsPath,
     buildPlatformAgentRunPath,
     buildToolAuthorizationsPath,
+    buildEvaluationReportPath,
     buildEvaluationReportsPath,
     buildEvaluationFindingsPath,
     buildGovernanceProposalsPath,
+    buildGovernanceProposalPath,
     buildGovernanceExperimentsPath,
     buildRunLivePath,
     buildReplayPath
@@ -541,6 +544,244 @@
         tab: "authorizations",
         authorization_id: authorization?.id || ""
       });
+    },
+
+    observabilityToolAuthorizationContextLinks(authorization) {
+      const links = [];
+      const agentRunId = String(authorization?.agent_run_id || this.observabilityAgentRunDetail?.id || "").trim();
+      const toolCallId = String(authorization?.agent_tool_call_id || "").trim();
+      const runId = String(authorization?.run_id || this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "run_id",
+        "source_run_id"
+      ]) || "").trim();
+      const runEventId = String(authorization?.run_event_id || this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "run_event_id",
+        "event_id"
+      ]) || "").trim();
+      const proposalId = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "proposal_id",
+        "governance_proposal_id"
+      ]);
+      const experimentId = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "experiment_id",
+        "governance_experiment_id"
+      ]);
+      const evaluationId = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "evaluation_id",
+        "evaluation_report_id",
+        "run_evaluation_id",
+        "source_evaluation_id"
+      ]);
+      const findingIds = this.observabilityToolAuthorizationNestedValues(authorization, [
+        "finding_id",
+        "run_evaluation_finding_id",
+        "source_finding_id",
+        "source_finding_ids",
+        "finding_ids",
+        "run_evaluation_finding_ids"
+      ]);
+      const runTraceId = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "run_trace_id",
+        "trace_id",
+        "trace_event_id"
+      ]);
+      const snapshotSeq = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "snapshot_seq",
+        "session_token_seq",
+        "seq_no"
+      ]);
+      const pskillId = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "pskill_definition_id",
+        "pskill_id",
+        "skill_id"
+      ]);
+
+      if (agentRunId) {
+        links.push({
+          key: `agent-run-${agentRunId}`,
+          label: "AgentRun",
+          value: agentRunId,
+          href: buildPlatformAgentRunPath(agentRunId, { tab: "authorizations", authorization_id: authorization?.id || "" }),
+          icon: "smart_toy"
+        });
+      }
+      if (agentRunId && toolCallId) {
+        links.push({
+          key: `tool-call-${toolCallId}`,
+          label: "ToolCall",
+          value: toolCallId,
+          href: buildPlatformAgentRunPath(agentRunId, { tab: "tools", tool_call_id: toolCallId }),
+          icon: "build"
+        });
+      }
+      if (runId) {
+        links.push({
+          key: `run-replay-${runId}`,
+          label: "Run Replay",
+          value: runId,
+          href: buildReplayPath(runId),
+          icon: "history"
+        });
+      }
+      if (runId && runEventId) {
+        links.push({
+          key: `run-event-${runEventId}`,
+          label: "RunEvent",
+          value: runEventId,
+          href: buildReplayPath(runId, { event_id: runEventId }),
+          icon: "receipt_long"
+        });
+      }
+      if (proposalId) {
+        links.push({
+          key: `proposal-${proposalId}`,
+          label: "Governance Proposal",
+          value: proposalId,
+          href: buildGovernanceProposalPath(proposalId),
+          icon: "account_tree"
+        });
+      }
+      if (experimentId) {
+        links.push({
+          key: `experiment-${experimentId}`,
+          label: "Experiment",
+          value: experimentId,
+          href: buildGovernanceExperimentsPath({ experiment_id: experimentId }),
+          icon: "science"
+        });
+      }
+      if (evaluationId) {
+        links.push({
+          key: `evaluation-${evaluationId}`,
+          label: "Evaluation",
+          value: evaluationId,
+          href: buildEvaluationReportPath(evaluationId),
+          icon: "fact_check"
+        });
+      }
+      for (const findingId of findingIds) {
+        links.push({
+          key: `finding-${findingId}`,
+          label: "Finding",
+          value: findingId,
+          href: evaluationId ? buildEvaluationReportPath(evaluationId) : buildEvaluationFindingsPath({ run_id: runId }),
+          icon: "find_in_page"
+        });
+      }
+      if (runId && runTraceId) {
+        links.push({
+          key: `run-trace-${runTraceId}`,
+          label: "RunTrace",
+          value: runTraceId,
+          href: buildReplayPath(runId, { trace_id: runTraceId }),
+          icon: "timeline"
+        });
+      }
+      if (runId && snapshotSeq) {
+        links.push({
+          key: `snapshot-${snapshotSeq}`,
+          label: "Snapshot",
+          value: snapshotSeq,
+          href: buildReplayPath(runId, { snapshot_seq: snapshotSeq }),
+          icon: "difference"
+        });
+      }
+      if (pskillId) {
+        links.push({
+          key: `pskill-${pskillId}`,
+          label: "PSkill",
+          value: pskillId,
+          href: buildSkillDetailPath(pskillId),
+          icon: "hub"
+        });
+      }
+
+      return this.uniqueObservabilityToolAuthorizationLinks(links);
+    },
+
+    uniqueObservabilityToolAuthorizationLinks(links) {
+      const seen = new Set();
+      return (links || []).filter((link) => {
+        const key = `${link?.key || ""}:${link?.href || ""}`;
+        if (!link?.href || seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      });
+    },
+
+    observabilityToolAuthorizationFirstNestedValue(authorization, keys) {
+      return this.observabilityToolAuthorizationNestedValues(authorization, keys)[0] || "";
+    },
+
+    observabilityToolAuthorizationNestedValues(authorization, keys) {
+      const keySet = new Set(keys);
+      const sources = [
+        authorization?.business_context,
+        authorization?.tool_arguments_summary,
+        authorization?.request_payload,
+        authorization?.request_payload?.decision,
+        authorization?.request_payload?.decision?.arguments_summary,
+        authorization?.request_payload?.proposal,
+        authorization?.response_payload,
+        authorization?.response_payload?.result,
+        authorization?.response_payload?.proposal
+      ];
+      const seen = new Set();
+      const values = [];
+
+      const collect = (item, depth) => {
+        if (item === null || item === undefined || depth > 8) {
+          return;
+        }
+        if (Array.isArray(item)) {
+          for (const nested of item) {
+            collect(nested, depth + 1);
+          }
+          return;
+        }
+        if (typeof item === "object") {
+          walk(item, depth + 1);
+          return;
+        }
+        const normalized = String(item || "").trim();
+        if (normalized && !values.includes(normalized)) {
+          values.push(normalized);
+        }
+      };
+
+      const walk = (value, depth = 0) => {
+        if (value === null || value === undefined || depth > 8) {
+          return;
+        }
+        if (typeof value !== "object") {
+          return;
+        }
+        if (seen.has(value)) {
+          return;
+        }
+        seen.add(value);
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            walk(item, depth + 1);
+          }
+          return;
+        }
+        for (const [key, item] of Object.entries(value)) {
+          if (keySet.has(key)) {
+            collect(item, depth + 1);
+          }
+        }
+        for (const item of Object.values(value)) {
+          walk(item, depth + 1);
+        }
+      };
+
+      for (const source of sources) {
+        walk(source);
+      }
+      return values;
     },
 
     observabilityRunLivePath(runId) {

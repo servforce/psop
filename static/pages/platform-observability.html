@@ -1068,6 +1068,21 @@
                                 <span>授权页</span>
                               </button>
                             </div>
+                            <template x-if="observabilityToolAuthorizationContextLinks(authorization).length > 0">
+                              <div class="mt-2 flex flex-wrap gap-1.5">
+                                <template x-for="link in observabilityToolAuthorizationContextLinks(authorization)" :key="link.key">
+                                  <button
+                                    type="button"
+                                    class="inline-flex max-w-full items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-left text-[11px] text-slate-200 transition hover:border-orange-500/40 hover:bg-orange-500/10 hover:text-orange-100"
+                                    @click="navigate(link.href)"
+                                    :title="`${link.label}: ${link.value}`"
+                                  >
+                                    <span class="material-symbols-outlined shrink-0 text-[14px]" x-text="link.icon"></span>
+                                    <span class="max-w-32 truncate" x-text="link.label"></span>
+                                  </button>
+                                </template>
+                              </div>
+                            </template>
                           </div>
                         </template>
                       </div>

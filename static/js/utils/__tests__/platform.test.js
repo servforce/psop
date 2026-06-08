@@ -152,6 +152,7 @@ function loadPlatformHarness(locationSearch = "") {
     String,
     Array,
     Object,
+    Set,
     Number,
     Math
   };
@@ -223,6 +224,89 @@ test("platform methods build filters, labels, and paths", () => {
   expect(methods.platformRunLivePath("runtime-run-1")).toBe("/admin/runs/runtime-run-1/live");
   expect(methods.platformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
   expect(methods.platformMemoryEntryPath("mem-1")).toBe("/admin/platform/memory/mem-1");
+});
+
+test("platform AgentRun authorization context links expose source evidence", () => {
+  const methods = loadPlatformMethods();
+  const context = {
+    ...methods,
+    currentAgentRun: { id: "agent-run-current", run_id: "run-current" }
+  };
+  const authorization = {
+    id: "auth-context",
+    agent_run_id: "agent-run-1",
+    agent_tool_call_id: "tool-call-1",
+    run_event_id: "event-1",
+    business_context: {
+      proposal_id: "proposal-business",
+      experiment_id: "experiment-business",
+      source_evaluation_id: "evaluation-business",
+      source_finding_ids: ["finding-business", "finding-business-2"],
+      source_run_id: "run-business",
+      run_trace_id: "trace-business",
+      snapshot_seq: 6,
+      pskill_definition_id: "pskill-business"
+    }
+  };
+
+  const links = methods.agentRunAuthorizationContextLinks.call(context, authorization);
+
+  expect(links.map((item) => item.key)).toEqual([
+    "agent-run-agent-run-1",
+    "tool-call-tool-call-1",
+    "run-replay-run-business",
+    "run-event-event-1",
+    "proposal-proposal-business",
+    "experiment-experiment-business",
+    "evaluation-evaluation-business",
+    "finding-finding-business",
+    "finding-finding-business-2",
+    "run-trace-trace-business",
+    "snapshot-6",
+    "pskill-pskill-business"
+  ]);
+  expect(links.find((item) => item.key === "agent-run-agent-run-1").href).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-context"
+  );
+  expect(links.find((item) => item.key === "tool-call-tool-call-1").href).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-call-1"
+  );
+  expect(links.find((item) => item.key === "run-replay-run-business").href).toBe(
+    "/admin/runs/run-business/live/replay"
+  );
+  expect(links.find((item) => item.key === "run-event-event-1").href).toBe(
+    "/admin/runs/run-business/live/replay?event_id=event-1"
+  );
+  expect(links.find((item) => item.key === "proposal-proposal-business").href).toBe(
+    "/admin/governance/proposals/proposal-business"
+  );
+  expect(links.find((item) => item.key === "experiment-experiment-business").href).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-business"
+  );
+  expect(links.find((item) => item.key === "evaluation-evaluation-business").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "finding-finding-business").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "finding-finding-business-2").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "run-trace-trace-business").href).toBe(
+    "/admin/runs/run-business/live/replay?trace_id=trace-business"
+  );
+  expect(links.find((item) => item.key === "snapshot-6").href).toBe(
+    "/admin/runs/run-business/live/replay?snapshot_seq=6"
+  );
+  expect(links.find((item) => item.key === "pskill-pskill-business").href).toBe(
+    "/admin/skills/pskill-business"
+  );
+  expect(methods.agentRunAuthorizationFirstNestedValue.call(context, authorization, ["source_finding_ids"])).toBe(
+    "finding-business"
+  );
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/platform-agent-runs.html"), "utf8");
+  expect(html).toContain("agentRunAuthorizationContextLinks(authorization)");
 });
 
 test("platform methods sync agent run filters from location", async () => {

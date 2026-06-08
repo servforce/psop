@@ -75,6 +75,10 @@
                     <dd class="truncate font-mono text-slate-300" x-text="authorization.run_event_id || 'N/A'"></dd>
                   </div>
                   <div class="flex min-w-0 justify-between gap-3">
+                    <dt class="text-slate-500">Idempotency</dt>
+                    <dd class="truncate font-mono text-slate-300" x-text="authorization.idempotency_key || 'N/A'"></dd>
+                  </div>
+                  <div class="flex min-w-0 justify-between gap-3">
                     <dt class="text-slate-500">Reversible</dt>
                     <dd class="text-slate-300" x-text="toolAuthorizationReversibleLabel(authorization)"></dd>
                   </div>

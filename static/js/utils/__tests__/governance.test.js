@@ -464,6 +464,7 @@ test("governance methods build tool authorization links from business context", 
       experiment_id: "experiment-business",
       source_evaluation_id: "evaluation-business",
       source_finding_id: "finding-business",
+      source_finding_ids: ["finding-business", "finding-business-2"],
       source_run_id: "run-business",
       run_trace_id: "trace-business",
       snapshot_seq: 9,
@@ -484,6 +485,9 @@ test("governance methods build tool authorization links from business context", 
     "/admin/evaluations/evaluation-business"
   );
   expect(links.find((item) => item.key === "finding-finding-business").href).toBe(
+    "/admin/evaluations/evaluation-business"
+  );
+  expect(links.find((item) => item.key === "finding-finding-business-2").href).toBe(
     "/admin/evaluations/evaluation-business"
   );
   expect(links.find((item) => item.key === "run-trace-trace-business").href).toBe(
@@ -636,6 +640,34 @@ test("governance methods extract tool authorization patch diffs", () => {
   expect(methods.toolAuthorizationDiffText.call(context, changesAuthorization)).toContain('"path": "README.md"');
   expect(methods.toolAuthorizationDiffText.call(context, beforeAfterAuthorization)).toContain("--- before");
   expect(methods.toolAuthorizationDiffText.call(context, { tool_arguments_summary: {}, request_payload: {} })).toBe("");
+});
+
+test("governance methods summarize tool authorization rollback details", () => {
+  const methods = loadGovernanceMethods();
+  const context = { ...methods };
+
+  expect(methods.toolAuthorizationReversibleLabel.call(context, {
+    reversible: true,
+    request_payload: {
+      rollback_summary: "恢复到上一个 AgentVersion。"
+    }
+  })).toBe("可回滚 · 恢复到上一个 AgentVersion。");
+  expect(methods.toolAuthorizationReversibleLabel.call(context, {
+    reversible: false,
+    tool_arguments_summary: {
+      irreversible_reason: "外部系统动作无法由 PSOP 自动撤销。"
+    }
+  })).toBe("不可回滚 · 外部系统动作无法由 PSOP 自动撤销。");
+  expect(methods.toolAuthorizationRollbackSummary.call(context, {
+    reversible: true,
+    request_payload: {
+      rollback: { strategy: "reactivate_previous_version" }
+    }
+  })).toContain("reactivate_previous_version");
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/tool-authorizations.html"), "utf8");
+  expect(html).toContain("Idempotency");
+  expect(html).toContain("authorization.idempotency_key");
 });
 
 test("governance methods edit proposal payloads and source finding links", async () => {
