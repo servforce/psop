@@ -687,7 +687,7 @@
         return buildReplayPath(evaluation.run_id, focus);
       }
       const params = new URLSearchParams();
-      for (const key of ["event_id", "seq_no", "snapshot_seq"]) {
+      for (const key of ["event_id", "trace_id", "seq_no", "snapshot_seq"]) {
         const value = String(focus?.[key] || "").trim();
         if (value) {
           params.set(key, value);
@@ -709,7 +709,19 @@
       if (!ref || typeof ref !== "object") {
         return {};
       }
-      const id = String(ref.id || ref.source_id || ref.run_trace_id || ref.run_event_id || ref.event_id || "").trim();
+      const kind = String(ref.kind || ref.source_kind || "").trim().toLowerCase();
+      const traceId = String(ref.trace_id || ref.run_trace_id || ref.trace_event_id || "").trim();
+      if (traceId) {
+        return { trace_id: traceId };
+      }
+      const eventId = String(ref.run_event_id || ref.event_id || "").trim();
+      if (eventId) {
+        return { event_id: eventId };
+      }
+      const id = String(ref.id || ref.source_id || "").trim();
+      if (id && ["run_trace", "trace_event"].includes(kind)) {
+        return { trace_id: id };
+      }
       if (id) {
         return { event_id: id };
       }

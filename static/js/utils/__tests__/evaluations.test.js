@@ -57,7 +57,7 @@ function loadEvaluationHarness() {
         resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`,
         buildReplayPath: (runId, focus = {}) => {
           const params = new URLSearchParams();
-          for (const key of ["event_id", "seq_no", "snapshot_seq"]) {
+          for (const key of ["event_id", "trace_id", "seq_no", "snapshot_seq"]) {
             const value = String(focus?.[key] || "").trim();
             if (value) {
               params.set(key, value);
@@ -169,19 +169,27 @@ test("evaluation finding evidence refs build run replay deep links", () => {
     id: "finding-2",
     evidence_refs: [{ kind: "run_event", seq_no: 4, event_kind: "terminal.text.input.v1" }]
   };
+  const findingWithRunEventId = {
+    id: "finding-3",
+    run_id: "run-3",
+    evidence_refs: [{ kind: "run_event", id: "event-1", event_kind: "terminal.text.output.v1" }]
+  };
 
   expect(methods.evaluationRunReplayPath({ run_id: "run-1" })).toBe("/admin/runs/run-1/live/replay");
   expect(methods.findingRunReplayPath.call(context, findingWithRun, findingWithRun.evidence_refs[0])).toBe(
-    "/admin/runs/run-1/live/replay?event_id=trace-1"
+    "/admin/runs/run-1/live/replay?trace_id=trace-1"
   );
   expect(methods.findingRunReplayPath.call(context, findingWithoutRun, findingWithoutRun.evidence_refs[0])).toBe(
     "/admin/runs/run-current/live/replay?seq_no=4"
+  );
+  expect(methods.findingRunReplayPath.call(context, findingWithRunEventId, findingWithRunEventId.evidence_refs[0])).toBe(
+    "/admin/runs/run-3/live/replay?event_id=event-1"
   );
   expect(methods.canOpenFindingEvidenceReplay.call(context, findingWithoutRun)).toBe(true);
 
   methods.openFindingEvidenceReplay.call(context, findingWithRun, findingWithRun.evidence_refs[0]);
 
-  expect(context.navigate).toHaveBeenCalledWith("/admin/runs/run-1/live/replay?event_id=trace-1");
+  expect(context.navigate).toHaveBeenCalledWith("/admin/runs/run-1/live/replay?trace_id=trace-1");
 
   const htmlReport = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-reports.html"), "utf8");
   const htmlFindings = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-findings.html"), "utf8");

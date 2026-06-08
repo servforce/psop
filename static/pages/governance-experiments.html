@@ -133,7 +133,15 @@
               </div>
               <div class="p-4">
                 <p class="text-slate-500">Run</p>
-                <p class="mt-1 truncate font-mono text-slate-300" x-text="governanceExperimentDetail.source_run_id || governanceExperimentProposalContext()?.source_run_id || 'N/A'"></p>
+                <button
+                  type="button"
+                  class="mt-1 inline-flex max-w-full items-center gap-1 truncate font-mono text-sky-300 hover:text-sky-200 disabled:cursor-not-allowed disabled:text-slate-500"
+                  :disabled="!governanceExperimentReplayPath(governanceExperimentDetail)"
+                  @click="openGovernanceExperimentReplay(governanceExperimentDetail)"
+                >
+                  <span class="material-symbols-outlined shrink-0 text-[15px]">history</span>
+                  <span class="truncate" x-text="governanceExperimentSourceRunId(governanceExperimentDetail) || 'N/A'"></span>
+                </button>
               </div>
               <div class="p-4">
                 <p class="text-slate-500">Proposal</p>

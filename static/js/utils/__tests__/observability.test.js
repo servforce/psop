@@ -196,7 +196,7 @@ test("observability methods query global run traces when run id is empty", async
 test("observability methods query global run events from distribution filters", async () => {
   const methods = loadObservabilityMethods();
   const events = [
-    { id: "event-1", run_id: "run-1", event_kind: "tool.authorization.requested", payload_inline: {} }
+    { id: "event-1", run_id: "run-1", event_kind: "tool_authorization_request", payload_inline: {} }
   ];
   const context = {
     ...methods,
@@ -204,7 +204,7 @@ test("observability methods query global run events from distribution filters", 
     observabilityFilters: {
       window_hours: 24,
       event_run_id: "",
-      run_event_kind: "tool.authorization.requested"
+      run_event_kind: "tool_authorization_request"
     },
     observabilityRunEvents: [],
     observabilityEventLookupRunId: "",
@@ -215,7 +215,7 @@ test("observability methods query global run events from distribution filters", 
   await methods.loadObservabilityRunEvents.call(context);
 
   expect(context.apiRequest).toHaveBeenCalledWith(
-    "/observability/run-events?event_kind=tool.authorization.requested&window_hours=24&limit=50"
+    "/observability/run-events?event_kind=tool_authorization_request&window_hours=24&limit=50"
   );
   expect(context.observabilityRunEvents).toEqual(events);
   expect(context.observabilityEventLookupRunId).toBe("");
@@ -255,7 +255,7 @@ test("observability methods derive run event kind options", () => {
       runtime: {
         run_event_kind_counts: {
           "runtime.output": 1,
-          "tool.authorization.requested": 3
+          "tool_authorization_request": 3
         }
       }
     }
@@ -263,7 +263,7 @@ test("observability methods derive run event kind options", () => {
 
   expect(methods.observabilityRunEventKindOptions.call(context)).toEqual([
     "runtime.output",
-    "tool.authorization.requested"
+    "tool_authorization_request"
   ]);
 });
 
@@ -273,7 +273,7 @@ test("observability methods query global agent events from distribution filters"
     {
       id: "agent-event-1",
       agent_run_id: "agent-run-1",
-      event_type: "agent.tool.authorization.requested",
+      event_type: "tool.authorization_requested",
       payload: {}
     }
   ];
@@ -284,7 +284,7 @@ test("observability methods query global agent events from distribution filters"
       window_hours: 24,
       agent_event_agent_key: "",
       agent_event_run_id: "",
-      agent_event_type: "agent.tool.authorization.requested"
+      agent_event_type: "tool.authorization_requested"
     },
     observabilityAgentEventResults: [],
     apiRequest: jest.fn(async () => events),
@@ -294,7 +294,7 @@ test("observability methods query global agent events from distribution filters"
   await methods.loadObservabilityAgentEvents.call(context);
 
   expect(context.apiRequest).toHaveBeenCalledWith(
-    "/observability/agent-events?event_type=agent.tool.authorization.requested&window_hours=24&limit=50"
+    "/observability/agent-events?event_type=tool.authorization_requested&window_hours=24&limit=50"
   );
   expect(context.observabilityAgentEventResults).toEqual(events);
   expect(methods.observabilityAgentEventPath(events[0])).toBe(
@@ -576,15 +576,15 @@ test("observability methods query global tool authorizations from status filters
     "/observability/tool-authorizations?agent_key=pskill.runner&run_id=run+1&tool_name=psop.memory.search&window_hours=24&limit=50"
   );
 
-  await methods.selectObservabilityToolAuthorizationStatus.call(context, "denied");
+  await methods.selectObservabilityToolAuthorizationStatus.call(context, "rejected");
 
   expect(context.observabilityFilters.tool_authorization_agent_key).toBe("");
   expect(context.observabilityFilters.tool_authorization_run_id).toBe("");
-  expect(context.observabilityFilters.tool_authorization_status).toBe("denied");
+  expect(context.observabilityFilters.tool_authorization_status).toBe("rejected");
   expect(context.observabilityFilters.tool_authorization_risk_level).toBe("");
   expect(context.observabilityFilters.tool_authorization_tool_name).toBe("");
   expect(context.apiRequest).toHaveBeenLastCalledWith(
-    "/observability/tool-authorizations?status=denied&window_hours=24&limit=50"
+    "/observability/tool-authorizations?status=rejected&window_hours=24&limit=50"
   );
 
   methods.resetObservabilityToolAuthorizationQuery.call(context);
@@ -698,7 +698,7 @@ test("observability methods sort distribution entries and derive trace event opt
       agents: {
         agent_event_type_counts: {
           "agent.run.created": 1,
-          "agent.tool.authorization.requested": 3
+          "tool.authorization_requested": 3
         },
         agent_run_key_counts: {
           "pskill.runner": 2,
@@ -740,7 +740,7 @@ test("observability methods sort distribution entries and derive trace event opt
   expect(methods.observabilityTraceEventTypeOptions.call(context)).toEqual(["runtime.completed", "runtime.failed"]);
   expect(methods.observabilityAgentEventTypeOptions.call(context)).toEqual([
     "agent.run.created",
-    "agent.tool.authorization.requested"
+    "tool.authorization_requested"
   ]);
   expect(methods.observabilityAgentKeyOptions.call(context)).toEqual(["pskill.runner", "psop.governance"]);
   expect(methods.observabilityToolCallStatusOptions.call(context)).toEqual(["failed", "succeeded"]);

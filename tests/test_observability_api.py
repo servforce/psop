@@ -244,7 +244,7 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
                         terminal_session_id=terminal_session.id,
                         run_id=runtime_run.id,
                         direction="system",
-                        event_kind="tool.authorization.requested",
+                        event_kind="tool_authorization_request",
                         mime_type="application/json",
                         payload_inline={"tool_name": "psop.repository.commit_patch"},
                         seq_no=1,
@@ -279,8 +279,8 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
                         id="agent-event-metrics-1",
                         agent_run_id=agent_run.id,
                         seq_no=1,
-                        event_type="agent.tool.authorization.requested",
-                        phase="tools",
+                        event_type="tool.authorization_requested",
+                        phase="tool_authorization",
                         payload={},
                         occurred_at=now - timedelta(minutes=1),
                     ),
@@ -422,13 +422,13 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
     payload = response.json()
     assert payload["runtime"]["run_count"] == 1
     assert payload["runtime"]["run_status_counts"]["failed"] == 1
-    assert payload["runtime"]["run_event_kind_counts"]["tool.authorization.requested"] == 1
+    assert payload["runtime"]["run_event_kind_counts"]["tool_authorization_request"] == 1
     assert payload["runtime"]["run_trace_count"] == 1
     assert payload["runtime"]["run_trace_event_type_counts"]["runtime.failed"] == 1
     assert "runtime.old" not in payload["runtime"]["run_trace_event_type_counts"]
     assert payload["agents"]["agent_run_status_counts"]["waiting_tool_authorization"] == 1
     assert payload["agents"]["agent_run_key_counts"]["pskill.runner"] == 1
-    assert payload["agents"]["agent_event_type_counts"]["agent.tool.authorization.requested"] == 1
+    assert payload["agents"]["agent_event_type_counts"]["tool.authorization_requested"] == 1
     assert payload["agents"]["model_call_provider_counts"]["deterministic"] == 1
     assert payload["agents"]["tool_call_status_counts"]["failed"] == 1
     assert payload["agents"]["tool_call_side_effect_counts"]["high_write"] == 1
@@ -717,7 +717,7 @@ def test_observability_run_event_query_filters_recent_runtime_events() -> None:
                         run_id=run.id,
                         agent_run_id=agent_run.id,
                         direction="system",
-                        event_kind="tool.authorization.requested",
+                        event_kind="tool_authorization_request",
                         mime_type="application/json",
                         payload_inline={"tool_name": "psop.repository.commit_patch"},
                         seq_no=2,
@@ -744,7 +744,7 @@ def test_observability_run_event_query_filters_recent_runtime_events() -> None:
                         run_id=run.id,
                         agent_run_id=agent_run.id,
                         direction="system",
-                        event_kind="tool.authorization.requested",
+                        event_kind="tool_authorization_request",
                         mime_type="application/json",
                         payload_inline={"tool_name": "psop.repository.commit_patch"},
                         seq_no=1,
@@ -772,7 +772,7 @@ def test_observability_run_event_query_filters_recent_runtime_events() -> None:
                         terminal_session_id=terminal_session.id,
                         run_id=run.id,
                         direction="system",
-                        event_kind="tool.authorization.requested",
+                        event_kind="tool_authorization_request",
                         mime_type="application/json",
                         payload_inline={},
                         seq_no=4,
@@ -787,7 +787,7 @@ def test_observability_run_event_query_filters_recent_runtime_events() -> None:
 
         response = client.get(
             "/api/v1/observability/run-events",
-            params={"window_hours": 24, "event_kind": "tool.authorization.requested", "limit": 10},
+            params={"window_hours": 24, "event_kind": "tool_authorization_request", "limit": 10},
         )
         run_response = client.get(
             "/api/v1/observability/run-events",
@@ -799,7 +799,7 @@ def test_observability_run_event_query_filters_recent_runtime_events() -> None:
     assert [item["id"] for item in payload] == ["run-event-observe-newer", "run-event-observe-older"]
     assert payload[0]["run_id"] == run.id
     assert payload[0]["agent_run_id"] == agent_run.id
-    assert payload[0]["event_kind"] == "tool.authorization.requested"
+    assert payload[0]["event_kind"] == "tool_authorization_request"
     assert payload[0]["payload_inline"] == {"tool_name": "psop.repository.commit_patch"}
     assert payload[0]["parts"][0]["text"] == "Authorization summary"
 
@@ -873,8 +873,8 @@ def test_observability_agent_event_query_filters_recent_agent_events() -> None:
                         id="agent-event-observe-newer",
                         agent_run_id=runner_run.id,
                         seq_no=3,
-                        event_type="agent.tool.authorization.requested",
-                        phase="tools",
+                        event_type="tool.authorization_requested",
+                        phase="tool_authorization",
                         payload={"tool_name": "psop.repository.commit_patch"},
                         occurred_at=now - timedelta(minutes=1),
                     ),
@@ -894,8 +894,8 @@ def test_observability_agent_event_query_filters_recent_agent_events() -> None:
                         id="agent-event-observe-older",
                         agent_run_id=runner_run.id,
                         seq_no=1,
-                        event_type="agent.tool.authorization.requested",
-                        phase="tools",
+                        event_type="tool.authorization_requested",
+                        phase="tool_authorization",
                         payload={"tool_name": "psop.repository.commit_patch"},
                         occurred_at=now - timedelta(minutes=2),
                     ),
@@ -912,8 +912,8 @@ def test_observability_agent_event_query_filters_recent_agent_events() -> None:
                         id="agent-event-observe-old-window",
                         agent_run_id=runner_run.id,
                         seq_no=3,
-                        event_type="agent.tool.authorization.requested",
-                        phase="tools",
+                        event_type="tool.authorization_requested",
+                        phase="tool_authorization",
                         payload={"old": True},
                         occurred_at=now - timedelta(days=2),
                     ),
@@ -923,7 +923,7 @@ def test_observability_agent_event_query_filters_recent_agent_events() -> None:
 
         response = client.get(
             "/api/v1/observability/agent-events",
-            params={"window_hours": 24, "event_type": "agent.tool.authorization.requested", "limit": 10},
+            params={"window_hours": 24, "event_type": "tool.authorization_requested", "limit": 10},
         )
         scoped_response = client.get(
             "/api/v1/observability/agent-events",
@@ -938,7 +938,7 @@ def test_observability_agent_event_query_filters_recent_agent_events() -> None:
     payload = response.json()
     assert [item["id"] for item in payload] == ["agent-event-observe-newer", "agent-event-observe-older"]
     assert payload[0]["agent_run_id"] == runner_run.id
-    assert payload[0]["event_type"] == "agent.tool.authorization.requested"
+    assert payload[0]["event_type"] == "tool.authorization_requested"
     assert payload[0]["payload"] == {"tool_name": "psop.repository.commit_patch"}
 
     assert scoped_response.status_code == 200

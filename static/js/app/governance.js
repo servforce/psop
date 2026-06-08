@@ -527,6 +527,28 @@
       };
     },
 
+    governanceExperimentSourceRunId(experiment = this.governanceExperimentDetail) {
+      return String(
+        experiment?.source_run_id ||
+          this.governanceExperimentProposalContext(experiment)?.source_run_id ||
+          ""
+      ).trim();
+    },
+
+    governanceExperimentReplayPath(experiment = this.governanceExperimentDetail) {
+      const runId = this.governanceExperimentSourceRunId(experiment);
+      return runId ? buildReplayPath(runId) : "";
+    },
+
+    openGovernanceExperimentReplay(experiment = this.governanceExperimentDetail) {
+      const path = this.governanceExperimentReplayPath(experiment);
+      if (!path) {
+        this.showNotice?.("error", "Experiment 缺少来源 Run，无法打开 Replay。");
+        return;
+      }
+      return this.navigate(path);
+    },
+
     async runTestsFromGovernanceExperiment(experiment = this.governanceExperimentDetail) {
       await this.performGovernanceExperimentProposalAction(experiment, "run-tests", "回归测试已运行。");
     },
@@ -913,6 +935,7 @@
 
     toolAuthorizationContextLinks(authorization) {
       const links = [];
+      const authorizationId = String(authorization?.id || "").trim();
       const agentRunId = String(authorization?.agent_run_id || "").trim();
       const toolCallId = String(authorization?.agent_tool_call_id || "").trim();
       const runId = String(authorization?.run_id || "").trim();
@@ -925,6 +948,15 @@
           value: agentRunId,
           href: buildPlatformAgentRunPath(agentRunId, { tab: "events" }),
           icon: "timeline"
+        });
+      }
+      if (agentRunId && authorizationId) {
+        links.push({
+          key: `authorization-${authorizationId}`,
+          label: "Authorization",
+          value: authorizationId,
+          href: buildPlatformAgentRunPath(agentRunId, { tab: "authorizations", authorization_id: authorizationId }),
+          icon: "admin_panel_settings"
         });
       }
       if (agentRunId && toolCallId) {
@@ -1149,9 +1181,21 @@
       if (!ref || typeof ref !== "object") {
         return {};
       }
-      const eventId = String(ref.id || ref.source_id || ref.run_trace_id || ref.run_event_id || ref.event_id || "").trim();
+      const kind = String(ref.kind || ref.source_kind || "").trim().toLowerCase();
+      const traceId = String(ref.trace_id || ref.run_trace_id || ref.trace_event_id || "").trim();
+      if (traceId) {
+        return { trace_id: traceId };
+      }
+      const eventId = String(ref.run_event_id || ref.event_id || "").trim();
       if (eventId) {
         return { event_id: eventId };
+      }
+      const id = String(ref.id || ref.source_id || "").trim();
+      if (id && ["run_trace", "trace_event"].includes(kind)) {
+        return { trace_id: id };
+      }
+      if (id) {
+        return { event_id: id };
       }
       const seqNo = String(ref.seq_no ?? "").trim();
       return seqNo ? { seq_no: seqNo } : {};
