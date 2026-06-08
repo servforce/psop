@@ -840,6 +840,10 @@ def test_pskills_and_materials_routes_are_available() -> None:
             files={"file": ("guide.md", b"# Guide\n\nUse lockout before repair.\n", "text/markdown")},
         )
         material_id = upload_response.json()["id"]
+        batch_analyze_response = client.post(
+            f"/api/v1/pskills/{skill_id}/materials/batch-analyze",
+            json={"material_ids": [material_id]},
+        )
         materials_response = client.get(f"/api/v1/pskills/{skill_id}/materials")
         detail_response = client.get(f"/api/v1/pskills/{skill_id}/materials/{material_id}")
         content_response = client.get(f"/api/v1/pskills/{skill_id}/materials/{material_id}/content")
@@ -849,6 +853,13 @@ def test_pskills_and_materials_routes_are_available() -> None:
     assert any(item["id"] == skill_id for item in list_response.json())
     assert upload_response.status_code == 201
     assert upload_response.json()["source_note"] == "pskills route"
+    assert batch_analyze_response.status_code == 200
+    assert batch_analyze_response.json()["pskill_definition_id"] == skill_id
+    assert batch_analyze_response.json()["requested_count"] == 1
+    assert batch_analyze_response.json()["analyzed_count"] == 1
+    assert batch_analyze_response.json()["skipped_count"] == 0
+    assert batch_analyze_response.json()["analyses"][0]["material_id"] == material_id
+    assert batch_analyze_response.json()["analyses"][0]["status"] == "ready"
     assert materials_response.status_code == 200
     assert [item["id"] for item in materials_response.json()] == [material_id]
     assert detail_response.status_code == 200

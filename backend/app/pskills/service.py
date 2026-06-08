@@ -51,6 +51,8 @@ from app.pskills.materials import (
 )
 from app.pskills.repository import SkillsRepository
 from app.pskills.schemas import (
+    BatchAnalyzeMaterialsRequest,
+    BatchAnalyzeMaterialsResponse,
     ApplyPSkillDraftPatchRequest,
     CreateSkillRepositoryFileRequest,
     CreateSkillRepositoryFolderRequest,
@@ -823,6 +825,47 @@ class SkillsService:
             )
         analysis = self._queue_material_analysis(session, material, force=True)
         return self._build_material_analysis_response(session, analysis)
+
+    def batch_analyze_materials(
+        self,
+        session: Session,
+        *,
+        skill_id: str,
+        payload: BatchAnalyzeMaterialsRequest,
+    ) -> BatchAnalyzeMaterialsResponse:
+        definition = self._require_definition(session, skill_id)
+        if payload.material_ids:
+            materials = self.repository.list_materials_by_ids(
+                session,
+                pskill_definition_id=definition.id,
+                material_ids=payload.material_ids,
+            )
+            found_ids = {material.id for material in materials}
+            missing_ids = [material_id for material_id in payload.material_ids if material_id not in found_ids]
+            if missing_ids:
+                raise SkillNotFoundError("部分素材不存在。", details={"material_ids": missing_ids})
+        else:
+            materials = self.repository.list_materials(session, definition.id)
+
+        analyses: list[PSkillMaterialAnalysisResponse] = []
+        skipped_material_ids: list[str] = []
+        for material in materials:
+            existing = self.repository.get_latest_material_analysis(session, material.id)
+            if material.status == "processing" or (existing and existing.status in {"pending", "running"}):
+                skipped_material_ids.append(material.id)
+                if existing:
+                    analyses.append(self._build_material_analysis_response(session, existing))
+                continue
+            analysis = self._queue_material_analysis(session, material, force=payload.force)
+            analyses.append(self._build_material_analysis_response(session, analysis))
+        return BatchAnalyzeMaterialsResponse(
+            pskill_definition_id=definition.id,
+            requested_count=len(payload.material_ids) if payload.material_ids else len(materials),
+            analyzed_count=len(analyses),
+            skipped_count=len(skipped_material_ids),
+            analyses=analyses,
+            skipped_material_ids=skipped_material_ids,
+        )
 
     def get_material_analysis(
         self,

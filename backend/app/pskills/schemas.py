@@ -254,3 +254,17 @@ class PSkillMaterialAnalysisResponse(BaseModel):
     ended_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class BatchAnalyzeMaterialsRequest(BaseModel):
+    material_ids: list[str] = Field(default_factory=list)
+    force: bool = False
+
+
+class BatchAnalyzeMaterialsResponse(BaseModel):
+    pskill_definition_id: str
+    requested_count: int
+    analyzed_count: int
+    skipped_count: int
+    analyses: list[PSkillMaterialAnalysisResponse] = Field(default_factory=list)
+    skipped_material_ids: list[str] = Field(default_factory=list)

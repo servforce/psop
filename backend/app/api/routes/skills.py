@@ -10,6 +10,8 @@ from app.pskills.exceptions import SkillValidationError
 from app.pskills.draft import PSkillDraftService
 from app.pskills.schemas import (
     ApplyPSkillDraftPatchRequest,
+    BatchAnalyzeMaterialsRequest,
+    BatchAnalyzeMaterialsResponse,
     CreateSkillRepositoryFileRequest,
     CreateSkillRepositoryFolderRequest,
     CreateSkillRequest,
@@ -270,6 +272,23 @@ def generate_skill_draft_from_materials(
     service: SkillsService = Depends(get_skills_service),
 ) -> PSkillMaterialGenerationResponse:
     return service.generate_skill_draft_from_materials(session, skill_id=skill_id, payload=payload)
+
+
+@router.post(
+    "/{skill_id}/raw-materials/batch-analyze",
+    response_model=BatchAnalyzeMaterialsResponse,
+)
+@router.post(
+    "/{skill_id}/materials/batch-analyze",
+    response_model=BatchAnalyzeMaterialsResponse,
+)
+def batch_analyze_materials(
+    skill_id: str,
+    payload: BatchAnalyzeMaterialsRequest | None = None,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> BatchAnalyzeMaterialsResponse:
+    return service.batch_analyze_materials(session, skill_id=skill_id, payload=payload or BatchAnalyzeMaterialsRequest())
 
 
 @router.post(
