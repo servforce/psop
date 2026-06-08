@@ -67,7 +67,7 @@
         <span>同步任务已创建</span>
         <span class="ml-3 font-mono" x-text="skillPackageSyncJob.id"></span>
         <span class="ml-3 font-mono" x-text="skillPackageSyncJob.status"></span>
-        <button type="button" class="ml-3 text-sky-200 hover:text-sky-100" @click="navigate(platformTasksPath())">查看 Tasks</button>
+        <button type="button" class="ml-3 text-sky-200 hover:text-sky-100" @click="navigate(platformTaskJobPath(skillPackageSyncJob))">查看 Tasks</button>
       </div>
     </template>
 

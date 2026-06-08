@@ -440,20 +440,35 @@
         return;
       }
       this.toolAuthorizationLocationSearch = search;
+      if (!search) {
+        this.toolAuthorizationFilters = { status: "pending", tool_name: "" };
+        return;
+      }
       const params = new URLSearchParams(search);
       this.toolAuthorizationFilters = {
         ...this.toolAuthorizationFilters,
+        status: params.get("status") || this.toolAuthorizationFilters.status || "pending",
         tool_name: params.get("tool_name") || ""
       };
     },
 
     applyToolAuthorizationFilters() {
+      this.replaceToolAuthorizationFilterLocation();
       return this.loadToolAuthorizations();
     },
 
     resetToolAuthorizationFilters() {
       this.toolAuthorizationFilters = { status: "pending", tool_name: "" };
+      this.replaceToolAuthorizationFilterLocation();
       return this.loadToolAuthorizations();
+    },
+
+    replaceToolAuthorizationFilterLocation() {
+      if (typeof window === "undefined" || !window.history?.replaceState) {
+        return;
+      }
+      window.history.replaceState({}, "", buildToolAuthorizationsPath(this.toolAuthorizationFilters));
+      this.toolAuthorizationLocationSearch = window.location.search || "";
     },
 
     async decideToolAuthorization(authorization, decision) {

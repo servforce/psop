@@ -144,7 +144,7 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(skillDetailJs).toContain("canGenerateSkillDraftFromRawMaterials");
   expect(skillDetailJs).toContain("hasReadyVideoRawMaterial");
   expect(skillDetailJs).toContain('job_type: "pskill_build"');
-  expect(skillDetailJs).toContain('await this.navigate("/admin/tasks")');
+  expect(skillDetailJs).toContain("await this.navigate(buildTasksPath(taskFilters))");
   expect(skillDetailJs).toContain('this.showCenterToast("success", "Skill 生成任务已提交。")');
   expect(skillDetailJs).toContain('jobId ? `Skill 生成任务已提交：${this.formatShortId(jobId)}`');
   expect(skillDetailJs).toContain('kind === "document"');

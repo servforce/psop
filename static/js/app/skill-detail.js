@@ -12,6 +12,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildTasksPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -725,14 +726,15 @@
           } else {
             const jobId = result.job_id || result.prompt_metadata?.job_id || result.id;
             this.rawMaterialGenerateModalOpen = false;
-            this.taskFilters = {
+            const taskFilters = {
               job_type: "pskill_build",
               status: "",
               q: jobId || "",
               created_from: "",
               created_to: ""
             };
-            await this.navigate("/admin/tasks");
+            this.taskFilters = taskFilters;
+            await this.navigate(buildTasksPath(taskFilters));
             this.showCenterToast("success", "Skill 生成任务已提交。");
             this.showNotice(
               "success",

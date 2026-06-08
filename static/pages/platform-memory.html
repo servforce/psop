@@ -69,7 +69,7 @@
         <span>Memory compaction 任务已创建</span>
         <span class="ml-3 font-mono" x-text="memoryCompactionJob.id"></span>
         <span class="ml-3 font-mono" x-text="memoryCompactionJob.status"></span>
-        <button type="button" class="ml-3 text-sky-200 hover:text-sky-100" @click="navigate(platformTasksPath())">查看 Tasks</button>
+        <button type="button" class="ml-3 text-sky-200 hover:text-sky-100" @click="navigate(platformTaskJobPath(memoryCompactionJob))">查看 Tasks</button>
       </div>
     </template>
 

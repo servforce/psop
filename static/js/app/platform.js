@@ -845,6 +845,13 @@
       return buildTasksPath();
     },
 
+    platformTaskJobPath(job) {
+      return buildTasksPath({
+        job_type: job?.job_type || "",
+        q: job?.id || ""
+      });
+    },
+
     platformAgentRunPath(agentRunId) {
       return buildPlatformAgentRunPath(agentRunId);
     },
@@ -878,9 +885,11 @@
     },
 
     platformToolAuthorizationsPath(toolName) {
-      const path = buildToolAuthorizationsPath();
       const normalized = String(toolName || "").trim();
-      return normalized ? `${path}?tool_name=${encodeURIComponent(normalized)}` : path;
+      return buildToolAuthorizationsPath({
+        status: "pending",
+        tool_name: normalized
+      });
     },
 
     platformToolSideEffectOptions() {

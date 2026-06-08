@@ -1,10 +1,27 @@
 (function () {
+  const {
+    buildEvaluationReportPath,
+    buildGovernanceProposalPath,
+    buildPlatformMemoryEntryPath,
+    buildPlatformSkillsPath,
+    buildPlatformSkillPath,
+    buildRunLivePath,
+    buildSkillDetailPath,
+    buildSkillTestScenarioRunReviewPath,
+    buildCompilerArtifactPath,
+    buildTasksPath
+  } = window.PSOPConsoleHelpers || {};
+
   const KNOWN_JOB_TYPES = [
     { value: "material_analysis", label: "PSkill 素材解析" },
     { value: "pskill_build", label: "PSkill 智能体构建" },
     { value: "pskill_compile", label: "PSkill 编译" },
     { value: "pskill_test", label: "PSkill 测试" },
-    { value: "runtime_step", label: "Runtime 推进" }
+    { value: "runtime_step", label: "Runtime 推进" },
+    { value: "run_evaluation", label: "Run 评估" },
+    { value: "governance_proposal", label: "治理提案生成" },
+    { value: "memory_compaction", label: "记忆压缩" },
+    { value: "skill_sync", label: "Skill 包同步" }
   ];
 
   const JOB_TYPE_ALIASES = {
@@ -20,11 +37,13 @@
     { value: "succeeded", label: "成功" },
     { value: "failed", label: "失败" },
     { value: "cancelled", label: "已取消" },
-    { value: "retryable_failed", label: "等待重试" }
+    { value: "retryable_failed", label: "等待重试" },
+    { value: "dead_letter", label: "死信" }
   ];
 
   window.PSOPConsoleTasksMethods = {
     async loadTasksPage() {
+      this.syncTaskFiltersFromLocation();
       await this.loadTasks();
       this.startTaskPolling();
     },
@@ -77,18 +96,76 @@
     },
 
     applyTaskFilters() {
+      this.replaceTaskFilterLocation();
       return this.loadTasks();
     },
 
     resetTaskFilters() {
-      this.taskFilters = {
+      this.taskFilters = this.emptyTaskFilters();
+      this.replaceTaskFilterLocation();
+      return this.loadTasks();
+    },
+
+    emptyTaskFilters() {
+      return {
         job_type: "",
         status: "",
         q: "",
         created_from: "",
         created_to: ""
       };
-      return this.loadTasks();
+    },
+
+    syncTaskFiltersFromLocation() {
+      const search = this.taskLocationSearch();
+      if (search === (this.taskFiltersLocationSearch || "")) {
+        return;
+      }
+      if (!search) {
+        if (this.taskFiltersLocationSearch) {
+          this.taskFilters = this.emptyTaskFilters();
+        }
+        this.taskFiltersLocationSearch = "";
+        return;
+      }
+      const params = new URLSearchParams(search);
+      this.taskFilters = {
+        ...this.emptyTaskFilters(),
+        job_type: params.get("job_type") || "",
+        status: params.get("status") || "",
+        q: params.get("q") || "",
+        created_from: params.get("created_from") || "",
+        created_to: params.get("created_to") || ""
+      };
+      this.taskFiltersLocationSearch = search;
+    },
+
+    replaceTaskFilterLocation() {
+      if (typeof window === "undefined" || !window.history?.replaceState) {
+        return;
+      }
+      const path = this.taskFilterPath(this.taskFilters);
+      window.history.replaceState({}, "", path);
+      this.taskFiltersLocationSearch = this.taskLocationSearch();
+    },
+
+    taskLocationSearch() {
+      if (typeof window === "undefined") {
+        return "";
+      }
+      return window.location.search || "";
+    },
+
+    taskFilterPath(filters = {}) {
+      if (typeof buildTasksPath === "function") {
+        return buildTasksPath(filters);
+      }
+      const params = new URLSearchParams();
+      for (const key of ["job_type", "status", "q", "created_from", "created_to"]) {
+        this.appendTaskFilterParam(params, key, filters[key]);
+      }
+      const query = params.toString();
+      return query ? `/admin/tasks?${query}` : "/admin/tasks";
     },
 
     taskQueryString() {
@@ -174,26 +251,146 @@
     },
 
     taskRelatedLabel(task) {
+      return this.taskRelatedEntity(task).label;
+    },
+
+    taskRelatedHref(task) {
+      return this.taskRelatedEntity(task).href;
+    },
+
+    taskRelatedTitle(task) {
+      const entity = this.taskRelatedEntity(task);
+      return entity.id ? `${entity.kind}: ${entity.id}` : entity.label;
+    },
+
+    taskRelatedEntity(task) {
       if (!task) {
-        return "N/A";
+        return this.emptyTaskEntity();
       }
-      if (task.run_id) {
-        return `Run ${this.formatShortId(task.run_id)}`;
+      const jobType = this.normalizeTaskJobType(task.job_type);
+      if (jobType === "run_evaluation") {
+        return (
+          this.taskEntity("Evaluation", this.taskValue(task, "evaluation_id"), buildEvaluationReportPath)
+          || this.taskEntity("Run", this.taskValue(task, "run_id"), buildRunLivePath)
+          || this.emptyTaskEntity()
+        );
       }
-      if (task.compile_request_id) {
-        return `Compile ${this.formatShortId(task.compile_request_id)}`;
+      if (jobType === "governance_proposal") {
+        return (
+          this.taskEntity("Proposal", this.taskValue(task, "proposal_id"), buildGovernanceProposalPath)
+          || this.taskEntity("Evaluation", this.taskValue(task, "source_evaluation_id"), buildEvaluationReportPath)
+          || this.taskEntity("Run", this.taskValue(task, "source_run_id", "run_id"), buildRunLivePath)
+          || this.taskEntity("Finding", this.taskValue(task, "finding_id"))
+          || this.emptyTaskEntity()
+        );
       }
-      const payload = task.payload || {};
-      if (payload.analysis_id) {
-        return `Analysis ${this.formatShortId(payload.analysis_id)}`;
+      if (jobType === "memory_compaction") {
+        return (
+          this.taskEntity("Memory", this.taskValue(task, "compacted_memory_id"), buildPlatformMemoryEntryPath)
+          || this.taskEntity("Namespace", this.taskValue(task, "target_namespace", "namespace"))
+          || this.emptyTaskEntity()
+        );
       }
-      if (payload.scenario_run_id) {
-        return `Scenario ${this.formatShortId(payload.scenario_run_id)}`;
+      if (jobType === "skill_sync") {
+        const packageName = this.taskValue(task, "package_name", "skill_package_name");
+        if (packageName) {
+          return this.taskEntity("Skill Package", packageName, buildPlatformSkillPath);
+        }
+        return {
+          kind: "Skill Packages",
+          id: "",
+          label: "Skill Packages",
+          href: this.taskPath(buildPlatformSkillsPath)
+        };
       }
-      if (payload.pskill_definition_id) {
-        return `Skill ${this.formatShortId(payload.pskill_definition_id)}`;
+      if (jobType === "runtime_step") {
+        return this.taskEntity("Run", this.taskValue(task, "run_id"), buildRunLivePath) || this.emptyTaskEntity();
       }
-      return "N/A";
+      if (jobType === "pskill_compile") {
+        return (
+          this.taskEntity("Artifact", this.taskValue(task, "artifact_id", "compile_artifact_id"), buildCompilerArtifactPath)
+          || this.taskEntity("PSkill", this.taskValue(task, "pskill_definition_id", "skill_id"), buildSkillDetailPath)
+          || this.taskEntity("Compile", this.taskValue(task, "compile_request_id"))
+          || this.emptyTaskEntity()
+        );
+      }
+      if (jobType === "pskill_test") {
+        return this.taskTestEntity(task) || this.taskEntity("Run", this.taskValue(task, "run_id"), buildRunLivePath) || this.emptyTaskEntity();
+      }
+      if (jobType === "pskill_build") {
+        return (
+          this.taskEntity("PSkill", this.taskValue(task, "pskill_definition_id", "skill_id"), buildSkillDetailPath)
+          || this.taskEntity("Generation", this.taskValue(task, "generation_id"))
+          || this.emptyTaskEntity()
+        );
+      }
+      if (jobType === "material_analysis") {
+        return (
+          this.taskEntity("PSkill", this.taskValue(task, "pskill_definition_id", "skill_id"), buildSkillDetailPath)
+          || this.taskEntity("Analysis", this.taskValue(task, "analysis_id"))
+          || this.taskEntity("Material", this.taskValue(task, "material_id"))
+          || this.emptyTaskEntity()
+        );
+      }
+      return (
+        this.taskEntity("Run", this.taskValue(task, "run_id"), buildRunLivePath)
+        || this.taskEntity("Entity", this.taskValue(task, "entity_id", "owner_id"))
+        || this.emptyTaskEntity()
+      );
+    },
+
+    taskTestEntity(task) {
+      const scenarioRunId = this.taskValue(task, "scenario_run_id");
+      const scenarioId = this.taskValue(task, "scenario_id");
+      const pskillId = this.taskValue(task, "pskill_definition_id", "pskill_id", "skill_id");
+      if (scenarioRunId && scenarioId && pskillId) {
+        return this.taskEntity("Scenario Run", scenarioRunId, buildSkillTestScenarioRunReviewPath, pskillId, scenarioId);
+      }
+      if (this.taskValue(task, "run_id")) {
+        return null;
+      }
+      return this.taskEntity("Scenario", scenarioRunId || scenarioId);
+    },
+
+    taskValue(task, ...keys) {
+      const payload = task?.payload || {};
+      const metrics = task?.metrics || {};
+      for (const key of keys) {
+        const value = task?.[key] ?? payload[key] ?? metrics[key];
+        const normalized = String(value || "").trim();
+        if (normalized) {
+          return normalized;
+        }
+      }
+      return "";
+    },
+
+    taskEntity(kind, id, pathBuilder, ...pathArgs) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) {
+        return null;
+      }
+      return {
+        kind,
+        id: normalizedId,
+        label: `${kind} ${this.formatShortId(normalizedId)}`,
+        href: this.taskPath(pathBuilder, ...pathArgs, normalizedId)
+      };
+    },
+
+    taskPath(pathBuilder, ...args) {
+      if (typeof pathBuilder !== "function") {
+        return "";
+      }
+      const normalizedArgs = args.map((value) => String(value || "").trim());
+      if (normalizedArgs.some((value) => !value)) {
+        return "";
+      }
+      return pathBuilder(...normalizedArgs);
+    },
+
+    emptyTaskEntity() {
+      return { kind: "", id: "", label: "N/A", href: "" };
     },
 
     taskErrorSummary(task) {

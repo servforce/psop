@@ -379,7 +379,8 @@
 
 
       async navigate(pathname) {
-        if (pathname !== window.location.pathname) {
+        const currentPath = `${window.location.pathname}${window.location.search || ""}`;
+        if (pathname !== currentPath) {
           window.history.pushState({}, "", pathname);
         }
         this.syncRoute();

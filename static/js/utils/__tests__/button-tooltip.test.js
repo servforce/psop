@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const corePath = path.join(__dirname, "../../app/core.js");
 
-function loadCoreMethods() {
+function loadCoreHarness() {
   const helperNames = [
     "normalizePath",
     "resolveAdminRoute",
@@ -30,11 +30,21 @@ function loadCoreMethods() {
   ];
   const context = {
     window: {
-      PSOPConsoleHelpers: Object.fromEntries(helperNames.map((name) => [name, jest.fn()]))
+      PSOPConsoleHelpers: Object.fromEntries(helperNames.map((name) => [name, jest.fn()])),
+      location: { pathname: "/admin/tasks", search: "" },
+      history: { pushState: jest.fn((_state, _title, pathValue) => {
+        const [pathname, search = ""] = String(pathValue).split("?");
+        context.window.location.pathname = pathname;
+        context.window.location.search = search ? `?${search}` : "";
+      }) }
     }
   };
   vm.runInNewContext(fs.readFileSync(corePath, "utf8"), context);
-  return context.window.PSOPConsoleCoreMethods;
+  return { methods: context.window.PSOPConsoleCoreMethods, window: context.window };
+}
+
+function loadCoreMethods() {
+  return loadCoreHarness().methods;
 }
 
 function textNode(text) {
@@ -117,6 +127,22 @@ test("button tooltips prefer readable button text over icon ligatures", () => {
 
   expect(attrs.title).toBe("保存场景");
   expect(attrs["aria-label"]).toBe("保存场景");
+});
+
+test("navigate treats query string changes as route changes", async () => {
+  const { methods, window } = loadCoreHarness();
+  const context = {
+    syncRoute: jest.fn(),
+    loadCurrentRoute: jest.fn()
+  };
+
+  await methods.navigate.call(context, "/admin/tasks?job_type=skill_sync&q=job-1");
+
+  expect(window.history.pushState).toHaveBeenCalledWith({}, "", "/admin/tasks?job_type=skill_sync&q=job-1");
+  expect(window.location.pathname).toBe("/admin/tasks");
+  expect(window.location.search).toBe("?job_type=skill_sync&q=job-1");
+  expect(context.syncRoute).toHaveBeenCalledTimes(1);
+  expect(context.loadCurrentRoute).toHaveBeenCalledTimes(1);
 });
 
 test("button tooltips describe icon-only actions", () => {

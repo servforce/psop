@@ -251,8 +251,16 @@
     return "/admin/dashboard";
   }
 
-  function buildTasksPath() {
-    return "/admin/tasks";
+  function buildTasksPath(filters = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["job_type", "status", "q", "created_from", "created_to"]) {
+      const value = String(filters?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `/admin/tasks?${query}` : "/admin/tasks";
   }
 
   function buildEvaluationReportsPath() {
@@ -279,8 +287,16 @@
     return "/admin/governance/experiments";
   }
 
-  function buildToolAuthorizationsPath() {
-    return "/admin/platform/tool-authorizations";
+  function buildToolAuthorizationsPath(filters = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["status", "tool_name"]) {
+      const value = String(filters?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
   }
 
   function buildPlatformAgentsPath() {
@@ -730,6 +746,7 @@
         created_from: "",
         created_to: ""
       },
+      taskFiltersLocationSearch: "",
       currentEvaluation: null,
       evaluationActivityWs: null,
       evaluationActivityWsId: "",

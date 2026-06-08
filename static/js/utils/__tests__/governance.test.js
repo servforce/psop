@@ -54,11 +54,27 @@ function loadGovernanceHarness(locationSearch = "") {
   const sandbox = {
     window: {
       location: { search: locationSearch },
+      history: {
+        replaceState: jest.fn((_state, _title, pathValue) => {
+          const [, search = ""] = String(pathValue).split("?");
+          sandbox.window.location.search = search ? `?${search}` : "";
+        })
+      },
       PSOPConsoleHelpers: {
         buildGovernanceProposalsPath: () => "/admin/governance/proposals",
         buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
         buildGovernanceExperimentsPath: () => "/admin/governance/experiments",
-        buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations",
+        buildToolAuthorizationsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          if (filters.status) {
+            params.set("status", filters.status);
+          }
+          if (filters.tool_name) {
+            params.set("tool_name", filters.tool_name);
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
+        },
         resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`
       }
     },
@@ -102,8 +118,8 @@ test("governance methods build filters and labels", () => {
   expect(methods.governanceProposalPath("proposal-1")).toBe("/admin/governance/proposals/proposal-1");
 });
 
-test("governance methods sync tool authorization filter from location", () => {
-  const methods = loadGovernanceMethods("?tool_name=psop.agent_version.activate");
+test("governance methods sync tool authorization filters from location", () => {
+  const methods = loadGovernanceMethods("?status=approved&tool_name=psop.agent_version.activate");
   const context = {
     ...methods,
     toolAuthorizationFilters: { status: "pending", tool_name: "" },
@@ -112,7 +128,34 @@ test("governance methods sync tool authorization filter from location", () => {
 
   methods.syncToolAuthorizationFiltersFromLocation.call(context);
 
+  expect(context.toolAuthorizationFilters.status).toBe("approved");
   expect(context.toolAuthorizationFilters.tool_name).toBe("psop.agent_version.activate");
+});
+
+test("governance methods keep tool authorization filters in location", async () => {
+  const { methods, FakeWebSocket } = loadGovernanceHarness();
+  const context = {
+    ...methods,
+    busy: { toolAuthorizations: false },
+    toolAuthorizationFilters: { status: "pending", tool_name: "psop.repository.commit_patch" },
+    toolAuthorizationLocationSearch: "",
+    toolAuthorizations: [],
+    apiRequest: jest.fn(async () => []),
+    showNotice: jest.fn()
+  };
+
+  await methods.applyToolAuthorizationFilters.call(context);
+
+  expect(FakeWebSocket.instances).toHaveLength(0);
+  expect(context.apiRequest).toHaveBeenCalledWith(
+    "/tool-authorizations?status=pending&tool_name=psop.repository.commit_patch"
+  );
+  expect(context.toolAuthorizationLocationSearch).toBe("?status=pending&tool_name=psop.repository.commit_patch");
+
+  await methods.resetToolAuthorizationFilters.call(context);
+
+  expect(context.toolAuthorizationFilters).toEqual({ status: "pending", tool_name: "" });
+  expect(context.toolAuthorizationLocationSearch).toBe("?status=pending");
 });
 
 test("governance methods extract tool authorization patch diffs", () => {

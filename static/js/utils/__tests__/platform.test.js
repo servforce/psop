@@ -54,7 +54,16 @@ function loadPlatformHarness() {
   const sandbox = {
     window: {
       PSOPConsoleHelpers: {
-        buildTasksPath: () => "/admin/tasks",
+        buildTasksPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["job_type", "status", "q", "created_from", "created_to"]) {
+            if (filters[key]) {
+              params.set(key, filters[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/tasks?${query}` : "/admin/tasks";
+        },
         buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
         buildPlatformAgentRunPath: (agentRunId) => `/admin/platform/agent-runs/${agentRunId}`,
         buildPlatformSkillsPath: () => "/admin/platform/skills",
@@ -63,7 +72,17 @@ function loadPlatformHarness() {
         buildPlatformToolPath: (toolName) => `/admin/platform/tools/${toolName}`,
         buildPlatformMemoryPath: () => "/admin/platform/memory",
         buildPlatformMemoryEntryPath: (memoryId) => `/admin/platform/memory/${memoryId}`,
-        buildToolAuthorizationsPath: () => "/admin/platform/tool-authorizations",
+        buildToolAuthorizationsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          if (filters.status) {
+            params.set("status", filters.status);
+          }
+          if (filters.tool_name) {
+            params.set("tool_name", filters.tool_name);
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
+        },
         buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
         buildRunLivePath: (runId) => `/admin/runs/${runId}/live`,
         resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`
@@ -130,6 +149,9 @@ test("platform methods build filters, labels, and paths", () => {
   expect(methods.memoryStatusLabel.call(context, "pending_review")).toBe("待审核");
   expect(methods.platformAgentRunPath("run-1")).toBe("/admin/platform/agent-runs/run-1");
   expect(methods.platformTasksPath()).toBe("/admin/tasks");
+  expect(methods.platformTaskJobPath({ id: "job-memory-1", job_type: "memory_compaction" })).toBe(
+    "/admin/tasks?job_type=memory_compaction&q=job-memory-1"
+  );
   expect(methods.platformSkillPath("pskill-builder")).toBe("/admin/platform/skills/pskill-builder");
   expect(methods.platformRunLivePath("runtime-run-1")).toBe("/admin/runs/runtime-run-1/live");
   expect(methods.platformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
@@ -493,7 +515,7 @@ test("platform methods load tools and select the first row", async () => {
   expect(context.platformTools).toEqual(tools);
   expect(context.currentPlatformTool.name).toBe("psop.memory.search");
   expect(methods.platformToolAuthorizationsPath.call(context, context.currentPlatformTool.name)).toBe(
-    "/admin/platform/tool-authorizations?tool_name=psop.memory.search"
+    "/admin/platform/tool-authorizations?status=pending&tool_name=psop.memory.search"
   );
   expect(context.platformToolTestResult.policy_reason).toBe("console_test_allowed");
   expect(context.busy.platformTools).toBe(false);

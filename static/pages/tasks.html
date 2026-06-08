@@ -99,9 +99,10 @@
       </div>
     </div>
 
-    <div class="grid gap-3 border-b border-slate-800 bg-slate-950/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500" style="grid-template-columns: minmax(0,0.95fr) minmax(0,0.9fr) 5rem minmax(0,1.25fr) 6.25rem 6rem 5.25rem 10.75rem;">
+    <div class="grid gap-3 border-b border-slate-800 bg-slate-950/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500" style="grid-template-columns: minmax(0,0.9fr) minmax(0,0.95fr) minmax(0,0.95fr) 5rem minmax(0,1.25fr) 5.75rem 5.75rem 5rem 10.25rem;">
       <span>Job ID</span>
       <span>类型</span>
+      <span>关联</span>
       <span class="text-center">状态</span>
       <span>进度</span>
       <span class="text-center">时长</span>
@@ -121,9 +122,17 @@
       <template x-if="tasks.length > 0">
         <div class="divide-y divide-slate-800">
           <template x-for="task in tasks" :key="task.id">
-            <article class="grid h-11 items-center gap-3 bg-slate-950/20 px-3 text-sm transition hover:bg-slate-900/50" style="grid-template-columns: minmax(0,0.95fr) minmax(0,0.9fr) 5rem minmax(0,1.25fr) 6.25rem 6rem 5.25rem 10.75rem;" :title="taskErrorSummary(task) || task.id">
+            <article class="grid h-12 items-center gap-3 bg-slate-950/20 px-3 text-sm transition hover:bg-slate-900/50" style="grid-template-columns: minmax(0,0.9fr) minmax(0,0.95fr) minmax(0,0.95fr) 5rem minmax(0,1.25fr) 5.75rem 5.75rem 5rem 10.25rem;" :title="taskErrorSummary(task) || task.id">
               <div class="mono-field min-w-0 truncate" x-text="taskJobIdLabel(task)"></div>
               <div class="min-w-0 truncate font-semibold text-slate-100" x-text="jobTypeLabel(task.job_type)"></div>
+              <div class="min-w-0 truncate" :title="taskRelatedTitle(task)">
+                <template x-if="taskRelatedHref(task)">
+                  <button type="button" class="block min-w-0 max-w-full truncate font-mono text-[11px] text-sky-300 hover:text-sky-200" @click.stop="navigate(taskRelatedHref(task))" x-text="taskRelatedLabel(task)"></button>
+                </template>
+                <template x-if="!taskRelatedHref(task)">
+                  <span class="mono-field block truncate" x-text="taskRelatedLabel(task)"></span>
+                </template>
+              </div>
               <div class="flex min-w-0 justify-center">
                 <span class="status-badge" :class="statusBadgeTone(task.status)" x-text="formatStatus(task.status)"></span>
               </div>

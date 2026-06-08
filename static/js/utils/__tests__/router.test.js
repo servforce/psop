@@ -33,6 +33,10 @@ const {
   buildPlatformMemoryEntryPath,
   buildPlatformObservabilityPath
 } = require("../router.node.cjs");
+const fs = require("fs");
+const path = require("path");
+
+const ROUTER_ES_MODULE_PATH = path.join(__dirname, "../router.js");
 
 test("normalizePath handles root", () => {
   expect(normalizePath("/")).toBe("/");
@@ -56,6 +60,9 @@ test("resolveAdminRoute maps the skills list route", () => {
 test("resolveAdminRoute maps the tasks route", () => {
   expect(resolveAdminRoute("/admin/tasks")).toEqual({ name: "tasks-list", params: {} });
   expect(buildTasksPath()).toBe("/admin/tasks");
+  expect(buildTasksPath({ job_type: "skill_sync", q: "job-1", status: "pending" })).toBe(
+    "/admin/tasks?job_type=skill_sync&status=pending&q=job-1"
+  );
 });
 
 test("resolveAdminRoute maps evaluation routes", () => {
@@ -109,6 +116,9 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
   expect(buildGovernanceProposalPath("proposal-123")).toBe("/admin/governance/proposals/proposal-123");
   expect(buildGovernanceExperimentsPath()).toBe("/admin/governance/experiments");
   expect(buildToolAuthorizationsPath()).toBe("/admin/platform/tool-authorizations");
+  expect(buildToolAuthorizationsPath({ status: "pending", tool_name: "psop.memory.search" })).toBe(
+    "/admin/platform/tool-authorizations?status=pending&tool_name=psop.memory.search"
+  );
   expect(buildPlatformAgentsPath()).toBe("/admin/platform/agents");
   expect(buildPlatformAgentPath("pskill.runner")).toBe("/admin/platform/agents/pskill.runner");
   expect(buildPlatformAgentRunsPath()).toBe("/admin/platform/agent-runs");
@@ -120,6 +130,34 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
   expect(buildPlatformMemoryPath()).toBe("/admin/platform/memory");
   expect(buildPlatformMemoryEntryPath("mem-123")).toBe("/admin/platform/memory/mem-123");
   expect(buildPlatformObservabilityPath()).toBe("/admin/platform/observability");
+});
+
+test("router ES module exposes the closed-loop route helpers", () => {
+  const source = fs.readFileSync(ROUTER_ES_MODULE_PATH, "utf8");
+  const helperNames = [
+    "buildEvaluationReportsPath",
+    "buildEvaluationReportPath",
+    "buildEvaluationFindingsPath",
+    "buildGovernanceProposalsPath",
+    "buildGovernanceProposalPath",
+    "buildGovernanceExperimentsPath",
+    "buildToolAuthorizationsPath",
+    "buildPlatformAgentRunsPath",
+    "buildPlatformAgentRunPath",
+    "buildPlatformSkillsPath",
+    "buildPlatformSkillPath",
+    "buildPlatformToolsPath",
+    "buildPlatformToolPath",
+    "buildPlatformMemoryPath",
+    "buildPlatformMemoryEntryPath"
+  ];
+
+  for (const helperName of helperNames) {
+    expect(source).toContain(`export function ${helperName}`);
+  }
+  for (const routeName of ["evaluation-report", "governance-proposal", "platform-agent-run", "platform-memory-entry"]) {
+    expect(source).toContain(`name: "${routeName}"`);
+  }
 });
 
 test("resolveAdminRoute extracts skill detail params", () => {

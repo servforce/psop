@@ -24,6 +24,30 @@ export function resolveAdminRoute(pathname) {
     return { name: "tasks-list", params: {} };
   }
 
+  if (normalized === "/admin/evaluations") {
+    return { name: "evaluation-reports", params: {} };
+  }
+
+  if (normalized === "/admin/evaluations/findings") {
+    return { name: "evaluation-findings", params: {} };
+  }
+
+  if (normalized === "/admin/governance" || normalized === "/admin/governance/proposals") {
+    return { name: "governance-proposals", params: {} };
+  }
+
+  const governanceProposalMatch = normalized.match(/^\/admin\/governance\/proposals\/([^/]+)$/);
+  if (governanceProposalMatch) {
+    return {
+      name: "governance-proposal",
+      params: { proposalId: governanceProposalMatch[1] }
+    };
+  }
+
+  if (normalized === "/admin/governance/experiments") {
+    return { name: "governance-experiments", params: {} };
+  }
+
   if (normalized === "/admin/platform/agents") {
     return { name: "platform-agents", params: {} };
   }
@@ -36,8 +60,68 @@ export function resolveAdminRoute(pathname) {
     };
   }
 
+  if (normalized === "/admin/platform/agent-runs") {
+    return { name: "platform-agent-runs", params: {} };
+  }
+
+  const platformAgentRunMatch = normalized.match(/^\/admin\/platform\/agent-runs\/([^/]+)$/);
+  if (platformAgentRunMatch) {
+    return {
+      name: "platform-agent-run",
+      params: { agentRunId: platformAgentRunMatch[1] }
+    };
+  }
+
+  if (normalized === "/admin/platform/skills") {
+    return { name: "platform-skills", params: {} };
+  }
+
+  const platformSkillMatch = normalized.match(/^\/admin\/platform\/skills\/([^/]+)$/);
+  if (platformSkillMatch) {
+    return {
+      name: "platform-skill",
+      params: { packageName: platformSkillMatch[1] }
+    };
+  }
+
+  if (normalized === "/admin/platform/tools") {
+    return { name: "platform-tools", params: {} };
+  }
+
+  const platformToolMatch = normalized.match(/^\/admin\/platform\/tools\/([^/]+)$/);
+  if (platformToolMatch) {
+    return {
+      name: "platform-tool",
+      params: { toolName: platformToolMatch[1] }
+    };
+  }
+
+  if (normalized === "/admin/platform/memory") {
+    return { name: "platform-memory", params: {} };
+  }
+
   if (normalized === "/admin/platform/observability") {
     return { name: "platform-observability", params: {} };
+  }
+
+  const platformMemoryMatch = normalized.match(/^\/admin\/platform\/memory\/([^/]+)$/);
+  if (platformMemoryMatch) {
+    return {
+      name: "platform-memory-entry",
+      params: { memoryId: platformMemoryMatch[1] }
+    };
+  }
+
+  if (normalized === "/admin/platform/tool-authorizations") {
+    return { name: "tool-authorizations", params: {} };
+  }
+
+  const evaluationReportMatch = normalized.match(/^\/admin\/evaluations\/([^/]+)$/);
+  if (evaluationReportMatch) {
+    return {
+      name: "evaluation-report",
+      params: { evaluationId: evaluationReportMatch[1] }
+    };
   }
 
   const detailMatch = normalized.match(/^\/admin\/skills\/([^/]+)$/);
@@ -158,8 +242,52 @@ export function buildDashboardPath() {
   return "/admin/dashboard";
 }
 
-export function buildTasksPath() {
-  return "/admin/tasks";
+export function buildTasksPath(filters = {}) {
+  const params = new URLSearchParams();
+  for (const key of ["job_type", "status", "q", "created_from", "created_to"]) {
+    const value = String(filters?.[key] || "").trim();
+    if (value) {
+      params.set(key, value);
+    }
+  }
+  const query = params.toString();
+  return query ? `/admin/tasks?${query}` : "/admin/tasks";
+}
+
+export function buildEvaluationReportsPath() {
+  return "/admin/evaluations";
+}
+
+export function buildEvaluationReportPath(evaluationId) {
+  return `/admin/evaluations/${evaluationId}`;
+}
+
+export function buildEvaluationFindingsPath() {
+  return "/admin/evaluations/findings";
+}
+
+export function buildGovernanceProposalsPath() {
+  return "/admin/governance/proposals";
+}
+
+export function buildGovernanceProposalPath(proposalId) {
+  return `/admin/governance/proposals/${proposalId}`;
+}
+
+export function buildGovernanceExperimentsPath() {
+  return "/admin/governance/experiments";
+}
+
+export function buildToolAuthorizationsPath(filters = {}) {
+  const params = new URLSearchParams();
+  for (const key of ["status", "tool_name"]) {
+    const value = String(filters?.[key] || "").trim();
+    if (value) {
+      params.set(key, value);
+    }
+  }
+  const query = params.toString();
+  return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
 }
 
 export function buildPlatformAgentsPath() {
@@ -168,6 +296,38 @@ export function buildPlatformAgentsPath() {
 
 export function buildPlatformAgentPath(agentKey) {
   return `/admin/platform/agents/${agentKey}`;
+}
+
+export function buildPlatformAgentRunsPath() {
+  return "/admin/platform/agent-runs";
+}
+
+export function buildPlatformAgentRunPath(agentRunId) {
+  return `/admin/platform/agent-runs/${agentRunId}`;
+}
+
+export function buildPlatformSkillsPath() {
+  return "/admin/platform/skills";
+}
+
+export function buildPlatformSkillPath(packageName) {
+  return `/admin/platform/skills/${packageName}`;
+}
+
+export function buildPlatformToolsPath() {
+  return "/admin/platform/tools";
+}
+
+export function buildPlatformToolPath(toolName) {
+  return `/admin/platform/tools/${toolName}`;
+}
+
+export function buildPlatformMemoryPath() {
+  return "/admin/platform/memory";
+}
+
+export function buildPlatformMemoryEntryPath(memoryId) {
+  return `/admin/platform/memory/${memoryId}`;
 }
 
 export function buildPlatformObservabilityPath() {
