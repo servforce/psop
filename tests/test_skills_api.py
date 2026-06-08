@@ -2182,8 +2182,8 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         binding_requirements_response = client.get(f"/api/v1/runs/{run_id}/binding-requirements")
         bindings_response = client.get(f"/api/v1/runs/{run_id}/bindings")
         terminal_session_response = client.get(f"/api/v1/terminal/sessions/{run_id}")
-        terminal_events_response = client.get(f"/api/v1/runs/{run_id}/events")
-        terminal_append_response = client.post(
+        run_events_response = client.get(f"/api/v1/runs/{run_id}/events")
+        run_event_append_response = client.post(
             f"/api/v1/runs/{run_id}/events",
             json={
                 "direction": "input",
@@ -2201,7 +2201,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
             for trace in trace_payload
             if trace["event_type"] == "runtime.wait_checkpoint.entered"
         )
-        terminal_events_after_append_response = client.get(f"/api/v1/runs/{run_id}/events")
+        run_events_after_append_response = client.get(f"/api/v1/runs/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
         replay_trace_response = client.get(f"/api/v1/replay/traces/{replay_trace_id}")
         missing_replay_trace_response = client.get("/api/v1/replay/traces/not-a-trace")
@@ -2292,11 +2292,11 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert {item["target_kind"] for item in bindings_response.json()} == {"web_terminal"}
     assert terminal_session_response.status_code == 200
     assert terminal_session_response.json()["terminal_session"]["id"] == invocation_payload["terminal_session_id"]
-    assert terminal_events_response.status_code == 200
-    assert [item["direction"] for item in terminal_events_response.json()] == ["input", "output"]
-    assert terminal_append_response.status_code == 202
-    assert terminal_append_response.json()["seq_no"] == 3
-    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3, 4, 5, 6]
+    assert run_events_response.status_code == 200
+    assert [item["direction"] for item in run_events_response.json()] == ["input", "output"]
+    assert run_event_append_response.status_code == 202
+    assert run_event_append_response.json()["seq_no"] == 3
+    assert [item["seq_no"] for item in run_events_after_append_response.json()] == [1, 2, 3, 4, 5, 6]
 
     replay_payload = replay_response.json()
     replay_trace_payload = replay_trace_response.json()
@@ -2309,7 +2309,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         "LLM 输出",
     ]
     assert len(replay_payload["run_events"]) == 6
-    assert len(replay_payload["terminal_events"]) == 6
+    assert replay_payload["terminal_events"] == replay_payload["run_events"]
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
     assert replay_payload["provenance"]["invocation_id"] == invocation_payload["id"]

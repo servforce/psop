@@ -661,9 +661,9 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         run = runtime_service.get_run(session, invocation.run_id or "")
         replay = runtime_service.build_replay(session, invocation.run_id or "")
         snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
-        trace_events = runtime_service.list_run_traces(session, invocation.run_id or "")
+        run_traces = runtime_service.list_run_traces(session, invocation.run_id or "")
         terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
-        terminal_events = runtime_service.list_run_events(session, invocation.run_id or "")
+        run_events = runtime_service.list_run_events(session, invocation.run_id or "")
         bindings = runtime_service.list_run_bindings(session, invocation.run_id or "")
         runner_runs = runtime_service.agent_service.list_runs(
             session,
@@ -703,7 +703,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert snapshots[-1].token_payload["metadata"]["run_event_cursor"] == snapshots[-1].token_payload["metadata"]["terminal_cursor"]
     assert snapshots[-1].token_payload["run_events"] == snapshots[-1].token_payload["terminal"]["events"]
     assert snapshots[-1].token_payload["run_events"][-1]["seq_no"] == snapshots[-1].token_payload["metadata"]["run_event_cursor"]
-    assert terminal_events[-1].seq_no >= snapshots[-1].token_payload["metadata"]["run_event_cursor"]
+    assert run_events[-1].seq_no >= snapshots[-1].token_payload["metadata"]["run_event_cursor"]
     assert all(snapshot.token_payload.get("memory", {}) == {} for snapshot in snapshots)
     serialized_snapshots = json.dumps(
         [snapshot.token_payload for snapshot in snapshots],
@@ -740,10 +740,10 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert all("reason、terminal_message、final_response、summary" in call["system_prompt"] for call in runtime_llm_calls)
     assert all("legacy-user-prompt" not in call["user_prompt"] for call in inference_gateway.calls[1:])
     llm_trace_payloads = [
-        event.payload for event in trace_events if event.event_type == "gateway.inference.completed"
+        event.payload for event in run_traces if event.event_type == "gateway.inference.completed"
     ]
     llm_trace_agent_run_ids = {
-        event.agent_run_id for event in trace_events if event.event_type == "gateway.inference.completed"
+        event.agent_run_id for event in run_traces if event.event_type == "gateway.inference.completed"
     }
     assert llm_trace_agent_run_ids == runner_run_ids
     assert "input" not in llm_trace_payloads[0]["observation"]
@@ -759,12 +759,13 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert trace_request["body"]["messages"][1]["content"] == runtime_llm_calls[0]["user_prompt"]
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
     assert terminal_session.terminal_session.status == "closed"
-    assert [event.direction for event in terminal_events] == ["output", "input", "output", "output", "output"]
-    assert terminal_events[1].payload_inline == "我已经完成当前步骤，并上传了现场说明。"
-    assert terminal_events[0].agent_run_id in runner_run_ids
-    assert terminal_events[1].agent_run_id is None
+    assert [event.direction for event in run_events] == ["output", "input", "output", "output", "output"]
+    assert run_events[1].payload_inline == "我已经完成当前步骤，并上传了现场说明。"
+    assert run_events[0].agent_run_id in runner_run_ids
+    assert run_events[1].agent_run_id is None
     assert {binding.requirement_key for binding in bindings} == {"terminal.input", "terminal.output"}
-    assert len(replay.terminal_events) == 5
+    assert len(replay.run_events) == 5
+    assert replay.terminal_events == replay.run_events
     assert len(replay.bindings) == 2
     assert [item.event_type for item in replay.timeline][:5] == [
         "binding.resolved",
@@ -973,8 +974,8 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
             run = runtime_service.get_run(session, invocation.run_id or "")
             refreshed_invocation = runtime_service.get_invocation(session, invocation.id)
             terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
-            terminal_events = runtime_service.list_run_events(session, invocation.run_id or "")
-            trace_events = runtime_service.list_run_traces(session, invocation.run_id or "")
+            run_events = runtime_service.list_run_events(session, invocation.run_id or "")
+            run_traces = runtime_service.list_run_traces(session, invocation.run_id or "")
             snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
             replay = runtime_service.build_replay(session, invocation.run_id or "")
 
@@ -999,12 +1000,12 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
     assert "电源功率不足" in run.exit_reason
     assert run.ended_at is not None
     assert terminal_session.terminal_session.status == "closed"
-    assert [event.direction for event in terminal_events] == ["output", "input", "output", "output"]
-    assert terminal_events[-1].source_ref["node_id"] == "terminal_abort"
+    assert [event.direction for event in run_events] == ["output", "input", "output", "output"]
+    assert run_events[-1].source_ref["node_id"] == "terminal_abort"
     assert snapshots[-1].token_payload["status"] == "aborted"
     assert snapshots[-1].token_payload["control"]["abort"]["next_phase"] == "terminal_abort"
-    assert "runtime.aborted" in [item.event_type for item in trace_events]
-    assert "runtime.failed" not in [item.event_type for item in trace_events]
+    assert "runtime.aborted" in [item.event_type for item in run_traces]
+    assert "runtime.failed" not in [item.event_type for item in run_traces]
     assert "已中止" in [item.title for item in replay.timeline]
 
 
@@ -1108,21 +1109,21 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
             ),
         )
         run = failing_runtime.get_run(session, invocation.run_id or "")
-        trace_events = failing_runtime.list_run_traces(session, invocation.run_id or "")
-        terminal_events = failing_runtime.list_run_events(session, invocation.run_id or "")
+        run_traces = failing_runtime.list_run_traces(session, invocation.run_id or "")
+        run_events = failing_runtime.list_run_events(session, invocation.run_id or "")
 
     assert invocation.status == "failed"
     assert run.status == "failed"
     assert run.exit_reason == "LLM provider unavailable"
-    assert trace_events[-1].event_type == "runtime.failed"
-    assert terminal_events[-1].direction == "output"
-    assert terminal_events[-1].event_kind == "terminal.text.output.v1"
-    assert terminal_events[-1].external_event_id == f"runtime:{invocation.run_id}:failed"
-    assert terminal_events[-1].trace_event_id == trace_events[-1].id
-    assert "Runtime 执行失败" in terminal_events[-1].payload_inline
-    assert "当前运行已停止" in terminal_events[-1].payload_inline
-    assert "调试运行" not in terminal_events[-1].payload_inline
-    assert "LLM provider unavailable" in terminal_events[-1].payload_inline
+    assert run_traces[-1].event_type == "runtime.failed"
+    assert run_events[-1].direction == "output"
+    assert run_events[-1].event_kind == "terminal.text.output.v1"
+    assert run_events[-1].external_event_id == f"runtime:{invocation.run_id}:failed"
+    assert run_events[-1].trace_event_id == run_traces[-1].id
+    assert "Runtime 执行失败" in run_events[-1].payload_inline
+    assert "当前运行已停止" in run_events[-1].payload_inline
+    assert "调试运行" not in run_events[-1].payload_inline
+    assert "LLM provider unavailable" in run_events[-1].payload_inline
 
 
 def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(runtime_stack) -> None:
@@ -1152,11 +1153,11 @@ def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(r
                 input_envelope={"user_input": "触发 gateway 失败"},
             ),
         )
-        trace_events = failing_runtime.list_run_traces(session, invocation.run_id or "")
+        run_traces = failing_runtime.list_run_traces(session, invocation.run_id or "")
 
-    payload = trace_events[-1].payload
+    payload = run_traces[-1].payload
     details = payload["error_details"]
-    assert trace_events[-1].event_type == "runtime.failed"
+    assert run_traces[-1].event_type == "runtime.failed"
     assert payload["error"] == "LLM Inference Gateway 返回错误响应。"
     assert payload["error_type"] == "SkillsGatewayError"
     assert payload["error_code"] == "skills_gateway_error"
@@ -1213,9 +1214,9 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
             ),
         )
         recovered_run = runtime_service.get_run(session, invocation.run_id or "")
-        trace_events = runtime_service.list_run_traces(session, invocation.run_id or "")
+        run_traces = runtime_service.list_run_traces(session, invocation.run_id or "")
         terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
-        terminal_events = runtime_service.list_run_events(session, invocation.run_id or "")
+        run_events = runtime_service.list_run_events(session, invocation.run_id or "")
         snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
 
         retry = runtime_service.append_run_event(
@@ -1236,17 +1237,17 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
     assert recovered_run.exit_reason == ""
     assert recovered_run.ended_at is None
     assert terminal_session.terminal_session.status == "open"
-    assert trace_events[-1].event_type == "runtime.message_processing.failed"
-    assert trace_events[-1].payload["recoverable"] is True
-    assert trace_events[-1].payload["error_type"] == "SkillsGatewayError"
-    assert trace_events[-1].payload["error_details"]["request_id"] == "request-test"
-    assert trace_events[-1].payload["error_details"]["provider_error_type"] == "ServiceUnavailable"
-    assert terminal_events[-1].direction == "output"
-    assert terminal_events[-1].trace_event_id == trace_events[-1].id
-    assert terminal_events[-1].payload_inline == "刚才服务器开小差了，请您重试！"
+    assert run_traces[-1].event_type == "runtime.message_processing.failed"
+    assert run_traces[-1].payload["recoverable"] is True
+    assert run_traces[-1].payload["error_type"] == "SkillsGatewayError"
+    assert run_traces[-1].payload["error_details"]["request_id"] == "request-test"
+    assert run_traces[-1].payload["error_details"]["provider_error_type"] == "ServiceUnavailable"
+    assert run_events[-1].direction == "output"
+    assert run_events[-1].trace_event_id == run_traces[-1].id
+    assert run_events[-1].payload_inline == "刚才服务器开小差了，请您重试！"
     assert snapshots[-1].token_payload["status"] == "waiting"
-    assert snapshots[-1].token_payload["metadata"]["run_event_cursor"] == terminal_events[-1].seq_no
-    assert snapshots[-1].token_payload["metadata"]["terminal_cursor"] == terminal_events[-1].seq_no
+    assert snapshots[-1].token_payload["metadata"]["run_event_cursor"] == run_events[-1].seq_no
+    assert snapshots[-1].token_payload["metadata"]["terminal_cursor"] == run_events[-1].seq_no
     assert snapshots[-1].token_payload["run_events"] == snapshots[-1].token_payload["terminal"]["events"]
-    assert retry.seq_no > terminal_events[-1].seq_no
+    assert retry.seq_no > run_events[-1].seq_no
     assert final_run.status == "succeeded"
