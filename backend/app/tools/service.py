@@ -19,8 +19,15 @@ VALID_SIDE_EFFECT_LEVELS = {"read", "compute", "low_write", "high_write", "exter
 VALID_TOOL_STATUSES = {"active", "deprecated", "disabled"}
 
 DEFAULT_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "psop.pskills.get": "读取 PSkill 定义、版本和 source 摘要。",
     "psop.pskills.read": "读取 PSkill 定义、版本和 source 摘要。",
+    "psop.materials.list": "列出 PSkill materials。",
+    "psop.materials.read_analysis": "读取 PSkill material 分析结果。",
     "psop.materials.read": "读取 PSkill materials 和分析结果。",
+    "psop.repository.read_file": "读取 PSkill source 仓库文件。",
+    "psop.repository.propose_patch": "生成可 review 的 PSkill draft patch。",
+    "psop.pskill_manifest.parse": "解析 pskill.yaml manifest。",
+    "psop.pskill_manifest.render": "渲染 pskill.yaml manifest。",
     "psop.compiler.validate_formal_v5": "校验 EG Compile Artifact 是否符合 formal-v5。",
     "psop.testing.write_diagnostics": "写入测试诊断和发布门禁内部记录。",
     "psop.runtime.read": "读取 Runtime Run、Session Token snapshot、RunEvent 和 RunTrace。",

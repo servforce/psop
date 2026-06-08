@@ -7,8 +7,15 @@ AUTH_REQUIRED_LEVELS = {"high_write", "external_action", "physical_action"}
 
 
 DEFAULT_TOOL_SIDE_EFFECTS: dict[str, str] = {
+    "psop.pskills.get": "read",
     "psop.pskills.read": "read",
+    "psop.materials.list": "read",
+    "psop.materials.read_analysis": "read",
     "psop.materials.read": "read",
+    "psop.repository.read_file": "read",
+    "psop.repository.propose_patch": "low_write",
+    "psop.pskill_manifest.parse": "compute",
+    "psop.pskill_manifest.render": "compute",
     "psop.compiler.validate_formal_v5": "compute",
     "psop.testing.write_diagnostics": "low_write",
     "psop.runtime.read": "read",

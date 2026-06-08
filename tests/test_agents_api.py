@@ -7,11 +7,25 @@ from app.skills.models import SkillPackage, SkillVersion
 from tests.test_skills_api import create_test_client
 
 
+BUILDER_ALLOWED_TOOLS = [
+    "psop.pskills.get",
+    "psop.materials.list",
+    "psop.materials.read_analysis",
+    "psop.repository.read_file",
+    "psop.repository.propose_patch",
+    "psop.pskill_manifest.parse",
+    "psop.pskill_manifest.render",
+    "psop.memory.search",
+    "psop.memory.write_candidate",
+]
+
+
 def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     client, _, _ = create_test_client()
 
     with client:
         agents_response = client.get("/api/v1/agents")
+        builder_detail_response = client.get("/api/v1/agents/pskill.builder")
         agent_detail_response = client.get("/api/v1/agents/pskill.runner")
         versions_response = client.get("/api/v1/agents/pskill.runner/versions")
         run_response = client.post(
@@ -107,6 +121,8 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
         "psop.governance",
     }
     assert agent_detail_response.status_code == 200
+    assert builder_detail_response.status_code == 200
+    assert builder_detail_response.json()["active_version"]["spec_json"]["allowed_tools"] == BUILDER_ALLOWED_TOOLS
     assert agent_detail_response.json()["active_version"]["spec_json"]["output_schema"]["name"] == "RuntimeAgentObservation"
     assert agent_detail_response.json()["active_version"]["spec_json"]["allowed_tools"] == ["psop.runtime.read"]
     assert versions_response.status_code == 200

@@ -3,6 +3,19 @@ from __future__ import annotations
 from tests.test_skills_api import create_test_client
 
 
+BUILDER_ALLOWED_TOOLS = {
+    "psop.pskills.get",
+    "psop.materials.list",
+    "psop.materials.read_analysis",
+    "psop.repository.read_file",
+    "psop.repository.propose_patch",
+    "psop.pskill_manifest.parse",
+    "psop.pskill_manifest.render",
+    "psop.memory.search",
+    "psop.memory.write_candidate",
+}
+
+
 def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
     client, _, _ = create_test_client()
 
@@ -14,6 +27,7 @@ def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
         )
         detail_response = client.get("/api/v1/tools/psop.agent_version.activate")
         memory_detail_response = client.get("/api/v1/tools/psop.memory.write_candidate")
+        propose_patch_detail_response = client.get("/api/v1/tools/psop.repository.propose_patch")
 
     tools = {item["name"]: item for item in list_response.json()}
     assert list_response.status_code == 200
@@ -24,7 +38,7 @@ def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
         "psop.memory.write_candidate",
         "psop.agent_version.activate",
         "psop.skill_version.activate",
-    } <= set(tools)
+    } | BUILDER_ALLOWED_TOOLS <= set(tools)
 
     assert tools["psop.pskills.read"]["side_effect_level"] == "read"
     assert tools["psop.pskills.read"]["requires_authorization"] is False
@@ -53,6 +67,12 @@ def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
     assert memory_detail_response.status_code == 200
     assert memory_detail["side_effect_level"] == "low_write"
     assert memory_detail["requires_authorization"] is False
+
+    propose_patch_detail = propose_patch_detail_response.json()
+    assert propose_patch_detail_response.status_code == 200
+    assert propose_patch_detail["side_effect_level"] == "low_write"
+    assert propose_patch_detail["requires_authorization"] is False
+    assert propose_patch_detail["allowed_agent_keys"] == ["pskill.builder"]
 
 
 def test_tools_api_reports_recent_tool_call_failure_stats() -> None:

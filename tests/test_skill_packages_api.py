@@ -3,6 +3,19 @@ from __future__ import annotations
 from tests.test_skills_api import create_test_client
 
 
+BUILDER_ALLOWED_TOOLS = [
+    "psop.pskills.get",
+    "psop.materials.list",
+    "psop.materials.read_analysis",
+    "psop.repository.read_file",
+    "psop.repository.propose_patch",
+    "psop.pskill_manifest.parse",
+    "psop.pskill_manifest.render",
+    "psop.memory.search",
+    "psop.memory.write_candidate",
+]
+
+
 def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
     client, _, _ = create_test_client()
 
@@ -41,7 +54,7 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
     assert detail_response.status_code == 200
     assert detail["name"] == "pskill-builder"
     assert detail["scope"] == "psop"
-    assert detail["active_version"]["allowed_tools"] == ["psop.pskills.read", "psop.materials.read"]
+    assert detail["active_version"]["allowed_tools"] == BUILDER_ALLOWED_TOOLS
     assert detail["active_version"]["resource_count"] >= 1
     assert detail["resources"][0]["resource_kind"] == "skill"
 
@@ -64,7 +77,7 @@ def test_skill_package_version_create_validate_and_activate_lifecycle() -> None:
         "manifest_json": {
             "name": "pskill-builder",
             "description": "Candidate builder package",
-            "allowed-tools": ["psop.pskills.read", "psop.materials.read"],
+            "allowed-tools": BUILDER_ALLOWED_TOOLS,
         },
         "body_object_key": "uploads/pskill-builder/builder-candidate/SKILL.md",
         "resource_index": [
@@ -94,7 +107,7 @@ def test_skill_package_version_create_validate_and_activate_lifecycle() -> None:
     assert create_response.status_code == 201
     assert created["status"] == "candidate"
     assert created["validation_status"] == "valid"
-    assert created["allowed_tools"] == ["psop.pskills.read", "psop.materials.read"]
+    assert created["allowed_tools"] == BUILDER_ALLOWED_TOOLS
     assert created["resource_count"] == 2
     assert validate_response.status_code == 200
     assert validate_response.json()["validation_status"] == "valid"
