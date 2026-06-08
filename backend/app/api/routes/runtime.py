@@ -484,7 +484,7 @@ async def _store_terminal_upload_part(
     content = await upload.read()
     _validate_terminal_upload(settings=settings, filename=filename, content=content, mime_type=upload_mime_type)
     part_id = _next_terminal_part_id(kind, part_counts)
-    object_key = posixpath.join("terminal-event-parts", run_id, f"{uuid.uuid4()}-{filename}")
+    object_key = posixpath.join("run-event-parts", run_id, f"{uuid.uuid4()}-{filename}")
     try:
         stored = object_store.upload_bytes(
             object_key=object_key,
@@ -631,7 +631,7 @@ def _run_event_content_filename(event: RunEventResponse) -> str:
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return _safe_terminal_upload_filename(value)
-    return f"terminal-event-{event.seq_no}"
+    return f"run-event-{event.seq_no}"
 
 
 def _terminal_part_content_filename(part: dict[str, Any]) -> str:
@@ -641,7 +641,7 @@ def _terminal_part_content_filename(part: dict[str, Any]) -> str:
             value = source.get(key) if isinstance(source, dict) else None
             if isinstance(value, str) and value.strip():
                 return _safe_terminal_upload_filename(value)
-    return "terminal-event-part"
+    return "run-event-part"
 
 
 def _run_event_content_mime_type(event: RunEventResponse, artifact_object: ArtifactObject) -> str:

@@ -31,7 +31,9 @@ const {
   buildPlatformToolPath,
   buildPlatformMemoryPath,
   buildPlatformMemoryEntryPath,
-  buildPlatformObservabilityPath
+  buildPlatformObservabilityPath,
+  buildRunEventsPath,
+  buildSkillRunEventsPath
 } = require("../router.node.cjs");
 const fs = require("fs");
 const path = require("path");
@@ -155,7 +157,9 @@ test("router ES module exposes the closed-loop route helpers", () => {
     "buildPlatformToolsPath",
     "buildPlatformToolPath",
     "buildPlatformMemoryPath",
-    "buildPlatformMemoryEntryPath"
+    "buildPlatformMemoryEntryPath",
+    "buildRunEventsPath",
+    "buildSkillRunEventsPath"
   ];
 
   for (const helperName of helperNames) {
@@ -196,6 +200,10 @@ test("resolveAdminRoute maps issue #1 runtime pages", () => {
     name: "skill-run-live",
     params: { skillId: "skill-123", runId: "run-123", view: "replay" }
   });
+  expect(resolveAdminRoute("/admin/skills/skill-123/runs/run-123/events")).toEqual({
+    name: "skill-run-live",
+    params: { skillId: "skill-123", runId: "run-123", view: "events" }
+  });
   expect(resolveAdminRoute("/admin/skills/skill-123/debug/runs/run-123/live")).toEqual({
     name: "skill-debug-live",
     params: { skillId: "skill-123", runId: "run-123" }
@@ -229,11 +237,17 @@ test("resolveAdminRoute maps issue #1 runtime pages", () => {
     name: "run-live",
     params: { runId: "run-123", view: "replay" }
   });
+  expect(resolveAdminRoute("/admin/runs/run-123/events")).toEqual({
+    name: "run-live",
+    params: { runId: "run-123", view: "events" }
+  });
 });
 
 test("runtime route builders create live and replay locations", () => {
   expect(buildRunLivePath("run-123")).toBe("/admin/runs/run-123/live");
+  expect(buildRunEventsPath("run-123")).toBe("/admin/runs/run-123/events");
   expect(buildSkillRunLivePath("skill-123", "run-123")).toBe("/admin/skills/skill-123/runs/run-123/live");
+  expect(buildSkillRunEventsPath("skill-123", "run-123")).toBe("/admin/skills/skill-123/runs/run-123/events");
   expect(buildSkillDebugRunLivePath("skill-123", "run-123")).toBe(
     "/admin/skills/skill-123/debug/runs/run-123/live"
   );

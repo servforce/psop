@@ -145,6 +145,14 @@
       };
     }
 
+    const skillRunEventsMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/runs\/([^/]+)\/events$/);
+    if (skillRunEventsMatch) {
+      return {
+        name: "skill-run-live",
+        params: { skillId: skillRunEventsMatch[1], runId: skillRunEventsMatch[2], view: "events" }
+      };
+    }
+
     const skillDebugRunLiveMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/debug\/runs\/([^/]+)\/live$/);
     if (skillDebugRunLiveMatch) {
       return {
@@ -229,6 +237,11 @@
     const runReplayMatch = normalized.match(/^\/admin\/runs\/([^/]+)\/live\/replay$/);
     if (runReplayMatch) {
       return { name: "run-live", params: { runId: runReplayMatch[1], view: "replay" } };
+    }
+
+    const runEventsMatch = normalized.match(/^\/admin\/runs\/([^/]+)\/events$/);
+    if (runEventsMatch) {
+      return { name: "run-live", params: { runId: runEventsMatch[1], view: "events" } };
     }
 
     if (normalized === "/admin/replay") {
@@ -363,8 +376,16 @@
     return `/admin/runs/${runId}/live`;
   }
 
+  function buildRunEventsPath(runId) {
+    return `/admin/runs/${runId}/events`;
+  }
+
   function buildSkillRunLivePath(skillId, runId) {
     return `/admin/skills/${skillId}/runs/${runId}/live`;
+  }
+
+  function buildSkillRunEventsPath(skillId, runId) {
+    return `/admin/skills/${skillId}/runs/${runId}/events`;
   }
 
   function buildSkillDebugRunLivePath(skillId, runId) {
@@ -1191,7 +1212,9 @@
     buildPlatformMemoryEntryPath,
     buildPlatformObservabilityPath,
     buildRunLivePath,
+    buildRunEventsPath,
     buildSkillRunLivePath,
+    buildSkillRunEventsPath,
     buildSkillDebugRunLivePath,
     buildReplayPath,
     buildSkillReplayPath,

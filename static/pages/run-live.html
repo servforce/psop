@@ -254,6 +254,10 @@
                         <option :value="kind" x-text="kind"></option>
                       </template>
                     </select>
+                    <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(runEventsPath(liveRun.id))">
+                      <span class="material-symbols-outlined text-[18px]">open_in_new</span>
+                      <span class="hidden sm:inline">Events</span>
+                    </button>
                     <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="downloadLiveRunRawEvents()">
                       <span class="material-symbols-outlined text-[18px]">download</span>
                       <span class="hidden sm:inline">下载</span>

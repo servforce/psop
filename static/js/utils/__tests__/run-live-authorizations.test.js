@@ -9,7 +9,9 @@ function loadRuntimeMethods(locationSearch = "") {
     "resolveAdminRoute",
     "buildSkillDetailPath",
     "buildRunLivePath",
+    "buildRunEventsPath",
     "buildSkillRunLivePath",
+    "buildSkillRunEventsPath",
     "buildSkillDebugRunLivePath",
     "buildReplayPath",
     "buildSkillReplayPath",
@@ -47,6 +49,10 @@ function loadRuntimeMethods(locationSearch = "") {
     JSON,
     URLSearchParams
   };
+  context.window.PSOPConsoleHelpers.buildRunEventsPath = (runId) => `/admin/runs/${runId}/events`;
+  context.window.PSOPConsoleHelpers.buildSkillRunEventsPath = (skillId, runId) => (
+    `/admin/skills/${skillId}/runs/${runId}/events`
+  );
   vm.createContext(context);
   vm.runInContext(source, context);
   return context.window.PSOPConsoleRuntimeMethods;
@@ -65,6 +71,26 @@ test("run live page exposes embedded tool authorization tab", () => {
   expect(runtimeJs).toContain("/runs/${runId}/tool-authorizations");
   expect(runtimeJs).toContain("isToolAuthorizationRunEvent");
   expect(runtimeJs).toContain("refreshLiveRunToolAuthorizations");
+});
+
+test("run live opens the raw events tab from the Run Events route view", () => {
+  const methods = loadRuntimeMethods();
+  const context = {
+    ...methods,
+    route: { name: "run-live", params: { runId: "run-1", view: "events" } },
+    liveRunInteractionTab: "terminal",
+    currentSkill: null
+  };
+
+  methods.syncLiveRunInteractionTabFromRoute.call(context, false);
+  context.currentSkill = { id: "skill-1" };
+
+  expect(context.liveRunInteractionTab).toBe("events");
+  expect(methods.runEventsPath.call({ ...context, currentSkill: null }, "run-1")).toBe("/admin/runs/run-1/events");
+  expect(methods.runEventsPath.call(context, "run-1")).toBe("/admin/skills/skill-1/runs/run-1/events");
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
+  expect(html).toContain("navigate(runEventsPath(liveRun.id))");
 });
 
 test("loadRunLive loads run-scoped tool authorizations", async () => {

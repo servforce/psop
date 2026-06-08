@@ -996,6 +996,12 @@
         if (this.route.name === "invocations-list") {
           return "运行";
         }
+        if (this.route.name === "run-live" && this.route.params?.view === "events") {
+          return "Run Events";
+        }
+        if (this.route.name === "run-live" && this.route.params?.view === "replay") {
+          return "Run Replay";
+        }
         if (this.route.name === "run-live") {
           return "运行详情";
         }

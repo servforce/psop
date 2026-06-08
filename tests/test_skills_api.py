@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.app import create_app
+from app.compiler.models import ArtifactObject
 from app.core.config import Settings
 from app.jobs.types import (
     LEGACY_SKILL_TEST_TIMELINE_DRIVER_JOB_TYPE,
@@ -2547,6 +2548,13 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         event_parts_response = client.get(f"/api/v1/runs/{run_id}/event-parts")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+        with client.app.state.db_manager.session() as session:
+            artifact_objects = [
+                session.get(ArtifactObject, part["artifact_object_id"])
+                for part in appended_event["parts"]
+                if part.get("artifact_object_id")
+            ]
+            artifact_object_keys = [item.object_key for item in artifact_objects if item]
 
     assert append_response.status_code == 202
     assert appended_event["event_kind"] == "terminal.multimodal.input.v1"
@@ -2559,6 +2567,9 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
     assert [part["kind"] for part in media_parts] == ["image", "video", "audio"]
     assert all(part["artifact_object_id"] for part in media_parts)
     assert all("object_key" not in part["metadata"] for part in media_parts)
+    assert artifact_object_keys
+    assert all(key.startswith(f"run-event-parts/{run_id}/") for key in artifact_object_keys)
+    assert all("terminal-event-parts" not in key for key in artifact_object_keys)
 
     assert image_part_content_response.status_code == 200
     assert image_part_content_response.headers["content-type"] == "image/png"

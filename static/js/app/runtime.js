@@ -4,7 +4,9 @@
     resolveAdminRoute,
     buildSkillDetailPath,
     buildRunLivePath,
+    buildRunEventsPath,
     buildSkillRunLivePath,
+    buildSkillRunEventsPath,
     buildSkillDebugRunLivePath,
     buildReplayPath,
     buildSkillReplayPath,
@@ -155,8 +157,9 @@
 
       syncLiveRunInteractionTabFromRoute(isSameRun = false) {
         const allowedTabs = new Set(["terminal", "events", "io", "replay", "authorizations"]);
-        if (this.route?.params?.view === "replay") {
-          this.liveRunInteractionTab = "replay";
+        const requestedView = String(this.route?.params?.view || "");
+        if (allowedTabs.has(requestedView)) {
+          this.liveRunInteractionTab = requestedView;
           return;
         }
         if (!isSameRun || !allowedTabs.has(this.liveRunInteractionTab)) {
@@ -1198,6 +1201,13 @@
         return this.currentSkill?.id
           ? buildSkillRunLivePath(this.currentSkill.id, runId)
           : buildRunLivePath(runId);
+      },
+
+
+      runEventsPath(runId) {
+        return this.currentSkill?.id
+          ? buildSkillRunEventsPath(this.currentSkill.id, runId)
+          : buildRunEventsPath(runId);
       },
 
 
