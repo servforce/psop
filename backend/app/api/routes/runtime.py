@@ -26,6 +26,7 @@ from app.jobs.service import JobQueryService
 from app.runtime.schemas import (
     AppendRunEventRequest,
     BindingRequirementResponse,
+    CancelRunRequest,
     CreateInvocationRequest,
     InvocationResponse,
     ReplayDetailResponse,
@@ -135,6 +136,18 @@ def get_run(
     service: RuntimeService = Depends(get_runtime_service),
 ) -> RunResponse:
     return service.get_run(session, run_id)
+
+
+@runs_router.post("/{run_id}/cancel", response_model=RunResponse)
+def cancel_run(
+    run_id: str,
+    payload: CancelRunRequest | None = None,
+    session: Session = Depends(get_db_session),
+    service: RuntimeService = Depends(get_runtime_service),
+) -> RunResponse:
+    request = payload or CancelRunRequest()
+    reason = request.reason.strip() or "cancelled by user"
+    return service.cancel_run(session, run_id, reason=reason)
 
 
 @runs_router.get("/{run_id}/snapshots", response_model=list[SessionTokenSnapshotResponse])

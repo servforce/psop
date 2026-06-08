@@ -61,6 +61,10 @@ class RunResponse(BaseModel):
     updated_at: datetime
 
 
+class CancelRunRequest(BaseModel):
+    reason: str = Field(default="cancelled by user", max_length=500)
+
+
 class SessionTokenSnapshotResponse(BaseModel):
     id: str
     run_id: str

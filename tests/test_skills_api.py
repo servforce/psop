@@ -2244,6 +2244,82 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert job_stats["token_usage"]["total_tokens"] >= 60
 
 
+def test_runtime_run_can_be_cancelled_through_runs_api() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "runtime-cancel-demo",
+                "name": "Runtime Cancel Demo",
+                "description": "Validate cancelling a waiting runtime run.",
+            },
+        ).json()
+
+        publish_response = client.post(
+            f"/api/v1/pskills/{created['id']}/publish",
+            json={"publish_reason": "Runtime cancel publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        compile_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+
+        invocation_response = client.post(
+            "/api/v1/runtime/invocations",
+            json={
+                "skill_key": "runtime-cancel-demo",
+                "input_envelope": {"user_input": "启动后等待现场证据"},
+                "gateway_type": "web",
+            },
+        )
+        invocation_payload = invocation_response.json()
+        run_id = invocation_payload["run_id"]
+        initial_run_response = client.get(f"/api/v1/runs/{run_id}")
+        cancel_response = client.post(f"/api/v1/runs/{run_id}/cancel", json={"reason": "用户取消本次运行"})
+        second_cancel_response = client.post(f"/api/v1/runs/{run_id}/cancel", json={"reason": "不应覆盖原始原因"})
+        run_response = client.get(f"/api/v1/runs/{run_id}")
+        invocation_detail_response = client.get(f"/api/v1/gateway/invocations/{invocation_payload['id']}")
+        terminal_session_response = client.get(f"/api/v1/terminal/sessions/{run_id}")
+        snapshots_response = client.get(f"/api/v1/runs/{run_id}/snapshots")
+        traces_response = client.get(f"/api/v1/runs/{run_id}/traces")
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+
+    assert publish_response.status_code == 202
+    assert compile_response.status_code == 200
+    assert invocation_response.status_code == 201
+    initial_run_payload = initial_run_response.json()
+    assert initial_run_payload["status"] == "waiting_input"
+
+    assert cancel_response.status_code == 200
+    cancelled = cancel_response.json()
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["runtime_phase"] == "cancelled"
+    assert cancelled["exit_reason"] == "用户取消本次运行"
+    assert cancelled["ended_at"]
+    assert cancelled["latest_snapshot_seq"] == initial_run_payload["latest_snapshot_seq"] + 1
+    assert cancelled["latest_trace_seq"] == initial_run_payload["latest_trace_seq"] + 1
+
+    assert second_cancel_response.status_code == 200
+    assert second_cancel_response.json()["exit_reason"] == "用户取消本次运行"
+    assert run_response.json()["status"] == "cancelled"
+    assert invocation_detail_response.json()["status"] == "cancelled"
+
+    terminal_session = terminal_session_response.json()["terminal_session"]
+    assert terminal_session["status"] == "closed"
+    assert terminal_session["closed_at"]
+
+    snapshots = snapshots_response.json()
+    assert snapshots[-1]["token_payload"]["status"] == "cancelled"
+    assert snapshots[-1]["token_payload"]["phase"] == "cancelled"
+    assert snapshots[-1]["token_payload"]["control"]["cancelled"]["reason"] == "用户取消本次运行"
+    assert snapshots[-1]["selection_summary"] == {"selected": None, "reason": "cancelled"}
+
+    traces = traces_response.json()
+    assert traces[-1]["event_type"] == "runtime.cancelled"
+    assert traces[-1]["payload"] == {"reason": "用户取消本次运行"}
+    assert replay_response.json()["run"]["status"] == "cancelled"
+
+
 def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     client, _, _ = create_test_client()
 
