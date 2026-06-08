@@ -418,6 +418,110 @@ def test_agent_runner_executes_runtime_read_tool_from_persisted_facts() -> None:
     assert "agent.tool_call.succeeded" in event_types
 
 
+def test_agent_runner_executes_compiler_read_and_formal_v5_validation_tools() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        skill_response = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "compiler-tool-runtime",
+                "name": "Compiler Tool Runtime",
+                "description": "Validate compiler Agent native tools.",
+            },
+        )
+        skill = skill_response.json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill['id']}/publish",
+            json={"publish_reason": "Compiler tool execution test"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        compile_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        artifact_id = compile_response.json()["artifact_id"]
+
+        read_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.compiler",
+                "owner_type": "compile_request",
+                "owner_id": compile_request_id,
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.pskills.read",
+                        "side_effect_level": "read",
+                        "arguments_summary": {"pskill_id": skill["id"]},
+                    }
+                },
+            },
+        )
+        read_agent_run_id = read_run_response.json()["id"]
+        read_once_response = client.post(f"/api/v1/agent-runs/{read_agent_run_id}/run-once")
+        read_tool_calls_response = client.get(f"/api/v1/agent-runs/{read_agent_run_id}/tool-calls")
+        read_authorizations_response = client.get(f"/api/v1/agent-runs/{read_agent_run_id}/tool-authorizations")
+
+        validate_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.compiler",
+                "owner_type": "compile_request",
+                "owner_id": compile_request_id,
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.compiler.validate_formal_v5",
+                        "side_effect_level": "compute",
+                        "arguments_summary": {"artifact_id": artifact_id},
+                    }
+                },
+            },
+        )
+        validate_agent_run_id = validate_run_response.json()["id"]
+        validate_once_response = client.post(f"/api/v1/agent-runs/{validate_agent_run_id}/run-once")
+        validate_tool_calls_response = client.get(f"/api/v1/agent-runs/{validate_agent_run_id}/tool-calls")
+        validate_events_response = client.get(f"/api/v1/agent-runs/{validate_agent_run_id}/events")
+        validate_authorizations_response = client.get(
+            f"/api/v1/agent-runs/{validate_agent_run_id}/tool-authorizations"
+        )
+
+    assert skill_response.status_code == 201
+    assert compile_response.status_code == 200
+    assert artifact_id
+
+    assert read_run_response.status_code == 201
+    assert read_once_response.status_code == 200
+    read_payload = read_once_response.json()
+    assert read_payload["status"] == "succeeded"
+    assert read_payload["output_payload"]["tool_result"]["tool_name"] == "psop.pskills.read"
+    assert read_payload["output_payload"]["tool_result"]["result"]["id"] == skill["id"]
+    assert read_payload["output_payload"]["tool_result"]["result"]["key"] == "compiler-tool-runtime"
+    assert read_authorizations_response.json() == []
+    assert read_tool_calls_response.json()[0]["result_summary"]["executed"] is True
+    assert "native_execution" not in read_tool_calls_response.json()[0]["result_summary"]["result"]
+
+    assert validate_run_response.status_code == 201
+    assert validate_once_response.status_code == 200
+    validate_payload = validate_once_response.json()
+    assert validate_payload["status"] == "succeeded"
+    validate_result = validate_payload["output_payload"]["tool_result"]["result"]
+    assert validate_result["artifact_id"] == artifact_id
+    assert validate_result["valid"] is True
+    assert validate_result["normalized_artifact"]["formal_revision"] == "psop-eg-formal/v5"
+    assert validate_result["graph_summary"]["template"] == "formal-v5 skill workflow graph"
+    assert validate_authorizations_response.json() == []
+
+    validate_tool_call = validate_tool_calls_response.json()[0]
+    assert validate_tool_call["tool_name"] == "psop.compiler.validate_formal_v5"
+    assert validate_tool_call["status"] == "succeeded"
+    assert validate_tool_call["result_summary"]["executed"] is True
+    assert "native_execution" not in validate_tool_call["result_summary"]["result"]
+
+    validate_event_types = [item["event_type"] for item in validate_events_response.json()]
+    assert "compiler.formal_v5.validated" in validate_event_types
+    assert "tool.execution_succeeded" in validate_event_types
+    assert "agent.tool_call.succeeded" in validate_event_types
+
+
 def test_agent_version_api_creates_publishes_and_activates_draft() -> None:
     client, _, _ = create_test_client()
 

@@ -18,6 +18,8 @@ from app.agents.schemas import (
     AgentRunResponse,
 )
 from app.agents.service import AgentService
+from app.compiler.formal_v5 import validate_and_normalize_artifact
+from app.compiler.service import CompilerService
 from app.governance.schemas import GovernanceProposalCreateRequest
 from app.governance.service import GovernanceService
 from app.memory.schemas import MemorySearchRequest
@@ -52,6 +54,7 @@ class AgentRunner:
         tool_policy: ToolPolicy | None = None,
         memory_service: MemoryService | None = None,
         pskills_service: SkillsService | None = None,
+        compiler_service: CompilerService | None = None,
         runtime_service: RuntimeService | None = None,
         governance_service: GovernanceService | None = None,
         output_guardrail: OutputGuardrail | None = None,
@@ -63,6 +66,7 @@ class AgentRunner:
         self.tool_policy = tool_policy or ToolPolicy()
         self.memory_service = memory_service or MemoryService()
         self.pskills_service = pskills_service
+        self.compiler_service = compiler_service
         self.runtime_service = runtime_service
         self.governance_service = governance_service or GovernanceService()
         self.output_guardrail = output_guardrail or OutputGuardrail()
@@ -364,6 +368,10 @@ class AgentRunner:
             pskill_id = self._pskill_id_from_arguments(session, arguments)
             detail = self._require_pskills_service().get_skill_detail(session, pskill_id)
             return {"result": detail.model_dump(mode="json")}
+        if tool_call.tool_name == "psop.pskills.read":
+            pskill_id = self._pskill_id_from_arguments(session, arguments)
+            detail = self._require_pskills_service().get_skill_detail(session, pskill_id)
+            return {"result": detail.model_dump(mode="json")}
         if tool_call.tool_name == "psop.materials.list":
             pskill_id = self._pskill_id_from_arguments(session, arguments)
             materials = self._require_pskills_service().list_materials(session, skill_id=pskill_id)
@@ -399,6 +407,8 @@ class AgentRunner:
                 raise SkillValidationError("psop.pskill_manifest.render 缺少 manifest。", details={"arguments_summary": arguments})
             document = self._document_from_tool_manifest(manifest)
             return {"result": {"content": render_skill_yaml(document), "document": document.model_dump(mode="json")}}
+        if tool_call.tool_name == "psop.compiler.validate_formal_v5":
+            return {"result": self._validate_formal_v5_artifact(session, tool_call=tool_call, arguments=arguments)}
         if tool_call.tool_name == "psop.memory.search":
             try:
                 payload = MemorySearchRequest(
@@ -601,10 +611,54 @@ class AgentRunner:
             raise SkillValidationError("AgentRunner 未配置 PSkill service，无法执行 PSkill repository 工具。")
         return self.pskills_service
 
+    def _require_compiler_service(self) -> CompilerService:
+        if not self.compiler_service:
+            raise SkillValidationError("AgentRunner 未配置 Compiler service，无法执行 Compiler 工具。")
+        return self.compiler_service
+
     def _require_runtime_service(self) -> RuntimeService:
         if not self.runtime_service:
             raise SkillValidationError("AgentRunner 未配置 Runtime service，无法执行 Runtime 工具。")
         return self.runtime_service
+
+    def _validate_formal_v5_artifact(self, session: Session, *, tool_call: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+        artifact_id = str(arguments.get("artifact_id") or arguments.get("compile_artifact_id") or "").strip()
+        if artifact_id:
+            validation = self._require_compiler_service().validate_artifact(session, artifact_id)
+            result = validation.model_dump(mode="json")
+        else:
+            candidate = arguments.get("artifact", arguments.get("candidate", arguments.get("compile_artifact")))
+            if not isinstance(candidate, dict):
+                raise SkillValidationError(
+                    "psop.compiler.validate_formal_v5 缺少 artifact 或 artifact_id。",
+                    details={"required_any_of": ["artifact_id", "compile_artifact_id", "artifact"], "arguments_summary": arguments},
+                )
+            validation = validate_and_normalize_artifact(candidate)
+            result = {
+                "artifact_id": "",
+                "compile_request_id": "",
+                "pskill_version_id": "",
+                "valid": not validation.has_errors and validation.artifact is not None,
+                "diagnostics": [item.as_dict() for item in validation.diagnostics],
+                "graph_summary": validation.artifact.get("graph_summary") if validation.artifact else None,
+                "capability_summary": validation.artifact.get("capability_summary") if validation.artifact else None,
+                "normalized_artifact": validation.artifact,
+            }
+        self.agent_service.append_event(
+            session,
+            tool_call.agent_run_id,
+            AppendAgentEventRequest(
+                event_type="compiler.formal_v5.validated",
+                phase="compiler",
+                payload={
+                    "artifact_id": result.get("artifact_id") or artifact_id,
+                    "valid": result.get("valid"),
+                    "diagnostic_count": len(result.get("diagnostics") or []),
+                },
+            ),
+            commit=False,
+        )
+        return result
 
     def _read_runtime_facts(self, session: Session, *, tool_call: Any, arguments: dict[str, Any]) -> dict[str, Any]:
         runtime_service = self._require_runtime_service()
