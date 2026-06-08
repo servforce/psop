@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_skill_test_service
 from app.agents.schemas import AgentEventResponse
-from app.pskills.exceptions import SkillValidationError
+from app.pskills.exceptions import SkillsError, SkillValidationError
 from app.runtime.schemas import InvocationResponse
+from app.testing.activity import SkillTestRunActivityService
 from app.testing.schemas import (
     CancelSkillTestScenarioRunRequest,
     DeleteSkillTestAssetResponse,
@@ -33,6 +36,7 @@ from app.testing.service import SkillTestService
 
 
 router = APIRouter(tags=["skill-tests"])
+test_run_activity_ws_router = APIRouter(prefix="/ws", tags=["ws"])
 
 
 @router.get("/testing/suites", response_model=list[SkillTestSuiteResponse])
@@ -309,3 +313,58 @@ def run_publish_gate(
     if not payload.pskill_id:
         raise SkillValidationError("publish gate 需要 pskill_id。")
     return service.run_publish_gate(session, payload.pskill_id, payload)
+
+
+@test_run_activity_ws_router.websocket("/test-runs/{test_run_id}")
+async def test_run_activity_websocket(websocket: WebSocket, test_run_id: str) -> None:
+    await websocket.accept()
+    await websocket.send_json(
+        {
+            "event_type": "ws.connected",
+            "test_run_id": test_run_id,
+            "occurred_at": None,
+            "payload": {"message": "connected"},
+        }
+    )
+    service = SkillTestRunActivityService(testing_service=_build_skill_test_service(websocket))
+    last_payload = ""
+    try:
+        while True:
+            with websocket.app.state.db_manager.session() as session:
+                snapshot = service.build_snapshot(session, test_run_id)
+            encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
+            if encoded != last_payload:
+                await websocket.send_json(
+                    {
+                        "event_type": "test_run.activity.snapshot",
+                        "test_run_id": test_run_id,
+                        "occurred_at": snapshot["test_run"]["updated_at"],
+                        "payload": snapshot,
+                    }
+                )
+                last_payload = encoded
+            await asyncio.sleep(1)
+    except SkillsError as exc:
+        await websocket.send_json(
+            {
+                "event_type": "test_run.activity.error",
+                "test_run_id": test_run_id,
+                "occurred_at": None,
+                "payload": {
+                    "code": exc.error_code,
+                    "message": exc.message,
+                    "details": exc.details,
+                },
+            }
+        )
+        await websocket.close(code=1008)
+    except (RuntimeError, WebSocketDisconnect):
+        return
+
+
+def _build_skill_test_service(websocket: WebSocket) -> SkillTestService:
+    return SkillTestService(
+        settings=websocket.app.state.settings,
+        inference_gateway=websocket.app.state.inference_gateway,
+        object_store=websocket.app.state.object_store,
+    )

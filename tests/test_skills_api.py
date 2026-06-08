@@ -3181,6 +3181,88 @@ def test_skill_test_scenario_run_can_be_cancelled() -> None:
     assert second_cancel_response.json()["status"] == "cancelled"
 
 
+def test_skill_test_run_activity_websocket_streams_review_snapshot() -> None:
+    client, _, _ = create_test_client()
+
+    timeline = {
+        "schema_version": "psop-skill-test-timeline/v1",
+        "duration_ms": 60000,
+        "lanes": [
+            {"id": "input.text", "kind": "input", "label": "文本"},
+            {"id": "expected.semantic", "kind": "output", "label": "文本"},
+        ],
+        "events": [
+            {
+                "id": "delayed_input",
+                "lane_id": "input.text",
+                "at_ms": 60000,
+                "payload_inline": "一分钟后发送。",
+            },
+            {
+                "id": "expect_delayed",
+                "lane_id": "expected.semantic",
+                "at_ms": 60000,
+                "expectation": "系统应处理延迟输入。",
+            },
+        ],
+    }
+
+    with client:
+        created = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "skill-test-run-activity-ws",
+                "name": "Skill Test Run Activity WS",
+                "description": "Validate test run activity websocket.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{created['id']}/publish",
+            json={"publish_reason": "Test run activity websocket publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        scenario = client.post(
+            f"/api/v1/pskills/{created['id']}/test-scenarios",
+            json={"name": "activity ws scenario", "duration_ms": 60000, "timeline": timeline},
+        ).json()
+        start_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        scenario_run = start_response.json()
+
+        with client.websocket_connect(f"/ws/test-runs/{scenario_run['id']}") as websocket:
+            connected = websocket.receive_json()
+            initial_snapshot = websocket.receive_json()
+            cancel_response = client.post(
+                f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/cancel",
+                json={"reason": "活动流测试终止"},
+            )
+            cancelled_snapshot = websocket.receive_json()
+
+    assert start_response.status_code == 202
+    assert scenario_run["status"] == "waiting_input"
+    assert scenario_run["driver_status"] == "waiting_time"
+    assert connected["event_type"] == "ws.connected"
+    assert connected["test_run_id"] == scenario_run["id"]
+
+    assert initial_snapshot["event_type"] == "test_run.activity.snapshot"
+    initial_payload = initial_snapshot["payload"]
+    assert initial_payload["test_run"]["id"] == scenario_run["id"]
+    assert initial_payload["active"] is True
+    assert initial_payload["terminal"] is False
+    assert initial_payload["review"]["scenario_run"]["driver_status"] == "waiting_time"
+    assert [event["event_type"] for event in initial_payload["agent_events"]] == [
+        "agent.run.created",
+        "testing.run.linked",
+    ]
+
+    assert cancel_response.status_code == 200
+    cancelled_payload = cancelled_snapshot["payload"]
+    assert cancelled_payload["test_run"]["status"] == "cancelled"
+    assert cancelled_payload["review"]["scenario_run"]["result_summary"]["reason"] == "活动流测试终止"
+    assert cancelled_payload["terminal"] is True
+    assert cancelled_payload["active"] is False
+
+
 def test_skill_test_scenario_sensor_timeline_review_stage_outputs_and_fork() -> None:
     client, _, _ = create_test_client()
 

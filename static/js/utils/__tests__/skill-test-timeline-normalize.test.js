@@ -4,7 +4,53 @@ const vm = require("vm");
 
 const skillTestAppPath = path.join(__dirname, "../../app/skill-test.js");
 
-function loadSkillTestMethods() {
+function createFakeWebSocketClass() {
+  const instances = [];
+
+  class FakeWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+
+    constructor(url) {
+      this.url = url;
+      this.readyState = FakeWebSocket.CONNECTING;
+      this.listeners = {};
+      instances.push(this);
+    }
+
+    addEventListener(type, handler) {
+      this.listeners[type] = this.listeners[type] || [];
+      this.listeners[type].push(handler);
+    }
+
+    close() {
+      this.readyState = FakeWebSocket.CLOSED;
+      this.emit("close", {});
+    }
+
+    open() {
+      this.readyState = FakeWebSocket.OPEN;
+      this.emit("open", {});
+    }
+
+    message(payload) {
+      this.emit("message", { data: JSON.stringify(payload) });
+    }
+
+    emit(type, event) {
+      for (const handler of this.listeners[type] || []) {
+        handler(event);
+      }
+    }
+  }
+
+  FakeWebSocket.instances = instances;
+  return FakeWebSocket;
+}
+
+function loadSkillTestMethods(overrides = {}) {
   const source = fs.readFileSync(skillTestAppPath, "utf8");
   const helperNames = [
     "normalizePath",
@@ -29,20 +75,33 @@ function loadSkillTestMethods() {
     "renderInlineMarkdown",
     "renderMarkdown"
   ];
+  const defaultWindow = {
+    PSOPConsoleHelpers: Object.fromEntries(helperNames.map((name) => [name, jest.fn()])),
+    PSOPRuntimeEvents: {
+      mergeById: (existing = [], incoming = []) => incoming.reduce((items, item) => {
+        const index = items.findIndex((existingItem) => existingItem.id === item.id);
+        if (index >= 0) {
+          items[index] = { ...items[index], ...item };
+        } else {
+          items.push(item);
+        }
+        return items;
+      }, [...existing]),
+      mergeBySeq: (existing = [], incoming = []) => [...existing, ...incoming].sort((left, right) => Number(left.seq_no || 0) - Number(right.seq_no || 0))
+    }
+  };
   const context = {
+    ...overrides,
     window: {
-      PSOPConsoleHelpers: Object.fromEntries(helperNames.map((name) => [name, jest.fn()])),
+      ...defaultWindow,
+      ...(overrides.window || {}),
+      PSOPConsoleHelpers: {
+        ...defaultWindow.PSOPConsoleHelpers,
+        ...(overrides.window?.PSOPConsoleHelpers || {})
+      },
       PSOPRuntimeEvents: {
-        mergeById: (existing = [], incoming = []) => incoming.reduce((items, item) => {
-          const index = items.findIndex((existingItem) => existingItem.id === item.id);
-          if (index >= 0) {
-            items[index] = { ...items[index], ...item };
-          } else {
-            items.push(item);
-          }
-          return items;
-        }, [...existing]),
-        mergeBySeq: (existing = [], incoming = []) => [...existing, ...incoming].sort((left, right) => Number(left.seq_no || 0) - Number(right.seq_no || 0))
+        ...defaultWindow.PSOPRuntimeEvents,
+        ...(overrides.window?.PSOPRuntimeEvents || {})
       }
     }
   };
@@ -1013,6 +1072,88 @@ test("review refresh replaces pending semantic judgement with saved judge output
   expect(app.skillTestReviewStepStatus(app.selectedSkillTestReviewExpectationEvent())).toBe("passed");
   expect(app.selectedSkillTestReviewJudgeRawOutput()).toBe("{\"status\":\"passed\",\"confidence\":0.91}");
   expect(app.shouldPollSkillTestRunReview(refreshedReview)).toBe(false);
+});
+
+test("skill test run activity websocket applies review snapshots", () => {
+  const FakeWebSocket = createFakeWebSocketClass();
+  const methods = loadSkillTestMethods({
+    WebSocket: FakeWebSocket,
+    window: {
+      PSOPConsoleHelpers: {
+        resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`
+      }
+    }
+  });
+  const review = {
+    scenario: {
+      id: "scenario-1",
+      timeline: {
+        duration_ms: 600000,
+        events: [{ id: "expect_final", lane_id: "expected.semantic", at_ms: 1000 }]
+      }
+    },
+    scenario_run: {
+      id: "run-1",
+      status: "running",
+      driver_status: "waiting_time",
+      timeline: {
+        duration_ms: 600000,
+        events: [{ id: "expect_final", lane_id: "expected.semantic", at_ms: 1000 }]
+      },
+      result_summary: {},
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z"
+    },
+    replay: { run: { id: "runtime-run-1" }, run_events: [], run_traces: [], bindings: [] },
+    scenario_timeline: {
+      duration_ms: 600000,
+      events: [{ id: "expect_final", lane_id: "expected.semantic", at_ms: 1000 }]
+    },
+    replay_timeline: [],
+    cursor_anchors: [],
+    driver_events: [],
+    expectation_evaluations: [],
+    stage_outputs: []
+  };
+  const app = {
+    ...createTimelineHarness(),
+    ...methods,
+    apiBaseUrl: "/api/v1",
+    skillTestReviewActivityWs: null,
+    skillTestReviewActivityWsRunId: "",
+    skillTestReviewActivityWsStatus: "idle",
+    skillTestReviewAgentEvents: [],
+    skillTestRuns: [],
+    showNotice: jest.fn(),
+    startSkillTestReviewPolling: jest.fn(),
+    stopSkillTestReviewPolling: jest.fn()
+  };
+
+  expect(app.connectSkillTestRunActivityWebSocket("run-1")).toBe(true);
+  const socket = FakeWebSocket.instances[0];
+  socket.open();
+  socket.message({
+    event_type: "test_run.activity.snapshot",
+    payload: {
+      test_run: review.scenario_run,
+      scenario: review.scenario,
+      active: true,
+      terminal: false,
+      review,
+      agent_events: [{ id: "event-1", event_type: "testing.run.linked" }]
+    }
+  });
+
+  expect(socket.url).toBe("ws://localhost/ws/test-runs/run-1");
+  expect(app.skillTestReviewActivityWsStatus).toBe("open");
+  expect(app.skillTestReview.scenario_run.id).toBe("run-1");
+  expect(app.skillTestRun.driver_status).toBe("waiting_time");
+  expect(app.skillTestReviewAgentEvents).toHaveLength(1);
+
+  app.disconnectSkillTestRunActivityWebSocket();
+
+  expect(app.skillTestReviewActivityWs).toBeNull();
+  expect(app.skillTestReviewActivityWsStatus).toBe("idle");
 });
 
 test("completed review records open at the end without autoplay", () => {

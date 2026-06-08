@@ -2076,6 +2076,7 @@
       async loadSkillTestRunReview(skillId, scenarioId, scenarioRunId) {
         this.stopSkillTestReviewPlayback();
         this.stopSkillTestReviewPolling();
+        this.disconnectSkillTestRunActivityWebSocket();
         this.busy.skillTestRun = true;
         try {
           const review = await this.apiRequest(`/skill-test-scenario-runs/${scenarioRunId}/review`);
@@ -2091,7 +2092,9 @@
           await this.loadSkillTestCaseDetail(skillId, scenarioId);
           this.applySkillTestReviewPayload(review);
           this.applySkillTestReviewInitialPlayhead(review);
-          this.startSkillTestReviewPolling(scenarioRunId);
+          if (!this.connectSkillTestRunActivityWebSocket(scenarioRunId)) {
+            this.startSkillTestReviewPolling(scenarioRunId);
+          }
         } finally {
           this.busy.skillTestRun = false;
         }
@@ -2152,6 +2155,87 @@
       },
 
 
+      connectSkillTestRunActivityWebSocket(scenarioRunId = this.skillTestRun?.id) {
+        const id = String(scenarioRunId || "").trim();
+        if (!id || typeof WebSocket === "undefined") {
+          return false;
+        }
+        if (
+          this.skillTestReviewActivityWs &&
+          this.skillTestReviewActivityWsRunId === id &&
+          [WebSocket.CONNECTING, WebSocket.OPEN].includes(this.skillTestReviewActivityWs.readyState)
+        ) {
+          return true;
+        }
+
+        this.disconnectSkillTestRunActivityWebSocket();
+        const socket = new WebSocket(resolveWsUrl(this.apiBaseUrl, `/ws/test-runs/${encodeURIComponent(id)}`));
+        this.skillTestReviewActivityWs = socket;
+        this.skillTestReviewActivityWsRunId = id;
+        this.skillTestReviewActivityWsStatus = "connecting";
+        socket.addEventListener("open", () => {
+          if (this.skillTestReviewActivityWs === socket) {
+            this.skillTestReviewActivityWsStatus = "open";
+          }
+        });
+        socket.addEventListener("message", (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            if (message.event_type === "test_run.activity.snapshot" && message.payload) {
+              this.applySkillTestRunActivitySnapshot(message.payload);
+            }
+            if (message.event_type === "test_run.activity.error") {
+              this.showNotice("error", message.payload?.message || "获取测试运行活动流失败。");
+              this.disconnectSkillTestRunActivityWebSocket();
+              this.startSkillTestReviewPolling(id);
+            }
+          } catch {
+            // Ignore malformed activity messages; polling remains the recovery path.
+          }
+        });
+        socket.addEventListener("close", () => {
+          if (this.skillTestReviewActivityWs === socket) {
+            this.skillTestReviewActivityWsStatus = "closed";
+          }
+        });
+        socket.addEventListener("error", () => {
+          if (this.skillTestReviewActivityWs === socket) {
+            this.skillTestReviewActivityWsStatus = "error";
+            this.disconnectSkillTestRunActivityWebSocket();
+            this.startSkillTestReviewPolling(id);
+          }
+        });
+        return true;
+      },
+
+
+      disconnectSkillTestRunActivityWebSocket() {
+        if (this.skillTestReviewActivityWs) {
+          this.skillTestReviewActivityWs.close();
+        }
+        this.skillTestReviewActivityWs = null;
+        this.skillTestReviewActivityWsRunId = "";
+        this.skillTestReviewActivityWsStatus = "idle";
+      },
+
+
+      applySkillTestRunActivitySnapshot(snapshot) {
+        if (!snapshot || typeof snapshot !== "object") {
+          return;
+        }
+        if (Array.isArray(snapshot.agent_events)) {
+          this.skillTestReviewAgentEvents = snapshot.agent_events;
+        }
+        if (snapshot.review) {
+          this.applySkillTestReviewPayload(snapshot.review);
+        }
+        if (snapshot.terminal && !this.shouldPollSkillTestRunReview(snapshot.review || this.skillTestReview)) {
+          this.stopSkillTestReviewPolling();
+          this.disconnectSkillTestRunActivityWebSocket();
+        }
+      },
+
+
       startSkillTestReviewPolling(scenarioRunId = this.skillTestRun?.id) {
         this.stopSkillTestReviewPolling();
         if (!scenarioRunId || !this.shouldPollSkillTestRunReview(this.skillTestReview)) {
@@ -2179,6 +2263,9 @@
 
       shouldPollSkillTestRunReview(review = this.skillTestReview) {
         if (!review) {
+          return false;
+        }
+        if ((review.scenario_run || this.skillTestRun)?.status === "cancelled") {
           return false;
         }
         return this.isOpenSkillTestRun(review.scenario_run || this.skillTestRun) || this.hasPendingSkillTestReviewJudgement(review);

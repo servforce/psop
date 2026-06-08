@@ -459,6 +459,7 @@
         if (this.route.name !== "skill-test-scenario-review") {
           this.stopSkillTestReviewPlayback?.();
           this.stopSkillTestReviewPolling?.();
+          this.disconnectSkillTestRunActivityWebSocket?.();
         }
         if (this.route.name !== "tasks-list") {
           this.stopTaskPolling?.();

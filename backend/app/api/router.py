@@ -17,7 +17,7 @@ from app.api.routes.memory import router as memory_router
 from app.api.routes.observability import router as observability_router
 from app.api.routes.runtime import gateway_router, replay_router, runtime_router, runs_router, terminal_router, ws_router
 from app.api.routes.skill_packages import router as skill_packages_router
-from app.api.routes.skill_tests import router as skill_tests_router
+from app.api.routes.skill_tests import router as skill_tests_router, test_run_activity_ws_router
 from app.api.routes.skills import pskill_activity_ws_router, router as skills_router
 from app.api.routes.system import router as system_router
 from app.api.routes.tools import router as tools_router
@@ -49,3 +49,4 @@ api_router.include_router(ws_router)
 api_router.include_router(agent_runs_ws_router)
 api_router.include_router(tool_authorizations_ws_router)
 api_router.include_router(pskill_activity_ws_router)
+api_router.include_router(test_run_activity_ws_router)
