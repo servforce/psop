@@ -3033,10 +3033,14 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert review["scenario_run"]["agent_run_id"] == scenario_run["agent_run_id"]
     assert review["expectation_evaluations"][0]["expectation_id"] == "expect_completion"
     assert review["expectation_evaluations"][0]["status"] == "passed"
+    assert review["expectation_evaluations"][0]["evidence_refs"] == [{"kind": "run_event", "seq_no": 4}]
     judge_raw_response = review["expectation_evaluations"][0]["raw_response"]
     assert judge_raw_response["request"]["route_key"] == "text"
     assert judge_raw_response["request"]["prompt_payload"]["expectation"] == "系统应确认现场步骤已完成。"
     assert judge_raw_response["request"]["prompt_payload"]["run_status"] == "succeeded"
+    assert isinstance(judge_raw_response["request"]["prompt_payload"]["run_events_before_cutoff"], list)
+    assert "terminal_outputs_before_cutoff" not in judge_raw_response["request"]["prompt_payload"]
+    assert "terminal_output_count_before_cutoff" not in judge_raw_response["request"]["prompt_payload"]
     assert judge_raw_response["request"]["user_prompt"] == json.dumps(
         judge_raw_response["request"]["prompt_payload"],
         ensure_ascii=False,
@@ -3045,6 +3049,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert judge_raw_response["parsed"]["status"] == "passed"
     assert judge_raw_response["content"]
     assert review["replay_timeline"]
+    assert review["stage_outputs"][0]["judge_result"]["evidence_refs"] == [{"kind": "run_event", "seq_no": 4}]
     assert list_response.json()[0]["latest_run"]["id"] == scenario_run["id"]
     assert list_response.json()[0]["latest_run"]["agent_run_id"] == scenario_run["agent_run_id"]
     assert runs_response.json()[0]["id"] == scenario_run["id"]
@@ -3591,15 +3596,33 @@ def test_skill_test_judge_prompt_compacts_large_outputs() -> None:
 
     prompt_json = json.dumps(payload, ensure_ascii=False)
 
-    assert payload["terminal_output_count_before_cutoff"] == 2
-    assert payload["terminal_outputs_before_cutoff"]
-    assert payload["input_compaction"]["terminal_output_count"] == 2
+    assert payload["run_event_count_before_cutoff"] == 2
+    assert payload["run_events_before_cutoff"]
+    assert "terminal_outputs_before_cutoff" not in payload
+    assert "terminal_output_count_before_cutoff" not in payload
+    assert payload["input_compaction"]["run_event_count"] == 2
+    assert "terminal_output_count" not in payload["input_compaction"]
     assert payload["input_compaction"]["transcript_budget_chars"] == 5000
     assert payload["input_compaction"]["final_output_truncated"] is True
-    assert any(item["payload_truncated"] for item in payload["terminal_outputs_before_cutoff"])
+    assert any(item["payload_truncated"] for item in payload["run_events_before_cutoff"])
     assert len(prompt_json) < 10000
     assert old_payload not in prompt_json
     assert recent_payload not in prompt_json
+
+
+def test_skill_test_judge_evidence_refs_use_runtime_names() -> None:
+    assert SkillTestService._normalize_judge_evidence_refs(
+        [
+            {"kind": "terminal_event", "seq_no": 1},
+            {"kind": "trace_event", "id": "trace-1"},
+            {"kind": "artifact", "id": "artifact-1"},
+            "invalid",
+        ]
+    ) == [
+        {"kind": "run_event", "seq_no": 1},
+        {"kind": "run_trace", "id": "trace-1"},
+        {"kind": "artifact", "id": "artifact-1"},
+    ]
 
 
 def test_skill_test_scenario_rejects_duplicate_open_run() -> None:

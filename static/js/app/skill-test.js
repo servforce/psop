@@ -2157,6 +2157,96 @@
         this.navigate(path);
       },
 
+      skillTestReviewRunId() {
+        return String(
+          this.skillTestRun?.run_id ||
+            this.skillTestReview?.scenario_run?.run_id ||
+            this.skillTestReview?.replay?.run?.id ||
+            ""
+        ).trim();
+      },
+
+
+      skillTestReviewNormalizeEvidenceKind(kind) {
+        const value = String(kind || "").trim().toLowerCase();
+        if (value === "terminal_event") {
+          return "run_event";
+        }
+        if (value === "trace_event") {
+          return "run_trace";
+        }
+        return value;
+      },
+
+
+      skillTestReviewEvidenceRefs(event = this.selectedSkillTestReviewExpectationEvent()) {
+        const evaluation = event ? this.skillTestReviewEvaluationFor(event.id) : this.selectedSkillTestReviewEvaluation();
+        const stageOutput = event ? this.skillTestReviewStageOutputForEvent(event) : this.selectedSkillTestStageOutput();
+        const refs = Array.isArray(evaluation?.evidence_refs)
+          ? evaluation.evidence_refs
+          : Array.isArray(stageOutput?.judge_result?.evidence_refs)
+            ? stageOutput.judge_result.evidence_refs
+            : [];
+        return refs.filter((ref) => ref && typeof ref === "object");
+      },
+
+
+      skillTestReviewEvidenceRefLabel(ref) {
+        if (!ref || typeof ref !== "object") {
+          return "evidence:N/A";
+        }
+        const kind = this.skillTestReviewNormalizeEvidenceKind(ref.kind || ref.source_kind) || "evidence";
+        const descriptor =
+          ref.event_type ||
+          ref.event_kind ||
+          ref.id ||
+          ref.run_event_id ||
+          ref.run_trace_id ||
+          ref.trace_id ||
+          ref.event_id ||
+          ref.seq_no ||
+          "N/A";
+        return `${kind}:${descriptor}`;
+      },
+
+
+      skillTestReviewEvidenceReplayPath(ref) {
+        if (!ref || typeof ref !== "object") {
+          return "";
+        }
+        const runId = String(ref.run_id || this.skillTestReviewRunId()).trim();
+        if (!runId) {
+          return "";
+        }
+        const kind = this.skillTestReviewNormalizeEvidenceKind(ref.kind || ref.source_kind);
+        const eventId = String(ref.run_event_id || ref.event_id || (kind === "run_event" ? ref.id : "") || "").trim();
+        const traceId = String(ref.run_trace_id || ref.trace_id || (kind === "run_trace" ? ref.id : "") || "").trim();
+        const seqNo = String(ref.seq_no ?? "").trim();
+        if (kind === "run_event" && eventId) {
+          return buildReplayPath(runId, { event_id: eventId });
+        }
+        if (kind === "run_trace" && traceId) {
+          return buildReplayPath(runId, { trace_id: traceId });
+        }
+        if (eventId) {
+          return buildReplayPath(runId, { event_id: eventId });
+        }
+        if (traceId) {
+          return buildReplayPath(runId, { trace_id: traceId });
+        }
+        return buildReplayPath(runId, seqNo ? { seq_no: seqNo } : {});
+      },
+
+
+      openSkillTestReviewEvidenceReplay(ref) {
+        const path = this.skillTestReviewEvidenceReplayPath(ref);
+        if (!path) {
+          this.showNotice?.("error", "未找到对应 Replay 证据。");
+          return;
+        }
+        this.navigate(path);
+      },
+
 
       async refreshSkillTestRunReview(scenarioRunId = this.skillTestReviewPollRunId, options = {}) {
         if (!scenarioRunId) {
@@ -2626,6 +2716,7 @@
           occurred_at: event?.occurred_at,
           direction: "output",
           required: false,
+          run_event: event,
           terminal_event: event
         };
       },
@@ -2656,6 +2747,7 @@
             occurred_at: output.occurred_at,
             direction: "output",
             required: false,
+            run_event: output,
             terminal_event: output
           }));
         }
@@ -2683,7 +2775,7 @@
 
 
       skillTestReviewRuntimeOutputLabel(event) {
-        const sourceEvent = event?.terminal_event || event;
+        const sourceEvent = event?.run_event || event?.terminal_event || event;
         const parts = [];
         if (sourceEvent?.artifact_object_id) {
           parts.push(`artifact_object_id: ${sourceEvent.artifact_object_id}`);
@@ -3061,7 +3153,7 @@
         if (!event) {
           return [];
         }
-        const terminalEvent = event.terminal_event || null;
+        const runEvent = event.run_event || event.terminal_event || null;
         const asset = event.asset_id ? this.skillTestAssetById(event.asset_id) : null;
         const assetLabel = asset ? this.skillTestAssetLabel(asset) : event.asset_id ? this.skillTestTimelineEventAssetLabel(event) : "";
         const stageOutput = this.skillTestReviewStageOutputForEvent(event);
@@ -3081,14 +3173,14 @@
           ["资源", event.asset_id ? `${assetLabel} · ${event.asset_id}` : ""],
           ["必填", event.required === false ? "否" : "是"]
         ];
-        if (terminalEvent) {
+        if (runEvent) {
           pairs.push(
-            ["终端序号", terminalEvent.seq_no === undefined || terminalEvent.seq_no === null ? "" : `#${terminalEvent.seq_no}`],
-            ["方向", this.terminalDirectionLabel(terminalEvent.direction)],
-            ["发生时间", this.formatDateTime(terminalEvent.occurred_at)],
-            ["终端事件类型", terminalEvent.event_kind],
-            ["终端 MIME 类型", terminalEvent.mime_type],
-            ["Artifact 对象", terminalEvent.artifact_object_id]
+            ["RunEvent 序号", runEvent.seq_no === undefined || runEvent.seq_no === null ? "" : `#${runEvent.seq_no}`],
+            ["方向", this.terminalDirectionLabel(runEvent.direction)],
+            ["发生时间", this.formatDateTime(runEvent.occurred_at)],
+            ["RunEvent 类型", runEvent.event_kind],
+            ["RunEvent MIME 类型", runEvent.mime_type],
+            ["Artifact 对象", runEvent.artifact_object_id]
           );
         }
         return pairs
@@ -3106,7 +3198,7 @@
         if (!event) {
           return "null";
         }
-        return this.formatSkillTestReviewDebugJson(event.terminal_event || event);
+        return this.formatSkillTestReviewDebugJson(event.run_event || event.terminal_event || event);
       },
 
 
@@ -3166,7 +3258,7 @@
         return {
           expectation: event.expectation || "",
           cutoff_occurred_at: new Date(cutoff).toISOString(),
-          terminal_outputs_before_cutoff: outputs,
+          run_events_before_cutoff: outputs,
           final_output: this.skillTestReview?.replay?.run?.final_output || this.liveRun?.final_output || "",
           run_status: this.skillTestRun?.status || "",
           reconstructed: true
@@ -3282,12 +3374,12 @@
           "点击查看完整内容"
         ];
         if (this.isSkillTestRuntimeOutputLane(event?.lane_id)) {
-          const terminalEvent = event.terminal_event || {};
-          if (terminalEvent.seq_no !== undefined && terminalEvent.seq_no !== null) {
-            parts.push(`terminal seq #${terminalEvent.seq_no}`);
+          const runEvent = event.run_event || event.terminal_event || {};
+          if (runEvent.seq_no !== undefined && runEvent.seq_no !== null) {
+            parts.push(`run_event seq #${runEvent.seq_no}`);
           }
-          if (terminalEvent.event_kind) {
-            parts.push(terminalEvent.event_kind);
+          if (runEvent.event_kind) {
+            parts.push(runEvent.event_kind);
           }
         }
         const runtimeOutputCount = this.skillTestReviewRuntimeOutputsForExpectation(event).length;

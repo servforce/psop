@@ -2178,7 +2178,7 @@
         if (!ref || typeof ref !== "object") {
           return "evidence:N/A";
         }
-        const kind = ref.kind || ref.source_kind || "evidence";
+        const kind = this.liveRunReplayNormalizeEvidenceKind(ref.kind || ref.source_kind) || "evidence";
         const descriptor =
           ref.event_type ||
           ref.event_kind ||
@@ -2711,7 +2711,7 @@
         const pairs = [
           ["方向", this.terminalDirectionLabel?.(event.direction) || event.direction],
           ["内容", this.liveRunProcessLaneLabel({ kind: this.liveRunProcessEventKind(event) })],
-          ["终端序号", event.seq_no === undefined || event.seq_no === null ? "" : `#${event.seq_no}`],
+          ["RunEvent 序号", event.seq_no === undefined || event.seq_no === null ? "" : `#${event.seq_no}`],
           ["相对时间", this.formatLiveRunProcessMs(this.liveRunProcessEventAtMs(event))],
           ["发生时间", this.formatDateTime?.(event.occurred_at) || event.occurred_at],
           ["事件类型", event.event_kind],

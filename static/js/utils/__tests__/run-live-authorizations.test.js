@@ -787,12 +787,15 @@ test("run replay finding evidence refs select matching timeline item", () => {
   };
 
   const traceRef = { kind: "run_trace", id: "trace-1", event_type: "runtime.failed" };
-  const eventRef = { kind: "terminal_event", id: "event-1", event_kind: "agent_output" };
+  const eventRef = { kind: "run_event", id: "event-1", event_kind: "agent_output" };
+  const legacyEventRef = { kind: "terminal_event", id: "event-1", event_kind: "agent_output" };
 
   expect(methods.liveRunReplayEvidenceRefs({ evidence_refs: [traceRef] })).toEqual([traceRef]);
   expect(methods.liveRunReplayEvidenceRefLabel(traceRef)).toBe("run_trace:runtime.failed");
+  expect(methods.liveRunReplayEvidenceRefLabel(legacyEventRef)).toBe("run_event:agent_output");
   expect(methods.liveRunReplayFindEvidenceItem.call(context, traceRef)).toBe(traceItem);
   expect(methods.liveRunReplayFindEvidenceItem.call(context, eventRef)).toBe(eventItem);
+  expect(methods.liveRunReplayFindEvidenceItem.call(context, legacyEventRef)).toBe(eventItem);
   expect(methods.liveRunReplayEvidenceRefClass.call(context, traceRef)).toContain("text-sky-200");
 
   expect(methods.selectLiveRunReplayEvidenceRef.call(context, traceRef)).toBe(traceItem);
@@ -987,6 +990,9 @@ test("run live raw events tab filters and exports original run events", () => {
   expect(methods.liveRunRawFilteredEvents.call(context).map((event) => event.id)).toEqual(["event-1"]);
   expect(methods.liveRunRawEventSourceLabel(context.liveRunTerminalEvents[1])).toBe("web · terminal");
   expect(methods.liveRunRawEventJsonText.call(context, context.liveRunTerminalEvents[1])).toContain("fault.png");
+  expect(methods.liveRunProcessEventMetadata.call(context, context.liveRunTerminalEvents[1])).toEqual(
+    expect.arrayContaining([{ label: "RunEvent 序号", value: "#1" }])
+  );
 
   const payload = methods.liveRunRawEventsDownloadPayload.call(context);
   expect(payload.schema).toBe("psop-run-events-export/v1");

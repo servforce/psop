@@ -1194,7 +1194,7 @@ class SkillTestService:
             confidence = self._coerce_confidence(parsed.get("confidence"))
             reason = str(parsed.get("reason") or reason)
             raw_refs = parsed.get("evidence_refs")
-            evidence_refs = raw_refs if isinstance(raw_refs, list) else []
+            evidence_refs = self._normalize_judge_evidence_refs(raw_refs)
         except Exception as exc:
             raw_response = {"request": request_snapshot, "error": str(exc), "error_type": exc.__class__.__name__}
             reason = f"Judge 调用失败或响应非法：{exc.__class__.__name__}"
@@ -2379,6 +2379,25 @@ class SkillTestService:
             return 0.0
         return max(0.0, min(1.0, confidence))
 
+    @staticmethod
+    def _normalize_judge_evidence_refs(value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        kind_aliases = {
+            "terminal_event": "run_event",
+            "trace_event": "run_trace",
+        }
+        normalized: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            ref = dict(item)
+            kind = ref.get("kind")
+            if isinstance(kind, str):
+                ref["kind"] = kind_aliases.get(kind, kind)
+            normalized.append(ref)
+        return normalized
+
     @classmethod
     def _build_judge_prompt_payload(
         cls,
@@ -2425,8 +2444,8 @@ class SkillTestService:
         return {
             "expectation": expectation.get("expectation") or "",
             "cutoff_occurred_at": cutoff.isoformat(),
-            "terminal_outputs_before_cutoff": compact_outputs,
-            "terminal_output_count_before_cutoff": len(scoped_outputs),
+            "run_events_before_cutoff": compact_outputs,
+            "run_event_count_before_cutoff": len(scoped_outputs),
             "final_output": final_output_text,
             "run_status": run_status,
             "input_compaction": compaction,
@@ -2468,9 +2487,9 @@ class SkillTestService:
             "strategy": "recent_outputs_with_per_event_truncation",
             "transcript_budget_chars": transcript_budget,
             "event_budget_chars": event_budget,
-            "terminal_output_count": len(scoped_outputs),
-            "included_terminal_output_count": len(included),
-            "omitted_terminal_output_count": max(0, len(scoped_outputs) - len(included)),
+            "run_event_count": len(scoped_outputs),
+            "included_run_event_count": len(included),
+            "omitted_run_event_count": max(0, len(scoped_outputs) - len(included)),
             "omitted_seq_no": omitted_seq_no,
             "included_chars": included_chars,
             "truncated_seq_no": [item.get("seq_no") for item in included if item.get("payload_truncated")],

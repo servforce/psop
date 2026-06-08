@@ -1177,11 +1177,22 @@
       return buildReplayPath(runId, focus);
     },
 
+    governanceNormalizeEvidenceKind(kind) {
+      const value = String(kind || "").trim().toLowerCase();
+      if (value === "terminal_event") {
+        return "run_event";
+      }
+      if (value === "trace_event") {
+        return "run_trace";
+      }
+      return value;
+    },
+
     governanceSourceFindingReplayFocus(ref) {
       if (!ref || typeof ref !== "object") {
         return {};
       }
-      const kind = String(ref.kind || ref.source_kind || "").trim().toLowerCase();
+      const kind = this.governanceNormalizeEvidenceKind(ref.kind || ref.source_kind);
       const traceId = String(ref.trace_id || ref.run_trace_id || ref.trace_event_id || "").trim();
       if (traceId) {
         return { trace_id: traceId };
@@ -1191,7 +1202,7 @@
         return { event_id: eventId };
       }
       const id = String(ref.id || ref.source_id || "").trim();
-      if (id && ["run_trace", "trace_event"].includes(kind)) {
+      if (id && kind === "run_trace") {
         return { trace_id: id };
       }
       if (id) {
@@ -1214,7 +1225,7 @@
       if (!ref) {
         return "N/A";
       }
-      const kind = ref.kind || "evidence";
+      const kind = this.governanceNormalizeEvidenceKind(ref.kind || ref.source_kind) || "evidence";
       const seq = ref.seq_no === null || ref.seq_no === undefined ? "" : ` #${ref.seq_no}`;
       const type = ref.event_type || ref.event_kind || "";
       return `${kind}${seq}${type ? ` · ${type}` : ""}`;

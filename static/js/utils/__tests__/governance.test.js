@@ -393,7 +393,11 @@ test("governance methods edit proposal payloads and source finding links", async
         run_id: "run-1",
         pskill_definition_id: "pskill-1",
         description: "runner issue",
-        evidence_refs: [{ kind: "run_trace", id: "trace-1" }]
+        evidence_refs: [
+          { kind: "run_trace", id: "trace-1" },
+          { kind: "trace_event", id: "trace-legacy" },
+          { kind: "terminal_event", seq_no: 7, event_kind: "terminal.text.output.v1" }
+        ]
       }
     ],
     experiments: []
@@ -419,6 +423,12 @@ test("governance methods edit proposal payloads and source finding links", async
   );
   expect(methods.governanceSourceFindingReplayPath(proposal.source_findings[0], { kind: "run_event", id: "event-1" })).toBe(
     "/admin/runs/run-1/live/replay?event_id=event-1"
+  );
+  expect(methods.governanceSourceFindingReplayPath(proposal.source_findings[0], proposal.source_findings[0].evidence_refs[1])).toBe(
+    "/admin/runs/run-1/live/replay?trace_id=trace-legacy"
+  );
+  expect(methods.governanceFindingEvidenceLabel(proposal.source_findings[0].evidence_refs[2])).toBe(
+    "run_event #7 · terminal.text.output.v1"
   );
   expect(methods.governanceProposalHasPatchDiff.call(context, proposal)).toBe(true);
   expect(methods.governanceProposalPatchDiffText.call(context, proposal)).toContain("+++ b/test");

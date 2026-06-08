@@ -102,6 +102,17 @@ function loadSkillTestMethods(overrides = {}) {
     const query = params.toString();
     return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
   };
+  defaultWindow.PSOPConsoleHelpers.buildReplayPath = (runId, focus = {}) => {
+    const params = new URLSearchParams();
+    for (const key of ["event_id", "trace_id", "seq_no", "snapshot_seq"]) {
+      const value = String(focus?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
+  };
   const context = {
     ...overrides,
     window: {
@@ -709,6 +720,59 @@ test("skill test review links tester AgentRun details", () => {
   expect(app.navigate).toHaveBeenCalledWith("/admin/platform/agent-runs/agent-run-1?tab=events");
 });
 
+test("skill test review links judge evidence refs to runtime replay", () => {
+  const app = createTimelineHarness();
+  app.skillTestRun = { id: "scenario-run-1", run_id: "runtime-run-1" };
+  app.skillTestReview = {
+    scenario_timeline: duplicateSemanticTimeline(),
+    expectation_evaluations: [
+      {
+        expectation_id: "expected_9",
+        evidence_refs: [
+          { kind: "run_event", id: "event-1", event_kind: "terminal.text.output.v1" },
+          { kind: "run_trace", id: "trace-1", event_type: "runtime.failed" },
+          { kind: "terminal_event", seq_no: 4 }
+        ]
+      }
+    ],
+    stage_outputs: [
+      {
+        stage_id: "expected_10",
+        judge_result: {
+          evidence_refs: [{ kind: "run_event", run_event_id: "event-2" }]
+        }
+      }
+    ]
+  };
+  app.navigate = jest.fn();
+
+  const event = app.skillTestReviewEventsForLane("expected.semantic")[0].event;
+  const refs = app.skillTestReviewEvidenceRefs(event);
+
+  expect(refs).toHaveLength(3);
+  expect(app.skillTestReviewEvidenceRefLabel(refs[2])).toBe("run_event:4");
+  expect(app.skillTestReviewEvidenceReplayPath(refs[0])).toBe(
+    "/admin/runs/runtime-run-1/live/replay?event_id=event-1"
+  );
+  expect(app.skillTestReviewEvidenceReplayPath(refs[1])).toBe(
+    "/admin/runs/runtime-run-1/live/replay?trace_id=trace-1"
+  );
+  expect(app.skillTestReviewEvidenceReplayPath(refs[2])).toBe(
+    "/admin/runs/runtime-run-1/live/replay?seq_no=4"
+  );
+  app.openSkillTestReviewEvidenceReplay(refs[1]);
+  expect(app.navigate).toHaveBeenCalledWith("/admin/runs/runtime-run-1/live/replay?trace_id=trace-1");
+
+  const stageOnlyEvent = app.skillTestReviewEventsForLane("expected.semantic").find((item) => item.event.id === "expected_10").event;
+  expect(app.skillTestReviewEvidenceReplayPath(app.skillTestReviewEvidenceRefs(stageOnlyEvent)[0])).toBe(
+    "/admin/runs/runtime-run-1/live/replay?event_id=event-2"
+  );
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/skill-test-scenario-review.html"), "utf8");
+  expect(html).toContain("skillTestReviewEvidenceRefs(skillTestReviewExpandedEvent())");
+  expect(html).toContain("openSkillTestReviewEvidenceReplay(ref)");
+});
+
 test("review stage output drives expanded details and fork cursor", () => {
   const app = createTimelineHarness();
   app.skillTestReview = {
@@ -752,7 +816,9 @@ test("review stage output drives expanded details and fork cursor", () => {
 
   expect(app.skillTestReviewPlayheadMsValue()).toBe(50000);
   expect(app.currentSkillTestForkCursor()).toEqual({ time_ms: 190000, terminal_seq: 4, snapshot_seq: 3 });
-  expect(app.skillTestReviewRuntimeOutputsForExpectation(event)).toHaveLength(1);
+  const stageRuntimeOutputs = app.skillTestReviewRuntimeOutputsForExpectation(event);
+  expect(stageRuntimeOutputs).toHaveLength(1);
+  expect(stageRuntimeOutputs[0].run_event).toEqual(stageRuntimeOutputs[0].terminal_event);
   expect(app.skillTestReviewEventContentSections(event).map((section) => section.title)).toEqual([
     "阶段期望",
     "阶段切面",
@@ -852,6 +918,7 @@ test("review timeline binds runtime outputs to the next semantic expectation", (
   expect(runtimeOutputs).toHaveLength(3);
   expect(runtimeOutputs[0].at_ms).toBe(45000);
   expect(runtimeOutputs[0].seq_no).toBe(2);
+  expect(runtimeOutputs[0].run_event).toEqual(runtimeOutputs[0].terminal_event);
   expect(app.skillTestTimelineEventLabel(runtimeOutputs[0])).toContain("第一步");
   expect(app.skillTestTimelineEventLabel(runtimeOutputs[1])).toContain("第二步");
 
@@ -877,6 +944,13 @@ test("review timeline binds runtime outputs to the next semantic expectation", (
   app.updateSkillTestReviewPlayhead(45000);
   expect(app.skillTestReviewStepStatus(runtimeOutputs[0])).toBe("output");
   expect(app.skillTestReviewEventStatusLabel(runtimeOutputs[0])).toBe("已输出");
+  expect(app.skillTestReviewEventTooltip(runtimeOutputs[0])).toContain("run_event seq #2");
+  expect(app.skillTestReviewEventMetadata(runtimeOutputs[0])).toEqual(
+    expect.arrayContaining([
+      { label: "RunEvent 序号", value: "#2" },
+      { label: "RunEvent 类型", value: "terminal.text.output.v1" }
+    ])
+  );
 });
 
 test("review lane header opens lane time details and event clicks replace it", () => {
@@ -975,6 +1049,41 @@ test("review judge debug exposes saved request and model response", () => {
   expect(app.selectedSkillTestReviewJudgeUsage().total_tokens).toBe(99);
   expect(app.selectedSkillTestReviewJudgeProviderRaw().id).toBe("completion-1");
   expect(app.selectedSkillTestReviewJudgeInputNotice()).toBe("已保存本次 Judge 调用的真实输入。");
+});
+
+test("review judge debug reconstructs prompt payload with run event names", () => {
+  const app = createTimelineHarness();
+  app.skillTestRun = { status: "passed" };
+  app.skillTestReview = {
+    scenario_timeline: duplicateSemanticTimeline(),
+    scenario_run: {
+      status: "passed",
+      time_origin: "2026-05-13T00:00:00Z"
+    },
+    replay: {
+      run: { final_output: "最终输出" },
+      run_events: [
+        {
+          id: "output-1",
+          seq_no: 2,
+          direction: "output",
+          event_kind: "terminal.text.output.v1",
+          occurred_at: "2026-05-13T00:00:45Z",
+          payload_inline: "第一步：请检查伞骨。"
+        }
+      ]
+    },
+    expectation_evaluations: [{ expectation_id: "expected_9", status: "passed" }]
+  };
+
+  const event = app.skillTestReviewEventsForLane("expected.semantic")[0].event;
+  app.selectSkillTestReviewEvent(event);
+  const payload = app.selectedSkillTestReviewJudgePromptPayload();
+
+  expect(payload.reconstructed).toBe(true);
+  expect(payload.run_events_before_cutoff[0].id).toBe("output-1");
+  expect(payload.terminal_outputs_before_cutoff).toBeUndefined();
+  expect(payload.run_status).toBe("passed");
 });
 
 test("review timeline events open expanded full content", () => {
