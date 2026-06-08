@@ -48,13 +48,41 @@ function createFakeWebSocketClass() {
   return FakeWebSocket;
 }
 
-function loadEvaluationHarness() {
+function loadEvaluationHarness(locationSearch = "") {
   const FakeWebSocket = createFakeWebSocketClass();
   const code = fs.readFileSync(path.join(__dirname, "../../app/evaluations.js"), "utf8");
+  const buildFilteredPath = (basePath, filters = {}, keys = []) => {
+    const params = new URLSearchParams();
+    for (const key of keys) {
+      const value = String(filters?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `${basePath}?${query}` : basePath;
+  };
   const sandbox = {
     window: {
+      location: { search: locationSearch },
+      history: {
+        replaceState: jest.fn((_state, _title, pathValue) => {
+          const [, search = ""] = String(pathValue).split("?");
+          sandbox.window.location.search = search ? `?${search}` : "";
+        })
+      },
       PSOPConsoleHelpers: {
         resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`,
+        buildEvaluationReportsPath: (filters = {}) => buildFilteredPath(
+          "/admin/evaluations",
+          filters,
+          ["run_id", "pskill_definition_id", "overall_outcome"]
+        ),
+        buildEvaluationFindingsPath: (filters = {}) => buildFilteredPath(
+          "/admin/evaluations/findings",
+          filters,
+          ["status", "category", "severity", "run_id", "pskill_definition_id"]
+        ),
         buildReplayPath: (runId, focus = {}) => {
           const params = new URLSearchParams();
           for (const key of ["event_id", "trace_id", "seq_no", "snapshot_seq"]) {
@@ -93,7 +121,7 @@ function loadEvaluationHarness() {
   };
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
-  return { methods: sandbox.window.PSOPConsoleEvaluationMethods, FakeWebSocket };
+  return { methods: sandbox.window.PSOPConsoleEvaluationMethods, FakeWebSocket, window: sandbox.window };
 }
 
 function loadEvaluationMethods() {
@@ -151,6 +179,104 @@ test("evaluation reports page loads recent reports", async () => {
   const htmlReport = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-reports.html"), "utf8");
   expect(htmlReport).toContain("evaluationReports.length");
   expect(htmlReport).toContain("navigate(evaluationReportPath(evaluation.id))");
+  expect(htmlReport).toContain("evaluationReportFilters.overall_outcome");
+  expect(htmlReport).toContain("applyEvaluationReportFilters()");
+});
+
+test("evaluation reports sync filters from location and query backend", async () => {
+  const { methods } = loadEvaluationHarness("?overall_outcome=failed");
+  const reports = [{ id: "evaluation-1", overall_outcome: "failed" }];
+  const context = {
+    ...methods,
+    busy: { evaluationReports: false },
+    currentEvaluation: { id: "evaluation-old" },
+    evaluationReports: [],
+    evaluationReportFilters: { run_id: "", pskill_definition_id: "", overall_outcome: "" },
+    evaluationReportFiltersLocationSearch: "",
+    apiRequest: jest.fn(async () => reports),
+    disconnectEvaluationActivityWebSocket: jest.fn(),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadEvaluationReportsPage.call(context);
+
+  expect(context.evaluationReportFilters.overall_outcome).toBe("failed");
+  expect(context.apiRequest).toHaveBeenCalledWith("/evaluations?overall_outcome=failed&limit=50");
+  expect(methods.evaluationReportsPath.call(context, { overall_outcome: "success" })).toBe(
+    "/admin/evaluations?overall_outcome=success"
+  );
+  expect(methods.evaluationReportHasFilters.call(context)).toBe(true);
+});
+
+test("evaluation findings sync location filters and replace filter URL", async () => {
+  const { methods, window } = loadEvaluationHarness("?status=converted_to_proposal&category=runner_issue");
+  const findings = [{ id: "finding-1", status: "converted_to_proposal", category: "runner_issue" }];
+  const context = {
+    ...methods,
+    busy: { evaluationFindings: false },
+    evaluationFindings: [],
+    selectedEvaluationFindingIds: ["finding-1"],
+    evaluationFindingFilters: {
+      status: "open",
+      category: "",
+      severity: "",
+      run_id: "",
+      pskill_definition_id: ""
+    },
+    evaluationFindingFiltersLocationSearch: "",
+    apiRequest: jest.fn(async () => findings),
+    showNotice: jest.fn(),
+    syncEvaluationFindingSelection: jest.fn()
+  };
+
+  await methods.loadEvaluationFindingsPage.call(context);
+
+  expect(context.evaluationFindingFilters).toMatchObject({
+    status: "converted_to_proposal",
+    category: "runner_issue"
+  });
+  expect(context.apiRequest).toHaveBeenCalledWith(
+    "/evaluations/findings?status=converted_to_proposal&category=runner_issue"
+  );
+
+  context.evaluationFindingFilters = {
+    status: "resolved",
+    category: "",
+    severity: "",
+    run_id: "run-1",
+    pskill_definition_id: ""
+  };
+  await methods.applyEvaluationFindingFilters.call(context);
+
+  expect(window.location.search).toBe("?status=resolved&run_id=run-1");
+  expect(context.apiRequest).toHaveBeenLastCalledWith("/evaluations/findings?status=resolved&run_id=run-1");
+});
+
+test("evaluation finding category deep links do not imply open status", async () => {
+  const { methods } = loadEvaluationHarness("?category=runner_issue");
+  const context = {
+    ...methods,
+    busy: { evaluationFindings: false },
+    evaluationFindings: [],
+    selectedEvaluationFindingIds: [],
+    evaluationFindingFilters: {
+      status: "open",
+      category: "",
+      severity: "",
+      run_id: "",
+      pskill_definition_id: ""
+    },
+    evaluationFindingFiltersLocationSearch: "",
+    apiRequest: jest.fn(async () => []),
+    showNotice: jest.fn(),
+    syncEvaluationFindingSelection: jest.fn()
+  };
+
+  await methods.loadEvaluationFindingsPage.call(context);
+
+  expect(context.evaluationFindingFilters.status).toBe("");
+  expect(context.evaluationFindingFilters.category).toBe("runner_issue");
+  expect(context.apiRequest).toHaveBeenCalledWith("/evaluations/findings?category=runner_issue");
 });
 
 test("evaluation finding evidence refs build run replay deep links", () => {

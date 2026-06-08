@@ -60,8 +60,10 @@ test("runtime entry pages surface compile provenance links", () => {
   const skillDetailHtml = fs.readFileSync(path.join(__dirname, "../../../pages/skill-detail.html"), "utf8");
 
   expect(invocationsHtml).toContain("invocation.compile_request_id");
+  expect(invocationsHtml).toContain("openCompilerRequest(invocation.compile_request_id)");
   expect(invocationsHtml).toContain("openCompilerArtifact(invocation.compile_artifact_id)");
   expect(skillDetailHtml).toContain("invocation.compile_request_id");
+  expect(skillDetailHtml).toContain("openCompilerRequest(invocation.compile_request_id)");
   expect(skillDetailHtml).toContain("openCompilerArtifact(invocation.compile_artifact_id)");
 });
 

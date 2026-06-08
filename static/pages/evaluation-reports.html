@@ -40,6 +40,18 @@
           <span class="material-symbols-outlined text-[18px]">find_in_page</span>
           <span class="hidden sm:inline">Findings</span>
         </button>
+        <label class="field-block w-48 shrink-0">
+          <span class="field-label">Outcome</span>
+          <select x-model="evaluationReportFilters.overall_outcome" class="input-field h-9 py-0" @change="applyEvaluationReportFilters()">
+            <option value="">全部</option>
+            <template x-for="option in evaluationOutcomeOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" x-show="evaluationReportHasFilters()" @click="resetEvaluationReportFilters()">
+          <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+        </button>
         <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.evaluationReports" @click="loadEvaluationReports()">
           <span class="material-symbols-outlined text-[18px]" :class="busy.evaluationReports ? 'animate-spin' : ''">refresh</span>
         </button>

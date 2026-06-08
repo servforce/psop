@@ -591,7 +591,7 @@
 
           if (this.route.name === "evaluation-findings") {
             this.currentSkill = null;
-            await this.loadEvaluationFindings();
+            await this.loadEvaluationFindingsPage();
             return;
           }
 
@@ -610,7 +610,7 @@
 
           if (this.route.name === "governance-experiments") {
             this.currentSkill = null;
-            await this.loadGovernanceExperiments();
+            await this.loadGovernanceExperimentsPage();
             return;
           }
 

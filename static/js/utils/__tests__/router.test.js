@@ -77,8 +77,14 @@ test("resolveAdminRoute maps evaluation routes", () => {
     params: { evaluationId: "eval-123" }
   });
   expect(buildEvaluationReportsPath()).toBe("/admin/evaluations");
+  expect(buildEvaluationReportsPath({ overall_outcome: "failed", run_id: "run-1" })).toBe(
+    "/admin/evaluations?run_id=run-1&overall_outcome=failed"
+  );
   expect(buildEvaluationReportPath("eval-123")).toBe("/admin/evaluations/eval-123");
   expect(buildEvaluationFindingsPath()).toBe("/admin/evaluations/findings");
+  expect(buildEvaluationFindingsPath({ status: "open", category: "runner_issue" })).toBe(
+    "/admin/evaluations/findings?status=open&category=runner_issue"
+  );
 });
 
 test("resolveAdminRoute maps governance and platform authorization routes", () => {
@@ -117,8 +123,15 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
   expect(resolveAdminRoute("/admin/platform/observability")).toEqual({ name: "platform-observability", params: {} });
   expect(resolveAdminRoute("/admin/platform/tool-authorizations")).toEqual({ name: "tool-authorizations", params: {} });
   expect(buildGovernanceProposalsPath()).toBe("/admin/governance/proposals");
+  expect(buildGovernanceProposalsPath({ status: "canary" })).toBe("/admin/governance/proposals?status=canary");
   expect(buildGovernanceProposalPath("proposal-123")).toBe("/admin/governance/proposals/proposal-123");
   expect(buildGovernanceExperimentsPath()).toBe("/admin/governance/experiments");
+  expect(buildGovernanceExperimentsPath({ proposal_id: "proposal-1", status: "running", experiment_type: "canary" })).toBe(
+    "/admin/governance/experiments?proposal_id=proposal-1&status=running&experiment_type=canary"
+  );
+  expect(buildGovernanceExperimentsPath({ experiment_id: "experiment-1" })).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-1"
+  );
   expect(buildToolAuthorizationsPath()).toBe("/admin/platform/tool-authorizations");
   expect(buildToolAuthorizationsPath({ status: "pending", tool_name: "psop.memory.search" })).toBe(
     "/admin/platform/tool-authorizations?status=pending&tool_name=psop.memory.search"

@@ -51,6 +51,17 @@ function createFakeWebSocketClass() {
 function loadGovernanceHarness(locationSearch = "") {
   const FakeWebSocket = createFakeWebSocketClass();
   const code = fs.readFileSync(path.join(__dirname, "../../app/governance.js"), "utf8");
+  const buildFilteredPath = (basePath, filters = {}, keys = []) => {
+    const params = new URLSearchParams();
+    for (const key of keys) {
+      const value = String(filters?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `${basePath}?${query}` : basePath;
+  };
   const sandbox = {
     window: {
       location: { search: locationSearch },
@@ -63,9 +74,17 @@ function loadGovernanceHarness(locationSearch = "") {
       PSOPConsoleHelpers: {
         buildSkillDetailPath: (skillId) => `/admin/skills/${skillId}`,
         buildEvaluationReportPath: (evaluationId) => `/admin/evaluations/${evaluationId}`,
-        buildGovernanceProposalsPath: () => "/admin/governance/proposals",
+        buildGovernanceProposalsPath: (filters = {}) => buildFilteredPath(
+          "/admin/governance/proposals",
+          filters,
+          ["status"]
+        ),
         buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
-        buildGovernanceExperimentsPath: () => "/admin/governance/experiments",
+        buildGovernanceExperimentsPath: (filters = {}) => buildFilteredPath(
+          "/admin/governance/experiments",
+          filters,
+          ["experiment_id", "proposal_id", "status", "experiment_type"]
+        ),
         buildToolAuthorizationsPath: (filters = {}) => {
           const params = new URLSearchParams();
           if (filters.status) {
@@ -114,7 +133,7 @@ function loadGovernanceHarness(locationSearch = "") {
   };
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
-  return { methods: sandbox.window.PSOPConsoleGovernanceMethods, FakeWebSocket };
+  return { methods: sandbox.window.PSOPConsoleGovernanceMethods, FakeWebSocket, window: sandbox.window };
 }
 
 function loadGovernanceMethods(locationSearch = "") {
@@ -145,6 +164,7 @@ test("governance methods build filters and labels", () => {
   expect(methods.toolAuthorizationStatusLabel.call(context, "cancelled")).toBe("已取消");
   expect(methods.toolAuthorizationStatusLabel.call(context, "executed")).toBe("已执行");
   expect(methods.governanceProposalPath("proposal-1")).toBe("/admin/governance/proposals/proposal-1");
+  expect(methods.governanceProposalsPath({ status: "canary" })).toBe("/admin/governance/proposals?status=canary");
   expect(methods.governanceEvaluationReportPath("evaluation-1")).toBe("/admin/evaluations/evaluation-1");
   expect(methods.governanceProposalAgentRunPath({ agent_run_id: "agent-run-1" })).toBe(
     "/admin/platform/agent-runs/agent-run-1?tab=events"
@@ -153,6 +173,9 @@ test("governance methods build filters and labels", () => {
     "/admin/platform/agent-runs/agent-run-2?tab=model"
   );
   expect(methods.governanceProposalMemoryEntryPath("memory-1")).toBe("/admin/platform/memory/memory-1");
+  expect(methods.governanceExperimentsPath({ status: "running", experiment_type: "canary" })).toBe(
+    "/admin/governance/experiments?status=running&experiment_type=canary"
+  );
 });
 
 test("governance proposal opens governance AgentRun details", () => {
@@ -172,6 +195,109 @@ test("governance proposal opens governance AgentRun details", () => {
   expect(html).toContain("currentGovernanceProposal.agent_run_id");
   expect(html).toContain("governanceProposalMemoryEntries");
   expect(html).toContain("openGovernanceProposalMemoryEntry(memory)");
+});
+
+test("governance proposal filters sync from URL and replace location", async () => {
+  const { methods, window } = loadGovernanceHarness("?status=canary");
+  const proposals = [{ id: "proposal-1", status: "canary" }];
+  const context = {
+    ...methods,
+    busy: { governanceProposals: false },
+    governanceProposals: [],
+    currentGovernanceProposal: null,
+    governanceProposalFilters: { status: "" },
+    governanceProposalFiltersLocationSearch: "",
+    apiRequest: jest.fn(async () => proposals),
+    showNotice: jest.fn(),
+    applyGovernanceProposalActivitySnapshot: jest.fn(),
+    connectGovernanceProposalActivityWebSocket: jest.fn()
+  };
+
+  await methods.loadGovernanceProposalsPage.call(context);
+
+  expect(context.governanceProposalFilters.status).toBe("canary");
+  expect(context.apiRequest).toHaveBeenCalledWith("/governance/proposals?status=canary");
+
+  context.governanceProposalFilters = { status: "approved" };
+  await methods.applyGovernanceProposalFilters.call(context);
+
+  expect(window.location.search).toBe("?status=approved");
+  expect(context.apiRequest).toHaveBeenLastCalledWith("/governance/proposals?status=approved");
+});
+
+test("governance experiment filters sync from URL and replace location", async () => {
+  const { methods, window } = loadGovernanceHarness("?status=running&experiment_type=canary");
+  const experiments = [{ id: "experiment-1", status: "running", experiment_type: "canary" }];
+  const context = {
+    ...methods,
+    busy: { governanceExperiments: false },
+    governanceExperimentRows: [],
+    governanceExperimentDetail: null,
+    governanceExperimentFilters: { proposal_id: "", status: "", experiment_type: "" },
+    governanceExperimentFiltersLocationSearch: "",
+    apiRequest: jest.fn(async () => experiments),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadGovernanceExperimentsPage.call(context);
+
+  expect(context.governanceExperimentFilters).toMatchObject({
+    status: "running",
+    experiment_type: "canary"
+  });
+  expect(context.apiRequest).toHaveBeenCalledWith("/governance/experiments?status=running&experiment_type=canary");
+
+  context.governanceExperimentFilters = { proposal_id: "proposal-1", status: "succeeded", experiment_type: "" };
+  await methods.applyGovernanceExperimentFilters.call(context);
+
+  expect(window.location.search).toBe("?proposal_id=proposal-1&status=succeeded");
+  expect(context.apiRequest).toHaveBeenLastCalledWith("/governance/experiments?proposal_id=proposal-1&status=succeeded");
+});
+
+test("governance experiments deep link opens experiment detail from URL", async () => {
+  const { methods, window } = loadGovernanceHarness("?experiment_id=experiment-1");
+  const experiment = {
+    id: "experiment-1",
+    proposal_id: "proposal-1",
+    status: "running",
+    experiment_type: "canary"
+  };
+  const proposal = { id: "proposal-1", status: "canary", experiments: [experiment] };
+  const context = {
+    ...methods,
+    busy: { governanceExperiments: false, governanceExperimentLookup: false },
+    governanceExperimentRows: [],
+    governanceExperimentDetail: null,
+    governanceExperimentProposal: null,
+    governanceExperimentLookupId: "",
+    governanceExperimentFilters: { proposal_id: "", status: "", experiment_type: "" },
+    governanceExperimentFiltersLocationSearch: "",
+    governanceProposals: [],
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/governance/experiments") {
+        return [experiment];
+      }
+      if (url === "/governance/experiments/experiment-1") {
+        return experiment;
+      }
+      if (url === "/governance/proposals/proposal-1") {
+        return proposal;
+      }
+      return {};
+    }),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadGovernanceExperimentsPage.call(context);
+
+  expect(context.governanceExperimentLookupId).toBe("experiment-1");
+  expect(context.governanceExperimentDetail).toEqual(experiment);
+  expect(context.governanceExperimentProposal).toEqual(proposal);
+  expect(context.apiRequest).toHaveBeenCalledWith("/governance/experiments/experiment-1");
+  expect(window.location.search).toBe("?experiment_id=experiment-1");
+  expect(methods.governanceExperimentsPath({ experiment_id: "experiment-1" })).toBe(
+    "/admin/governance/experiments?experiment_id=experiment-1"
+  );
 });
 
 test("governance methods build tool authorization context links", () => {

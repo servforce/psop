@@ -59,6 +59,7 @@
 
   window.PSOPConsoleGovernanceMethods = {
     async loadGovernanceProposalsPage() {
+      this.syncGovernanceProposalFiltersFromLocation();
       await this.loadGovernanceProposals();
       if (!this.currentGovernanceProposal && this.governanceProposals.length) {
         this.applyGovernanceProposalActivitySnapshot({ proposal: this.governanceProposals[0] });
@@ -206,12 +207,54 @@
     },
 
     applyGovernanceProposalFilters() {
+      this.replaceGovernanceProposalFilterLocation();
       return this.loadGovernanceProposalsPage();
     },
 
     resetGovernanceProposalFilters() {
-      this.governanceProposalFilters = { status: "" };
+      this.governanceProposalFilters = this.emptyGovernanceProposalFilters();
+      this.replaceGovernanceProposalFilterLocation();
       return this.loadGovernanceProposalsPage();
+    },
+
+    emptyGovernanceProposalFilters() {
+      return { status: "" };
+    },
+
+    syncGovernanceProposalFiltersFromLocation() {
+      const search = this.governanceProposalLocationSearch();
+      if (search === (this.governanceProposalFiltersLocationSearch || "")) {
+        return;
+      }
+      if (!search) {
+        if (this.governanceProposalFiltersLocationSearch) {
+          this.governanceProposalFilters = this.emptyGovernanceProposalFilters();
+        }
+        this.governanceProposalFiltersLocationSearch = "";
+        return;
+      }
+      const params = new URLSearchParams(search);
+      this.governanceProposalFilters = {
+        ...this.emptyGovernanceProposalFilters(),
+        status: params.get("status") || ""
+      };
+      this.governanceProposalFiltersLocationSearch = search;
+    },
+
+    replaceGovernanceProposalFilterLocation() {
+      if (typeof window === "undefined" || !window.history?.replaceState) {
+        return;
+      }
+      const path = this.governanceProposalsPath(this.governanceProposalFilters);
+      window.history.replaceState({}, "", path);
+      this.governanceProposalFiltersLocationSearch = this.governanceProposalLocationSearch();
+    },
+
+    governanceProposalLocationSearch() {
+      if (typeof window === "undefined") {
+        return "";
+      }
+      return window.location?.search || "";
     },
 
     async createGovernanceProposal() {
@@ -439,6 +482,14 @@
       }
     },
 
+    async loadGovernanceExperimentsPage() {
+      this.syncGovernanceExperimentFiltersFromLocation();
+      await this.loadGovernanceExperiments();
+      if (this.governanceExperimentLookupId) {
+        await this.openGovernanceExperiment({ replaceLocation: false });
+      }
+    },
+
     governanceExperimentQueryString() {
       const params = new URLSearchParams();
       const proposalId = String(this.governanceExperimentFilters?.proposal_id || "").trim();
@@ -457,15 +508,71 @@
     },
 
     applyGovernanceExperimentFilters() {
+      this.replaceGovernanceExperimentFilterLocation();
       return this.loadGovernanceExperiments();
     },
 
     resetGovernanceExperimentFilters() {
-      this.governanceExperimentFilters = { proposal_id: "", status: "", experiment_type: "" };
+      this.governanceExperimentFilters = this.emptyGovernanceExperimentFilters();
+      this.replaceGovernanceExperimentFilterLocation();
       return this.loadGovernanceExperiments();
     },
 
-    async openGovernanceExperiment() {
+    emptyGovernanceExperimentFilters() {
+      return { proposal_id: "", status: "", experiment_type: "" };
+    },
+
+    syncGovernanceExperimentFiltersFromLocation() {
+      const search = this.governanceExperimentLocationSearch();
+      if (search === (this.governanceExperimentFiltersLocationSearch || "")) {
+        return;
+      }
+      if (!search) {
+        if (this.governanceExperimentFiltersLocationSearch) {
+          this.governanceExperimentFilters = this.emptyGovernanceExperimentFilters();
+        }
+        this.governanceExperimentLookupId = "";
+        this.governanceExperimentFiltersLocationSearch = "";
+        return;
+      }
+      const params = new URLSearchParams(search);
+      this.governanceExperimentFilters = {
+        ...this.emptyGovernanceExperimentFilters(),
+        proposal_id: params.get("proposal_id") || "",
+        status: params.get("status") || "",
+        experiment_type: params.get("experiment_type") || ""
+      };
+      this.governanceExperimentLookupId = params.get("experiment_id") || "";
+      this.governanceExperimentFiltersLocationSearch = search;
+    },
+
+    replaceGovernanceExperimentFilterLocation() {
+      if (typeof window === "undefined" || !window.history?.replaceState) {
+        return;
+      }
+      const path = this.governanceExperimentsPath(this.governanceExperimentFilters);
+      window.history.replaceState({}, "", path);
+      this.governanceExperimentFiltersLocationSearch = this.governanceExperimentLocationSearch();
+    },
+
+    governanceExperimentLocationSearch() {
+      if (typeof window === "undefined") {
+        return "";
+      }
+      return window.location?.search || "";
+    },
+
+    replaceGovernanceExperimentLookupLocation(experimentId) {
+      const id = String(experimentId || "").trim();
+      if (!id || typeof window === "undefined" || !window.history?.replaceState) {
+        return;
+      }
+      const path = this.governanceExperimentsPath({ experiment_id: id });
+      window.history.replaceState({}, "", path);
+      this.governanceExperimentFiltersLocationSearch = this.governanceExperimentLocationSearch();
+    },
+
+    async openGovernanceExperiment(options = {}) {
       const experimentId = String(this.governanceExperimentLookupId || "").trim();
       if (!experimentId) {
         this.showNotice("error", "请输入 Experiment ID。");
@@ -474,6 +581,10 @@
       this.busy.governanceExperimentLookup = true;
       try {
         this.governanceExperimentDetail = await this.apiRequest(`/governance/experiments/${encodeURIComponent(experimentId)}`);
+        this.governanceExperimentLookupId = this.governanceExperimentDetail.id;
+        if (options.replaceLocation !== false) {
+          this.replaceGovernanceExperimentLookupLocation(this.governanceExperimentDetail.id);
+        }
         await this.loadGovernanceExperimentProposal(this.governanceExperimentDetail.proposal_id, { silent: true });
       } catch (error) {
         this.showNotice("error", error.message || "治理实验详情加载失败。");
@@ -805,8 +916,8 @@
       }
     },
 
-    governanceProposalsPath() {
-      return buildGovernanceProposalsPath();
+    governanceProposalsPath(filters = {}) {
+      return buildGovernanceProposalsPath(filters);
     },
 
     governanceProposalPath(proposalId) {
@@ -847,8 +958,8 @@
       this.navigate(path);
     },
 
-    governanceExperimentsPath() {
-      return buildGovernanceExperimentsPath();
+    governanceExperimentsPath(filters = {}) {
+      return buildGovernanceExperimentsPath(filters);
     },
 
     toolAuthorizationsPath() {

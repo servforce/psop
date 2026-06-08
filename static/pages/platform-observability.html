@@ -315,7 +315,7 @@
                   <p class="text-xs font-medium text-slate-300">Outcome</p>
                   <div class="mt-3 space-y-2">
                     <template x-for="item in observabilityTopEntries((observabilityMetrics.evaluations || {}).outcome_counts)" :key="'evaluation-outcome-' + item.key">
-                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityEvaluationReportsPath())">
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityEvaluationReportsPath({ overall_outcome: item.key }))">
                         <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
                         <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
                       </button>
@@ -326,7 +326,7 @@
                   <p class="text-xs font-medium text-slate-300">Finding Status</p>
                   <div class="mt-3 space-y-2">
                     <template x-for="item in observabilityTopEntries((observabilityMetrics.evaluations || {}).finding_status_counts)" :key="'finding-status-' + item.key">
-                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityEvaluationFindingsPath())">
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityEvaluationFindingsPath({ status: item.key }))">
                         <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
                         <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
                       </button>
@@ -337,7 +337,7 @@
                   <p class="text-xs font-medium text-slate-300">Finding Category</p>
                   <div class="mt-3 space-y-2">
                     <template x-for="item in observabilityTopEntries((observabilityMetrics.evaluations || {}).finding_category_counts)" :key="'finding-category-' + item.key">
-                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityEvaluationFindingsPath())">
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityEvaluationFindingsPath({ category: item.key }))">
                         <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
                         <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
                       </button>
@@ -348,7 +348,7 @@
                   <p class="text-xs font-medium text-slate-300">Proposal Status</p>
                   <div class="mt-3 space-y-2">
                     <template x-for="item in observabilityTopEntries((observabilityMetrics.governance || {}).status_counts)" :key="'proposal-status-' + item.key">
-                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityGovernanceProposalsPath())">
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityGovernanceProposalsPath({ status: item.key }))">
                         <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
                         <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
                       </button>
@@ -359,7 +359,7 @@
                   <p class="text-xs font-medium text-slate-300">Experiment</p>
                   <div class="mt-3 space-y-2">
                     <template x-for="item in observabilityTopEntries((observabilityMetrics.governance || {}).experiment_status_counts)" :key="'experiment-status-' + item.key">
-                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityGovernanceExperimentsPath())">
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityGovernanceExperimentsPath({ status: item.key }))">
                         <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
                         <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
                       </button>

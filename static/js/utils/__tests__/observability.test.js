@@ -4,6 +4,16 @@ const vm = require("vm");
 
 function loadObservabilityMethods() {
   const code = fs.readFileSync(path.join(__dirname, "../../app/observability.js"), "utf8");
+  const buildFilteredPath = (basePath, filters = {}, keys = []) => {
+    const params = new URLSearchParams();
+    for (const key of keys) {
+      if (filters[key]) {
+        params.set(key, filters[key]);
+      }
+    }
+    const query = params.toString();
+    return query ? `${basePath}?${query}` : basePath;
+  };
   const sandbox = {
     window: {
       PSOPConsoleHelpers: {
@@ -39,10 +49,26 @@ function loadObservabilityMethods() {
           const query = params.toString();
           return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
         },
-        buildEvaluationReportsPath: () => "/admin/evaluations",
-        buildEvaluationFindingsPath: () => "/admin/evaluations/findings",
-        buildGovernanceProposalsPath: () => "/admin/governance/proposals",
-        buildGovernanceExperimentsPath: () => "/admin/governance/experiments",
+        buildEvaluationReportsPath: (filters = {}) => buildFilteredPath(
+          "/admin/evaluations",
+          filters,
+          ["run_id", "pskill_definition_id", "overall_outcome"]
+        ),
+        buildEvaluationFindingsPath: (filters = {}) => buildFilteredPath(
+          "/admin/evaluations/findings",
+          filters,
+          ["status", "category", "severity", "run_id", "pskill_definition_id"]
+        ),
+        buildGovernanceProposalsPath: (filters = {}) => buildFilteredPath(
+          "/admin/governance/proposals",
+          filters,
+          ["status"]
+        ),
+        buildGovernanceExperimentsPath: (filters = {}) => buildFilteredPath(
+          "/admin/governance/experiments",
+          filters,
+          ["proposal_id", "status", "experiment_type"]
+        ),
         buildRunLivePath: (runId) => `/admin/runs/${runId}/live`,
         buildReplayPath: (runId, focus = {}) => {
           const params = new URLSearchParams();
@@ -124,9 +150,24 @@ test("observability methods load global metrics with the selected window", async
     "/admin/platform/tool-authorizations?status=pending"
   );
   expect(methods.observabilityEvaluationReportsPath()).toBe("/admin/evaluations");
+  expect(methods.observabilityEvaluationReportsPath({ overall_outcome: "failed" })).toBe(
+    "/admin/evaluations?overall_outcome=failed"
+  );
   expect(methods.observabilityEvaluationFindingsPath()).toBe("/admin/evaluations/findings");
+  expect(methods.observabilityEvaluationFindingsPath({ status: "open" })).toBe(
+    "/admin/evaluations/findings?status=open"
+  );
+  expect(methods.observabilityEvaluationFindingsPath({ category: "runner_issue" })).toBe(
+    "/admin/evaluations/findings?category=runner_issue"
+  );
   expect(methods.observabilityGovernanceProposalsPath()).toBe("/admin/governance/proposals");
+  expect(methods.observabilityGovernanceProposalsPath({ status: "canary" })).toBe(
+    "/admin/governance/proposals?status=canary"
+  );
   expect(methods.observabilityGovernanceExperimentsPath()).toBe("/admin/governance/experiments");
+  expect(methods.observabilityGovernanceExperimentsPath({ status: "running" })).toBe(
+    "/admin/governance/experiments?status=running"
+  );
   expect(methods.observabilityEvaluationOutcomeOptions.call(context)).toEqual(["failed"]);
   expect(methods.observabilityFindingStatusOptions.call(context)).toEqual(["open"]);
   expect(methods.observabilityFindingCategoryOptions.call(context)).toEqual(["runner_issue"]);
@@ -818,6 +859,11 @@ test("observability page exposes linked distribution filters", () => {
   expect(html).toContain("observabilitySkillActivationPath(activation)");
   expect(html).toContain("observabilityToolAuthorizationPath(authorization)");
   expect(html).toContain("observabilityToolAuthorizationHistoryPath(authorization)");
+  expect(html).toContain("observabilityEvaluationReportsPath({ overall_outcome: item.key })");
+  expect(html).toContain("observabilityEvaluationFindingsPath({ status: item.key })");
+  expect(html).toContain("observabilityEvaluationFindingsPath({ category: item.key })");
+  expect(html).toContain("observabilityGovernanceProposalsPath({ status: item.key })");
+  expect(html).toContain("observabilityGovernanceExperimentsPath({ status: item.key })");
   expect(html).toContain("selectObservabilityTraceEventType(item.key)");
   expect(html).toContain("observabilityRunReplayPath(trace)");
   expect(html).toContain("trace.trace_id");

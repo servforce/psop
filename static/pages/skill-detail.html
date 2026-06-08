@@ -1295,7 +1295,15 @@
                       <span class="status-badge" :class="statusBadgeTone(invocation.status)" x-text="formatStatus(invocation.status)"></span>
                     </div>
                     <span class="mono-field truncate" x-text="invocation.run_id || 'N/A'"></span>
-                    <span class="mono-field" x-text="formatShortId(invocation.compile_request_id) || 'N/A'"></span>
+                    <button
+                      type="button"
+                      class="button-secondary h-8 px-2.5 text-xs"
+                      :disabled="!invocation.compile_request_id"
+                      @click.stop="openCompilerRequest(invocation.compile_request_id)"
+                    >
+                      <span class="material-symbols-outlined text-[16px]">fact_check</span>
+                      <span class="font-mono" x-text="formatShortId(invocation.compile_request_id) || 'N/A'"></span>
+                    </button>
                     <button type="button" class="button-secondary h-8 px-2.5 text-xs" @click.stop="openCompilerArtifact(invocation.compile_artifact_id)">
                       <span class="material-symbols-outlined text-[16px]">account_tree</span>
                       <span class="font-mono" x-text="formatShortId(invocation.compile_artifact_id)"></span>

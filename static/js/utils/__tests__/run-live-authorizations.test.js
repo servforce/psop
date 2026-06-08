@@ -200,6 +200,22 @@ test("run live compile request evidence link opens compiler request filter", () 
   expect(context.navigate).toHaveBeenCalledWith("/admin/compiler?compile_request_id=compile-1");
 });
 
+test("runtime compile request helper opens compiler request evidence from lists", () => {
+  const methods = loadRuntimeMethods();
+  const context = {
+    ...methods,
+    navigate: jest.fn()
+  };
+
+  expect(methods.compilerRequestPath.call(context, "compile-2")).toBe("/admin/compiler?compile_request_id=compile-2");
+
+  methods.openCompilerRequest.call(context, "compile-2");
+  methods.openCompilerRequest.call(context, "");
+
+  expect(context.navigate).toHaveBeenCalledTimes(1);
+  expect(context.navigate).toHaveBeenCalledWith("/admin/compiler?compile_request_id=compile-2");
+});
+
 test("run live opens the raw events tab from the Run Events route view", () => {
   const methods = loadRuntimeMethods();
   const context = {

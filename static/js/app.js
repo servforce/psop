@@ -851,6 +851,12 @@
       evaluationModelCalls: [],
       evaluationMemoryEntries: [],
       evaluationReports: [],
+      evaluationReportFilters: {
+        run_id: "",
+        pskill_definition_id: "",
+        overall_outcome: ""
+      },
+      evaluationReportFiltersLocationSearch: "",
       evaluationForm: {
         run_id: "",
         evaluation_id: ""
@@ -864,6 +870,7 @@
         run_id: "",
         pskill_definition_id: ""
       },
+      evaluationFindingFiltersLocationSearch: "",
       governanceProposals: [],
       currentGovernanceProposal: null,
       governanceProposalActivityWs: null,
@@ -879,6 +886,7 @@
       governanceProposalFilters: {
         status: ""
       },
+      governanceProposalFiltersLocationSearch: "",
       governanceProposalForm: {
         proposal_type: "pskill_template_update",
         problem_statement: "",
@@ -905,6 +913,7 @@
         status: "",
         experiment_type: ""
       },
+      governanceExperimentFiltersLocationSearch: "",
       governanceExperimentLookupId: "",
       governanceExperimentDetail: null,
       governanceExperimentProposal: null,

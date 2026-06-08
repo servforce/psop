@@ -103,7 +103,28 @@ function loadPlatformHarness(locationSearch = "") {
           const query = params.toString();
           return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
         },
+        buildEvaluationReportPath: (evaluationId) => `/admin/evaluations/${evaluationId}`,
+        buildEvaluationFindingsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["status", "category", "severity", "run_id", "pskill_definition_id"]) {
+            if (filters[key]) {
+              params.set(key, filters[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/evaluations/findings?${query}` : "/admin/evaluations/findings";
+        },
         buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
+        buildGovernanceExperimentsPath: (filters = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["experiment_id", "proposal_id", "status", "experiment_type"]) {
+            if (filters[key]) {
+              params.set(key, filters[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/governance/experiments?${query}` : "/admin/governance/experiments";
+        },
         buildRunLivePath: (runId) => `/admin/runs/${runId}/live`,
         buildReplayPath: (runId, focus = {}) => {
           const params = new URLSearchParams();
@@ -712,7 +733,10 @@ test("platform methods search and save memory entries", async () => {
     content: "A regression finding pattern.",
     source_refs: [
       { kind: "run", id: "runtime-run-1" },
+      { kind: "run_evaluation", id: "evaluation-1" },
+      { kind: "run_evaluation_finding", id: "finding-1", evaluation_id: "evaluation-1" },
       { kind: "governance_proposal", proposal_id: "proposal-1" },
+      { kind: "psop_improvement_experiment", id: "experiment-1" },
       { kind: "agent_memory_entry", id: "memory-source-1" },
       { kind: "run_trace", id: "trace-1", run_id: "runtime-run-1", seq_no: 7 },
       { kind: "run_event", id: "run-event-1", run_id: "runtime-run-1" },
@@ -826,9 +850,24 @@ test("platform methods search and save memory entries", async () => {
       href: "/admin/runs/runtime-run-1/live"
     },
     {
+      key: "evaluation-evaluation-1",
+      label: "Evaluation evaluation-1",
+      href: "/admin/evaluations/evaluation-1"
+    },
+    {
+      key: "evaluation-finding-finding-1",
+      label: "Finding finding-1",
+      href: "/admin/evaluations/evaluation-1"
+    },
+    {
       key: "proposal-proposal-1",
       label: "Proposal proposal-1",
       href: "/admin/governance/proposals/proposal-1"
+    },
+    {
+      key: "experiment-experiment-1",
+      label: "Experiment experiment-1",
+      href: "/admin/governance/experiments?experiment_id=experiment-1"
     },
     {
       key: "memory-memory-source-1",

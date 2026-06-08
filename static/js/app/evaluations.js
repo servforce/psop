@@ -1,5 +1,20 @@
 (function () {
-  const { resolveWsUrl, buildReplayPath, buildPlatformAgentRunPath, buildPlatformMemoryEntryPath } = window.PSOPConsoleHelpers || {};
+  const {
+    resolveWsUrl,
+    buildEvaluationReportsPath,
+    buildEvaluationFindingsPath,
+    buildReplayPath,
+    buildPlatformAgentRunPath,
+    buildPlatformMemoryEntryPath
+  } = window.PSOPConsoleHelpers || {};
+
+  const EVALUATION_OUTCOME_OPTIONS = [
+    { value: "success", label: "成功" },
+    { value: "completed_with_issues", label: "完成但有问题" },
+    { value: "failed", label: "失败" },
+    { value: "aborted", label: "已中止" },
+    { value: "cancelled", label: "已取消" }
+  ];
 
   const FINDING_STATUS_OPTIONS = [
     { value: "open", label: "未处理" },
@@ -56,19 +71,106 @@
     async loadEvaluationReportsPage() {
       this.disconnectEvaluationActivityWebSocket?.();
       this.currentEvaluation = null;
+      this.syncEvaluationReportFiltersFromLocation();
       await this.loadEvaluationReports();
     },
 
     async loadEvaluationReports() {
       this.busy.evaluationReports = true;
       try {
-        const reports = await this.apiRequest("/evaluations?limit=50");
+        const reports = await this.apiRequest(`/evaluations?${this.evaluationReportsQueryString()}`);
         this.evaluationReports = Array.isArray(reports) ? reports : [];
       } catch (error) {
         this.showNotice("error", error.message || "Run 评估报告加载失败。");
       } finally {
         this.busy.evaluationReports = false;
       }
+    },
+
+    applyEvaluationReportFilters() {
+      this.replaceEvaluationReportFilterLocation();
+      return this.loadEvaluationReports();
+    },
+
+    resetEvaluationReportFilters() {
+      this.evaluationReportFilters = this.emptyEvaluationReportFilters();
+      this.replaceEvaluationReportFilterLocation();
+      return this.loadEvaluationReports();
+    },
+
+    emptyEvaluationReportFilters() {
+      return {
+        run_id: "",
+        pskill_definition_id: "",
+        overall_outcome: ""
+      };
+    },
+
+    syncEvaluationReportFiltersFromLocation() {
+      const search = this.evaluationReportLocationSearch();
+      if (search === (this.evaluationReportFiltersLocationSearch || "")) {
+        return;
+      }
+      if (!search) {
+        if (this.evaluationReportFiltersLocationSearch) {
+          this.evaluationReportFilters = this.emptyEvaluationReportFilters();
+        }
+        this.evaluationReportFiltersLocationSearch = "";
+        return;
+      }
+      const params = new URLSearchParams(search);
+      this.evaluationReportFilters = {
+        ...this.emptyEvaluationReportFilters(),
+        run_id: params.get("run_id") || "",
+        pskill_definition_id: params.get("pskill_definition_id") || "",
+        overall_outcome: params.get("overall_outcome") || ""
+      };
+      this.evaluationReportFiltersLocationSearch = search;
+    },
+
+    replaceEvaluationReportFilterLocation() {
+      if (typeof window === "undefined" || !window.history?.replaceState) {
+        return;
+      }
+      const path = this.evaluationReportsPath(this.evaluationReportFilters);
+      window.history.replaceState({}, "", path);
+      this.evaluationReportFiltersLocationSearch = this.evaluationReportLocationSearch();
+    },
+
+    evaluationReportLocationSearch() {
+      if (typeof window === "undefined") {
+        return "";
+      }
+      return window.location?.search || "";
+    },
+
+    evaluationReportsQueryString() {
+      const params = new URLSearchParams();
+      this.appendEvaluationFilterParam(params, "run_id", this.evaluationReportFilters?.run_id);
+      this.appendEvaluationFilterParam(params, "pskill_definition_id", this.evaluationReportFilters?.pskill_definition_id);
+      this.appendEvaluationFilterParam(params, "overall_outcome", this.evaluationReportFilters?.overall_outcome);
+      params.set("limit", "50");
+      return params.toString();
+    },
+
+    evaluationReportsPath(filters = this.evaluationReportFilters) {
+      if (typeof buildEvaluationReportsPath === "function") {
+        return buildEvaluationReportsPath(filters);
+      }
+      const params = new URLSearchParams();
+      this.appendEvaluationFilterParam(params, "run_id", filters?.run_id);
+      this.appendEvaluationFilterParam(params, "pskill_definition_id", filters?.pskill_definition_id);
+      this.appendEvaluationFilterParam(params, "overall_outcome", filters?.overall_outcome);
+      const query = params.toString();
+      return query ? `/admin/evaluations?${query}` : "/admin/evaluations";
+    },
+
+    evaluationReportHasFilters() {
+      return Boolean(
+        String(this.evaluationReportFilters?.run_id || "").trim() ||
+        String(this.evaluationReportFilters?.pskill_definition_id || "").trim() ||
+        String(this.evaluationReportFilters?.overall_outcome || "").trim()
+      );
     },
 
     async createRunEvaluation() {
@@ -265,6 +367,11 @@
       this.navigate(path);
     },
 
+    async loadEvaluationFindingsPage() {
+      this.syncEvaluationFindingFiltersFromLocation();
+      await this.loadEvaluationFindings();
+    },
+
     async loadEvaluationFindings() {
       this.busy.evaluationFindings = true;
       try {
@@ -281,19 +388,65 @@
     },
 
     applyEvaluationFindingFilters() {
+      this.replaceEvaluationFindingFilterLocation();
       return this.loadEvaluationFindings();
     },
 
     resetEvaluationFindingFilters() {
-      this.evaluationFindingFilters = {
+      this.evaluationFindingFilters = this.emptyEvaluationFindingFilters();
+      this.clearEvaluationFindingSelection();
+      this.replaceEvaluationFindingFilterLocation();
+      return this.loadEvaluationFindings();
+    },
+
+    emptyEvaluationFindingFilters() {
+      return {
         status: "open",
         category: "",
         severity: "",
         run_id: "",
         pskill_definition_id: ""
       };
-      this.clearEvaluationFindingSelection();
-      return this.loadEvaluationFindings();
+    },
+
+    syncEvaluationFindingFiltersFromLocation() {
+      const search = this.evaluationFindingLocationSearch();
+      if (search === (this.evaluationFindingFiltersLocationSearch || "")) {
+        return;
+      }
+      if (!search) {
+        if (this.evaluationFindingFiltersLocationSearch) {
+          this.evaluationFindingFilters = this.emptyEvaluationFindingFilters();
+        }
+        this.evaluationFindingFiltersLocationSearch = "";
+        return;
+      }
+      const params = new URLSearchParams(search);
+      this.evaluationFindingFilters = {
+        ...this.emptyEvaluationFindingFilters(),
+        status: params.get("status") || "",
+        category: params.get("category") || "",
+        severity: params.get("severity") || "",
+        run_id: params.get("run_id") || "",
+        pskill_definition_id: params.get("pskill_definition_id") || ""
+      };
+      this.evaluationFindingFiltersLocationSearch = search;
+    },
+
+    replaceEvaluationFindingFilterLocation() {
+      if (typeof window === "undefined" || !window.history?.replaceState) {
+        return;
+      }
+      const path = this.evaluationFindingsPath(this.evaluationFindingFilters);
+      window.history.replaceState({}, "", path);
+      this.evaluationFindingFiltersLocationSearch = this.evaluationFindingLocationSearch();
+    },
+
+    evaluationFindingLocationSearch() {
+      if (typeof window === "undefined") {
+        return "";
+      }
+      return window.location?.search || "";
     },
 
     evaluationFindingsQueryString() {
@@ -694,8 +847,22 @@
       return `/admin/evaluations/${evaluationId}`;
     },
 
-    evaluationFindingsPath() {
-      return "/admin/evaluations/findings";
+    evaluationFindingsPath(filters = {}) {
+      if (typeof buildEvaluationFindingsPath === "function") {
+        return buildEvaluationFindingsPath(filters);
+      }
+      const params = new URLSearchParams();
+      this.appendEvaluationFilterParam(params, "status", filters?.status);
+      this.appendEvaluationFilterParam(params, "category", filters?.category);
+      this.appendEvaluationFilterParam(params, "severity", filters?.severity);
+      this.appendEvaluationFilterParam(params, "run_id", filters?.run_id);
+      this.appendEvaluationFilterParam(params, "pskill_definition_id", filters?.pskill_definition_id);
+      const query = params.toString();
+      return query ? `/admin/evaluations/findings?${query}` : "/admin/evaluations/findings";
+    },
+
+    evaluationOutcomeOptions() {
+      return EVALUATION_OUTCOME_OPTIONS;
     },
 
     evaluationRunReplayPath(evaluation, focus = {}) {

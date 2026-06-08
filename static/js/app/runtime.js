@@ -1636,6 +1636,21 @@
       },
 
 
+      compilerRequestPath(compileRequestId) {
+        const normalized = String(compileRequestId || "").trim();
+        return buildCompilerRequestPath(normalized);
+      },
+
+
+      openCompilerRequest(compileRequestId) {
+        const normalized = String(compileRequestId || "").trim();
+        if (!normalized) {
+          return;
+        }
+        this.navigate(this.compilerRequestPath(normalized));
+      },
+
+
       liveRunReplayAgentRunPath(agentRunId, focus = {}) {
         const normalized = String(agentRunId || "").trim();
         return normalized ? buildPlatformAgentRunPath(normalized, focus) : "";

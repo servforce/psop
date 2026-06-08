@@ -11,7 +11,10 @@
     buildPlatformMemoryPath,
     buildPlatformMemoryEntryPath,
     buildToolAuthorizationsPath,
+    buildEvaluationReportPath,
+    buildEvaluationFindingsPath,
     buildGovernanceProposalPath,
+    buildGovernanceExperimentsPath,
     buildRunLivePath,
     buildReplayPath,
     resolveWsUrl
@@ -1273,6 +1276,9 @@
         ref.trace_id ||
         ref.run_event_id ||
         ref.event_id ||
+        ref.evaluation_id ||
+        ref.finding_id ||
+        ref.experiment_id ||
         ref.memory_entry_id ||
         ref.memory_id ||
         ref.run_id ||
@@ -1280,12 +1286,46 @@
         ref.proposal_id ||
         ""
       ).trim();
-      if (!id && !ref.run_id && !ref.agent_run_id && !ref.proposal_id && !ref.memory_entry_id && !ref.memory_id) {
+      if (
+        !id &&
+        !ref.run_id &&
+        !ref.agent_run_id &&
+        !ref.proposal_id &&
+        !ref.memory_entry_id &&
+        !ref.memory_id &&
+        !ref.evaluation_id &&
+        !ref.finding_id &&
+        !ref.experiment_id
+      ) {
         return null;
       }
       if (["agent_memory_entry", "memory_entry", "memory"].includes(kind) || ref.memory_entry_id || ref.memory_id) {
         const memoryId = String(ref.memory_entry_id || ref.memory_id || id).trim();
         return { key: `memory-${memoryId}`, label: `Memory ${memoryId}`, href: this.platformMemoryEntryPath(memoryId) };
+      }
+      if (["run_evaluation_finding", "evaluation_finding", "finding"].includes(kind) || ref.finding_id) {
+        const findingId = String(ref.finding_id || id).trim();
+        const evaluationId = String(ref.evaluation_id || "").trim();
+        const href = evaluationId
+          ? buildEvaluationReportPath(evaluationId)
+          : buildEvaluationFindingsPath({
+            run_id: ref.run_id || "",
+            status: ref.status || "",
+            category: ref.category || ""
+          });
+        return { key: `evaluation-finding-${findingId}`, label: `Finding ${findingId}`, href };
+      }
+      if (["run_evaluation", "evaluation"].includes(kind) || ref.evaluation_id) {
+        const evaluationId = String(ref.evaluation_id || id).trim();
+        return { key: `evaluation-${evaluationId}`, label: `Evaluation ${evaluationId}`, href: buildEvaluationReportPath(evaluationId) };
+      }
+      if (["psop_improvement_experiment", "governance_experiment", "experiment"].includes(kind) || ref.experiment_id) {
+        const experimentId = String(ref.experiment_id || id).trim();
+        return {
+          key: `experiment-${experimentId}`,
+          label: `Experiment ${experimentId}`,
+          href: buildGovernanceExperimentsPath({ experiment_id: experimentId })
+        };
       }
       if (["agent_tool_call", "tool_call"].includes(kind)) {
         const toolCallId = String(ref.agent_tool_call_id || ref.tool_call_id || ref.id || "").trim();

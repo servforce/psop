@@ -505,20 +505,20 @@
       return buildToolAuthorizationsPath();
     },
 
-    observabilityEvaluationReportsPath() {
-      return buildEvaluationReportsPath();
+    observabilityEvaluationReportsPath(filters = {}) {
+      return buildEvaluationReportsPath(filters);
     },
 
-    observabilityEvaluationFindingsPath() {
-      return buildEvaluationFindingsPath();
+    observabilityEvaluationFindingsPath(filters = {}) {
+      return buildEvaluationFindingsPath(filters);
     },
 
-    observabilityGovernanceProposalsPath() {
-      return buildGovernanceProposalsPath();
+    observabilityGovernanceProposalsPath(filters = {}) {
+      return buildGovernanceProposalsPath(filters);
     },
 
-    observabilityGovernanceExperimentsPath() {
-      return buildGovernanceExperimentsPath();
+    observabilityGovernanceExperimentsPath(filters = {}) {
+      return buildGovernanceExperimentsPath(filters);
     },
 
     observabilityToolAuthorizationsStatusPath(status) {
