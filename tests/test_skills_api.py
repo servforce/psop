@@ -1694,6 +1694,7 @@ def test_publish_skill_creates_published_version_and_record() -> None:
         ).json()
         skill_id = created["id"]
 
+        initial_versions_response = client.get(f"/api/v1/pskills/{skill_id}/versions")
         publish_response = client.post(
             f"/api/v1/pskills/{skill_id}/publish",
             json={"publish_reason": "Initial MVP publish"},
@@ -1705,6 +1706,14 @@ def test_publish_skill_creates_published_version_and_record() -> None:
         events_response = client.get(f"/api/v1/compiler/requests/{compile_request_id}/events")
         detail_response = client.get(f"/api/v1/pskills/{skill_id}")
         publishes_response = client.get(f"/api/v1/pskills/{skill_id}/publishes")
+        versions_response = client.get(f"/api/v1/pskills/{skill_id}/versions")
+
+    assert initial_versions_response.status_code == 200
+    initial_versions_payload = initial_versions_response.json()
+    assert len(initial_versions_payload) == 1
+    assert initial_versions_payload[0]["id"] == created["current_draft_version"]["id"]
+    assert initial_versions_payload[0]["version_no"] == 0
+    assert initial_versions_payload[0]["status"] == "draft"
 
     assert publish_response.status_code == 202
     assert publish_payload["published_version"]["status"] == "published"
@@ -1728,6 +1737,13 @@ def test_publish_skill_creates_published_version_and_record() -> None:
     assert len(publishes_payload) == 1
     assert publishes_payload[0]["publish_reason"] == "Initial MVP publish"
     assert publishes_payload[0]["publish_status"] == "published"
+
+    assert versions_response.status_code == 200
+    versions_payload = versions_response.json()
+    assert [version["status"] for version in versions_payload] == ["published", "draft"]
+    assert versions_payload[0]["id"] == publish_payload["published_version"]["id"]
+    assert versions_payload[0]["source_commit_sha"] == publish_payload["published_commit_sha"]
+    assert versions_payload[1]["id"] == created["current_draft_version"]["id"]
 
 
 def test_publish_gate_runs_after_publish_compile() -> None:

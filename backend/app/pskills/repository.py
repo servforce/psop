@@ -54,6 +54,14 @@ class SkillsRepository:
             return None
         return session.get(PSkillVersion, version_id)
 
+    def list_pskill_versions(self, session: Session, pskill_definition_id: str) -> list[PSkillVersion]:
+        query = (
+            select(PSkillVersion)
+            .where(PSkillVersion.pskill_definition_id == pskill_definition_id)
+            .order_by(PSkillVersion.version_no.desc(), PSkillVersion.created_at.desc())
+        )
+        return list(session.scalars(query).all())
+
     def get_publish_records(self, session: Session, pskill_definition_id: str) -> list[PSkillPublishRecord]:
         query = (
             select(PSkillPublishRecord)

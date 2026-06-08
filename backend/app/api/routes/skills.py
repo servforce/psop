@@ -21,6 +21,7 @@ from app.pskills.schemas import (
     GenerateSkillDraftRequest,
     PSkillDraftApplyPatchResponse,
     PSkillDraftGenerateResponse,
+    PSkillVersionSummaryResponse,
     PublishSkillRequest,
     PublishSkillResponse,
     SaveSkillRepositoryFileRequest,
@@ -72,6 +73,15 @@ def get_skill_detail(
     service: SkillsService = Depends(get_skills_service),
 ) -> SkillDetailResponse:
     return service.get_skill_detail(session, skill_id)
+
+
+@router.get("/{skill_id}/versions", response_model=list[PSkillVersionSummaryResponse])
+def list_skill_versions(
+    skill_id: str,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> list[PSkillVersionSummaryResponse]:
+    return service.list_skill_versions(session, skill_id=skill_id)
 
 
 @router.patch("/{skill_id}", response_model=SkillDetailResponse)

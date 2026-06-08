@@ -208,6 +208,15 @@ class SkillsService:
             latest_published_version=self._build_pskill_version_summary(latest_published_version),
         )
 
+    def list_skill_versions(self, session: Session, *, skill_id: str) -> list[PSkillVersionSummaryResponse]:
+        definition = self._require_definition(session, skill_id)
+        versions = self.repository.list_pskill_versions(session, definition.id)
+        return [
+            version_summary
+            for version in versions
+            if (version_summary := self._build_pskill_version_summary(version)) is not None
+        ]
+
     def update_skill_metadata(
         self,
         session: Session,
