@@ -1041,6 +1041,20 @@
                             <span class="font-mono" x-text="formatShortId(publishGateTestRunEvidence()?.test_run_id)"></span>
                           </button>
                         </template>
+                        <template x-if="publishGateTesterAgentRunPath()">
+                          <button type="button" class="button-secondary h-8 px-2.5 text-xs" @click="openPublishGateTesterAgentRun()">
+                            <span class="material-symbols-outlined text-[15px]">smart_toy</span>
+                            <span>AgentRun</span>
+                            <span class="font-mono" x-text="formatShortId(publishGateTestRunEvidence()?.agent_run_id)"></span>
+                          </button>
+                        </template>
+                        <template x-if="publishGateReplayPath()">
+                          <button type="button" class="button-secondary h-8 px-2.5 text-xs" @click="openPublishGateReplay()">
+                            <span class="material-symbols-outlined text-[15px]">replay</span>
+                            <span>Replay</span>
+                            <span class="font-mono" x-text="formatShortId(publishGateTestRunEvidence()?.run_id)"></span>
+                          </button>
+                        </template>
                         <template x-if="publishGateCompileArtifactId()">
                           <button type="button" class="button-secondary h-8 px-2.5 text-xs" @click="openCompilerArtifact(publishGateCompileArtifactId())">
                             <span class="material-symbols-outlined text-[15px]">account_tree</span>

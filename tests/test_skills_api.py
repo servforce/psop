@@ -1846,6 +1846,12 @@ def test_publish_gate_runs_after_publish_compile() -> None:
     assert gate_payload["result_json"]["checks"]["compile"]["status"] == "passed"
     assert gate_payload["result_json"]["checks"]["tests"]["status"] == "review_required"
     assert gate_payload["result_json"]["coverage"]["scenario_count"] == 0
+    evidence_refs = gate_payload["result_json"]["evidence_refs"]
+    assert evidence_refs[0]["kind"] == "pskill_version"
+    assert evidence_refs[0]["id"] == publish_payload["published_version"]["id"]
+    assert evidence_refs[1]["kind"] == "compile_artifact"
+    assert evidence_refs[1]["id"] == compile_payload["artifact_id"]
+    assert evidence_refs[1]["compile_request_id"] == compile_request_id
     assert gate_payload["result_json"]["warnings"] == [
         {
             "check": "tests",
@@ -1995,6 +2001,7 @@ def test_testing_suite_api_creates_and_runs_suite() -> None:
         test_run_id = suite_run_payload["runs"][0]["id"]
         get_run_response = client.get(f"/api/v1/testing/runs/{test_run_id}")
         run_events_response = client.get(f"/api/v1/testing/runs/{test_run_id}/events")
+        publish_gate_response = client.post(f"/api/v1/pskills/{skill_id}/publish-gate", json={})
 
     assert publish_response.status_code == 202
     assert compile_response.status_code == 200
@@ -2029,6 +2036,35 @@ def test_testing_suite_api_creates_and_runs_suite() -> None:
     event_types = [item["event_type"] for item in run_events_response.json()]
     assert "testing.run.linked" in event_types
     assert "testing.run.evaluation_completed" in event_types
+
+    assert publish_gate_response.status_code == 201
+    gate_payload = publish_gate_response.json()
+    assert gate_payload["status"] == "passed"
+    gate_scenario = gate_payload["result_json"]["coverage"]["scenario_results"][0]
+    assert gate_scenario["latest_run_id"] == test_run_id
+    assert gate_scenario["agent_run_id"] == suite_run_payload["runs"][0]["agent_run_id"]
+    assert gate_scenario["run_id"] == suite_run_payload["runs"][0]["run_id"]
+    assert gate_scenario["artifact_id"] == compile_payload["artifact_id"]
+    evidence_refs = gate_payload["result_json"]["evidence_refs"]
+    assert any(
+        item["kind"] == "pskill_test_run"
+        and item["id"] == test_run_id
+        and item["agent_run_id"] == suite_run_payload["runs"][0]["agent_run_id"]
+        and item["run_id"] == suite_run_payload["runs"][0]["run_id"]
+        for item in evidence_refs
+    )
+    assert any(
+        item["kind"] == "agent_run"
+        and item["id"] == suite_run_payload["runs"][0]["agent_run_id"]
+        and item["agent_key"] == "pskill.tester"
+        for item in evidence_refs
+    )
+    assert any(
+        item["kind"] == "runtime_replay"
+        and item["run_id"] == suite_run_payload["runs"][0]["run_id"]
+        and item["test_run_id"] == test_run_id
+        for item in evidence_refs
+    )
 
 
 def test_manual_compile_request_does_not_publish_draft() -> None:

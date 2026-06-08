@@ -12,6 +12,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildPlatformAgentRunPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -1834,7 +1835,12 @@
         if (!latestRunId || !scenarioId) {
           return null;
         }
-        return { scenario_id: scenarioId, test_run_id: latestRunId };
+        return {
+          scenario_id: scenarioId,
+          test_run_id: latestRunId,
+          agent_run_id: String(item?.agent_run_id || "").trim(),
+          run_id: String(item?.run_id || "").trim()
+        };
       },
 
       publishGateTestRunReviewPath(gate = this.publishGateResult) {
@@ -1847,6 +1853,40 @@
 
       openPublishGateTestRunReview(gate = this.publishGateResult) {
         const path = this.publishGateTestRunReviewPath(gate);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
+      },
+
+      publishGateTesterAgentRunPath(gate = this.publishGateResult) {
+        const evidence = this.publishGateTestRunEvidence(gate);
+        if (!evidence?.agent_run_id) {
+          return "";
+        }
+        return buildPlatformAgentRunPath(evidence.agent_run_id, { tab: "events" });
+      },
+
+      openPublishGateTesterAgentRun(gate = this.publishGateResult) {
+        const path = this.publishGateTesterAgentRunPath(gate);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
+      },
+
+      publishGateReplayPath(gate = this.publishGateResult) {
+        const evidence = this.publishGateTestRunEvidence(gate);
+        if (!evidence?.run_id) {
+          return "";
+        }
+        return this.currentSkill?.id
+          ? buildSkillReplayPath(this.currentSkill.id, evidence.run_id)
+          : buildReplayPath(evidence.run_id);
+      },
+
+      openPublishGateReplay(gate = this.publishGateResult) {
+        const path = this.publishGateReplayPath(gate);
         if (!path) {
           return;
         }

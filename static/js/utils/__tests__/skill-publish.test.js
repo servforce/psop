@@ -14,14 +14,18 @@ function loadSkillDetailMethods() {
         buildRunLivePath: helper,
         buildSkillRunLivePath: helper,
         buildSkillDebugRunLivePath: helper,
-        buildReplayPath: helper,
-        buildSkillReplayPath: helper,
+        buildReplayPath: (runId) => `/admin/runs/${runId}/live/replay`,
+        buildSkillReplayPath: (skillId, runId) => `/admin/skills/${skillId}/runs/${runId}/live/replay`,
         buildSkillTestScenarioPath: helper,
         buildSkillTestScenarioNewPath: helper,
         buildSkillTestScenarioRunReviewPath: (skillId, scenarioId, scenarioRunId) => (
           `/admin/skills/${skillId}/tests/${scenarioId}/runs/${scenarioRunId}/review`
         ),
         buildCompilerArtifactPath: helper,
+        buildPlatformAgentRunPath: (agentRunId, focus = {}) => {
+          const query = focus.tab ? `?tab=${focus.tab}` : "";
+          return `/admin/platform/agent-runs/${agentRunId}${query}`;
+        },
         generateSkillKey: helper,
         resolveApiBaseUrl: helper,
         resolveWsUrl: helper,
@@ -59,6 +63,10 @@ test("skill publish tab exposes versions and publish gate controls", () => {
   expect(html).toContain("publishGateResult.result_json?.publish_gate_summary");
   expect(html).toContain("publishGateTestRunReviewPath()");
   expect(html).toContain("openPublishGateTestRunReview()");
+  expect(html).toContain("publishGateTesterAgentRunPath()");
+  expect(html).toContain("openPublishGateTesterAgentRun()");
+  expect(html).toContain("publishGateReplayPath()");
+  expect(html).toContain("openPublishGateReplay()");
   expect(html).toContain("publishGateCompileArtifactId()");
   expect(html).toContain("openCompilerArtifact(publishGateCompileArtifactId())");
   expect(appJs).toContain("pskillVersionsLoadedSkillId");
@@ -83,7 +91,13 @@ test("skill publish methods load versions and run publish gate", async () => {
       compile_artifact_id: "artifact-1",
       coverage: {
         scenario_results: [
-          { scenario_id: "scenario-1", latest_run_id: "test-run-1", status: "failed" }
+          {
+            scenario_id: "scenario-1",
+            latest_run_id: "test-run-1",
+            agent_run_id: "agent-run-1",
+            run_id: "run-1",
+            status: "failed"
+          }
         ]
       },
       checks: {}
@@ -126,14 +140,24 @@ test("skill publish methods load versions and run publish gate", async () => {
   expect(context.publishGateResult).toEqual(gate);
   expect(methods.publishGateTestRunEvidence.call(context)).toEqual({
     scenario_id: "scenario-1",
-    test_run_id: "test-run-1"
+    test_run_id: "test-run-1",
+    agent_run_id: "agent-run-1",
+    run_id: "run-1"
   });
   expect(methods.publishGateTestRunReviewPath.call(context)).toBe(
     "/admin/skills/skill-1/tests/scenario-1/runs/test-run-1/review"
   );
+  expect(methods.publishGateTesterAgentRunPath.call(context)).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=events"
+  );
+  expect(methods.publishGateReplayPath.call(context)).toBe("/admin/skills/skill-1/runs/run-1/live/replay");
   expect(methods.publishGateCompileArtifactId.call(context)).toBe("artifact-1");
   methods.openPublishGateTestRunReview.call(context);
   expect(context.navigate).toHaveBeenCalledWith("/admin/skills/skill-1/tests/scenario-1/runs/test-run-1/review");
+  methods.openPublishGateTesterAgentRun.call(context);
+  expect(context.navigate).toHaveBeenCalledWith("/admin/platform/agent-runs/agent-run-1?tab=events");
+  methods.openPublishGateReplay.call(context);
+  expect(context.navigate).toHaveBeenCalledWith("/admin/skills/skill-1/runs/run-1/live/replay");
   expect(context.apiRequest).toHaveBeenCalledWith("/pskills/skill-1/publishes");
   expect(context.apiRequest).toHaveBeenCalledWith("/pskills/skill-1/versions");
   const gateCall = context.apiRequest.mock.calls.find(([url]) => url === "/pskills/skill-1/publish-gate");

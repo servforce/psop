@@ -876,6 +876,11 @@ class SkillTestService:
         artifact = artifact or self.repository.get_latest_ready_artifact(session, version.id)
         scenarios = self.repository.list_scenarios(session, skill.id)
         scenario_results = self._publish_gate_scenario_results(session, scenarios)
+        evidence_refs = self._publish_gate_evidence_refs(
+            version=version,
+            artifact=artifact,
+            scenario_results=scenario_results,
+        )
         checks = {
             "source": self._publish_gate_source_check(version),
             "compile": self._publish_gate_compile_check(artifact),
@@ -906,6 +911,7 @@ class SkillTestService:
             "warnings": self._publish_gate_warnings(checks),
             "publish_gate_summary": self._publish_gate_summary(status, score, checks),
             "compile_artifact_id": artifact.id if artifact else None,
+            "evidence_refs": evidence_refs,
         }
         gate = self.repository.create_publish_gate(
             session,
@@ -1331,6 +1337,10 @@ class SkillTestService:
                     "scenario_id": scenario.id,
                     "name": scenario.name,
                     "latest_run_id": latest_run.id if latest_run else None,
+                    "agent_run_id": latest_run.agent_run_id if latest_run else None,
+                    "run_id": latest_run.run_id if latest_run else None,
+                    "artifact_id": latest_run.artifact_id if latest_run else scenario.target_compile_artifact_id,
+                    "pskill_version_id": latest_run.pskill_version_id if latest_run else None,
                     "status": latest_run.status if latest_run else "not_run",
                     "score": int((latest_run.result_summary or {}).get("score") or 0) if latest_run else 0,
                     "result_summary": dict(latest_run.result_summary or {}) if latest_run else {},
@@ -1417,6 +1427,62 @@ class SkillTestService:
             "warnings": [],
             "summary": "所有 active 测试场景最新运行均已通过。",
         }
+
+    @staticmethod
+    def _publish_gate_evidence_refs(*, version, artifact, scenario_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        refs: list[dict[str, Any]] = [
+            {
+                "kind": "pskill_version",
+                "id": version.id,
+                "source_commit_sha": version.source_commit_sha,
+            }
+        ]
+        if artifact:
+            refs.append(
+                {
+                    "kind": "compile_artifact",
+                    "id": artifact.id,
+                    "compile_request_id": artifact.compile_request_id,
+                    "pskill_version_id": artifact.pskill_version_id,
+                }
+            )
+        for item in scenario_results:
+            scenario_id = str(item.get("scenario_id") or "").strip()
+            test_run_id = str(item.get("latest_run_id") or "").strip()
+            agent_run_id = str(item.get("agent_run_id") or "").strip()
+            run_id = str(item.get("run_id") or "").strip()
+            if test_run_id:
+                refs.append(
+                    {
+                        "kind": "pskill_test_run",
+                        "id": test_run_id,
+                        "scenario_id": scenario_id,
+                        "status": item.get("status"),
+                        "agent_run_id": agent_run_id or None,
+                        "run_id": run_id or None,
+                        "artifact_id": item.get("artifact_id"),
+                    }
+                )
+            if agent_run_id:
+                refs.append(
+                    {
+                        "kind": "agent_run",
+                        "id": agent_run_id,
+                        "agent_key": "pskill.tester",
+                        "test_run_id": test_run_id,
+                        "scenario_id": scenario_id,
+                    }
+                )
+            if run_id:
+                refs.append(
+                    {
+                        "kind": "runtime_replay",
+                        "run_id": run_id,
+                        "test_run_id": test_run_id,
+                        "scenario_id": scenario_id,
+                    }
+                )
+        return refs
 
     @staticmethod
     def _publish_gate_status(checks: dict[str, dict[str, Any]]) -> str:
