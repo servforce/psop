@@ -468,6 +468,7 @@
           this.stopPublishProgressWatchers?.();
         }
         if (!["evaluation-reports", "evaluation-report"].includes(this.route.name)) {
+          this.disconnectEvaluationActivityWebSocket?.();
           this.currentEvaluation = null;
         }
         if (!["governance-proposals", "governance-proposal"].includes(this.route.name)) {

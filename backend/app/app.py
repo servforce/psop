@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.api.routes.agents import agent_runs_ws_router, tool_authorizations_ws_router
+from app.api.routes.evaluations import evaluation_activity_ws_router
 from app.api.routes.runtime import ws_router
 from app.api.routes.skills import pskill_activity_ws_router
 from app.api.routes.skill_tests import test_run_activity_ws_router
@@ -122,6 +123,7 @@ def create_app(
     app.include_router(tool_authorizations_ws_router)
     app.include_router(pskill_activity_ws_router)
     app.include_router(test_run_activity_ws_router)
+    app.include_router(evaluation_activity_ws_router)
     app.include_router(api_router, prefix=resolved_settings.api_prefix)
     # FastAPI OTel instrumentation must run before the ASGI middleware stack is built.
     app.state.observability = configure_observability(

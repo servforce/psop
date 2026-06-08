@@ -10,7 +10,7 @@ from app.api.routes.agents import (
 )
 from app.api.routes.agent_prompts import router as agent_prompts_router
 from app.api.routes.compiler import router as compiler_router
-from app.api.routes.evaluations import router as evaluations_router
+from app.api.routes.evaluations import evaluation_activity_ws_router, router as evaluations_router
 from app.api.routes.governance import router as governance_router
 from app.api.routes.inference import router as inference_router
 from app.api.routes.memory import router as memory_router
@@ -50,3 +50,4 @@ api_router.include_router(agent_runs_ws_router)
 api_router.include_router(tool_authorizations_ws_router)
 api_router.include_router(pskill_activity_ws_router)
 api_router.include_router(test_run_activity_ws_router)
+api_router.include_router(evaluation_activity_ws_router)

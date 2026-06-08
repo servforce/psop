@@ -731,6 +731,12 @@
         created_to: ""
       },
       currentEvaluation: null,
+      evaluationActivityWs: null,
+      evaluationActivityWsId: "",
+      evaluationActivityWsStatus: "idle",
+      evaluationAgentRun: null,
+      evaluationAgentEvents: [],
+      evaluationModelCalls: [],
       evaluationForm: {
         run_id: "",
         evaluation_id: ""

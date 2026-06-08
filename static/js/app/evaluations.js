@@ -1,4 +1,6 @@
 (function () {
+  const { resolveWsUrl } = window.PSOPConsoleHelpers || {};
+
   const FINDING_STATUS_OPTIONS = [
     { value: "open", label: "未处理" },
     { value: "accepted", label: "已接受" },
@@ -73,11 +75,102 @@
       this.busy.evaluationReport = true;
       try {
         const evaluation = await this.apiRequest(`/evaluations/${encodeURIComponent(id)}`);
+        this.applyEvaluationActivitySnapshot({ evaluation });
+        this.connectEvaluationActivityWebSocket(evaluation.id);
+      } finally {
+        this.busy.evaluationReport = false;
+      }
+    },
+
+    connectEvaluationActivityWebSocket(evaluationId = this.currentEvaluation?.id) {
+      const id = String(evaluationId || "").trim();
+      if (!id || typeof WebSocket === "undefined" || typeof resolveWsUrl !== "function") {
+        return false;
+      }
+      if (
+        this.evaluationActivityWs &&
+        this.evaluationActivityWsId === id &&
+        [WebSocket.CONNECTING, WebSocket.OPEN].includes(this.evaluationActivityWs.readyState)
+      ) {
+        return true;
+      }
+
+      this.disconnectEvaluationActivityWebSocket();
+      const socket = new WebSocket(resolveWsUrl(this.apiBaseUrl, `/ws/evaluations/${encodeURIComponent(id)}`));
+      this.evaluationActivityWs = socket;
+      this.evaluationActivityWsId = id;
+      this.evaluationActivityWsStatus = "connecting";
+      socket.addEventListener("open", () => {
+        if (this.evaluationActivityWs === socket) {
+          this.evaluationActivityWsStatus = "open";
+        }
+      });
+      socket.addEventListener("message", (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.event_type === "evaluation.activity.snapshot" && message.payload) {
+            this.applyEvaluationActivitySnapshot(message.payload);
+          }
+          if (message.event_type === "evaluation.activity.error") {
+            this.showNotice("error", message.payload?.message || "获取 Evaluation 活动流失败。");
+            this.disconnectEvaluationActivityWebSocket();
+          }
+        } catch {
+          // Ignore malformed activity messages; REST actions remain the recovery path.
+        }
+      });
+      socket.addEventListener("close", () => {
+        if (this.evaluationActivityWs === socket) {
+          this.evaluationActivityWsStatus = "closed";
+        }
+      });
+      socket.addEventListener("error", () => {
+        if (this.evaluationActivityWs === socket) {
+          this.evaluationActivityWsStatus = "error";
+        }
+      });
+      return true;
+    },
+
+    disconnectEvaluationActivityWebSocket() {
+      if (this.evaluationActivityWs) {
+        this.evaluationActivityWs.close();
+      }
+      this.evaluationActivityWs = null;
+      this.evaluationActivityWsId = "";
+      this.evaluationActivityWsStatus = "idle";
+    },
+
+    applyEvaluationActivitySnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== "object") {
+        return;
+      }
+      const evaluation = snapshot.evaluation || null;
+      if (evaluation?.id) {
         this.currentEvaluation = evaluation;
         this.evaluationForm.evaluation_id = evaluation.id;
         this.evaluationForm.run_id = evaluation.run_id;
-      } finally {
-        this.busy.evaluationReport = false;
+      }
+      if (snapshot.agent_run) {
+        this.evaluationAgentRun = snapshot.agent_run;
+      }
+      if (Array.isArray(snapshot.agent_events)) {
+        this.evaluationAgentEvents = snapshot.agent_events;
+      }
+      if (Array.isArray(snapshot.model_calls)) {
+        this.evaluationModelCalls = snapshot.model_calls;
+      }
+      const findings = Array.isArray(snapshot.findings)
+        ? snapshot.findings
+        : Array.isArray(evaluation?.findings)
+          ? evaluation.findings
+          : null;
+      if (findings && this.currentEvaluation?.id) {
+        this.currentEvaluation.findings = findings;
+        this.evaluationFindings = (this.evaluationFindings || []).map((item) => {
+          const updated = findings.find((finding) => finding.id === item.id);
+          return updated || item;
+        });
       }
     },
 
