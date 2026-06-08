@@ -70,7 +70,7 @@ function agentDetail() {
         content_hash: "fedcba9876543210",
         spec_json: {
           goal: "Observe runtime state with extra context.",
-          allowed_tools: ["psop.runtime.read", "psop.run_events.write_low"],
+          allowed_tools: ["psop.runtime.read"],
           allowed_skill_names: ["pskill-runner-field-assistant"],
           output_schema: { name: "RuntimeAgentObservation" }
         }

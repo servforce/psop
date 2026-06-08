@@ -19,7 +19,6 @@ DEFAULT_TOOL_SIDE_EFFECTS: dict[str, str] = {
     "psop.compiler.validate_formal_v5": "compute",
     "psop.testing.write_diagnostics": "low_write",
     "psop.runtime.read": "read",
-    "psop.run_events.write_low": "low_write",
     "psop.evaluations.read": "read",
     "psop.evaluations.write_diagnostics": "low_write",
     "psop.governance.write_proposal": "low_write",

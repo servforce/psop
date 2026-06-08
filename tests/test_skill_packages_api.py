@@ -27,6 +27,7 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
         list_response = client.get("/api/v1/skills")
         psop_response = client.get("/api/v1/skills", params={"scope": "psop"})
         detail_response = client.get("/api/v1/skills/pskill-builder")
+        runner_detail_response = client.get("/api/v1/skills/pskill-runner-field-assistant")
         versions_response = client.get("/api/v1/skills/pskill-builder/versions")
         version_id = versions_response.json()[0]["id"]
         validate_response = client.post(f"/api/v1/skills/pskill-builder/versions/{version_id}/validate")
@@ -60,6 +61,10 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
     assert detail["active_version"]["allowed_tools"] == BUILDER_ALLOWED_TOOLS
     assert detail["active_version"]["resource_count"] >= 1
     assert detail["resources"][0]["resource_kind"] == "skill"
+
+    runner_detail = runner_detail_response.json()
+    assert runner_detail_response.status_code == 200
+    assert runner_detail["active_version"]["allowed_tools"] == ["psop.runtime.read"]
 
     assert versions_response.status_code == 200
     assert versions_response.json()[0]["content_hash"] == detail["active_content_hash"]

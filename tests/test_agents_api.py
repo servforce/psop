@@ -407,7 +407,7 @@ def test_agent_runner_cannot_write_run_events_directly() -> None:
     assert agent_run_response.status_code == 201
     assert run_once_response.status_code == 200
     assert run_once_response.json()["status"] == "failed"
-    assert run_once_response.json()["error_message"] == "tool_not_allowed_by_agent_or_skill"
+    assert run_once_response.json()["error_message"] == "tool_not_registered"
 
     before_events = before_events_response.json()
     after_events = after_events_response.json()

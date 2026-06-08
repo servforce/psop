@@ -31,7 +31,6 @@ DEFAULT_TOOL_DESCRIPTIONS: dict[str, str] = {
     "psop.compiler.validate_formal_v5": "校验 EG Compile Artifact 是否符合 formal-v5。",
     "psop.testing.write_diagnostics": "写入测试诊断和发布门禁内部记录。",
     "psop.runtime.read": "读取 Runtime Run、Session Token snapshot、RunEvent 和 RunTrace。",
-    "psop.run_events.write_low": "写入低副作用 RunEvent 记录。",
     "psop.evaluations.read": "读取 RunEvaluation 和 finding 归因结果。",
     "psop.evaluations.write_diagnostics": "写入评估诊断和候选 finding。",
     "psop.governance.write_proposal": "写入治理提案和实验业务记录。",
