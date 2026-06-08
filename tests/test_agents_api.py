@@ -519,6 +519,7 @@ def test_agent_runner_executes_authorized_skill_version_activation_tool() -> Non
     with client:
         sync_response = client.post("/api/v1/skills/sync")
         before_response = client.get("/api/v1/skills/pskill-builder")
+        candidate_allowed_tools = ["psop.pskills.get", "psop.repository.read_file"]
         with client.app.state.db_manager.session() as session:
             package = session.scalar(select(SkillPackage).where(SkillPackage.name == "pskill-builder"))
             assert package is not None
@@ -527,13 +528,17 @@ def test_agent_runner_executes_authorized_skill_version_activation_tool() -> Non
                 version_label="tool-activation-test",
                 status="candidate",
                 content_hash="tool-activation-test-hash",
-                manifest_json={"name": "pskill-builder", "description": "Tool activation candidate."},
+                manifest_json={
+                    "name": "pskill-builder",
+                    "description": "Tool activation candidate.",
+                    "allowed-tools": candidate_allowed_tools,
+                },
                 body_object_key="skills/psop/pskill-builder/SKILL.md",
                 resource_index=[
                     {"path": "SKILL.md", "kind": "skill", "content_hash": "skill-md-hash", "size_bytes": 128},
                     {"path": "references/tool.md", "kind": "references", "content_hash": "ref-hash", "size_bytes": 64},
                 ],
-                allowed_tools=["psop.pskills.read", "psop.materials.read", "psop.run_events.write_low"],
+                allowed_tools=candidate_allowed_tools,
                 validation_status="valid",
                 validation_diagnostics=[],
             )
@@ -583,11 +588,7 @@ def test_agent_runner_executes_authorized_skill_version_activation_tool() -> Non
     assert resumed_response.json()["status"] == "succeeded"
     assert resumed_response.json()["output_payload"]["tool_result"]["result"]["version_id"] == candidate_version_id
     assert after_response.json()["active_version_id"] == candidate_version_id
-    assert after_response.json()["active_version"]["allowed_tools"] == [
-        "psop.pskills.read",
-        "psop.materials.read",
-        "psop.run_events.write_low",
-    ]
+    assert after_response.json()["active_version"]["allowed_tools"] == candidate_allowed_tools
     assert tool_calls_response.json()[0]["result_summary"]["result"]["package_name"] == "pskill-builder"
     assert executed_authorization_response.json()["status"] == "executed"
 

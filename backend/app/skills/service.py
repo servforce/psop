@@ -188,6 +188,11 @@ class SkillPackageService:
             payload_allowed_tools=payload.allowed_tools,
             parent=parent,
         )
+        self._raise_if_allowed_tools_expands(
+            package=package,
+            allowed_tools=allowed_tools,
+            baseline_version=parent,
+        )
         version_label = (payload.version_label or "").strip() or self._next_candidate_version_label(session, package)
         body_object_key = (payload.body_object_key or "").strip()
         if not body_object_key:
@@ -216,7 +221,11 @@ class SkillPackageService:
             validation_status="pending",
             validation_diagnostics=[],
         )
-        version.validation_diagnostics = self._validate_version_diagnostics(package, version)
+        version.validation_diagnostics = self._validate_version_diagnostics(
+            package,
+            version,
+            allowed_tools_baseline=parent,
+        )
         version.validation_status = self._validation_status_from_diagnostics(version.validation_diagnostics)
         session.add(version)
         session.flush()
@@ -236,7 +245,11 @@ class SkillPackageService:
 
     def validate_version(self, session: Session, package_name: str, version_id: str) -> SkillVersionResponse:
         package, version = self._get_package_version(session, package_name, version_id)
-        diagnostics = self._validate_version_diagnostics(package, version)
+        diagnostics = self._validate_version_diagnostics(
+            package,
+            version,
+            allowed_tools_baseline=self._active_allowed_tools_baseline(session, package=package, version=version),
+        )
         version.validation_diagnostics = diagnostics
         version.validation_status = self._validation_status_from_diagnostics(diagnostics)
         version.updated_at = now_utc()
@@ -274,7 +287,11 @@ class SkillPackageService:
         package: SkillPackage,
         version: SkillVersion,
     ) -> dict[str, Any]:
-        diagnostics = self._validate_version_diagnostics(package, version)
+        diagnostics = self._validate_version_diagnostics(
+            package,
+            version,
+            allowed_tools_baseline=self._active_allowed_tools_baseline(session, package=package, version=version),
+        )
         if any(item["severity"] == "error" for item in diagnostics):
             version.validation_status = "invalid"
             version.validation_diagnostics = diagnostics
@@ -363,6 +380,40 @@ class SkillPackageService:
             return _normalize_string_list(parent.allowed_tools)
         return []
 
+    def _active_allowed_tools_baseline(
+        self,
+        session: Session,
+        *,
+        package: SkillPackage,
+        version: SkillVersion,
+    ) -> SkillVersion | None:
+        if not package.active_version_id or package.active_version_id == version.id:
+            return None
+        return self.repository.get_version(session, package.active_version_id)
+
+    @staticmethod
+    def _raise_if_allowed_tools_expands(
+        *,
+        package: SkillPackage,
+        allowed_tools: list[str],
+        baseline_version: SkillVersion | None,
+    ) -> None:
+        diagnostic = SkillPackageService._allowed_tools_expansion_diagnostic(
+            package=package,
+            allowed_tools=allowed_tools,
+            baseline_version=baseline_version,
+        )
+        if not diagnostic:
+            return
+        raise SkillValidationError(
+            "Skill package allowed-tools 只能收窄，不能扩大权限。",
+            details={
+                "package_name": package.name,
+                "baseline_version_id": diagnostic["baseline_version_id"],
+                "expanded_tools": diagnostic["expanded_tools"],
+            },
+        )
+
     def _normalize_resource_index(self, resource_index: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(resource_index, list):
             raise SkillValidationError("resource_index 必须是数组。")
@@ -417,7 +468,12 @@ class SkillPackageService:
         return _hash_bytes(json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
     @staticmethod
-    def _validate_version_diagnostics(package: SkillPackage, version: SkillVersion) -> list[dict[str, Any]]:
+    def _validate_version_diagnostics(
+        package: SkillPackage,
+        version: SkillVersion,
+        *,
+        allowed_tools_baseline: SkillVersion | None = None,
+    ) -> list[dict[str, Any]]:
         diagnostics: list[dict[str, Any]] = []
         manifest = version.manifest_json if isinstance(version.manifest_json, dict) else {}
         resource_index = version.resource_index if isinstance(version.resource_index, list) else []
@@ -451,6 +507,13 @@ class SkillPackageService:
                 "code": "empty_allowed_tools",
                 "message": "Skill package 未声明 allowed-tools。",
             })
+        expansion = SkillPackageService._allowed_tools_expansion_diagnostic(
+            package=package,
+            allowed_tools=version.allowed_tools if isinstance(version.allowed_tools, list) else [],
+            baseline_version=allowed_tools_baseline,
+        )
+        if expansion:
+            diagnostics.append(expansion)
         if not any(str(path).startswith("references/") for path in resource_paths):
             diagnostics.append({
                 "severity": "warning",
@@ -458,6 +521,32 @@ class SkillPackageService:
                 "message": "建议为 Skill package 提供 references/ 资料。",
             })
         return diagnostics
+
+    @staticmethod
+    def _allowed_tools_expansion_diagnostic(
+        *,
+        package: SkillPackage,
+        allowed_tools: list[str],
+        baseline_version: SkillVersion | None,
+    ) -> dict[str, Any] | None:
+        if not baseline_version:
+            return None
+        baseline_tools = set(
+            _normalize_string_list(
+                baseline_version.allowed_tools if isinstance(baseline_version.allowed_tools, list) else []
+            )
+        )
+        expanded_tools = sorted(set(_normalize_string_list(allowed_tools)) - baseline_tools)
+        if not expanded_tools:
+            return None
+        return {
+            "severity": "error",
+            "code": "allowed_tools_expand_package_scope",
+            "message": "Skill package allowed-tools 只能继承或收窄当前/父版本工具集合。",
+            "package_name": package.name,
+            "baseline_version_id": baseline_version.id,
+            "expanded_tools": expanded_tools,
+        }
 
     @staticmethod
     def _validation_status_from_diagnostics(diagnostics: list[dict[str, Any]]) -> str:
