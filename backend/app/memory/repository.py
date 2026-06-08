@@ -20,6 +20,7 @@ class MemoryRepository:
         memory_type: str | None = None,
         status: str | None = None,
         agent_key: str | None = None,
+        created_by_agent_run_id: str | None = None,
         q: str | None = None,
         limit: int = 100,
     ) -> list[AgentMemoryEntry]:
@@ -32,6 +33,8 @@ class MemoryRepository:
             query = query.where(AgentMemoryEntry.status == status)
         if agent_key:
             query = query.where(AgentMemoryEntry.agent_key == agent_key)
+        if created_by_agent_run_id:
+            query = query.where(AgentMemoryEntry.created_by_agent_run_id == created_by_agent_run_id)
         if q:
             pattern = f"%{q}%"
             query = query.where(or_(AgentMemoryEntry.title.ilike(pattern), AgentMemoryEntry.content.ilike(pattern)))

@@ -36,6 +36,7 @@ def test_memory_api_lists_searches_and_reviews_agent_memory_candidates() -> None
         agent_run_id = run_response.json()["id"]
         run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
         events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        agent_run_memory_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/memory-entries")
         memory_list_response = client.get(
             "/api/v1/memory",
             params={"namespace": "evaluation", "memory_type": "episodic", "status": "pending_review"},
@@ -64,6 +65,8 @@ def test_memory_api_lists_searches_and_reviews_agent_memory_candidates() -> None
     assert run_once_response.json()["status"] == "succeeded"
     assert run_once_response.json()["output_payload"]["memory_candidates"][0]["memory_type"] == "episodic"
     assert "agent.memory_candidates.written" in [item["event_type"] for item in events_response.json()]
+    assert agent_run_memory_response.status_code == 200
+    assert [item["created_by_agent_run_id"] for item in agent_run_memory_response.json()] == [agent_run_id]
 
     assert memory_list_response.status_code == 200
     assert entry["namespace"] == "evaluation"

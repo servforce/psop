@@ -2825,6 +2825,11 @@
       grid-template-columns: repeat(6, minmax(0, 1fr));
     }
   }
+  .lg\:grid-cols-7 {
+    @media (width >= 64rem) {
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+    }
+  }
   .lg\:grid-cols-\[11rem_minmax\(0\,1fr\)_minmax\(16rem\,0\.7fr\)_2\.5rem\] {
     @media (width >= 64rem) {
       grid-template-columns: 11rem minmax(0,1fr) minmax(16rem,0.7fr) 2.5rem;
@@ -3021,6 +3026,11 @@
   .xl\:grid-cols-\[minmax\(17rem\,0\.55fr\)_minmax\(0\,1fr\)\] {
     @media (width >= 80rem) {
       grid-template-columns: minmax(17rem,0.55fr) minmax(0,1fr);
+    }
+  }
+  .xl\:grid-cols-\[minmax\(18rem\,0\.55fr\)_minmax\(0\,1fr\)\] {
+    @media (width >= 80rem) {
+      grid-template-columns: minmax(18rem,0.55fr) minmax(0,1fr);
     }
   }
   .xl\:flex-row {

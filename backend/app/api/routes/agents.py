@@ -21,7 +21,15 @@ from app.agents.schemas import (
     ToolAuthorizationDecisionRequest,
 )
 from app.agents.service import AgentService
-from app.api.dependencies import get_agent_runner, get_agent_service, get_db_session, get_skill_package_service
+from app.api.dependencies import (
+    get_agent_runner,
+    get_agent_service,
+    get_db_session,
+    get_memory_service,
+    get_skill_package_service,
+)
+from app.memory.schemas import MemoryEntryResponse
+from app.memory.service import MemoryService
 from app.skills.schemas import SkillActivationResponse
 from app.skills.service import SkillPackageService
 
@@ -174,6 +182,18 @@ def list_agent_run_skill_activations(
 ) -> list[SkillActivationResponse]:
     agent_service.get_run(session, agent_run_id)
     return skill_service.list_activations(session, agent_run_id)
+
+
+@agent_runs_router.get("/{agent_run_id}/memory-entries", response_model=list[MemoryEntryResponse])
+def list_agent_run_memory_entries(
+    agent_run_id: str,
+    limit: int = Query(default=100, ge=1, le=200),
+    session: Session = Depends(get_db_session),
+    agent_service: AgentService = Depends(get_agent_service),
+    memory_service: MemoryService = Depends(get_memory_service),
+) -> list[MemoryEntryResponse]:
+    agent_service.get_run(session, agent_run_id)
+    return memory_service.list_entries_for_agent_run(session, agent_run_id, limit=limit)
 
 
 @agent_runs_router.post("/{agent_run_id}/events", response_model=AgentEventResponse, status_code=status.HTTP_201_CREATED)

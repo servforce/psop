@@ -108,13 +108,14 @@
       }
       this.busy.agentRunDetail = true;
       try {
-        const [run, events, modelCalls, toolCalls, skillActivations, toolAuthorizations] = await Promise.all([
+        const [run, events, modelCalls, toolCalls, skillActivations, toolAuthorizations, memoryEntries] = await Promise.all([
           this.apiRequest(`/agent-runs/${encodeURIComponent(id)}`),
           this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/events`),
           this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/model-calls`),
           this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/tool-calls`),
           this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/skill-activations`),
-          this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/tool-authorizations`)
+          this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/tool-authorizations`),
+          this.apiRequest(`/agent-runs/${encodeURIComponent(id)}/memory-entries`)
         ]);
         this.currentAgentRun = run;
         this.currentAgentRunEvents = Array.isArray(events) ? events : [];
@@ -122,6 +123,7 @@
         this.currentAgentRunToolCalls = Array.isArray(toolCalls) ? toolCalls : [];
         this.currentAgentRunSkillActivations = Array.isArray(skillActivations) ? skillActivations : [];
         this.currentAgentRunToolAuthorizations = Array.isArray(toolAuthorizations) ? toolAuthorizations : [];
+        this.currentAgentRunMemoryEntries = Array.isArray(memoryEntries) ? memoryEntries : [];
         this.replaceAgentRun(run);
       } catch (error) {
         this.showNotice("error", error.message || "AgentRun 详情加载失败。");
@@ -161,6 +163,7 @@
       this.currentAgentRunToolCalls = [];
       this.currentAgentRunSkillActivations = [];
       this.currentAgentRunToolAuthorizations = [];
+      this.currentAgentRunMemoryEntries = [];
       return this.loadPlatformAgentRunsPage();
     },
 

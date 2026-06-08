@@ -87,6 +87,7 @@ test("observability methods query agent run observability streams", async () => 
   const toolCalls = [{ id: "tool-1", tool_name: "psop.runtime.read", status: "succeeded", arguments_summary: {} }];
   const activations = [{ id: "activation-1", package_id: "pkg-1", version_id: "ver-1" }];
   const authorizations = [{ id: "auth-1", tool_name: "psop.repository.commit_patch", status: "pending" }];
+  const memoryEntries = [{ id: "memory-1", title: "Replay finding", memory_type: "episodic" }];
   const context = {
     ...methods,
     busy: { observabilityAgentRunLookup: false },
@@ -102,6 +103,7 @@ test("observability methods query agent run observability streams", async () => 
     observabilityToolCalls: [],
     observabilitySkillActivations: [],
     observabilityToolAuthorizations: [],
+    observabilityMemoryEntries: [],
     apiRequest: jest.fn(async (url) => {
       if (url === "/agent-runs/agent%20run%201") {
         return run;
@@ -121,6 +123,9 @@ test("observability methods query agent run observability streams", async () => 
       if (url.endsWith("/tool-authorizations")) {
         return authorizations;
       }
+      if (url.endsWith("/memory-entries")) {
+        return memoryEntries;
+      }
       return null;
     }),
     showNotice: jest.fn()
@@ -134,12 +139,14 @@ test("observability methods query agent run observability streams", async () => 
   expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent%20run%201/tool-calls");
   expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent%20run%201/skill-activations");
   expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent%20run%201/tool-authorizations");
+  expect(context.apiRequest).toHaveBeenCalledWith("/agent-runs/agent%20run%201/memory-entries");
   expect(context.observabilityAgentRunDetail).toBe(run);
   expect(context.observabilityAgentEvents).toEqual(events);
   expect(context.observabilityModelCalls).toEqual(modelCalls);
   expect(context.observabilityToolCalls).toEqual(toolCalls);
   expect(context.observabilitySkillActivations).toEqual(activations);
   expect(context.observabilityToolAuthorizations).toEqual(authorizations);
+  expect(context.observabilityMemoryEntries).toEqual(memoryEntries);
   expect(methods.observabilityAgentRunPath("agent-run-1")).toBe("/admin/platform/agent-runs/agent-run-1");
 
   methods.resetObservabilityAgentRunQuery.call(context);
@@ -147,6 +154,7 @@ test("observability methods query agent run observability streams", async () => 
   expect(context.observabilityFilters.agent_run_id).toBe("");
   expect(context.observabilityAgentRunDetail).toBeNull();
   expect(context.observabilityToolAuthorizations).toEqual([]);
+  expect(context.observabilityMemoryEntries).toEqual([]);
 });
 
 test("observability methods sort distribution entries and derive trace event options", () => {

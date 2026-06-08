@@ -100,13 +100,14 @@
       this.busy.observabilityAgentRunLookup = true;
       try {
         const encoded = encodeURIComponent(agentRunId);
-        const [run, events, modelCalls, toolCalls, skillActivations, toolAuthorizations] = await Promise.all([
+        const [run, events, modelCalls, toolCalls, skillActivations, toolAuthorizations, memoryEntries] = await Promise.all([
           this.apiRequest(`/agent-runs/${encoded}`),
           this.apiRequest(`/agent-runs/${encoded}/events`),
           this.apiRequest(`/agent-runs/${encoded}/model-calls`),
           this.apiRequest(`/agent-runs/${encoded}/tool-calls`),
           this.apiRequest(`/agent-runs/${encoded}/skill-activations`),
-          this.apiRequest(`/agent-runs/${encoded}/tool-authorizations`)
+          this.apiRequest(`/agent-runs/${encoded}/tool-authorizations`),
+          this.apiRequest(`/agent-runs/${encoded}/memory-entries`)
         ]);
         this.observabilityAgentRunDetail = run;
         this.observabilityAgentEvents = Array.isArray(events) ? events : [];
@@ -114,6 +115,7 @@
         this.observabilityToolCalls = Array.isArray(toolCalls) ? toolCalls : [];
         this.observabilitySkillActivations = Array.isArray(skillActivations) ? skillActivations : [];
         this.observabilityToolAuthorizations = Array.isArray(toolAuthorizations) ? toolAuthorizations : [];
+        this.observabilityMemoryEntries = Array.isArray(memoryEntries) ? memoryEntries : [];
       } catch (error) {
         this.showNotice("error", error.message || "AgentRun 可观测数据查询失败。");
       } finally {
@@ -129,6 +131,7 @@
       this.observabilityToolCalls = [];
       this.observabilitySkillActivations = [];
       this.observabilityToolAuthorizations = [];
+      this.observabilityMemoryEntries = [];
     },
 
     platformObservabilityPath() {

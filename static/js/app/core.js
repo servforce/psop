@@ -484,6 +484,7 @@
           this.currentAgentRunToolCalls = [];
           this.currentAgentRunSkillActivations = [];
           this.currentAgentRunToolAuthorizations = [];
+          this.currentAgentRunMemoryEntries = [];
         }
         if (!["platform-skills", "platform-skill"].includes(this.route.name)) {
           this.currentSkillPackage = null;
@@ -500,6 +501,7 @@
           this.observabilityToolCalls = [];
           this.observabilitySkillActivations = [];
           this.observabilityToolAuthorizations = [];
+          this.observabilityMemoryEntries = [];
         }
         if (!["compiler-artifact", "skill-compiler-artifact"].includes(this.route.name)) {
           this.destroyCompilerArtifactViewer();

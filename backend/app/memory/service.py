@@ -48,6 +48,22 @@ class MemoryService:
             )
         ]
 
+    def list_entries_for_agent_run(
+        self,
+        session: Session,
+        agent_run_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[MemoryEntryResponse]:
+        return [
+            self._build_entry_response(item)
+            for item in self.repository.list_entries(
+                session,
+                created_by_agent_run_id=agent_run_id,
+                limit=max(1, min(200, int(limit or 100))),
+            )
+        ]
+
     def search(self, session: Session, payload: MemorySearchRequest) -> list[MemoryEntryResponse]:
         query = payload.query.strip()
         status = payload.status.strip() if payload.status else None

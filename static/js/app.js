@@ -623,6 +623,7 @@
       observabilityToolCalls: [],
       observabilitySkillActivations: [],
       observabilityToolAuthorizations: [],
+      observabilityMemoryEntries: [],
       currentSkill: null,
       activeDetailTab: "overview",
       sourceLoadedSkillId: null,
@@ -767,6 +768,7 @@
       currentAgentRunToolCalls: [],
       currentAgentRunSkillActivations: [],
       currentAgentRunToolAuthorizations: [],
+      currentAgentRunMemoryEntries: [],
       agentRunDetailTab: "events",
       agentRunFilters: {
         agent_key: "",

@@ -145,7 +145,7 @@
               </div>
             </header>
 
-            <div class="grid grid-cols-2 divide-x divide-slate-800 text-xs lg:grid-cols-5">
+            <div class="grid grid-cols-2 divide-x divide-slate-800 text-xs lg:grid-cols-6">
               <div class="p-4">
                 <p class="text-slate-500">Owner</p>
                 <p class="mt-1 truncate text-slate-200" x-text="currentAgentRun.owner_type || 'N/A'"></p>
@@ -166,6 +166,10 @@
                 <p class="text-slate-500">Tool Failures</p>
                 <p class="mt-1 font-mono text-slate-300" x-text="agentRunToolFailureCount()"></p>
               </div>
+              <div class="p-4">
+                <p class="text-slate-500">Memory</p>
+                <p class="mt-1 font-mono text-slate-300" x-text="currentAgentRunMemoryEntries.length"></p>
+              </div>
             </div>
 
             <div class="shrink-0 overflow-x-auto border-b border-slate-800 bg-slate-950/30 px-3 py-2">
@@ -175,6 +179,7 @@
                 <button type="button" class="rounded-md border px-3 py-1.5 text-xs transition" :class="agentRunDetailTab === 'tools' ? 'border-orange-500/30 bg-orange-500/10 text-orange-200' : 'border-slate-700 bg-slate-950/30 text-slate-400 hover:bg-slate-900/70'" @click="agentRunDetailTab = 'tools'">Tools</button>
                 <button type="button" class="rounded-md border px-3 py-1.5 text-xs transition" :class="agentRunDetailTab === 'authorizations' ? 'border-orange-500/30 bg-orange-500/10 text-orange-200' : 'border-slate-700 bg-slate-950/30 text-slate-400 hover:bg-slate-900/70'" @click="agentRunDetailTab = 'authorizations'">Authorizations</button>
                 <button type="button" class="rounded-md border px-3 py-1.5 text-xs transition" :class="agentRunDetailTab === 'skills' ? 'border-orange-500/30 bg-orange-500/10 text-orange-200' : 'border-slate-700 bg-slate-950/30 text-slate-400 hover:bg-slate-900/70'" @click="agentRunDetailTab = 'skills'">Skills</button>
+                <button type="button" class="rounded-md border px-3 py-1.5 text-xs transition" :class="agentRunDetailTab === 'memory' ? 'border-orange-500/30 bg-orange-500/10 text-orange-200' : 'border-slate-700 bg-slate-950/30 text-slate-400 hover:bg-slate-900/70'" @click="agentRunDetailTab = 'memory'">Memory</button>
                 <button type="button" class="rounded-md border px-3 py-1.5 text-xs transition" :class="agentRunDetailTab === 'payload' ? 'border-orange-500/30 bg-orange-500/10 text-orange-200' : 'border-slate-700 bg-slate-950/30 text-slate-400 hover:bg-slate-900/70'" @click="agentRunDetailTab = 'payload'">Payload</button>
               </div>
             </div>
@@ -308,6 +313,54 @@
                       <p class="mt-2 font-mono text-[11px] text-slate-500" x-text="formatDateTime(activation.created_at)"></p>
                     </div>
                     <pre class="max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="platformJsonPreview(activation.activation_context)"></pre>
+                  </article>
+                </template>
+              </div>
+
+              <div x-show="agentRunDetailTab === 'memory'" class="divide-y divide-slate-800">
+                <template x-if="currentAgentRunMemoryEntries.length === 0">
+                  <p class="p-4 text-sm text-slate-400">暂无 Memory candidate</p>
+                </template>
+                <template x-for="entry in currentAgentRunMemoryEntries" :key="entry.id">
+                  <article class="grid gap-0 divide-y divide-slate-800 xl:grid-cols-[minmax(18rem,0.55fr)_minmax(0,1fr)] xl:divide-x xl:divide-y-0">
+                    <div class="p-4 text-xs">
+                      <div class="flex flex-wrap gap-2">
+                        <span class="status-badge" :class="memoryStatusTone(entry.status)" x-text="memoryStatusLabel(entry.status)"></span>
+                        <span class="status-badge border-slate-700 bg-slate-950/40 text-slate-300" x-text="memoryTypeLabel(entry.memory_type)"></span>
+                      </div>
+                      <p class="mt-3 line-clamp-2 font-semibold leading-5 text-slate-100" x-text="entry.title || entry.id"></p>
+                      <p class="mt-2 break-all font-mono text-[11px] text-slate-500" x-text="entry.id"></p>
+                      <div class="mt-4 flex flex-wrap items-center gap-2">
+                        <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-[11px] text-slate-300" x-text="'confidence ' + entry.confidence"></span>
+                        <button type="button" class="button-secondary h-8 px-3" @click="navigate(platformMemoryEntryPath(entry.id))">
+                          <span class="material-symbols-outlined text-[17px]">open_in_new</span>
+                          <span>Memory</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="grid min-w-0 grid-cols-1 divide-y divide-slate-800 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+                      <div class="p-4">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Content</p>
+                        <p class="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-300" x-text="entry.content"></p>
+                      </div>
+                      <div class="p-4">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Source Refs</p>
+                        <template x-if="memorySourceLinks(entry).length === 0">
+                          <p class="mt-3 text-sm text-slate-500">N/A</p>
+                        </template>
+                        <template x-if="memorySourceLinks(entry).length > 0">
+                          <div class="mt-3 flex flex-wrap gap-2">
+                            <template x-for="link in memorySourceLinks(entry)" :key="link.key">
+                              <button type="button" class="rounded-full border border-slate-700 bg-slate-950/40 px-2.5 py-1 text-[11px] text-slate-300 transition hover:bg-slate-900/70" @click="navigate(link.path)">
+                                <span x-text="link.label"></span>
+                              </button>
+                            </template>
+                          </div>
+                        </template>
+                        <p class="mt-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Tags</p>
+                        <p class="mt-3 text-sm text-slate-400" x-text="(entry.tags || []).join(', ') || 'N/A'"></p>
+                      </div>
+                    </div>
                   </article>
                 </template>
               </div>

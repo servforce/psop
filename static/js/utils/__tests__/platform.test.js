@@ -108,6 +108,7 @@ test("platform methods load agent runs with detail observability streams", async
     currentAgentRunToolCalls: [],
     currentAgentRunSkillActivations: [],
     currentAgentRunToolAuthorizations: [],
+    currentAgentRunMemoryEntries: [],
     apiRequest: jest.fn(async (url) => {
       if (url === "/agent-runs?agent_key=pskill.runner") {
         return [run];
@@ -130,6 +131,9 @@ test("platform methods load agent runs with detail observability streams", async
       if (url.endsWith("/tool-authorizations")) {
         return [{ id: "auth-1" }];
       }
+      if (url.endsWith("/memory-entries")) {
+        return [{ id: "memory-1", memory_type: "episodic", status: "pending_review" }];
+      }
       return null;
     }),
     showNotice: jest.fn(),
@@ -145,6 +149,7 @@ test("platform methods load agent runs with detail observability streams", async
   expect(context.currentAgentRunToolCalls).toHaveLength(1);
   expect(context.currentAgentRunSkillActivations).toHaveLength(1);
   expect(context.currentAgentRunToolAuthorizations).toHaveLength(1);
+  expect(context.currentAgentRunMemoryEntries).toHaveLength(1);
   expect(methods.agentRunDurationLabel.call(context, run)).toBe("3000 ms");
   expect(methods.agentRunToolFailureCount.call(context)).toBe(1);
   expect(methods.agentRunModelTokenUsage(context.currentAgentRunModelCalls[0])).toBe(42);
