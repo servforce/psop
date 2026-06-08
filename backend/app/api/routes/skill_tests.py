@@ -6,12 +6,15 @@ from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db_session, get_skill_test_service
+from app.pskills.exceptions import SkillValidationError
 from app.runtime.schemas import InvocationResponse
 from app.testing.schemas import (
     CancelSkillTestScenarioRunRequest,
     DeleteSkillTestAssetResponse,
     ForkSkillDebugRequest,
     ForkSkillTestScenarioRequest,
+    PSkillPublishGateResponse,
+    RunPublishGateRequest,
     SkillTestAssetResponse,
     SkillTestScenarioCreateRequest,
     SkillTestScenarioResponse,
@@ -218,3 +221,14 @@ def fork_test_scenario_debug(
     service: SkillTestService = Depends(get_skill_test_service),
 ) -> InvocationResponse:
     return service.fork_debug(session, scenario_run_id, payload)
+
+
+@router.post("/testing/publish-gate/run", response_model=PSkillPublishGateResponse, status_code=201)
+def run_publish_gate(
+    payload: RunPublishGateRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> PSkillPublishGateResponse:
+    if not payload.pskill_id:
+        raise SkillValidationError("publish gate 需要 pskill_id。")
+    return service.run_publish_gate(session, payload.pskill_id, payload)

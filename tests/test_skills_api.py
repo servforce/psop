@@ -1684,6 +1684,62 @@ def test_publish_skill_creates_published_version_and_record() -> None:
     assert publishes_payload[0]["publish_status"] == "published"
 
 
+def test_publish_gate_runs_after_publish_compile() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "publish-gate-demo",
+                "name": "Publish Gate Demo",
+                "description": "Validate publish gate checks.",
+            },
+        ).json()
+        skill_id = created["id"]
+
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill_id}/publish",
+            json={"publish_reason": "Gate coverage"},
+        )
+        publish_payload = publish_response.json()
+        compile_request_id = publish_payload["compile_request"]["id"]
+        compile_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        compile_payload = compile_response.json()
+
+        gate_response = client.post(f"/api/v1/pskills/{skill_id}/publish-gate", json={})
+        testing_gate_response = client.post("/api/v1/testing/publish-gate/run", json={"pskill_id": skill_id})
+
+    assert publish_response.status_code == 202
+    assert compile_response.status_code == 200
+    assert compile_payload["status"] == "succeeded"
+    assert compile_payload["artifact_id"]
+
+    assert gate_response.status_code == 201
+    gate_payload = gate_response.json()
+    assert gate_payload["pskill_definition_id"] == skill_id
+    assert gate_payload["pskill_version_id"] == publish_payload["published_version"]["id"]
+    assert gate_payload["status"] == "review_required"
+    assert gate_payload["score"] >= 90
+    assert gate_payload["result_json"]["decision"] == "require_human_review"
+    assert gate_payload["result_json"]["compile_artifact_id"] == compile_payload["artifact_id"]
+    assert gate_payload["result_json"]["checks"]["source"]["status"] == "passed"
+    assert gate_payload["result_json"]["checks"]["compile"]["status"] == "passed"
+    assert gate_payload["result_json"]["checks"]["tests"]["status"] == "review_required"
+    assert gate_payload["result_json"]["coverage"]["scenario_count"] == 0
+    assert gate_payload["result_json"]["warnings"] == [
+        {
+            "check": "tests",
+            "code": "no_active_test_scenarios",
+            "message": "当前 PSkill 尚未配置 active 测试场景。",
+        }
+    ]
+
+    assert testing_gate_response.status_code == 201
+    assert testing_gate_response.json()["pskill_definition_id"] == skill_id
+    assert testing_gate_response.json()["status"] == "review_required"
+
+
 def test_manual_compile_request_does_not_publish_draft() -> None:
     client, _, _ = create_test_client()
 

@@ -195,3 +195,21 @@ class ForkSkillTestScenarioRequest(BaseModel):
 
 class ForkSkillDebugRequest(BaseModel):
     cursor: SkillTestForkCursor
+
+
+class RunPublishGateRequest(BaseModel):
+    pskill_id: str | None = None
+    pskill_version_id: str | None = None
+    compile_artifact_id: str | None = None
+
+
+class PSkillPublishGateResponse(BaseModel):
+    id: str
+    pskill_definition_id: str
+    pskill_version_id: str | None = None
+    test_run_id: str | None = None
+    status: str
+    score: int
+    result_json: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime

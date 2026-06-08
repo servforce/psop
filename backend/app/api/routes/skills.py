@@ -5,7 +5,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db_session, get_pskill_draft_service, get_skills_service
+from app.api.dependencies import get_db_session, get_pskill_draft_service, get_skill_test_service, get_skills_service
 from app.pskills.exceptions import SkillValidationError
 from app.pskills.draft import PSkillDraftService
 from app.pskills.schemas import (
@@ -36,6 +36,8 @@ from app.pskills.schemas import (
     UpdateSkillRequest,
 )
 from app.pskills.service import SkillsService
+from app.testing.schemas import PSkillPublishGateResponse, RunPublishGateRequest
+from app.testing.service import SkillTestService
 
 
 router = APIRouter(tags=["pskills"])
@@ -187,6 +189,22 @@ def publish_skill(
     service: SkillsService = Depends(get_skills_service),
 ) -> PublishSkillResponse:
     return service.publish_skill(session, skill_id=skill_id, payload=payload)
+
+
+@router.post("/{skill_id}/publish-gate", response_model=PSkillPublishGateResponse, status_code=201)
+def run_publish_gate(
+    skill_id: str,
+    payload: RunPublishGateRequest | None = None,
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> PSkillPublishGateResponse:
+    request = payload or RunPublishGateRequest()
+    if request.pskill_id and request.pskill_id != skill_id:
+        raise SkillValidationError(
+            "publish gate 请求中的 pskill_id 与路径不一致。",
+            details={"path_skill_id": skill_id, "payload_pskill_id": request.pskill_id},
+        )
+    return service.run_publish_gate(session, skill_id, request)
 
 
 @router.get("/{skill_id}/publishes", response_model=list[PSkillPublishRecordResponse])

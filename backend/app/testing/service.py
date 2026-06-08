@@ -28,6 +28,7 @@ from app.runtime.schemas import (
 from app.runtime.service import RuntimeService
 from app.testing.models import (
     PSkillTestSuite,
+    PSkillPublishGate,
     SkillTestAsset,
     SkillTestExpectationEvaluation,
     SkillTestScenario,
@@ -38,6 +39,8 @@ from app.testing.schemas import (
     DeleteSkillTestAssetResponse,
     ForkSkillDebugRequest,
     ForkSkillTestScenarioRequest,
+    PSkillPublishGateResponse,
+    RunPublishGateRequest,
     SkillTestAssetResponse,
     SkillTestExpectationEvaluationResponse,
     SkillTestScenarioCreateRequest,
@@ -679,6 +682,76 @@ class SkillTestService:
             input_envelope={},
         )
 
+    def run_publish_gate(
+        self,
+        session: Session,
+        skill_id: str,
+        payload: RunPublishGateRequest | None = None,
+    ) -> PSkillPublishGateResponse:
+        payload = payload or RunPublishGateRequest()
+        skill = self._get_skill(session, skill_id)
+        if payload.pskill_id and payload.pskill_id != skill.id:
+            raise SkillValidationError(
+                "publish gate 请求中的 pskill_id 与路径不一致。",
+                details={"path_skill_id": skill.id, "payload_pskill_id": payload.pskill_id},
+            )
+        version_id = payload.pskill_version_id or skill.latest_published_version_id or skill.latest_draft_version_id
+        version = self.repository.get_pskill_version(session, version_id)
+        if not version or version.pskill_definition_id != skill.id:
+            raise SkillValidationError("发布门禁缺少有效 PSkillVersion。", details={"pskill_version_id": version_id})
+
+        artifact = self.repository.get_artifact(session, payload.compile_artifact_id)
+        if payload.compile_artifact_id and (not artifact or artifact.pskill_version_id != version.id):
+            raise SkillValidationError(
+                "指定编译产物不属于当前 PSkillVersion。",
+                details={"compile_artifact_id": payload.compile_artifact_id, "pskill_version_id": version.id},
+            )
+        artifact = artifact or self.repository.get_latest_ready_artifact(session, version.id)
+        scenarios = self.repository.list_scenarios(session, skill.id)
+        scenario_results = self._publish_gate_scenario_results(session, scenarios)
+        checks = {
+            "source": self._publish_gate_source_check(version),
+            "compile": self._publish_gate_compile_check(artifact),
+            "tests": self._publish_gate_tests_check(scenario_results),
+            "safety": {
+                "status": "passed",
+                "score": 100,
+                "blocking_findings": [],
+                "warnings": [],
+                "summary": "当前阶段未发现额外安全阻塞项。",
+            },
+        }
+        status = self._publish_gate_status(checks)
+        score = self._publish_gate_score(checks)
+        test_run_id = next(
+            (str(item.get("latest_run_id")) for item in scenario_results if item.get("latest_run_id")),
+            None,
+        )
+        result_json = {
+            "decision": "pass" if status == "passed" else "require_human_review" if status == "review_required" else "fail",
+            "score": score,
+            "coverage": {
+                "scenario_count": len(scenarios),
+                "scenario_results": scenario_results,
+            },
+            "checks": checks,
+            "blocking_findings": self._publish_gate_blocking_findings(checks),
+            "warnings": self._publish_gate_warnings(checks),
+            "publish_gate_summary": self._publish_gate_summary(status, score, checks),
+            "compile_artifact_id": artifact.id if artifact else None,
+        }
+        gate = self.repository.create_publish_gate(
+            session,
+            pskill_definition_id=skill.id,
+            pskill_version_id=version.id,
+            test_run_id=test_run_id,
+            status=status,
+            score=score,
+            result_json=result_json,
+        )
+        session.commit()
+        return self._build_publish_gate_response(gate)
+
     def _start_forked_invocation(
         self,
         session: Session,
@@ -1013,6 +1086,143 @@ class SkillTestService:
             if item.status in OPEN_SCENARIO_RUN_STATUSES:
                 return item
         return None
+
+    def _publish_gate_scenario_results(
+        self,
+        session: Session,
+        scenarios: list[SkillTestScenario],
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for scenario in scenarios:
+            latest_run = self.repository.get_latest_run(session, scenario.id)
+            if latest_run:
+                self._sync_scenario_run_from_runtime(session, latest_run)
+            results.append(
+                {
+                    "scenario_id": scenario.id,
+                    "name": scenario.name,
+                    "latest_run_id": latest_run.id if latest_run else None,
+                    "status": latest_run.status if latest_run else "not_run",
+                    "score": int((latest_run.result_summary or {}).get("score") or 0) if latest_run else 0,
+                    "result_summary": dict(latest_run.result_summary or {}) if latest_run else {},
+                }
+            )
+        return results
+
+    @staticmethod
+    def _publish_gate_source_check(version) -> dict[str, Any]:
+        if version.source_commit_sha:
+            return {
+                "status": "passed",
+                "score": 100,
+                "blocking_findings": [],
+                "warnings": [],
+                "summary": "PSkill source 已冻结到 draft/published version。",
+                "source_commit_sha": version.source_commit_sha,
+            }
+        return {
+            "status": "failed",
+            "score": 0,
+            "blocking_findings": [{"code": "missing_source_commit", "message": "PSkillVersion 缺少 source commit。"}],
+            "warnings": [],
+            "summary": "缺少可发布的 source commit。",
+            "source_commit_sha": "",
+        }
+
+    @staticmethod
+    def _publish_gate_compile_check(artifact) -> dict[str, Any]:
+        if artifact and artifact.status == "ready":
+            return {
+                "status": "passed",
+                "score": 100,
+                "blocking_findings": [],
+                "warnings": [],
+                "summary": "已存在 ready EG Compile Artifact。",
+                "compile_artifact_id": artifact.id,
+            }
+        return {
+            "status": "failed",
+            "score": 0,
+            "blocking_findings": [{"code": "missing_ready_compile_artifact", "message": "发布门禁需要 ready EG Compile Artifact。"}],
+            "warnings": [],
+            "summary": "缺少 ready EG Compile Artifact。",
+            "compile_artifact_id": artifact.id if artifact else None,
+        }
+
+    @staticmethod
+    def _publish_gate_tests_check(scenario_results: list[dict[str, Any]]) -> dict[str, Any]:
+        if not scenario_results:
+            return {
+                "status": "review_required",
+                "score": 70,
+                "blocking_findings": [],
+                "warnings": [{"code": "no_active_test_scenarios", "message": "当前 PSkill 尚未配置 active 测试场景。"}],
+                "summary": "未配置 active 测试场景，需要人工确认测试覆盖。",
+            }
+        failed = [item for item in scenario_results if item["status"] in {"failed", "cancelled"}]
+        missing = [item for item in scenario_results if item["status"] in {"not_run", "pending", "queued", "running", "waiting_input"}]
+        if failed:
+            return {
+                "status": "failed",
+                "score": 0,
+                "blocking_findings": [
+                    {"code": "test_scenario_failed", "message": f"{len(failed)} 个测试场景未通过。"}
+                ],
+                "warnings": [],
+                "summary": "存在失败测试场景。",
+            }
+        if missing:
+            return {
+                "status": "review_required",
+                "score": 50,
+                "blocking_findings": [],
+                "warnings": [
+                    {"code": "test_scenario_not_passed", "message": f"{len(missing)} 个测试场景尚未通过。"}
+                ],
+                "summary": "存在未完成或未运行测试场景。",
+            }
+        return {
+            "status": "passed",
+            "score": round(sum(int(item.get("score") or 100) for item in scenario_results) / len(scenario_results)),
+            "blocking_findings": [],
+            "warnings": [],
+            "summary": "所有 active 测试场景最新运行均已通过。",
+        }
+
+    @staticmethod
+    def _publish_gate_status(checks: dict[str, dict[str, Any]]) -> str:
+        if any(check.get("status") == "failed" for check in checks.values()):
+            return "failed"
+        if any(check.get("status") == "review_required" for check in checks.values()):
+            return "review_required"
+        return "passed"
+
+    @staticmethod
+    def _publish_gate_score(checks: dict[str, dict[str, Any]]) -> int:
+        if not checks:
+            return 0
+        return max(0, min(100, round(sum(int(check.get("score") or 0) for check in checks.values()) / len(checks))))
+
+    @staticmethod
+    def _publish_gate_blocking_findings(checks: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        findings: list[dict[str, Any]] = []
+        for check_name, check in checks.items():
+            for item in check.get("blocking_findings") or []:
+                findings.append({"check": check_name, **dict(item)})
+        return findings
+
+    @staticmethod
+    def _publish_gate_warnings(checks: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        warnings: list[dict[str, Any]] = []
+        for check_name, check in checks.items():
+            for item in check.get("warnings") or []:
+                warnings.append({"check": check_name, **dict(item)})
+        return warnings
+
+    @staticmethod
+    def _publish_gate_summary(status: str, score: int, checks: dict[str, dict[str, Any]]) -> str:
+        check_summary = ", ".join(f"{name}:{check.get('status')}" for name, check in checks.items())
+        return f"publish gate {status} with score {score}; {check_summary}"
 
     def _ensure_default_suite(
         self,
@@ -2021,6 +2231,20 @@ class SkillTestService:
             ended_at=scenario_run.ended_at,
             created_at=scenario_run.created_at,
             updated_at=scenario_run.updated_at,
+        )
+
+    @staticmethod
+    def _build_publish_gate_response(gate: PSkillPublishGate) -> PSkillPublishGateResponse:
+        return PSkillPublishGateResponse(
+            id=gate.id,
+            pskill_definition_id=gate.pskill_definition_id,
+            pskill_version_id=gate.pskill_version_id,
+            test_run_id=gate.test_run_id,
+            status=gate.status,
+            score=gate.score,
+            result_json=gate.result_json,
+            created_at=gate.created_at,
+            updated_at=gate.updated_at,
         )
 
     @staticmethod

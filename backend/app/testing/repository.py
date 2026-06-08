@@ -7,6 +7,7 @@ from app.compiler.models import ArtifactObject, EgCompileArtifact
 from app.runtime.models import Run
 from app.testing.models import (
     PSkillTestSuite,
+    PSkillPublishGate,
     SkillTestAsset,
     SkillTestExpectationEvaluation,
     SkillTestScenario,
@@ -122,6 +123,29 @@ class SkillTestRepository:
             .where(SkillTestScenarioRun.scenario_id == scenario_id)
             .order_by(SkillTestScenarioRun.created_at.desc())
         )
+
+    def create_publish_gate(
+        self,
+        session: Session,
+        *,
+        pskill_definition_id: str,
+        pskill_version_id: str | None,
+        test_run_id: str | None,
+        status: str,
+        score: int,
+        result_json: dict,
+    ) -> PSkillPublishGate:
+        gate = PSkillPublishGate(
+            pskill_definition_id=pskill_definition_id,
+            pskill_version_id=pskill_version_id,
+            test_run_id=test_run_id,
+            status=status,
+            score=score,
+            result_json=result_json,
+        )
+        session.add(gate)
+        session.flush()
+        return gate
 
     def get_scenario_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRun | None:
         return session.get(SkillTestScenarioRun, scenario_run_id)
