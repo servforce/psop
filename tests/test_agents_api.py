@@ -343,6 +343,91 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
     assert "tool_authorization_response" in replay_event_kinds
 
 
+def test_agent_runner_cannot_write_run_events_directly() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        skill = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "runner-run-event-write-boundary",
+                "name": "Runner Run Event Write Boundary",
+                "description": "Validate runner cannot bypass RuntimeService run_event ownership.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill['id']}/publish",
+            json={"publish_reason": "Runner run_event boundary test"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/runtime/invocations",
+            json={
+                "skill_key": "runner-run-event-write-boundary",
+                "input_envelope": {"user_input": "检查 runner 是否能直接写 run_event。"},
+                "gateway_type": "web",
+                "terminal_context": {"terminal_kind": "web"},
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+        before_events_response = client.get(f"/api/v1/runs/{run_id}/events")
+        agent_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.runner",
+                "owner_type": "runtime_run",
+                "owner_id": run_id,
+                "run_id": run_id,
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.run_events.write_low",
+                        "side_effect_level": "low_write",
+                        "arguments_summary": {
+                            "run_id": run_id,
+                            "direction": "output",
+                            "event_kind": "terminal.text.output.v1",
+                            "payload_inline": {"text": "agent attempted direct run_event write"},
+                        },
+                        "expected_effect_summary": "Directly append a RunEvent from pskill.runner.",
+                    }
+                },
+            },
+        )
+        agent_run_id = agent_run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        after_events_response = client.get(f"/api/v1/runs/{run_id}/events")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        agent_events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert invocation_response.status_code == 201
+    assert before_events_response.status_code == 200
+    assert agent_run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "failed"
+    assert run_once_response.json()["error_message"] == "tool_not_allowed_by_agent_or_skill"
+
+    before_events = before_events_response.json()
+    after_events = after_events_response.json()
+    assert after_events_response.status_code == 200
+    assert [event["id"] for event in after_events] == [event["id"] for event in before_events]
+
+    assert tool_calls_response.status_code == 200
+    tool_call = tool_calls_response.json()[0]
+    assert tool_call["tool_name"] == "psop.run_events.write_low"
+    assert tool_call["status"] == "blocked"
+    assert tool_call["side_effect_level"] == "low_write"
+
+    assert authorizations_response.status_code == 200
+    assert authorizations_response.json() == []
+
+    event_types = [item["event_type"] for item in agent_events_response.json()]
+    assert "agent.skills.activated" in event_types
+    assert "agent.tool_call.blocked" in event_types
+
+
 def test_agent_runner_executes_runtime_read_tool_from_persisted_facts() -> None:
     client, _, _ = create_test_client()
 
