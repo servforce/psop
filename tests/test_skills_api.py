@@ -656,7 +656,6 @@ def build_test_formal_v5_artifact() -> dict:
                 },
                 "merge": [
                     {"op": "set", "path": "observations.evaluate_collect_context", "from": "observation"},
-                    {"op": "set", "path": "phase", "from": "observation.next_phase"},
                 ],
                 "policy": {"priority": 30},
             },
@@ -672,7 +671,6 @@ def build_test_formal_v5_artifact() -> dict:
                 },
                 "merge": [
                     {"op": "set", "path": "observations.final_verify", "from": "observation"},
-                    {"op": "set", "path": "phase", "from": "observation.next_phase"},
                     {"op": "set", "path": "outputs.final_response", "from": "observation.terminal_message"},
                 ],
                 "policy": {"priority": 40},

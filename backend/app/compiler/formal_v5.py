@@ -33,6 +33,18 @@ DEFAULT_TOKEN_FIELDS = {
     "trace",
     "status",
 }
+KERNEL_CONTROL_TOKEN_FIELDS = {
+    "phase",
+    "status",
+    "control",
+    "terminal",
+    "budgets",
+    "metadata",
+    "memory",
+    "trace",
+    "input_envelope",
+}
+MERGE_SOURCE_ROOTS = {"observation", "input", "token"}
 
 
 @dataclass(slots=True)
@@ -451,6 +463,14 @@ def _validate_merge(merge: list[Any], token_fields: set[str], path: str) -> list
         has_from = "from" in operation
         if has_value == has_from:
             diagnostics.append(_error("merge operation 必须且只能包含 value 或 from。", op_path))
+        if has_from:
+            source_path = operation.get("from")
+            if not isinstance(source_path, str):
+                diagnostics.append(_error("merge operation.from 必须是字符串。", f"{op_path}.from"))
+            else:
+                diagnostics.extend(_validate_merge_source_path(source_path, token_fields, f"{op_path}.from"))
+                if isinstance(target_path, str):
+                    diagnostics.extend(_validate_runtime_kernel_merge_boundary(target_path, source_path, op_path))
     return diagnostics
 
 
@@ -464,6 +484,35 @@ def _validate_token_path(value: str, token_fields: set[str], path: str) -> list[
     root = value.split(".", 1)[0]
     if root not in token_fields:
         return [_error(f"字段路径 `{value}` 引用了未知 Token 顶层字段 `{root}`。", path)]
+    return []
+
+
+def _validate_merge_source_path(value: str, token_fields: set[str], path: str) -> list[FormalDiagnostic]:
+    root = value.split(".", 1)[0]
+    if root not in MERGE_SOURCE_ROOTS:
+        return [_error(f"merge source `{value}` 引用了未知来源 `{root}`。", path)]
+    if root == "token":
+        token_path = value.removeprefix("token.")
+        if not token_path or token_path == value:
+            return [_error("merge source token 引用必须包含字段路径。", path)]
+        return _validate_token_path(token_path, token_fields, path)
+    return []
+
+
+def _validate_runtime_kernel_merge_boundary(target_path: str, source_path: str, path: str) -> list[FormalDiagnostic]:
+    target_root = target_path.split(".", 1)[0]
+    if (source_path == "observation" or source_path.startswith("observation.")) and target_root in KERNEL_CONTROL_TOKEN_FIELDS:
+        return [
+            FormalDiagnostic(
+                severity="error",
+                code="compile.runtime_kernel_sovereignty_violation",
+                message=(
+                    "pskill.runner observation 不能通过 merge 直接写 Runtime Kernel 控制状态；"
+                    "应由 RuntimeService 根据 RuntimeAgentObservation 解释后更新。"
+                ),
+                location={"path": path, "target": target_path, "source": source_path},
+            )
+        ]
     return []
 
 

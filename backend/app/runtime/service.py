@@ -1120,6 +1120,10 @@ class RuntimeService:
                 else:
                     next_token["status"] = "aborted"
                     next_token["phase"] = "aborted"
+            elif decision in {"proceed", "complete"}:
+                requested_next_phase = str(observation.get("next_phase") or "").strip()
+                if requested_next_phase:
+                    next_token["phase"] = requested_next_phase
 
         if interaction.get("wait_after_output"):
             next_token = self._enter_wait_checkpoint(run=run, token=next_token, node=node, observation=observation)

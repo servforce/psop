@@ -479,6 +479,32 @@ def test_formal_v5_validator_normalizes_common_agent_dsl_aliases() -> None:
     assert result.artifact["halt"] == {"success": {"field_equals": {"path": "status", "value": "success"}}}
 
 
+def test_formal_v5_validator_rejects_observation_merge_into_runtime_kernel_state() -> None:
+    artifact = build_test_formal_v5_artifact()
+    artifact["nodes"][1]["merge"].append({"op": "set", "path": "status", "from": "observation.status"})
+
+    result = validate_and_normalize_artifact(artifact)
+
+    assert result.has_errors
+    assert result.artifact is None
+    assert any(item.code == "compile.runtime_kernel_sovereignty_violation" for item in result.diagnostics)
+
+
+def test_formal_v5_validator_rejects_unknown_merge_source() -> None:
+    artifact = build_test_formal_v5_artifact()
+    artifact["nodes"][1]["merge"].append({"op": "set", "path": "outputs.final_response", "from": "model.answer"})
+
+    result = validate_and_normalize_artifact(artifact)
+
+    assert result.has_errors
+    assert result.artifact is None
+    assert any(
+        item.code == "compile.formal_v5.validation_failed"
+        and item.location == {"path": "nodes[1].merge[1].from"}
+        for item in result.diagnostics
+    )
+
+
 def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime_stack) -> None:
     database_manager, _, inference_gateway, compiler_service, skills_service, runtime_service = runtime_stack
 
