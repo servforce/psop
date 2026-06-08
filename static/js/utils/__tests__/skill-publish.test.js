@@ -18,7 +18,9 @@ function loadSkillDetailMethods() {
         buildSkillReplayPath: helper,
         buildSkillTestScenarioPath: helper,
         buildSkillTestScenarioNewPath: helper,
-        buildSkillTestScenarioRunReviewPath: helper,
+        buildSkillTestScenarioRunReviewPath: (skillId, scenarioId, scenarioRunId) => (
+          `/admin/skills/${skillId}/tests/${scenarioId}/runs/${scenarioRunId}/review`
+        ),
         buildCompilerArtifactPath: helper,
         generateSkillKey: helper,
         resolveApiBaseUrl: helper,
@@ -55,6 +57,10 @@ test("skill publish tab exposes versions and publish gate controls", () => {
   expect(html).toContain("pskillVersions.length");
   expect(html).toContain("runPublishGate()");
   expect(html).toContain("publishGateResult.result_json?.publish_gate_summary");
+  expect(html).toContain("publishGateTestRunReviewPath()");
+  expect(html).toContain("openPublishGateTestRunReview()");
+  expect(html).toContain("publishGateCompileArtifactId()");
+  expect(html).toContain("openCompilerArtifact(publishGateCompileArtifactId())");
   expect(appJs).toContain("pskillVersionsLoadedSkillId");
   expect(appJs).toContain("publishGateResult");
   expect(appJs).toContain("publishGate: false");
@@ -71,7 +77,17 @@ test("skill publish methods load versions and run publish gate", async () => {
     id: "gate-1",
     status: "review_required",
     score: 92,
-    result_json: { publish_gate_summary: "需要人工复核。", checks: {} }
+    test_run_id: "test-run-1",
+    result_json: {
+      publish_gate_summary: "需要人工复核。",
+      compile_artifact_id: "artifact-1",
+      coverage: {
+        scenario_results: [
+          { scenario_id: "scenario-1", latest_run_id: "test-run-1", status: "failed" }
+        ]
+      },
+      checks: {}
+    }
   };
   const context = {
     ...methods,
@@ -98,7 +114,8 @@ test("skill publish methods load versions and run publish gate", async () => {
       return null;
     }),
     clearNotice: jest.fn(),
-    showNotice: jest.fn()
+    showNotice: jest.fn(),
+    navigate: jest.fn()
   };
 
   await methods.loadPublishWorkspaceData.call(context, "skill-1");
@@ -107,6 +124,16 @@ test("skill publish methods load versions and run publish gate", async () => {
   expect(context.publishRecords).toEqual([{ id: "publish-1" }]);
   expect(context.pskillVersions).toEqual([{ id: "version-1", status: "published" }]);
   expect(context.publishGateResult).toEqual(gate);
+  expect(methods.publishGateTestRunEvidence.call(context)).toEqual({
+    scenario_id: "scenario-1",
+    test_run_id: "test-run-1"
+  });
+  expect(methods.publishGateTestRunReviewPath.call(context)).toBe(
+    "/admin/skills/skill-1/tests/scenario-1/runs/test-run-1/review"
+  );
+  expect(methods.publishGateCompileArtifactId.call(context)).toBe("artifact-1");
+  methods.openPublishGateTestRunReview.call(context);
+  expect(context.navigate).toHaveBeenCalledWith("/admin/skills/skill-1/tests/scenario-1/runs/test-run-1/review");
   expect(context.apiRequest).toHaveBeenCalledWith("/pskills/skill-1/publishes");
   expect(context.apiRequest).toHaveBeenCalledWith("/pskills/skill-1/versions");
   const gateCall = context.apiRequest.mock.calls.find(([url]) => url === "/pskills/skill-1/publish-gate");

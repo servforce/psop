@@ -12,6 +12,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildPlatformAgentRunPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -2135,6 +2136,25 @@
         }
         this.skillTestReviewPlayheadMs = Math.min(this.skillTestReviewDurationMs(), Math.max(0, Number(previousPlayhead || 0)));
         this.skillTestReviewCursor = this.skillTestReviewProgressPercent();
+      },
+
+
+      skillTestAgentRunPath(testRunOrAgentRun = this.skillTestRun, focus = { tab: "events" }) {
+        const agentRunId = String(
+          typeof testRunOrAgentRun === "string"
+            ? testRunOrAgentRun
+            : (testRunOrAgentRun?.agent_run_id || (testRunOrAgentRun?.agent_key ? testRunOrAgentRun.id : ""))
+        ).trim();
+        return agentRunId ? buildPlatformAgentRunPath(agentRunId, focus) : "";
+      },
+
+
+      openSkillTestAgentRun(testRunOrAgentRun = this.skillTestRun, focus = { tab: "events" }) {
+        const path = this.skillTestAgentRunPath(testRunOrAgentRun, focus);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
       },
 
 

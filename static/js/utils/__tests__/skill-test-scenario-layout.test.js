@@ -281,6 +281,8 @@ test("scenario review provides scrub and fork actions", () => {
   expect(html).toContain("whitespace-nowrap rounded-full");
   expect(html).toContain("skillTestReviewEventTooltip(item.event)");
   expect(html).toContain("openSkillTestReviewEvent(item.event)");
+  expect(html).toContain("openSkillTestAgentRun(skillTestRun)");
+  expect(html).toContain("skillTestRun?.agent_run_id");
   expect(html).toContain("isSkillTestReviewExpectationSelected(item.event)");
   expect(html).toContain("skillTestReviewExpandedEvent()");
   expect(html).toContain("closeSkillTestReviewEvent()");

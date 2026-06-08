@@ -1770,5 +1770,44 @@
       publishGateBlockingFindings() {
         return this.publishGateResult?.result_json?.blocking_findings || [];
       },
+
+      publishGateScenarioResults(gate = this.publishGateResult) {
+        const results = gate?.result_json?.coverage?.scenario_results;
+        return Array.isArray(results) ? results : [];
+      },
+
+      publishGateTestRunEvidence(gate = this.publishGateResult) {
+        const testRunId = String(gate?.test_run_id || "").trim();
+        const results = this.publishGateScenarioResults(gate);
+        const matched = results.find((item) => String(item?.latest_run_id || "").trim() === testRunId);
+        const fallback = results.find((item) => String(item?.latest_run_id || "").trim());
+        const item = matched || fallback || null;
+        const latestRunId = String(item?.latest_run_id || testRunId || "").trim();
+        const scenarioId = String(item?.scenario_id || "").trim();
+        if (!latestRunId || !scenarioId) {
+          return null;
+        }
+        return { scenario_id: scenarioId, test_run_id: latestRunId };
+      },
+
+      publishGateTestRunReviewPath(gate = this.publishGateResult) {
+        const evidence = this.publishGateTestRunEvidence(gate);
+        if (!this.currentSkill?.id || !evidence) {
+          return "";
+        }
+        return buildSkillTestScenarioRunReviewPath(this.currentSkill.id, evidence.scenario_id, evidence.test_run_id);
+      },
+
+      openPublishGateTestRunReview(gate = this.publishGateResult) {
+        const path = this.publishGateTestRunReviewPath(gate);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
+      },
+
+      publishGateCompileArtifactId(gate = this.publishGateResult) {
+        return String(gate?.result_json?.compile_artifact_id || "").trim();
+      },
   };
 })();

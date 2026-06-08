@@ -65,6 +65,7 @@ function loadSkillTestMethods(overrides = {}) {
     "buildSkillTestScenarioNewPath",
     "buildSkillTestScenarioRunReviewPath",
     "buildCompilerArtifactPath",
+    "buildPlatformAgentRunPath",
     "generateSkillKey",
     "resolveApiBaseUrl",
     "resolveWsUrl",
@@ -89,6 +90,17 @@ function loadSkillTestMethods(overrides = {}) {
       }, [...existing]),
       mergeBySeq: (existing = [], incoming = []) => [...existing, ...incoming].sort((left, right) => Number(left.seq_no || 0) - Number(right.seq_no || 0))
     }
+  };
+  defaultWindow.PSOPConsoleHelpers.buildPlatformAgentRunPath = (agentRunId, focus = {}) => {
+    const params = new URLSearchParams();
+    for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+      const value = String(focus?.[key] || "").trim();
+      if (value) {
+        params.set(key, value);
+      }
+    }
+    const query = params.toString();
+    return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
   };
   const context = {
     ...overrides,
@@ -677,6 +689,24 @@ test("running skill test review can be cancelled without local state guesswork",
   expect(app.stopSkillTestReviewPolling).toHaveBeenCalled();
   expect(app.showNotice).toHaveBeenCalledWith("success", "已终止测试运行。");
   expect(app.busy.skillTestCancel).toBe(false);
+});
+
+test("skill test review links tester AgentRun details", () => {
+  const app = createTimelineHarness();
+  app.skillTestRun = { id: "scenario-run-1", agent_run_id: "agent-run-1" };
+  app.navigate = jest.fn();
+
+  expect(app.skillTestAgentRunPath(app.skillTestRun)).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=events"
+  );
+  expect(app.skillTestAgentRunPath("agent-run-2", { tab: "model" })).toBe(
+    "/admin/platform/agent-runs/agent-run-2?tab=model"
+  );
+  expect(app.skillTestAgentRunPath({ id: "scenario-run-without-agent" })).toBe("");
+
+  app.openSkillTestAgentRun(app.skillTestRun);
+
+  expect(app.navigate).toHaveBeenCalledWith("/admin/platform/agent-runs/agent-run-1?tab=events");
 });
 
 test("review stage output drives expanded details and fork cursor", () => {

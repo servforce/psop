@@ -196,11 +196,11 @@ static/
 | `invocations-list.html` | `invocations-list-page` | Invocation 列表，展示 compile request 与 Artifact 证据入口 |
 | `run-live.html` | `run-live-page` | Run live/replay、terminal transcript，展示 Runtime compile provenance |
 | `skill-test-scenario-detail.html` | `skill-test-scenario-page` | 测试场景编辑 |
-| `skill-test-scenario-review.html` | `skill-test-scenario-review-page` | 测试运行 review |
+| `skill-test-scenario-review.html` | `skill-test-scenario-review-page` | 测试运行 review，显示 tester AgentRun 与 Runtime Replay 回链 |
 | `replay-list.html` | `replay-list-page` | Replay run 列表 |
-| `evaluation-reports.html` | `evaluation-reports-page` | RunEvaluation reports |
+| `evaluation-reports.html` | `evaluation-reports-page` | RunEvaluation reports，显示 evaluator AgentRun 回链 |
 | `evaluation-findings.html` | `evaluation-findings-page` | RunEvaluation findings |
-| `governance-proposals.html` | `governance-proposals-page` | Governance proposals |
+| `governance-proposals.html` | `governance-proposals-page` | Governance proposals，显示 governance AgentRun 回链 |
 | `governance-experiments.html` | `governance-experiments-page` | Governance experiments |
 | `tool-authorizations.html` | `tool-authorizations-page` | Platform tool authorizations |
 | `platform-agents.html` | `platform-agents-page` | Agents |
@@ -242,7 +242,7 @@ static/
 | 页面/能力 | 当前调用接口 |
 | --- | --- |
 | PSkills List | `GET /api/v1/pskills`、`POST /api/v1/pskills` |
-| PSkill Detail | `GET/PATCH/DELETE /api/v1/pskills/{skill_id}` |
+| PSkill Detail | `GET/PATCH/DELETE /api/v1/pskills/{skill_id}`；Publish Gate 结果显示 TestRun review 与 EG Artifact 回链 |
 | Source Editor | `GET/PUT /api/v1/pskills/{skill_id}/source` |
 | Repository Browser | `/api/v1/pskills/{skill_id}/repository/tree`、`/repository/files`、`/repository/folders` |
 | Materials | `/api/v1/pskills/{skill_id}/materials*` |
@@ -252,7 +252,7 @@ static/
 | Agent Prompts | `/api/v1/agent-prompts*`、`/api/v1/agent-prompt-bindings*` |
 | Tasks | `GET /api/v1/runtime/jobs`、`GET /api/v1/runtime/jobs/stats` |
 | Invocations | `GET/POST /api/v1/gateway/invocations`；列表显示 `compile_request_id` 与 `compile_artifact_id` 回链 |
-| Run Live | `GET /api/v1/runs/{run_id}`、`POST /api/v1/runs/{run_id}/cancel`、`/snapshots`、`/traces`、`/bindings`、`/events`；侧栏展示 `compile_request_id` 与 Artifact 入口 |
+| Run Live | `GET /api/v1/runs/{run_id}`、`POST /api/v1/runs/{run_id}/cancel`、`/snapshots`、`/traces`、`/bindings`、`/events`；侧栏展示 `compile_request_id` 与 Artifact 入口，Replay 证据区可跳转 `pskill.runner` AgentRun |
 | Terminal WS | `/ws/runs/{run_id}` |
 | Replay | `GET /api/v1/replay/runs`、`GET /api/v1/replay/runs/{run_id}`、`GET /api/v1/replay/traces/{trace_id}` |
 | Skill Tests | `/api/v1/pskills/{skill_id}/test-scenarios*`、`/api/v1/skill-test-scenario-runs*` |
@@ -287,7 +287,7 @@ static/
 | Run Live binding | WebSocket `/ws/runs/{run_id}` 接收 `binding.updated`，增量更新 Binding 列表和 Replay binding evidence，REST 补齐 |
 | Tasks | 轮询 runtime jobs 和 stats |
 | Skill Test Review | REST 拉取 review DTO，必要时轮询运行状态 |
-| Replay | REST 一次性拉取 replay detail；侧栏展示 Replay Provenance；deep link 支持 `event_id`、`trace_id`、`seq_no`、`snapshot_seq` 定位证据 |
+| Replay | REST 一次性拉取 replay detail；侧栏展示 Replay Provenance；deep link 支持 `event_id`、`trace_id`、`seq_no`、`snapshot_seq` 定位证据；RunTrace、AgentEvent、ModelCall、ToolCall、ToolAuthorization 证据可回跳 Platform AgentRun 详情对应 tab |
 | Evaluation / Governance activity | WebSocket 活动快照 + REST 补齐 |
 | Tool Authorizations | WebSocket `/ws/tool-authorizations` 接收授权变更，REST 补齐 |
 | Observability | REST 查询 dashboard、metrics、run events、run traces、agent/tool/model facts |
@@ -304,6 +304,7 @@ Run Live 当前负责：
 - 支持 multipart text + image/audio/video 输入。
 - 媒体 part 通过 `/runs/{run_id}/events/{event_id}/parts/{part_id}/content` 读取。
 - 将 runtime output、input、错误提示和 replay 视图区分展示。
+- Replay 中的 EG Node Path、AgentRun、AgentEvent、ModelCall、ToolCall、ToolAuthorization 必须保留到 Platform AgentRun 详情的可点击回链，用于从运行回放进入 runner 调用证据。
 
 输入规则与 [PSOP终端接入说明v1.md](./PSOP终端接入说明v1.md) 保持一致：前端不构造 `parts[]`，只提交 `text` 和文件字段。
 

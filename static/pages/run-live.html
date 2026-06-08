@@ -609,6 +609,20 @@
                               <p class="field-label">Occurred At</p>
                               <p class="mt-1 mono-field" x-text="formatDateTime(selectedLiveRunReplayItem().occurred_at)"></p>
                             </div>
+                            <template x-if="selectedLiveRunReplayItem().agent_run_id">
+                              <div class="col-span-2">
+                                <p class="field-label">AgentRun</p>
+                                <button
+                                  type="button"
+                                  class="button-secondary mt-1 h-8 max-w-full px-2.5 text-xs"
+                                  @click="navigate(liveRunReplayAgentRunPath(selectedLiveRunReplayItem().agent_run_id, { tab: 'events' }))"
+                                  title="打开 AgentRun 事件证据"
+                                >
+                                  <span class="material-symbols-outlined text-[15px]">open_in_new</span>
+                                  <span class="truncate font-mono" x-text="selectedLiveRunReplayItem().agent_run_id"></span>
+                                </button>
+                              </div>
+                            </template>
                           </div>
                         </details>
 
@@ -624,21 +638,28 @@
 
                           <div class="mt-3 divide-y divide-slate-800 border-y border-slate-800">
                             <template x-for="item in liveRunReplayEgNodePath()" :key="liveRunReplayEgNodePathItemKey(item)">
-                              <button
-                                type="button"
-                                class="block w-full px-0 py-2.5 text-left transition"
-                                :class="liveRunReplayEgNodePathItemClass(item)"
-                                @click="selectLiveRunReplayEgNodePathItem(item)"
-                              >
+                              <div class="px-0 py-2.5 transition" :class="liveRunReplayEgNodePathItemClass(item)">
                                 <div class="flex items-start justify-between gap-3">
-                                  <div class="min-w-0">
+                                  <button type="button" class="min-w-0 text-left" @click="selectLiveRunReplayEgNodePathItem(item)">
                                     <p class="truncate text-sm font-semibold text-slate-100" x-text="item.node_id"></p>
                                     <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayEgNodePathSummary(item)"></p>
                                     <p class="mt-1 mono-field break-all" x-text="item.trace_id"></p>
+                                  </button>
+                                  <div class="flex shrink-0 items-center gap-2">
+                                    <button
+                                      type="button"
+                                      class="button-secondary h-7 px-2 text-xs"
+                                      x-show="item.agent_run_id"
+                                      @click="navigate(liveRunReplayAgentRunPath(item.agent_run_id, { tab: 'events' }))"
+                                      title="打开 AgentRun 事件证据"
+                                    >
+                                      <span class="material-symbols-outlined text-[14px]">open_in_new</span>
+                                      <span class="hidden sm:inline">Agent</span>
+                                    </button>
+                                    <span class="status-badge border-slate-700 bg-slate-900/60 text-slate-300" x-text="`#${item.seq_no}`"></span>
                                   </div>
-                                  <span class="status-badge shrink-0 border-slate-700 bg-slate-900/60 text-slate-300" x-text="`#${item.seq_no}`"></span>
                                 </div>
-                              </button>
+                              </div>
                             </template>
                           </div>
                         </details>
@@ -760,7 +781,18 @@
                                         <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayAgentRunSummary(agentRun)"></p>
                                         <p class="mt-1 mono-field break-all" x-text="agentRun.id"></p>
                                       </div>
-                                      <span class="status-badge shrink-0" :class="statusBadgeTone(agentRun.status)" x-text="agentRun.status"></span>
+                                      <div class="flex shrink-0 items-center gap-2">
+                                        <button
+                                          type="button"
+                                          class="button-secondary h-8 px-2 text-xs"
+                                          @click="openLiveRunReplayAgentRun(agentRun, { tab: 'events' })"
+                                          title="打开 AgentRun 事件证据"
+                                        >
+                                          <span class="material-symbols-outlined text-[14px]">open_in_new</span>
+                                          <span class="hidden sm:inline">Open</span>
+                                        </button>
+                                        <span class="status-badge" :class="statusBadgeTone(agentRun.status)" x-text="agentRun.status"></span>
+                                      </div>
                                     </div>
                                   </div>
                                 </template>
@@ -784,7 +816,19 @@
                                         <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayAgentEventSummary(event)"></p>
                                         <p class="mt-1 mono-field break-all" x-text="event.id"></p>
                                       </div>
-                                      <span class="status-badge shrink-0" :class="statusBadgeTone(event.phase)" x-text="event.phase || 'phase'"></span>
+                                      <div class="flex shrink-0 items-center gap-2">
+                                        <button
+                                          type="button"
+                                          class="button-secondary h-8 px-2 text-xs"
+                                          x-show="event.agent_run_id"
+                                          @click="navigate(liveRunReplayAgentEventPath(event))"
+                                          title="打开 AgentEvent 所属 AgentRun"
+                                        >
+                                          <span class="material-symbols-outlined text-[14px]">open_in_new</span>
+                                          <span class="hidden sm:inline">Agent</span>
+                                        </button>
+                                        <span class="status-badge" :class="statusBadgeTone(event.phase)" x-text="event.phase || 'phase'"></span>
+                                      </div>
                                     </div>
                                   </div>
                                 </template>
@@ -808,7 +852,19 @@
                                         <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayModelCallSummary(call)"></p>
                                         <p class="mt-1 mono-field break-all" x-text="call.agent_run_id"></p>
                                       </div>
-                                      <span class="status-badge shrink-0" :class="statusBadgeTone(call.status)" x-text="call.status"></span>
+                                      <div class="flex shrink-0 items-center gap-2">
+                                        <button
+                                          type="button"
+                                          class="button-secondary h-8 px-2 text-xs"
+                                          x-show="call.agent_run_id"
+                                          @click="navigate(liveRunReplayModelCallPath(call))"
+                                          title="打开 AgentRun 模型调用证据"
+                                        >
+                                          <span class="material-symbols-outlined text-[14px]">open_in_new</span>
+                                          <span class="hidden sm:inline">Model</span>
+                                        </button>
+                                        <span class="status-badge" :class="statusBadgeTone(call.status)" x-text="call.status"></span>
+                                      </div>
                                     </div>
                                   </div>
                                 </template>
@@ -832,7 +888,19 @@
                                         <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayToolCallSummary(call)"></p>
                                         <p class="mt-1 mono-field break-all" x-text="call.id"></p>
                                       </div>
-                                      <span class="status-badge shrink-0" :class="statusBadgeTone(call.status)" x-text="call.status"></span>
+                                      <div class="flex shrink-0 items-center gap-2">
+                                        <button
+                                          type="button"
+                                          class="button-secondary h-8 px-2 text-xs"
+                                          x-show="call.agent_run_id"
+                                          @click="navigate(liveRunReplayToolCallPath(call))"
+                                          title="打开 AgentRun 工具调用证据"
+                                        >
+                                          <span class="material-symbols-outlined text-[14px]">open_in_new</span>
+                                          <span class="hidden sm:inline">Tool</span>
+                                        </button>
+                                        <span class="status-badge" :class="statusBadgeTone(call.status)" x-text="call.status"></span>
+                                      </div>
                                     </div>
                                   </div>
                                 </template>
@@ -844,7 +912,19 @@
                                         <p class="mt-1 truncate text-xs text-slate-400" x-text="`${authorization.risk_level || 'risk:N/A'} · ${authorization.side_effect_level || 'effect:N/A'}`"></p>
                                         <p class="mt-1 mono-field break-all" x-text="authorization.id"></p>
                                       </div>
-                                      <span class="status-badge shrink-0" :class="statusBadgeTone(authorization.status)" x-text="authorization.status"></span>
+                                      <div class="flex shrink-0 items-center gap-2">
+                                        <button
+                                          type="button"
+                                          class="button-secondary h-8 px-2 text-xs"
+                                          x-show="authorization.agent_run_id"
+                                          @click="navigate(liveRunReplayToolAuthorizationPath(authorization))"
+                                          title="打开 AgentRun 授权证据"
+                                        >
+                                          <span class="material-symbols-outlined text-[14px]">open_in_new</span>
+                                          <span class="hidden sm:inline">Auth</span>
+                                        </button>
+                                        <span class="status-badge" :class="statusBadgeTone(authorization.status)" x-text="authorization.status"></span>
+                                      </div>
                                     </div>
                                   </div>
                                 </template>

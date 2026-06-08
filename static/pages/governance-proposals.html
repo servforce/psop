@@ -204,7 +204,17 @@
               </div>
               <div class="p-4">
                 <p class="text-slate-500">AgentRun</p>
-                <p class="mt-1 truncate font-mono text-slate-300" x-text="currentGovernanceProposal.agent_run_id"></p>
+                <button
+                  type="button"
+                  class="button-secondary mt-1 h-8 max-w-full px-2.5 text-xs"
+                  x-show="currentGovernanceProposal.agent_run_id"
+                  @click="openGovernanceProposalAgentRun(currentGovernanceProposal)"
+                  title="打开 governance AgentRun"
+                >
+                  <span class="material-symbols-outlined text-[15px]">open_in_new</span>
+                  <span class="truncate font-mono" x-text="currentGovernanceProposal.agent_run_id"></span>
+                </button>
+                <p class="mt-1 font-mono text-slate-500" x-show="!currentGovernanceProposal.agent_run_id">N/A</p>
               </div>
               <div class="p-4">
                 <p class="text-slate-500">Run</p>

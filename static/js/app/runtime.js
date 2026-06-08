@@ -14,6 +14,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildPlatformAgentRunPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -1502,7 +1503,8 @@
           payload,
           occurred_at: trace?.occurred_at || trace?.created_at || "",
           source_kind: "run_trace",
-          source_id: trace?.id || ""
+          source_id: trace?.id || "",
+          agent_run_id: trace?.agent_run_id || payload.agent_run_id || ""
         };
       },
 
@@ -1610,6 +1612,53 @@
         return this.currentSkill?.id
           ? buildSkillReplayPath(this.currentSkill.id, runId)
           : buildReplayPath(runId);
+      },
+
+
+      liveRunReplayAgentRunPath(agentRunId, focus = {}) {
+        const normalized = String(agentRunId || "").trim();
+        return normalized ? buildPlatformAgentRunPath(normalized, focus) : "";
+      },
+
+
+      openLiveRunReplayAgentRun(agentRunOrId, focus = {}) {
+        const agentRunId = typeof agentRunOrId === "string"
+          ? agentRunOrId
+          : (agentRunOrId?.id || agentRunOrId?.agent_run_id || "");
+        const path = this.liveRunReplayAgentRunPath(agentRunId, focus);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
+      },
+
+
+      liveRunReplayAgentEventPath(event) {
+        return this.liveRunReplayAgentRunPath(event?.agent_run_id, {
+          tab: "events",
+          event_id: event?.id || ""
+        });
+      },
+
+
+      liveRunReplayModelCallPath(call) {
+        return this.liveRunReplayAgentRunPath(call?.agent_run_id, { tab: "model" });
+      },
+
+
+      liveRunReplayToolCallPath(call) {
+        return this.liveRunReplayAgentRunPath(call?.agent_run_id, {
+          tab: "tools",
+          tool_call_id: call?.id || ""
+        });
+      },
+
+
+      liveRunReplayToolAuthorizationPath(authorization) {
+        return this.liveRunReplayAgentRunPath(authorization?.agent_run_id, {
+          tab: "authorizations",
+          authorization_id: authorization?.id || ""
+        });
       },
 
 

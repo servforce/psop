@@ -65,6 +65,17 @@ function loadEvaluationHarness() {
           }
           const query = params.toString();
           return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
+        },
+        buildPlatformAgentRunPath: (agentRunId, focus = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+            const value = String(focus?.[key] || "").trim();
+            if (value) {
+              params.set(key, value);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
         }
       }
     },
@@ -178,6 +189,30 @@ test("evaluation finding evidence refs build run replay deep links", () => {
   expect(htmlFindings).toContain("openFindingEvidenceReplay(finding, ref)");
   expect(htmlReport).toContain("canOpenFindingEvidenceReplay(finding, currentEvaluation)");
   expect(htmlFindings).toContain("canOpenFindingEvidenceReplay(finding)");
+});
+
+test("evaluation report links evaluator AgentRun details", () => {
+  const methods = loadEvaluationMethods();
+  const context = {
+    ...methods,
+    currentEvaluation: { id: "evaluation-1", agent_run_id: "agent-run-1" },
+    navigate: jest.fn()
+  };
+
+  expect(methods.evaluationAgentRunPath.call(context, context.currentEvaluation)).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=events"
+  );
+  expect(methods.evaluationAgentRunPath.call(context, "agent-run-2", { tab: "model" })).toBe(
+    "/admin/platform/agent-runs/agent-run-2?tab=model"
+  );
+
+  methods.openEvaluationAgentRun.call(context, context.currentEvaluation);
+
+  expect(context.navigate).toHaveBeenCalledWith("/admin/platform/agent-runs/agent-run-1?tab=events");
+
+  const htmlReport = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-reports.html"), "utf8");
+  expect(htmlReport).toContain("openEvaluationAgentRun(currentEvaluation)");
+  expect(htmlReport).toContain("currentEvaluation.agent_run_id");
 });
 
 test("evaluation methods update finding status in list and current report", async () => {

@@ -1006,6 +1006,22 @@
                       <template x-if="publishGateWarnings().length > 0">
                         <p class="leading-5 text-amber-200" x-text="`${publishGateWarnings().length} 条警告`"></p>
                       </template>
+                      <div class="flex flex-wrap gap-2">
+                        <template x-if="publishGateTestRunReviewPath()">
+                          <button type="button" class="button-secondary h-8 px-2.5 text-xs" @click="openPublishGateTestRunReview()">
+                            <span class="material-symbols-outlined text-[15px]">fact_check</span>
+                            <span>TestRun</span>
+                            <span class="font-mono" x-text="formatShortId(publishGateTestRunEvidence()?.test_run_id)"></span>
+                          </button>
+                        </template>
+                        <template x-if="publishGateCompileArtifactId()">
+                          <button type="button" class="button-secondary h-8 px-2.5 text-xs" @click="openCompilerArtifact(publishGateCompileArtifactId())">
+                            <span class="material-symbols-outlined text-[15px]">account_tree</span>
+                            <span>Artifact</span>
+                            <span class="font-mono" x-text="formatShortId(publishGateCompileArtifactId())"></span>
+                          </button>
+                        </template>
+                      </div>
                     </div>
                   </template>
                   <template x-if="!publishGateResult">

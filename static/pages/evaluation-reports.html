@@ -152,7 +152,19 @@
                 </div>
                 <div class="flex min-w-0 items-center justify-between gap-3">
                   <dt class="text-slate-500">AgentRun</dt>
-                  <dd class="min-w-0 truncate font-mono text-slate-300" x-text="currentEvaluation.agent_run_id"></dd>
+                  <dd class="min-w-0">
+                    <button
+                      type="button"
+                      class="button-secondary h-8 max-w-full px-2.5 text-xs"
+                      x-show="currentEvaluation.agent_run_id"
+                      @click="openEvaluationAgentRun(currentEvaluation)"
+                      title="打开 evaluator AgentRun"
+                    >
+                      <span class="material-symbols-outlined text-[15px]">open_in_new</span>
+                      <span class="truncate font-mono" x-text="currentEvaluation.agent_run_id"></span>
+                    </button>
+                    <span class="font-mono text-slate-500" x-show="!currentEvaluation.agent_run_id">N/A</span>
+                  </dd>
                 </div>
               </dl>
               <div class="mt-4 flex flex-wrap gap-2">

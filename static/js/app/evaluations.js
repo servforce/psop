@@ -1,5 +1,5 @@
 (function () {
-  const { resolveWsUrl, buildReplayPath } = window.PSOPConsoleHelpers || {};
+  const { resolveWsUrl, buildReplayPath, buildPlatformAgentRunPath } = window.PSOPConsoleHelpers || {};
 
   const FINDING_STATUS_OPTIONS = [
     { value: "open", label: "未处理" },
@@ -224,6 +224,26 @@
         evaluation,
         ...existing.filter((item) => item.id !== evaluation.id)
       ].slice(0, 50);
+    },
+
+    evaluationAgentRunPath(evaluationOrAgentRun = this.currentEvaluation, focus = { tab: "events" }) {
+      const agentRunId = String(
+        typeof evaluationOrAgentRun === "string"
+          ? evaluationOrAgentRun
+          : (evaluationOrAgentRun?.agent_run_id || evaluationOrAgentRun?.id || "")
+      ).trim();
+      if (!agentRunId || typeof buildPlatformAgentRunPath !== "function") {
+        return "";
+      }
+      return buildPlatformAgentRunPath(agentRunId, focus);
+    },
+
+    openEvaluationAgentRun(evaluationOrAgentRun = this.currentEvaluation, focus = { tab: "events" }) {
+      const path = this.evaluationAgentRunPath(evaluationOrAgentRun, focus);
+      if (!path) {
+        return;
+      }
+      this.navigate(path);
     },
 
     async loadEvaluationFindings() {

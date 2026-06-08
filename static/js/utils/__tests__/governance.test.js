@@ -143,6 +143,29 @@ test("governance methods build filters and labels", () => {
   expect(methods.toolAuthorizationStatusLabel.call(context, "executed")).toBe("已执行");
   expect(methods.governanceProposalPath("proposal-1")).toBe("/admin/governance/proposals/proposal-1");
   expect(methods.governanceEvaluationReportPath("evaluation-1")).toBe("/admin/evaluations/evaluation-1");
+  expect(methods.governanceProposalAgentRunPath({ agent_run_id: "agent-run-1" })).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=events"
+  );
+  expect(methods.governanceProposalAgentRunPath("agent-run-2", { tab: "model" })).toBe(
+    "/admin/platform/agent-runs/agent-run-2?tab=model"
+  );
+});
+
+test("governance proposal opens governance AgentRun details", () => {
+  const methods = loadGovernanceMethods();
+  const context = {
+    ...methods,
+    currentGovernanceProposal: { id: "proposal-1", agent_run_id: "agent-run-1" },
+    navigate: jest.fn()
+  };
+
+  methods.openGovernanceProposalAgentRun.call(context, context.currentGovernanceProposal);
+
+  expect(context.navigate).toHaveBeenCalledWith("/admin/platform/agent-runs/agent-run-1?tab=events");
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/governance-proposals.html"), "utf8");
+  expect(html).toContain("openGovernanceProposalAgentRun(currentGovernanceProposal)");
+  expect(html).toContain("currentGovernanceProposal.agent_run_id");
 });
 
 test("governance methods build tool authorization context links", () => {

@@ -795,6 +795,23 @@
       return buildEvaluationReportPath(evaluationId);
     },
 
+    governanceProposalAgentRunPath(proposalOrAgentRun = this.currentGovernanceProposal, focus = { tab: "events" }) {
+      const agentRunId = String(
+        typeof proposalOrAgentRun === "string"
+          ? proposalOrAgentRun
+          : (proposalOrAgentRun?.agent_run_id || proposalOrAgentRun?.id || "")
+      ).trim();
+      return agentRunId ? buildPlatformAgentRunPath(agentRunId, focus) : "";
+    },
+
+    openGovernanceProposalAgentRun(proposalOrAgentRun = this.currentGovernanceProposal, focus = { tab: "events" }) {
+      const path = this.governanceProposalAgentRunPath(proposalOrAgentRun, focus);
+      if (!path) {
+        return;
+      }
+      this.navigate(path);
+    },
+
     governanceExperimentsPath() {
       return buildGovernanceExperimentsPath();
     },

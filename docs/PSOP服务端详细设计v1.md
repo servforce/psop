@@ -532,7 +532,7 @@ Claim 规则：
 - `gateway.gitlab`
 - `gateway.inference`
 
-运行时 trace 事件写入数据库 `run_trace`，Replay 直接读取持久化事件，不推断未落库状态。Replay detail 中的 `provenance` 直接串联 `invocation_id / run_id / pskill_version_id / compile_artifact_id / compile_request_id / latest_session_token_snapshot_id`。Compiler 关键 span 写入 `compile_request_id / pskill_definition_id / pskill_version_id / compile_artifact_id`，Runtime 关键 span（`runtime.loop`、`runtime.actor`、`gateway.inference`）写入同一组 provenance 属性，并额外包含当前输入 `session_token_id / session_token_seq`。`/api/v1/replay/traces/{trace_id}` 优先按 RunTrace 记录 id 查询，未命中时按 `run_trace.trace_id` 反查最近一条 OTel 关联事件，用于从 OTel 排障上下文跳转到 Replay。
+运行时 trace 事件写入数据库 `run_trace`，Replay 直接读取持久化事件，不推断未落库状态。Replay detail 中的 `provenance` 直接串联 `invocation_id / run_id / pskill_version_id / compile_artifact_id / compile_request_id / latest_session_token_snapshot_id`，并通过 `run_trace.agent_run_id`、AgentEvent、ModelCall、ToolCall、ToolAuthorization 暴露 `pskill.runner` AgentRun 证据链。Compiler 关键 span 写入 `compile_request_id / pskill_definition_id / pskill_version_id / compile_artifact_id`，Runtime 关键 span（`runtime.loop`、`runtime.actor`、`gateway.inference`）写入同一组 provenance 属性，并额外包含当前输入 `session_token_id / session_token_seq`。`/api/v1/replay/traces/{trace_id}` 优先按 RunTrace 记录 id 查询，未命中时按 `run_trace.trace_id` 反查最近一条 OTel 关联事件，用于从 OTel 排障上下文跳转到 Replay。
 
 `/api/v1/observability/metrics` 返回窗口内 Runtime、Agent、Evaluation、Governance 与 OpenTelemetry 状态聚合：
 
