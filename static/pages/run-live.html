@@ -959,7 +959,18 @@
                                         <p class="mt-1 truncate text-xs text-slate-400" x-text="liveRunReplayEvaluationSummary(evaluation)"></p>
                                         <p class="mt-1 mono-field break-all" x-text="evaluation.agent_run_id"></p>
                                       </div>
-                                      <span class="status-badge shrink-0 border-slate-700 bg-slate-900/60 text-slate-300" x-text="evaluation.overall_outcome"></span>
+                                      <div class="flex shrink-0 items-center gap-2">
+                                        <button
+                                          type="button"
+                                          class="button-secondary h-8 px-2 text-xs"
+                                          @click="openLiveRunReplayEvaluation(evaluation)"
+                                          title="打开 Evaluation Report"
+                                        >
+                                          <span class="material-symbols-outlined text-[14px]">assignment_turned_in</span>
+                                          <span class="hidden sm:inline">Report</span>
+                                        </button>
+                                        <span class="status-badge border-slate-700 bg-slate-900/60 text-slate-300" x-text="evaluation.overall_outcome"></span>
+                                      </div>
                                     </div>
                                   </div>
                                 </template>
@@ -988,7 +999,18 @@
                                           </div>
                                         </template>
                                       </div>
-                                      <span class="status-badge shrink-0" :class="statusBadgeTone(finding.status)" x-text="finding.status"></span>
+                                      <div class="flex shrink-0 items-center gap-2">
+                                        <button
+                                          type="button"
+                                          class="button-secondary h-8 px-2 text-xs"
+                                          @click="openLiveRunReplayFinding(finding)"
+                                          title="打开 Evaluation Findings"
+                                        >
+                                          <span class="material-symbols-outlined text-[14px]">rule</span>
+                                          <span class="hidden sm:inline">Finding</span>
+                                        </button>
+                                        <span class="status-badge" :class="statusBadgeTone(finding.status)" x-text="finding.status"></span>
+                                      </div>
                                     </div>
                                   </div>
                                 </template>

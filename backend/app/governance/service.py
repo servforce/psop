@@ -20,6 +20,7 @@ from app.governance.schemas import (
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.types import GOVERNANCE_PROPOSAL_JOB_TYPE
+from app.memory.service import MemoryService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import generate_uuid, now_utc
 
@@ -67,10 +68,12 @@ class GovernanceService:
         repository: GovernanceRepository | None = None,
         agent_service: AgentService | None = None,
         job_repository: JobRepository | None = None,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self.repository = repository or GovernanceRepository()
         self.agent_service = agent_service or AgentService()
         self.job_repository = job_repository or JobRepository()
+        self.memory_service = memory_service or MemoryService()
 
     def create_proposal(
         self,
@@ -90,6 +93,15 @@ class GovernanceService:
             source_findings.append(finding)
         source_finding_ids = [finding.id for finding in source_findings]
         result = self._proposal_result_from_request(payload)
+        result["evidence_refs"] = self._merge_evidence_refs(
+            result["evidence_refs"],
+            self._proposal_source_evidence_refs(
+                session,
+                source_findings=source_findings,
+                source_evaluation_id=payload.source_evaluation_id,
+                source_run_id=payload.source_run_id,
+            ),
+        )
         proposal = self._create_proposal_with_governance_agent(
             session,
             proposal_id=generate_uuid(),
@@ -120,6 +132,10 @@ class GovernanceService:
             raise SkillNotFoundError("未找到 RunEvaluation。", details={"evaluation_id": finding.evaluation_id})
 
         result = self._proposal_result_from_finding(finding, evaluation)
+        result["evidence_refs"] = self._merge_evidence_refs(
+            result["evidence_refs"],
+            self._proposal_source_evidence_refs(session, source_findings=[finding], source_evaluation_id=evaluation.id),
+        )
         proposal = self._create_proposal_with_governance_agent(
             session,
             proposal_id=generate_uuid(),
@@ -188,6 +204,15 @@ class GovernanceService:
             if not finding:
                 raise SkillNotFoundError("未找到 RunEvaluationFinding。", details={"finding_id": finding_id})
             source_findings.append(finding)
+        result["evidence_refs"] = self._merge_evidence_refs(
+            result["evidence_refs"],
+            self._proposal_source_evidence_refs(
+                session,
+                source_findings=source_findings,
+                source_evaluation_id=payload.source_evaluation_id,
+                source_run_id=payload.source_run_id,
+            ),
+        )
         proposal = PsopImprovementProposal(
             id=generate_uuid(),
             agent_run_id=agent_run_id,
@@ -373,6 +398,14 @@ class GovernanceService:
             finished_at=now_utc(),
         )
         session.add(experiment)
+        session.flush()
+        self._write_governance_memory_candidates(
+            session,
+            proposal=proposal,
+            candidates=[
+                self._governance_experiment_memory_candidate(proposal=proposal, experiment=experiment)
+            ],
+        )
         session.commit()
         return self.get_proposal(session, proposal.id)
 
@@ -400,6 +433,18 @@ class GovernanceService:
                 "reviewed_at": now_utc().isoformat(),
             },
         }
+        if proposal.status == "rejected":
+            self._write_governance_memory_candidates(
+                session,
+                proposal=proposal,
+                candidates=[
+                    self._governance_status_memory_candidate(
+                        proposal=proposal,
+                        status="rejected",
+                        content_summary=payload.review_notes or "Governance proposal rejected during review.",
+                    )
+                ],
+            )
         session.commit()
         return self.get_proposal(session, proposal.id)
 
@@ -464,6 +509,18 @@ class GovernanceService:
                 started_at=now,
                 finished_at=now,
             )
+        )
+        session.flush()
+        self._write_governance_memory_candidates(
+            session,
+            proposal=proposal,
+            candidates=[
+                self._governance_status_memory_candidate(
+                    proposal=proposal,
+                    status="rolled_back",
+                    content_summary="Governance proposal rolled back after canary or activation.",
+                )
+            ],
         )
         session.commit()
         return self.get_proposal(session, proposal.id)
@@ -715,6 +772,214 @@ class GovernanceService:
             ],
             "activation_plan": self._default_activation_plan(),
         }
+
+    def _proposal_source_evidence_refs(
+        self,
+        session: Session,
+        *,
+        source_findings: list[RunEvaluationFinding],
+        source_evaluation_id: str | None = None,
+        source_run_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        evidence_refs: list[dict[str, Any]] = []
+        evaluations: dict[str, RunEvaluation] = {}
+        for finding in source_findings:
+            evaluation = self.repository.get_evaluation(session, finding.evaluation_id)
+            if evaluation:
+                evaluations[evaluation.id] = evaluation
+            evidence_refs.append(
+                {
+                    "kind": "run_evaluation_finding",
+                    "id": finding.id,
+                    "evaluation_id": finding.evaluation_id,
+                }
+            )
+            evidence_refs.extend(list(finding.evidence_refs or []))
+
+        if source_evaluation_id and source_evaluation_id not in evaluations:
+            evaluation = self.repository.get_evaluation(session, source_evaluation_id)
+            if evaluation:
+                evaluations[evaluation.id] = evaluation
+
+        for evaluation in evaluations.values():
+            evidence_refs.extend(
+                [
+                    {
+                        "kind": "run_evaluation",
+                        "id": evaluation.id,
+                        "run_id": evaluation.run_id,
+                    },
+                    {
+                        "kind": "run",
+                        "id": evaluation.run_id,
+                    },
+                    {
+                        "kind": "run_replay",
+                        "run_id": evaluation.run_id,
+                    },
+                ]
+            )
+
+        if source_run_id and all(ref.get("kind") != "run" or ref.get("id") != source_run_id for ref in evidence_refs):
+            evidence_refs.extend(
+                [
+                    {
+                        "kind": "run",
+                        "id": source_run_id,
+                    },
+                    {
+                        "kind": "run_replay",
+                        "run_id": source_run_id,
+                    },
+                ]
+            )
+        return evidence_refs
+
+    def _write_governance_memory_candidates(
+        self,
+        session: Session,
+        *,
+        proposal: PsopImprovementProposal,
+        candidates: list[dict[str, Any]],
+    ) -> list[Any]:
+        if not candidates:
+            return []
+        entries = self.memory_service.write_candidates(
+            session,
+            agent_key="psop.governance",
+            created_by_agent_run_id=proposal.agent_run_id,
+            candidates=candidates,
+            commit=False,
+        )
+        self.agent_service.append_event(
+            session,
+            proposal.agent_run_id,
+            AppendAgentEventRequest(
+                event_type="governance.memory_candidates.written",
+                phase="memory",
+                payload={
+                    "proposal_id": proposal.id,
+                    "memory_entry_ids": [item.id for item in entries],
+                    "memory_entry_count": len(entries),
+                    "used_as_runtime_state": False,
+                },
+            ),
+            commit=False,
+        )
+        return entries
+
+    def _governance_experiment_memory_candidate(
+        self,
+        *,
+        proposal: PsopImprovementProposal,
+        experiment: PsopImprovementExperiment,
+    ) -> dict[str, Any]:
+        return {
+            "namespace": "governance",
+            "memory_type": "artifact",
+            "title": f"Governance experiment artifact: {experiment.id}",
+            "content": (
+                f"Proposal {proposal.id} ran {experiment.experiment_type} experiment with status "
+                f"{experiment.status}. Summary: {experiment.summary}"
+            ),
+            "confidence": 80 if experiment.status == "succeeded" else 55,
+            "source_refs": self._proposal_memory_source_refs(
+                proposal,
+                extra_refs=[
+                    {
+                        "kind": "psop_improvement_experiment",
+                        "id": experiment.id,
+                        "experiment_type": experiment.experiment_type,
+                    }
+                ],
+            ),
+            "tags": ["governance", "experiment", experiment.experiment_type, experiment.status],
+            "metadata": {
+                "schema": "psop-governance-memory/v1",
+                "proposal_id": proposal.id,
+                "proposal_type": proposal.proposal_type,
+                "proposal_status": proposal.status,
+                "experiment_id": experiment.id,
+                "experiment_type": experiment.experiment_type,
+                "experiment_status": experiment.status,
+            },
+        }
+
+    def _governance_status_memory_candidate(
+        self,
+        *,
+        proposal: PsopImprovementProposal,
+        status: str,
+        content_summary: str,
+    ) -> dict[str, Any]:
+        return {
+            "namespace": "governance",
+            "memory_type": "episodic",
+            "title": f"Governance proposal {status}: {proposal.id}",
+            "content": (
+                f"Proposal {proposal.id} ended in status {status}. "
+                f"Type={proposal.proposal_type}. {content_summary}"
+            ),
+            "confidence": 85,
+            "source_refs": self._proposal_memory_source_refs(proposal),
+            "tags": ["governance", "proposal", status, proposal.proposal_type],
+            "metadata": {
+                "schema": "psop-governance-memory/v1",
+                "proposal_id": proposal.id,
+                "proposal_type": proposal.proposal_type,
+                "proposal_status": status,
+            },
+        }
+
+    def _proposal_memory_source_refs(
+        self,
+        proposal: PsopImprovementProposal,
+        *,
+        extra_refs: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        refs: list[dict[str, Any]] = [{"kind": "psop_improvement_proposal", "id": proposal.id}]
+        if proposal.source_evaluation_id:
+            refs.append({"kind": "run_evaluation", "id": proposal.source_evaluation_id})
+        if proposal.source_run_id:
+            refs.extend(
+                [
+                    {"kind": "run", "id": proposal.source_run_id},
+                    {"kind": "run_replay", "run_id": proposal.source_run_id},
+                ]
+            )
+        refs.extend(
+            {"kind": "run_evaluation_finding", "id": finding_id}
+            for finding_id in list(proposal.source_finding_ids or [])
+        )
+        refs.extend(list(proposal.evidence_refs or []))
+        refs.extend(list(extra_refs or []))
+        return self._merge_evidence_refs([], refs)
+
+    @classmethod
+    def _merge_evidence_refs(
+        cls,
+        primary_refs: list[dict[str, Any]],
+        derived_refs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[tuple[tuple[str, str], ...]] = set()
+        for ref in [*primary_refs, *derived_refs]:
+            if not isinstance(ref, dict):
+                continue
+            normalized = cls._evidence_ref_identity(ref)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(dict(ref))
+        return merged
+
+    @staticmethod
+    def _evidence_ref_identity(ref: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+        identity_keys = ("kind", "source_kind", "id", "run_id", "evaluation_id", "seq_no", "trace_id", "span_id")
+        identity = tuple((key, str(ref.get(key))) for key in identity_keys if ref.get(key) is not None)
+        if identity:
+            return identity
+        return tuple((key, str(value)) for key, value in sorted(ref.items()))
 
     @staticmethod
     def _default_activation_plan() -> dict[str, Any]:

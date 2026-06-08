@@ -324,6 +324,32 @@
 
             <div class="p-4">
               <div class="flex items-center justify-between gap-3">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Memory Candidates</p>
+                <span class="mono-field" x-text="(governanceProposalMemoryEntries || []).length"></span>
+              </div>
+              <div class="mt-3 divide-y divide-slate-800 rounded-md border border-slate-800">
+                <template x-if="(governanceProposalMemoryEntries || []).length === 0">
+                  <p class="p-3 text-sm text-slate-400">暂无治理记忆候选。</p>
+                </template>
+                <template x-for="memory in governanceProposalMemoryEntries" :key="memory.id">
+                  <button type="button" class="block w-full min-w-0 p-3 text-left transition hover:bg-slate-900/70" @click="openGovernanceProposalMemoryEntry(memory)">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                      <div class="min-w-0">
+                        <p class="truncate text-sm font-medium text-slate-200" x-text="memory.title || memory.id"></p>
+                        <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="memory.id"></p>
+                      </div>
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="status-badge" :class="statusBadgeTone(memory.status)" x-text="formatStatus(memory.status)"></span>
+                        <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300" x-text="memory.memory_type || 'memory'"></span>
+                      </div>
+                    </div>
+                  </button>
+                </template>
+              </div>
+            </div>
+
+            <div class="p-4">
+              <div class="flex items-center justify-between gap-3">
                 <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Tool Authorizations</p>
                 <button type="button" class="button-secondary h-8 px-3" @click="navigate(toolAuthorizationsPath())">
                   <span class="material-symbols-outlined text-[17px]">admin_panel_settings</span>

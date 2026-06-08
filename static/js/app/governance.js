@@ -834,6 +834,19 @@
       this.navigate(path);
     },
 
+    governanceProposalMemoryEntryPath(memory) {
+      const memoryId = String(typeof memory === "string" ? memory : memory?.id || "").trim();
+      return memoryId ? buildPlatformMemoryEntryPath(memoryId) : "";
+    },
+
+    openGovernanceProposalMemoryEntry(memory) {
+      const path = this.governanceProposalMemoryEntryPath(memory);
+      if (!path) {
+        return;
+      }
+      this.navigate(path);
+    },
+
     governanceExperimentsPath() {
       return buildGovernanceExperimentsPath();
     },

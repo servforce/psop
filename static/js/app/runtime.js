@@ -16,6 +16,8 @@
     buildCompilerArtifactPath,
     buildCompilerRequestPath,
     buildPlatformAgentRunPath,
+    buildEvaluationReportPath,
+    buildEvaluationFindingsPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -1681,6 +1683,37 @@
           tab: "authorizations",
           authorization_id: authorization?.id || ""
         });
+      },
+
+
+      liveRunReplayEvaluationPath(evaluation) {
+        const evaluationId = String(typeof evaluation === "string" ? evaluation : evaluation?.id || "").trim();
+        return evaluationId ? buildEvaluationReportPath(evaluationId) : "";
+      },
+
+
+      liveRunReplayFindingPath(finding) {
+        const runId = String(finding?.run_id || this.replayDetail?.run?.id || this.liveRun?.id || "").trim();
+        const basePath = buildEvaluationFindingsPath();
+        return runId ? `${basePath}?run_id=${encodeURIComponent(runId)}` : basePath;
+      },
+
+
+      openLiveRunReplayEvaluation(evaluation) {
+        const path = this.liveRunReplayEvaluationPath(evaluation);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
+      },
+
+
+      openLiveRunReplayFinding(finding) {
+        const path = this.liveRunReplayFindingPath(finding);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
       },
 
 

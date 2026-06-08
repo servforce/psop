@@ -130,6 +130,9 @@ def test_materials_to_governance_closed_loop(monkeypatch) -> None:
     assert proposal["source_run_id"] == run_id
     assert proposal["source_evaluation_id"] == evaluation["id"]
     assert proposal["source_finding_ids"] == [finding["id"]]
+    assert any(ref["kind"] == "run_evaluation_finding" and ref["id"] == finding["id"] for ref in proposal["evidence_refs"])
+    assert any(ref["kind"] == "run_evaluation" and ref["id"] == evaluation["id"] for ref in proposal["evidence_refs"])
+    assert any(ref["kind"] == "run_replay" and ref["run_id"] == run_id for ref in proposal["evidence_refs"])
     assert governance_agent_run_response.json()["agent_key"] == "psop.governance"
     assert governance_agent_run_response.json()["status"] == "succeeded"
     assert governance_authorizations_response.json() == []

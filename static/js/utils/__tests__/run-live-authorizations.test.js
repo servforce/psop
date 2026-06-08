@@ -68,6 +68,8 @@ function loadRuntimeHarness(locationSearch = "") {
     "buildCompilerArtifactPath",
     "buildCompilerRequestPath",
     "buildPlatformAgentRunPath",
+    "buildEvaluationReportPath",
+    "buildEvaluationFindingsPath",
     "generateSkillKey",
     "resolveApiBaseUrl",
     "resolveWsUrl",
@@ -144,6 +146,8 @@ function loadRuntimeHarness(locationSearch = "") {
     const query = params.toString();
     return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
   };
+  context.window.PSOPConsoleHelpers.buildEvaluationReportPath = (evaluationId) => `/admin/evaluations/${evaluationId}`;
+  context.window.PSOPConsoleHelpers.buildEvaluationFindingsPath = () => "/admin/evaluations/findings";
   context.window.PSOPConsoleHelpers.resolveWsUrl = (_apiBaseUrl, pathname) => `ws://localhost${pathname}`;
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -735,6 +739,7 @@ test("run replay exposes closed-loop evidence counts", () => {
       run_evaluation_findings: [
         {
           id: "finding-1",
+          run_id: "run-1",
           category: "runner_issue",
           severity: "high",
           status: "open"
@@ -792,10 +797,20 @@ test("run replay exposes closed-loop evidence counts", () => {
   expect(methods.liveRunReplayToolAuthorizationPath(context.replayDetail.agent_tool_authorizations[0])).toBe(
     "/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-1"
   );
+  expect(methods.liveRunReplayEvaluationPath(context.replayDetail.run_evaluations[0])).toBe(
+    "/admin/evaluations/evaluation-1"
+  );
+  expect(methods.liveRunReplayFindingPath.call(context, context.replayDetail.run_evaluation_findings[0])).toBe(
+    "/admin/evaluations/findings?run_id=run-1"
+  );
 
   const navigationContext = { ...context, navigate: jest.fn() };
   methods.openLiveRunReplayAgentRun.call(navigationContext, context.replayDetail.agent_runs[0], { tab: "events" });
   expect(navigationContext.navigate).toHaveBeenCalledWith("/admin/platform/agent-runs/agent-run-1?tab=events");
+  methods.openLiveRunReplayEvaluation.call(navigationContext, context.replayDetail.run_evaluations[0]);
+  methods.openLiveRunReplayFinding.call(navigationContext, context.replayDetail.run_evaluation_findings[0]);
+  expect(navigationContext.navigate).toHaveBeenCalledWith("/admin/evaluations/evaluation-1");
+  expect(navigationContext.navigate).toHaveBeenCalledWith("/admin/evaluations/findings?run_id=run-1");
 
   const fallbackContext = {
     ...context,
@@ -827,6 +842,8 @@ test("run replay exposes closed-loop evidence counts", () => {
   expect(html).toContain("liveRunReplayModelCallPath(call)");
   expect(html).toContain("liveRunReplayToolCallPath(call)");
   expect(html).toContain("liveRunReplayToolAuthorizationPath(authorization)");
+  expect(html).toContain("openLiveRunReplayEvaluation(evaluation)");
+  expect(html).toContain("openLiveRunReplayFinding(finding)");
   expect(html).toContain("liveRunReplayAgentRunPath(selectedLiveRunReplayItem().agent_run_id");
 });
 

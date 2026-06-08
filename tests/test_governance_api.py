@@ -72,6 +72,10 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
             params={"proposal_id": proposal["id"], "status": "rolled_back", "experiment_type": "canary"},
         ).json()
         listed = client.get("/api/v1/governance/proposals", params={"status": "rolled_back"}).json()
+        governance_memory_entries = client.get(
+            f"/api/v1/agent-runs/{proposal['agent_run_id']}/memory-entries"
+        ).json()
+        final_agent_events = client.get(f"/api/v1/agent-runs/{proposal['agent_run_id']}/events").json()
 
     assert invocation_response.status_code == 201
     assert proposal_response.status_code == 201
@@ -84,6 +88,12 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
     assert proposal["source_evaluation_id"] == evaluation["id"]
     assert proposal["source_run_id"] == run_id
     assert proposal["target"]["finding_id"] == finding["id"]
+    evidence_refs = proposal["evidence_refs"]
+    assert any(ref["kind"] == "run_evaluation_finding" and ref["id"] == finding["id"] for ref in evidence_refs)
+    assert any(ref["kind"] == "run_evaluation" and ref["id"] == evaluation["id"] for ref in evidence_refs)
+    assert any(ref["kind"] == "run" and ref["id"] == run_id for ref in evidence_refs)
+    assert any(ref["kind"] == "run_replay" and ref["run_id"] == run_id for ref in evidence_refs)
+    assert any(ref["kind"] == "run_trace" and ref["id"] == finding["evidence_refs"][0]["id"] for ref in evidence_refs)
     assert proposal["risk_assessment"]["requires_human_review"] is True
     assert proposal["activation_plan"]["direct_activation_allowed"] is False
     assert converted_finding["id"] == finding["id"]
@@ -95,6 +105,10 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
     assert agent_run["owner_id"] == proposal["id"]
     assert agent_run["run_id"] == run_id
     assert agent_run["output_payload"]["schema"] == "GovernanceProposalResult"
+    assert any(
+        ref["kind"] == "run_evaluation_finding" and ref["id"] == finding["id"]
+        for ref in agent_run["output_payload"]["evidence_refs"]
+    )
     assert agent_model_calls[0]["provider"] == "deterministic"
     assert agent_authorizations == []
     assert {
@@ -127,6 +141,21 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
     assert len(proposal_experiments) == 3
     assert [item["id"] for item in rolled_back_canaries] == [canary["experiments"][-1]["id"]]
     assert listed[0]["id"] == proposal["id"]
+    memory_types = {item["memory_type"] for item in governance_memory_entries}
+    assert {"artifact", "episodic"} <= memory_types
+    assert {item["agent_key"] for item in governance_memory_entries} == {"psop.governance"}
+    assert {item["status"] for item in governance_memory_entries} == {"pending_review"}
+    artifact_memory = next(item for item in governance_memory_entries if item["memory_type"] == "artifact")
+    episodic_memory = next(item for item in governance_memory_entries if item["memory_type"] == "episodic")
+    assert artifact_memory["namespace"] == "governance"
+    assert artifact_memory["metadata"]["schema"] == "psop-governance-memory/v1"
+    assert artifact_memory["metadata"]["experiment_type"] == "regression"
+    assert any(ref["kind"] == "psop_improvement_experiment" for ref in artifact_memory["source_refs"])
+    assert episodic_memory["metadata"]["proposal_status"] == "rolled_back"
+    assert any(ref["kind"] == "psop_improvement_proposal" and ref["id"] == proposal["id"] for ref in episodic_memory["source_refs"])
+    memory_events = [item for item in final_agent_events if item["event_type"] == "governance.memory_candidates.written"]
+    assert len(memory_events) >= 2
+    assert all(event["payload"]["used_as_runtime_state"] is False for event in memory_events)
 
 
 def test_governance_api_creates_manual_proposal_with_agent_run() -> None:
@@ -239,6 +268,12 @@ def test_governance_api_creates_manual_proposal_from_source_findings() -> None:
     assert proposal["source_findings"][0]["quality_score"] == evaluation["quality_score"]
     assert proposal["source_evaluation_id"] == evaluation["id"]
     assert proposal["source_run_id"] == run_id
+    assert any(
+        ref["kind"] == "run_evaluation_finding" and ref["id"] == finding["id"]
+        for ref in proposal["evidence_refs"]
+    )
+    assert any(ref["kind"] == "run_evaluation" and ref["id"] == evaluation["id"] for ref in proposal["evidence_refs"])
+    assert any(ref["kind"] == "run_replay" and ref["run_id"] == run_id for ref in proposal["evidence_refs"])
     assert converted_finding["id"] == finding["id"]
     assert converted_finding["status"] == "converted_to_proposal"
 
@@ -276,6 +311,7 @@ def test_governance_proposal_activity_websocket_streams_proposal_snapshot() -> N
     assert initial_payload["active"] is False
     assert initial_payload["terminal"] is True
     assert initial_payload["tool_authorizations"] == []
+    assert initial_payload["memory_entries"] == []
     assert initial_payload["model_calls"][0]["provider"] == "deterministic"
     assert {
         "agent.run.created",
@@ -289,3 +325,5 @@ def test_governance_proposal_activity_websocket_streams_proposal_snapshot() -> N
     assert updated_payload["proposal"]["status"] == "testing"
     assert updated_payload["proposal"]["experiments"][0]["experiment_type"] == "regression"
     assert updated_payload["proposal"]["experiments"][0]["status"] == "succeeded"
+    assert updated_payload["memory_entries"][0]["memory_type"] == "artifact"
+    assert updated_payload["memory_entries"][0]["agent_key"] == "psop.governance"

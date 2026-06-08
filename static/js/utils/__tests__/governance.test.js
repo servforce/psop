@@ -152,6 +152,7 @@ test("governance methods build filters and labels", () => {
   expect(methods.governanceProposalAgentRunPath("agent-run-2", { tab: "model" })).toBe(
     "/admin/platform/agent-runs/agent-run-2?tab=model"
   );
+  expect(methods.governanceProposalMemoryEntryPath("memory-1")).toBe("/admin/platform/memory/memory-1");
 });
 
 test("governance proposal opens governance AgentRun details", () => {
@@ -169,6 +170,8 @@ test("governance proposal opens governance AgentRun details", () => {
   const html = fs.readFileSync(path.join(__dirname, "../../../pages/governance-proposals.html"), "utf8");
   expect(html).toContain("openGovernanceProposalAgentRun(currentGovernanceProposal)");
   expect(html).toContain("currentGovernanceProposal.agent_run_id");
+  expect(html).toContain("governanceProposalMemoryEntries");
+  expect(html).toContain("openGovernanceProposalMemoryEntry(memory)");
 });
 
 test("governance methods build tool authorization context links", () => {
@@ -689,6 +692,7 @@ test("governance methods stream proposal activity snapshots", async () => {
     governanceProposalToolAuthorizations: [],
     governanceProposalMemoryEntries: [],
     apiRequest: jest.fn(async () => proposal),
+    navigate: jest.fn(),
     showNotice: jest.fn()
   };
 
@@ -723,6 +727,8 @@ test("governance methods stream proposal activity snapshots", async () => {
   expect(context.governanceProposalAgentEvents).toHaveLength(1);
   expect(context.governanceProposalModelCalls).toHaveLength(1);
   expect(context.governanceProposalMemoryEntries).toHaveLength(1);
+  methods.openGovernanceProposalMemoryEntry.call(context, context.governanceProposalMemoryEntries[0]);
+  expect(context.navigate).toHaveBeenCalledWith("/admin/platform/memory/memory-1");
 
   methods.disconnectGovernanceProposalActivityWebSocket.call(context);
 
