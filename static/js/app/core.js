@@ -563,6 +563,7 @@
 
           if (this.route.name === "tool-authorizations") {
             this.currentSkill = null;
+            this.syncToolAuthorizationFiltersFromLocation?.();
             await this.loadToolAuthorizations();
             return;
           }

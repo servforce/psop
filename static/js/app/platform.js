@@ -733,8 +733,10 @@
       return buildPlatformMemoryEntryPath(memoryId);
     },
 
-    platformToolAuthorizationsPath() {
-      return buildToolAuthorizationsPath();
+    platformToolAuthorizationsPath(toolName) {
+      const path = buildToolAuthorizationsPath();
+      const normalized = String(toolName || "").trim();
+      return normalized ? `${path}?tool_name=${encodeURIComponent(normalized)}` : path;
     },
 
     platformToolSideEffectOptions() {

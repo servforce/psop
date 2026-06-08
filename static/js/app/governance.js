@@ -280,10 +280,30 @@
     toolAuthorizationQueryString() {
       const params = new URLSearchParams();
       const status = String(this.toolAuthorizationFilters.status || "").trim();
+      const toolName = String(this.toolAuthorizationFilters.tool_name || "").trim();
       if (status) {
         params.set("status", status);
       }
+      if (toolName) {
+        params.set("tool_name", toolName);
+      }
       return params.toString();
+    },
+
+    syncToolAuthorizationFiltersFromLocation() {
+      if (typeof window === "undefined" || !window.location) {
+        return;
+      }
+      const search = window.location.search || "";
+      if (search === this.toolAuthorizationLocationSearch) {
+        return;
+      }
+      this.toolAuthorizationLocationSearch = search;
+      const params = new URLSearchParams(search);
+      this.toolAuthorizationFilters = {
+        ...this.toolAuthorizationFilters,
+        tool_name: params.get("tool_name") || ""
+      };
     },
 
     applyToolAuthorizationFilters() {
@@ -291,7 +311,7 @@
     },
 
     resetToolAuthorizationFilters() {
-      this.toolAuthorizationFilters = { status: "pending" };
+      this.toolAuthorizationFilters = { status: "pending", tool_name: "" };
       return this.loadToolAuthorizations();
     },
 

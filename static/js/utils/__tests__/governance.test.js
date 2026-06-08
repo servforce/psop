@@ -2,10 +2,11 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-function loadGovernanceMethods() {
+function loadGovernanceMethods(locationSearch = "") {
   const code = fs.readFileSync(path.join(__dirname, "../../app/governance.js"), "utf8");
   const sandbox = {
     window: {
+      location: { search: locationSearch },
       PSOPConsoleHelpers: {
         buildGovernanceProposalsPath: () => "/admin/governance/proposals",
         buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
@@ -30,16 +31,29 @@ test("governance methods build filters and labels", () => {
   const context = {
     ...methods,
     governanceProposalFilters: { status: "testing" },
-    toolAuthorizationFilters: { status: "pending" },
+    toolAuthorizationFilters: { status: "pending", tool_name: "psop.repository.commit_patch" },
     optionLabel: (options, value) => options.find((item) => item.value === value)?.label || value
   };
 
   expect(methods.governanceProposalQueryString.call(context)).toBe("status=testing");
-  expect(methods.toolAuthorizationQueryString.call(context)).toBe("status=pending");
+  expect(methods.toolAuthorizationQueryString.call(context)).toBe("status=pending&tool_name=psop.repository.commit_patch");
   expect(methods.governanceProposalTypeLabel.call(context, "tool_policy_update")).toBe("Tool Policy");
   expect(methods.governanceProposalStatusLabel.call(context, "rolled_back")).toBe("已回滚");
   expect(methods.toolAuthorizationStatusLabel.call(context, "approved")).toBe("已批准");
   expect(methods.governanceProposalPath("proposal-1")).toBe("/admin/governance/proposals/proposal-1");
+});
+
+test("governance methods sync tool authorization filter from location", () => {
+  const methods = loadGovernanceMethods("?tool_name=psop.agent_version.activate");
+  const context = {
+    ...methods,
+    toolAuthorizationFilters: { status: "pending", tool_name: "" },
+    toolAuthorizationLocationSearch: ""
+  };
+
+  methods.syncToolAuthorizationFiltersFromLocation.call(context);
+
+  expect(context.toolAuthorizationFilters.tool_name).toBe("psop.agent_version.activate");
 });
 
 test("governance methods flatten proposal experiments", () => {

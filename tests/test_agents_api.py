@@ -53,6 +53,10 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
             f"/api/v1/runs/{agent_run['run_id']}/tool-authorizations",
             params={"status": "pending"},
         )
+        tool_run_authorizations_response = client.get(
+            f"/api/v1/runs/{agent_run['run_id']}/tool-authorizations",
+            params={"tool_name": "psop.repository.commit_patch"},
+        )
         waiting_run_response = client.get(f"/api/v1/agent-runs/{agent_run['id']}")
         approve_response = client.post(
             f"/api/v1/tool-authorizations/{authorization['id']}/approve",
@@ -81,6 +85,14 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
         )
         rejected_run_response = client.get(f"/api/v1/agent-runs/{reject_run['id']}")
         pending_authorizations_response = client.get("/api/v1/tool-authorizations", params={"status": "pending"})
+        commit_patch_authorizations_response = client.get(
+            "/api/v1/tool-authorizations",
+            params={"tool_name": "psop.repository.commit_patch"},
+        )
+        activate_authorizations_response = client.get(
+            "/api/v1/tool-authorizations",
+            params={"tool_name": "psop.agent_version.activate"},
+        )
 
     agent_keys = {item["key"] for item in agents_response.json()}
     assert agents_response.status_code == 200
@@ -110,6 +122,8 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert [item["id"] for item in run_authorizations_response.json()] == [authorization["id"]]
     assert pending_run_authorizations_response.status_code == 200
     assert [item["id"] for item in pending_run_authorizations_response.json()] == [authorization["id"]]
+    assert tool_run_authorizations_response.status_code == 200
+    assert [item["id"] for item in tool_run_authorizations_response.json()] == [authorization["id"]]
     assert waiting_run_response.json()["status"] == "waiting_tool_authorization"
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved"
@@ -120,6 +134,8 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert rejected_run_response.json()["status"] == "failed"
     assert rejected_run_response.json()["error_message"] == "tool_authorization_denied"
     assert pending_authorizations_response.json() == []
+    assert [item["id"] for item in commit_patch_authorizations_response.json()] == [authorization["id"]]
+    assert [item["id"] for item in activate_authorizations_response.json()] == [reject_authorization["id"]]
 
 
 def test_agent_version_api_creates_publishes_and_activates_draft() -> None:

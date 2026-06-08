@@ -528,6 +528,7 @@ class AgentService:
         agent_run_id: str | None = None,
         run_id: str | None = None,
         status: str | None = None,
+        tool_name: str | None = None,
     ) -> list[AgentToolAuthorizationResponse]:
         return [
             self._build_tool_authorization_response(item)
@@ -536,6 +537,7 @@ class AgentService:
                 agent_run_id=agent_run_id,
                 run_id=run_id,
                 status=status,
+                tool_name=tool_name,
             )
         ]
 

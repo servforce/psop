@@ -189,20 +189,22 @@ def append_agent_run_event(
 @agent_runs_router.get("/{agent_run_id}/tool-authorizations", response_model=list[AgentToolAuthorizationResponse])
 def list_agent_run_tool_authorizations(
     agent_run_id: str,
+    tool_name: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: AgentService = Depends(get_agent_service),
 ) -> list[AgentToolAuthorizationResponse]:
-    return service.list_tool_authorizations(session, agent_run_id=agent_run_id)
+    return service.list_tool_authorizations(session, agent_run_id=agent_run_id, tool_name=tool_name)
 
 
 @run_tool_authorizations_router.get("/{run_id}/tool-authorizations", response_model=list[AgentToolAuthorizationResponse])
 def list_run_tool_authorizations(
     run_id: str,
     status: str | None = Query(default=None),
+    tool_name: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: AgentService = Depends(get_agent_service),
 ) -> list[AgentToolAuthorizationResponse]:
-    return service.list_tool_authorizations(session, run_id=run_id, status=status)
+    return service.list_tool_authorizations(session, run_id=run_id, status=status, tool_name=tool_name)
 
 
 @tool_authorizations_router.post(
@@ -221,10 +223,11 @@ def create_tool_authorization(
 @tool_authorizations_router.get("", response_model=list[AgentToolAuthorizationResponse])
 def list_tool_authorizations(
     status: str | None = Query(default=None),
+    tool_name: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: AgentService = Depends(get_agent_service),
 ) -> list[AgentToolAuthorizationResponse]:
-    return service.list_tool_authorizations(session, status=status)
+    return service.list_tool_authorizations(session, status=status, tool_name=tool_name)
 
 
 @tool_authorizations_router.get("/{authorization_id}", response_model=AgentToolAuthorizationResponse)

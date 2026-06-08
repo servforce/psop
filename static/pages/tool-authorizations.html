@@ -19,6 +19,10 @@
             </template>
           </select>
         </label>
+        <label class="field-block w-72 shrink-0">
+          <span class="field-label">工具名</span>
+          <input x-model="toolAuthorizationFilters.tool_name" class="input-field h-9" placeholder="psop.repository.commit_patch" @input.debounce.300ms="applyToolAuthorizationFilters()" />
+        </label>
         <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.toolAuthorizations" @click="loadToolAuthorizations()">
           <span class="material-symbols-outlined text-[18px]">refresh</span>
         </button>

@@ -749,8 +749,10 @@
       governanceExperimentDetail: null,
       toolAuthorizations: [],
       toolAuthorizationFilters: {
-        status: "pending"
+        status: "pending",
+        tool_name: ""
       },
+      toolAuthorizationLocationSearch: "",
       agentRuns: [],
       currentAgentRun: null,
       currentAgentRunEvents: [],

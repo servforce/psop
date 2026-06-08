@@ -326,6 +326,9 @@ test("platform methods load tools and select the first row", async () => {
   });
   expect(context.platformTools).toEqual(tools);
   expect(context.currentPlatformTool.name).toBe("psop.memory.search");
+  expect(methods.platformToolAuthorizationsPath.call(context, context.currentPlatformTool.name)).toBe(
+    "/admin/platform/tool-authorizations?tool_name=psop.memory.search"
+  );
   expect(context.platformToolTestResult.policy_reason).toBe("console_test_allowed");
   expect(context.busy.platformTools).toBe(false);
   expect(context.busy.platformToolAction).toBe(false);
