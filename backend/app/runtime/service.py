@@ -18,6 +18,7 @@ from app.agent_prompts.service import AgentPromptService
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.schemas import RuntimeJobResponse
+from app.jobs.types import RUNTIME_STEP_JOB_TYPE
 from app.runtime.models import (
     RunCapabilityBinding,
     Run,
@@ -189,7 +190,7 @@ class RuntimeService:
             )
         session.add(
             RuntimeJob(
-                job_type="runtime",
+                job_type=RUNTIME_STEP_JOB_TYPE,
                 status="pending",
                 payload={"run_id": run.id},
                 run_id=run.id,
@@ -372,7 +373,7 @@ class RuntimeService:
         if run.status != "waiting_input":
             session.add(
                 RuntimeJob(
-                    job_type="runtime",
+                    job_type=RUNTIME_STEP_JOB_TYPE,
                     status="pending",
                     payload={"run_id": run.id},
                     run_id=run.id,
@@ -1863,12 +1864,13 @@ class RuntimeService:
     def _ensure_runtime_job_pending(self, session: Session, run: Run) -> RuntimeJob:
         job = self.job_repository.get_runtime_job_by_dedupe_key(session, f"job:runtime:{run.id}")
         if job:
+            job.job_type = RUNTIME_STEP_JOB_TYPE
             job.status = "pending"
             job.available_at = now_utc() + timedelta(seconds=2)
             job.last_error = ""
             return job
         job = RuntimeJob(
-            job_type="runtime",
+            job_type=RUNTIME_STEP_JOB_TYPE,
             status="pending",
             payload={"run_id": run.id},
             run_id=run.id,

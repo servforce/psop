@@ -15,6 +15,13 @@ from app.jobs.schemas import (
     RuntimeJobStatsResponse,
     RuntimeJobTokenUsageResponse,
 )
+from app.jobs.types import (
+    MATERIAL_ANALYSIS_JOB_TYPE,
+    PSKILL_BUILD_JOB_TYPE,
+    is_pskill_compile_job_type,
+    is_pskill_test_job_type,
+    is_runtime_step_job_type,
+)
 from app.runtime.models import Run
 from app.testing.models import SkillTestScenarioRun
 from app.pskills.models import PSkillMaterialAnalysis, PSkillMaterialGeneration, now_utc
@@ -122,15 +129,15 @@ class JobQueryService:
         )
 
     def _progress(self, session: Session, job: RuntimeJob) -> RuntimeJobProgressResponse:
-        if job.job_type == "compile":
+        if is_pskill_compile_job_type(job.job_type):
             return self._compile_progress(job)
-        if job.job_type == "runtime":
+        if is_runtime_step_job_type(job.job_type):
             return self._runtime_progress(session, job)
-        if job.job_type == "skill_test_timeline_driver":
+        if is_pskill_test_job_type(job.job_type):
             return self._skill_test_progress(session, job)
-        if job.job_type == "material_analysis":
+        if job.job_type == MATERIAL_ANALYSIS_JOB_TYPE:
             return self._material_analysis_progress(session, job)
-        if job.job_type == "pskill_build":
+        if job.job_type == PSKILL_BUILD_JOB_TYPE:
             return self._skill_generation_progress(session, job)
         return self._fallback_progress(job)
 

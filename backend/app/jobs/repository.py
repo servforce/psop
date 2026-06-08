@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.jobs.models import RuntimeJob
+from app.jobs.types import job_type_filter_values
 from app.pskills.models import now_utc
 
 
@@ -71,7 +72,7 @@ class JobRepository:
         if status:
             query = query.where(RuntimeJob.status == status)
         if job_type:
-            query = query.where(RuntimeJob.job_type == job_type)
+            query = query.where(RuntimeJob.job_type.in_(job_type_filter_values(job_type)))
         if created_from:
             query = query.where(RuntimeJob.created_at >= created_from)
         if created_to:
@@ -108,7 +109,7 @@ class JobRepository:
         if status:
             query = query.where(RuntimeJob.status == status)
         if job_type:
-            query = query.where(RuntimeJob.job_type == job_type)
+            query = query.where(RuntimeJob.job_type.in_(job_type_filter_values(job_type)))
         if created_from:
             query = query.where(RuntimeJob.created_at >= created_from)
         if created_to:

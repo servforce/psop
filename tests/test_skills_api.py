@@ -10,6 +10,12 @@ from fastapi.testclient import TestClient
 
 from app.app import create_app
 from app.core.config import Settings
+from app.jobs.types import (
+    LEGACY_SKILL_TEST_TIMELINE_DRIVER_JOB_TYPE,
+    PSKILL_COMPILE_JOB_TYPE,
+    PSKILL_TEST_JOB_TYPE,
+    RUNTIME_STEP_JOB_TYPE,
+)
 from app.pskills import materials
 from app.pskills import video_analysis
 from app.pskills import service as skills_service_module
@@ -2279,10 +2285,10 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
 
     jobs = jobs_response.json()
-    assert {job["job_type"] for job in jobs} >= {"compile", "runtime"}
+    assert {job["job_type"] for job in jobs} >= {PSKILL_COMPILE_JOB_TYPE, RUNTIME_STEP_JOB_TYPE}
     assert all(job["status"] == "succeeded" for job in jobs)
-    compile_job = next(job for job in jobs if job["job_type"] == "compile")
-    runtime_job = next(job for job in jobs if job["job_type"] == "runtime")
+    compile_job = next(job for job in jobs if job["job_type"] == PSKILL_COMPILE_JOB_TYPE)
+    runtime_job = next(job for job in jobs if job["job_type"] == RUNTIME_STEP_JOB_TYPE)
     assert compile_job["started_at"]
     assert compile_job["finished_at"]
     assert compile_job["duration_ms"] is not None
@@ -2439,7 +2445,10 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
         old_cases_response = client.get(f"/api/v1/pskills/{created['id']}/test-cases", params={"mode": "debug"})
-        test_jobs_response = client.get("/api/v1/runtime/jobs", params={"job_type": "skill_test_timeline_driver"})
+        test_jobs_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": LEGACY_SKILL_TEST_TIMELINE_DRIVER_JOB_TYPE},
+        )
 
     assert invocation_response.status_code == 201
     assert invocation["run_id"]
@@ -2835,9 +2844,9 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert image_inputs[0]["payload_inline"]["name"] == "伞骨图片"
     assert image_inputs[0]["payload_inline"]["description"] == "伞骨近照"
     assert any(event["direction"] == "output" and "测试任务已完成" in str(event["payload_inline"]) for event in terminal_events)
-    assert any(job["job_type"] == "skill_test_timeline_driver" and job["status"] == "succeeded" for job in jobs_response.json())
+    assert any(job["job_type"] == PSKILL_TEST_JOB_TYPE and job["status"] == "succeeded" for job in jobs_response.json())
     assert any(
-        job["job_type"] == "skill_test_timeline_driver"
+        job["job_type"] == PSKILL_TEST_JOB_TYPE
         and job["token_usage"]
         and job["token_usage"]["total_tokens"] >= 15
         for job in jobs_response.json()
@@ -3157,7 +3166,10 @@ def test_skill_test_scenario_run_can_be_cancelled() -> None:
         )
         runtime_run_response = client.get(f"/api/v1/runs/{scenario_run['run_id']}")
         terminal_session_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}")
-        jobs_response = client.get("/api/v1/runtime/jobs", params={"job_type": "skill_test_timeline_driver"})
+        jobs_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": LEGACY_SKILL_TEST_TIMELINE_DRIVER_JOB_TYPE},
+        )
         review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
         second_cancel_response = client.post(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/cancel", json={})
 

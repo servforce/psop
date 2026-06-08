@@ -39,6 +39,7 @@ from app.jobs.progress import (
     mark_publish_stage,
 )
 from app.jobs.repository import JobRepository
+from app.jobs.types import PSKILL_COMPILE_JOB_TYPE, is_pskill_compile_job_type
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError, SkillsError
 from app.pskills.manifest import SkillDocument, document_from_manifest_snapshot
 from app.pskills.models import PSkillDefinition, PSkillPublishRecord, PSkillVersion, now_utc
@@ -150,7 +151,7 @@ class CompilerService:
             published_commit_sha=pskill_version.source_commit_sha,
         )
         job = RuntimeJob(
-            job_type="compile",
+            job_type=PSKILL_COMPILE_JOB_TYPE,
             status="pending",
             payload=progress_payload,
             compile_request_id=compile_request.id,
@@ -240,7 +241,7 @@ class CompilerService:
                 stage["label"] = "完成编译"
 
         job = RuntimeJob(
-            job_type="compile",
+            job_type=PSKILL_COMPILE_JOB_TYPE,
             status="pending",
             payload=progress_payload,
             compile_request_id=compile_request.id,
@@ -522,7 +523,7 @@ class CompilerService:
         job = self.job_repository.get_runtime_job(session, job_id)
         if not job:
             raise SkillNotFoundError("未找到运行任务。", details={"job_id": job_id})
-        if job.job_type != "compile":
+        if not is_pskill_compile_job_type(job.job_type):
             raise SkillValidationError("当前 worker 仅支持 compile job。", details={"job_type": job.job_type})
 
         compile_request_id = job.compile_request_id or job.payload.get("compile_request_id")

@@ -18,6 +18,7 @@ from app.agent_prompts.service import AgentPromptService
 from app.compiler.models import ArtifactObject
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
+from app.jobs.types import PSKILL_TEST_JOB_TYPE
 from app.runtime.models import Run
 from app.runtime.schemas import (
     AppendTerminalEventRequest,
@@ -67,7 +68,7 @@ from app.infra.object_store import ObjectStoreService
 
 
 TIMELINE_SCHEMA_VERSION = "psop-skill-test-timeline/v1"
-TIMELINE_DRIVER_JOB_TYPE = "skill_test_timeline_driver"
+TIMELINE_DRIVER_JOB_TYPE = PSKILL_TEST_JOB_TYPE
 DEFAULT_TIMELINE_DURATION_MS = 1_800_000
 OPEN_SCENARIO_RUN_STATUSES = {"pending", "queued", "running", "waiting_input"}
 TERMINAL_RUNTIME_STATUSES = {"succeeded", "failed", "cancelled"}

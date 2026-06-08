@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from app.jobs.models import RuntimeJob
+from app.jobs.types import LEGACY_RUNTIME_JOB_TYPE, PSKILL_COMPILE_JOB_TYPE, RUNTIME_STEP_JOB_TYPE
 from app.pskills.models import now_utc
 from tests.test_skills_api import create_test_client
 
@@ -75,7 +76,7 @@ def test_runtime_jobs_stats_uses_window_and_summarizes_tokens() -> None:
     with client:
         with client.app.state.db_manager.session() as session:
             succeeded = RuntimeJob(
-                job_type="runtime",
+                job_type=RUNTIME_STEP_JOB_TYPE,
                 status="pending",
                 payload={"run_id": "run-1"},
                 dedupe_key="job:runtime-stats",
@@ -88,7 +89,7 @@ def test_runtime_jobs_stats_uses_window_and_summarizes_tokens() -> None:
             session.add(succeeded)
 
             failed = RuntimeJob(
-                job_type="compile",
+                job_type=PSKILL_COMPILE_JOB_TYPE,
                 status="pending",
                 payload={},
                 dedupe_key="job:compile-stats",
@@ -100,7 +101,7 @@ def test_runtime_jobs_stats_uses_window_and_summarizes_tokens() -> None:
             session.add(failed)
 
             old = RuntimeJob(
-                job_type="runtime",
+                job_type=LEGACY_RUNTIME_JOB_TYPE,
                 status="pending",
                 payload={},
                 dedupe_key="job:old-stats",
@@ -124,5 +125,12 @@ def test_runtime_jobs_stats_uses_window_and_summarizes_tokens() -> None:
         assert stats["avg_duration_ms"] == 3000
         assert stats["max_duration_ms"] == 4000
         assert stats["token_usage"]["total_tokens"] == 50
-        assert stats["by_type"]["runtime"] == 1
-        assert stats["by_type"]["compile"] == 1
+        assert stats["by_type"][RUNTIME_STEP_JOB_TYPE] == 1
+        assert stats["by_type"][PSKILL_COMPILE_JOB_TYPE] == 1
+
+        legacy_filter = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": LEGACY_RUNTIME_JOB_TYPE, "q": "runtime-stats"},
+        )
+        assert legacy_filter.status_code == 200
+        assert [item["job_type"] for item in legacy_filter.json()] == [RUNTIME_STEP_JOB_TYPE]

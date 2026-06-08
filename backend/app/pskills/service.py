@@ -33,6 +33,7 @@ from app.agent_prompts.service import AgentPromptService
 from app.compiler.models import ArtifactObject
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
+from app.jobs.types import MATERIAL_ANALYSIS_JOB_TYPE, PSKILL_BUILD_JOB_TYPE
 from app.pskills.models import (
     PSkillDefinition,
     PSkillPublishRecord,
@@ -88,7 +89,6 @@ from app.gateway.gitlab import GitLabSkillSourceGateway
 from app.infra.object_store import ObjectStoreService
 
 LOGGER = logging.getLogger(__name__)
-PSKILL_BUILD_JOB_TYPE = "pskill_build"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1674,7 +1674,7 @@ class SkillsService:
         material.status = "processing"
         material.error_message = ""
         job = RuntimeJob(
-            job_type="material_analysis",
+            job_type=MATERIAL_ANALYSIS_JOB_TYPE,
             status="pending",
             payload={
                 "pskill_definition_id": material.pskill_definition_id,

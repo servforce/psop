@@ -96,18 +96,27 @@ test("tasks methods build filters and preserve unknown job types", () => {
   expect(query).toContain("q=abc");
   expect(query).toContain("created_from=");
   expect(query).toContain("created_to=");
-  expect(methods.jobTypeLabel("compile")).toBe("Skill 编译");
-  expect(methods.jobTypeLabel("material_analysis")).toBe("Skill 素材解析");
-  expect(methods.jobTypeLabel("pskill_build")).toBe("Skill 智能体构建");
+  expect(methods.jobTypeLabel("compile")).toBe("PSkill 编译");
+  expect(methods.jobTypeLabel("runtime")).toBe("Runtime 推进");
+  expect(methods.jobTypeLabel("skill_test_timeline_driver")).toBe("PSkill 测试");
+  expect(methods.jobTypeLabel("material_analysis")).toBe("PSkill 素材解析");
+  expect(methods.jobTypeLabel("pskill_build")).toBe("PSkill 智能体构建");
   expect(methods.jobTypeLabel("custom_future_job")).toBe("custom_future_job");
+  expect(methods.normalizeTaskJobType("compile")).toBe("pskill_compile");
+  expect(methods.normalizeTaskJobType("runtime")).toBe("runtime_step");
+  expect(methods.normalizeTaskJobType("skill_test_timeline_driver")).toBe("pskill_test");
   expect(methods.normalizeTaskJobType("material_analysis")).toBe("material_analysis");
   expect(methods.taskTypeOptions.call(context)).toContainEqual({
+    value: "pskill_compile",
+    label: "PSkill 编译"
+  });
+  expect(methods.taskTypeOptions.call(context)).toContainEqual({
     value: "pskill_build",
-    label: "Skill 智能体构建"
+    label: "PSkill 智能体构建"
   });
   expect(methods.taskTypeOptions.call(context)).toContainEqual({
     value: "material_analysis",
-    label: "Skill 素材解析"
+    label: "PSkill 素材解析"
   });
   expect(methods.taskTypeOptions.call(context)).toContainEqual({
     value: "custom_future_job",

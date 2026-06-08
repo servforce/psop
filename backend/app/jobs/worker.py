@@ -12,9 +12,17 @@ from app.core.observability import record_span_exception, start_span
 from app.compiler.service import CompilerService
 from app.jobs.progress import ensure_publish_progress_payload, mark_publish_stage
 from app.jobs.repository import JobRepository
+from app.jobs.types import (
+    MATERIAL_ANALYSIS_JOB_TYPE,
+    PSKILL_BUILD_JOB_TYPE,
+    WORKER_CLAIM_JOB_TYPES,
+    is_pskill_compile_job_type,
+    is_pskill_test_job_type,
+    is_runtime_step_job_type,
+)
 from app.runtime.service import RuntimeService
 from app.testing.service import SkillTestService
-from app.pskills.service import PSKILL_BUILD_JOB_TYPE, SkillsService
+from app.pskills.service import SkillsService
 from app.pskills.models import now_utc
 from app.gateway.asr import AsrGateway
 from app.gateway.inference import LlmInferenceGateway
@@ -63,13 +71,7 @@ class RuntimeJobWorker:
         try:
             with self.database_manager.session() as session:
                 job = None
-                for job_type in (
-                    "compile",
-                    "runtime",
-                    "skill_test_timeline_driver",
-                    "material_analysis",
-                    PSKILL_BUILD_JOB_TYPE,
-                ):
+                for job_type in WORKER_CLAIM_JOB_TYPES:
                     with start_span("job.claim", job_type=job_type):
                         job = self.job_repository.claim_next_job(
                             session,
@@ -100,14 +102,14 @@ class RuntimeJobWorker:
             with self.database_manager.session() as session:
                 with log_context(job_id=job_id), start_span("job.process", job_id=job_id, job_type=job_type) as span:
                     try:
-                        if job_type == "compile":
+                        if is_pskill_compile_job_type(job_type):
                             compiler_service = CompilerService(
                                 settings=self.settings,
                                 gitlab_gateway=self.gitlab_gateway,
                                 inference_gateway=self.inference_gateway,
                             )
                             compiler_service.process_compile_job(session, job_id)
-                        elif job_type == "runtime":
+                        elif is_runtime_step_job_type(job_type):
                             job = self.job_repository.get_runtime_job(session, job_id)
                             if not job or not job.run_id:
                                 raise RuntimeError("Runtime job 缺少 run_id。")
@@ -117,14 +119,14 @@ class RuntimeJobWorker:
                                 object_store=self.object_store,
                             )
                             runtime_service.process_run(session, job.run_id)
-                        elif job_type == "skill_test_timeline_driver":
+                        elif is_pskill_test_job_type(job_type):
                             skill_test_service = SkillTestService(
                                 settings=self.settings,
                                 inference_gateway=self.inference_gateway,
                                 object_store=self.object_store,
                             )
                             skill_test_service.process_driver_job(session, job_id)
-                        elif job_type == "material_analysis":
+                        elif job_type == MATERIAL_ANALYSIS_JOB_TYPE:
                             skills_service = SkillsService(
                                 settings=self.settings,
                                 gitlab_gateway=self.gitlab_gateway,
@@ -166,7 +168,7 @@ class RuntimeJobWorker:
                 )
             retryable = job.attempt_no < job.max_attempts
             job.last_error = error_message
-            if job.job_type != "compile":
+            if not is_pskill_compile_job_type(job.job_type):
                 job.status = "pending" if retryable else "failed"
                 if retryable:
                     job.available_at = now_utc() + timedelta(seconds=5 * job.attempt_no)

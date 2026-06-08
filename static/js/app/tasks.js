@@ -1,13 +1,16 @@
 (function () {
   const KNOWN_JOB_TYPES = [
-    { value: "compile", label: "Skill 编译" },
-    { value: "runtime", label: "Skill 运行" },
-    { value: "skill_test_timeline_driver", label: "Skill 测试时间轴执行" },
-    { value: "material_analysis", label: "Skill 素材解析" },
-    { value: "pskill_build", label: "Skill 智能体构建" }
+    { value: "material_analysis", label: "PSkill 素材解析" },
+    { value: "pskill_build", label: "PSkill 智能体构建" },
+    { value: "pskill_compile", label: "PSkill 编译" },
+    { value: "pskill_test", label: "PSkill 测试" },
+    { value: "runtime_step", label: "Runtime 推进" }
   ];
 
   const JOB_TYPE_ALIASES = {
+    compile: "pskill_compile",
+    runtime: "runtime_step",
+    skill_test_timeline_driver: "pskill_test",
     material_analysis: "material_analysis"
   };
 
