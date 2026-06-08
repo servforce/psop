@@ -56,6 +56,25 @@ class CompileArtifactUpdateRequest(BaseModel):
     artifact: dict[str, Any]
 
 
+class CompileArtifactValidationDiagnosticResponse(BaseModel):
+    severity: str
+    code: str
+    message: str
+    location: dict[str, Any] | None = None
+    category: str
+
+
+class CompileArtifactValidationResponse(BaseModel):
+    artifact_id: str
+    compile_request_id: str
+    pskill_version_id: str
+    valid: bool
+    diagnostics: list[CompileArtifactValidationDiagnosticResponse]
+    graph_summary: dict[str, Any] | None = None
+    capability_summary: dict[str, Any] | None = None
+    normalized_artifact: dict[str, Any] | None = None
+
+
 class PublishProgressStageResponse(BaseModel):
     key: str
     label: str

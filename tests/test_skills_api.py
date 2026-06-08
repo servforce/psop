@@ -2055,6 +2055,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         artifact_id = compile_payload["artifact_id"]
 
         artifact_response = client.get(f"/api/v1/compiler/artifacts/{artifact_id}")
+        validate_artifact_response = client.post(f"/api/v1/compiler/artifacts/{artifact_id}/validate")
         edited_artifact = copy.deepcopy(artifact_response.json()["artifact"])
         edited_artifact["runtime_contract"]["workflow_steps"][0]["title"] = "人工修订上下文收集"
         update_artifact_response = client.put(
@@ -2105,6 +2106,21 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert compile_response.status_code == 200
     assert compile_payload["status"] == "succeeded"
     assert artifact_response.status_code == 200
+    assert validate_artifact_response.status_code == 200
+    validate_payload = validate_artifact_response.json()
+    assert validate_payload["artifact_id"] == artifact_id
+    assert validate_payload["compile_request_id"] == compile_request_id
+    assert validate_payload["pskill_version_id"] == publish_payload["published_version"]["id"]
+    assert validate_payload["valid"] is True
+    assert validate_payload["diagnostics"] == []
+    assert validate_payload["graph_summary"]["nodes"] == [
+        "start",
+        "instruct_collect_context",
+        "evaluate_collect_context",
+        "final_verify",
+        "terminal",
+    ]
+    assert validate_payload["normalized_artifact"]["formal_revision"] == "psop-eg-formal/v5"
     assert update_artifact_response.status_code == 200
     assert (
         update_artifact_response.json()["artifact"]["runtime_contract"]["workflow_steps"][0]["title"]

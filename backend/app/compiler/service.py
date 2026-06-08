@@ -25,6 +25,8 @@ from app.compiler.repository import CompilerRepository
 from app.compiler.schemas import (
     CompileArtifactResponse,
     CompileArtifactUpdateRequest,
+    CompileArtifactValidationDiagnosticResponse,
+    CompileArtifactValidationResponse,
     CompileDiagnosticResponse,
     CompileRequestResponse,
     PublishProgressResponse,
@@ -609,6 +611,32 @@ class CompilerService:
         if not artifact:
             raise SkillNotFoundError("未找到编译产物。", details={"compile_artifact_id": artifact_id})
         return self._build_artifact_response(session, artifact, include_payload=True)
+
+    def validate_artifact(self, session: Session, artifact_id: str) -> CompileArtifactValidationResponse:
+        artifact = self.repository.get_artifact(session, artifact_id)
+        if not artifact:
+            raise SkillNotFoundError("未找到编译产物。", details={"compile_artifact_id": artifact_id})
+        artifact_object = self.repository.get_artifact_object(session, artifact.artifact_object_id)
+        if not artifact_object:
+            raise SkillNotFoundError("未找到编译产物对象。", details={"artifact_object_id": artifact.artifact_object_id})
+
+        validation = validate_and_normalize_artifact(artifact_object.content_json)
+        normalized = validation.artifact
+        if normalized is not None:
+            normalized["compile_request_id"] = artifact.compile_request_id
+        return CompileArtifactValidationResponse(
+            artifact_id=artifact.id,
+            compile_request_id=artifact.compile_request_id,
+            pskill_version_id=artifact.pskill_version_id,
+            valid=not validation.has_errors and normalized is not None,
+            diagnostics=[
+                CompileArtifactValidationDiagnosticResponse(**diagnostic.as_dict())
+                for diagnostic in validation.diagnostics
+            ],
+            graph_summary=normalized.get("graph_summary") if normalized else None,
+            capability_summary=normalized.get("capability_summary") if normalized else None,
+            normalized_artifact=normalized,
+        )
 
     def update_artifact(
         self,

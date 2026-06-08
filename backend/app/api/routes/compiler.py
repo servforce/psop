@@ -22,6 +22,7 @@ from app.core.config import Settings
 from app.compiler.schemas import (
     CompileArtifactResponse,
     CompileArtifactUpdateRequest,
+    CompileArtifactValidationResponse,
     CompileDiagnosticResponse,
     CompileRequestResponse,
     PublishProgressResponse,
@@ -155,6 +156,15 @@ def get_compile_artifact(
     service: CompilerService = Depends(get_compiler_service),
 ) -> CompileArtifactResponse:
     return service.get_artifact(session, compile_artifact_id)
+
+
+@router.post("/artifacts/{compile_artifact_id}/validate", response_model=CompileArtifactValidationResponse)
+def validate_compile_artifact(
+    compile_artifact_id: str,
+    session: Session = Depends(get_db_session),
+    service: CompilerService = Depends(get_compiler_service),
+) -> CompileArtifactValidationResponse:
+    return service.validate_artifact(session, compile_artifact_id)
 
 
 @router.put("/artifacts/{compile_artifact_id}", response_model=CompileArtifactResponse)
