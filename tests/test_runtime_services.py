@@ -9,6 +9,7 @@ from app.agents.registry import PromptRegistry
 from app.compiler.service import CompilerService
 from app.compiler.formal_v5 import validate_and_normalize_artifact
 from app.jobs.repository import JobRepository
+from app.memory.models import AgentMemoryEntry
 from app.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest
 from app.runtime.service import RuntimeService
 from app.pskills.exceptions import SkillsGatewayError, SkillValidationError
@@ -496,6 +497,19 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
             payload=PublishSkillRequest(publish_reason="Runtime unit publish"),
         )
         process_publish_job(session, compiler_service, published.compile_request.id)
+        session.add(
+            AgentMemoryEntry(
+                namespace="runtime",
+                memory_type="semantic",
+                agent_key="pskill.runner",
+                status="active",
+                title="runtime-memory-boundary-sentinel",
+                content="Agent memory must not become Runtime Session Token state.",
+                source_refs=[{"kind": "agent_run", "id": "memory-boundary-sentinel-run"}],
+                confidence=90,
+            )
+        )
+        session.flush()
 
         invocation = runtime_service.create_invocation(
             session,
@@ -569,6 +583,14 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert [snapshot.seq_no for snapshot in snapshots] == [0, 1, 2, 3, 4, 5]
     assert snapshots[-1].token_payload["budgets"]["llm_input_tokens"] == 30
     assert snapshots[-1].token_payload["budgets"]["llm_output_tokens"] == 15
+    assert all(snapshot.token_payload.get("memory", {}) == {} for snapshot in snapshots)
+    serialized_snapshots = json.dumps(
+        [snapshot.token_payload for snapshot in snapshots],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    assert "runtime-memory-boundary-sentinel" not in serialized_snapshots
+    assert "memory-boundary-sentinel-run" not in serialized_snapshots
     assert "input" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
     assert "request" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
     assert "_trace_request" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
