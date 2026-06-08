@@ -501,6 +501,13 @@
           this.currentMemoryEntry = null;
         }
         if (this.route.name !== "platform-observability") {
+          this.observabilityRunEvents = [];
+          this.observabilityEventLookupRunId = "";
+          this.observabilityAgentEventResults = [];
+          this.observabilityToolCallResults = [];
+          this.observabilityModelCallResults = [];
+          this.observabilitySkillActivationResults = [];
+          this.observabilityToolAuthorizationResults = [];
           this.observabilityRunTraces = [];
           this.observabilityTraceLookupRunId = "";
           this.observabilityAgentRunDetail = null;

@@ -3003,6 +3003,16 @@
       grid-template-columns: 8rem minmax(12rem,0.45fr) minmax(0,1fr);
     }
   }
+  .xl\:grid-cols-\[8rem_minmax\(13rem\,0\.45fr\)_minmax\(0\,1fr\)\] {
+    @media (width >= 80rem) {
+      grid-template-columns: 8rem minmax(13rem,0.45fr) minmax(0,1fr);
+    }
+  }
+  .xl\:grid-cols-\[8rem_minmax\(14rem\,0\.45fr\)_minmax\(0\,1fr\)\] {
+    @media (width >= 80rem) {
+      grid-template-columns: 8rem minmax(14rem,0.45fr) minmax(0,1fr);
+    }
+  }
   .xl\:grid-cols-\[18rem_1fr_auto\] {
     @media (width >= 80rem) {
       grid-template-columns: 18rem 1fr auto;

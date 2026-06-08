@@ -6,11 +6,20 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.agents.models import AgentEvent, AgentModelCall, AgentRun, AgentToolAuthorization, AgentToolCall
+from app.agents.schemas import (
+    AgentEventResponse,
+    AgentModelCallResponse,
+    AgentToolAuthorizationResponse,
+    AgentToolCallResponse,
+)
 from app.core.config import Settings
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
 from app.governance.models import PsopImprovementProposal
 from app.pskills.models import PSkillDefinition, PSkillVersion, now_utc
-from app.runtime.models import Run, RunEvent, RunTrace
+from app.runtime.models import Run, RunEvent, RunEventPart, RunTrace
+from app.runtime.schemas import RunEventPartResponse, RunEventResponse, RunTraceResponse
+from app.skills.models import SkillActivation
+from app.skills.schemas import SkillActivationResponse
 from app.testing.models import PSkillPublishGate
 from app.observability.schemas import (
     AgentDashboardMetrics,
@@ -85,6 +94,269 @@ class ObservabilityService:
             agents=self._agent_observability_metrics(session, since=since),
             open_telemetry=self._open_telemetry_status(settings=settings, configured=otel_configured),
         )
+
+    def list_run_traces(
+        self,
+        session: Session,
+        *,
+        window_hours: int = 24,
+        run_id: str | None = None,
+        event_type: str | None = None,
+        phase: str | None = None,
+        agent_run_id: str | None = None,
+        limit: int = 50,
+    ) -> list[RunTraceResponse]:
+        resolved_window_hours = max(1, min(24 * 30, int(window_hours or 24)))
+        resolved_limit = max(1, min(200, int(limit or 50)))
+        since = now_utc() - timedelta(hours=resolved_window_hours)
+        conditions = [RunTrace.occurred_at >= since]
+        if run_id:
+            conditions.append(RunTrace.run_id == run_id)
+        if event_type:
+            conditions.append(RunTrace.event_type == event_type)
+        if phase:
+            conditions.append(RunTrace.phase == phase)
+        if agent_run_id:
+            conditions.append(RunTrace.agent_run_id == agent_run_id)
+        traces = list(
+            session.scalars(
+                select(RunTrace)
+                .where(*conditions)
+                .order_by(RunTrace.occurred_at.desc(), RunTrace.seq_no.desc())
+                .limit(resolved_limit)
+            ).all()
+        )
+        return [self._build_run_trace_response(trace) for trace in traces]
+
+    def list_run_events(
+        self,
+        session: Session,
+        *,
+        window_hours: int = 24,
+        run_id: str | None = None,
+        event_kind: str | None = None,
+        direction: str | None = None,
+        agent_run_id: str | None = None,
+        limit: int = 50,
+    ) -> list[RunEventResponse]:
+        resolved_window_hours = max(1, min(24 * 30, int(window_hours or 24)))
+        resolved_limit = max(1, min(200, int(limit or 50)))
+        since = now_utc() - timedelta(hours=resolved_window_hours)
+        conditions = [RunEvent.occurred_at >= since]
+        if run_id:
+            conditions.append(RunEvent.run_id == run_id)
+        if event_kind:
+            conditions.append(RunEvent.event_kind == event_kind)
+        if direction:
+            conditions.append(RunEvent.direction == direction)
+        if agent_run_id:
+            conditions.append(RunEvent.agent_run_id == agent_run_id)
+        events = list(
+            session.scalars(
+                select(RunEvent)
+                .where(*conditions)
+                .order_by(RunEvent.occurred_at.desc(), RunEvent.seq_no.desc())
+                .limit(resolved_limit)
+            ).all()
+        )
+        return [self._build_run_event_response(session, event) for event in events]
+
+    def list_agent_events(
+        self,
+        session: Session,
+        *,
+        window_hours: int = 24,
+        agent_run_id: str | None = None,
+        agent_key: str | None = None,
+        run_id: str | None = None,
+        event_type: str | None = None,
+        phase: str | None = None,
+        limit: int = 50,
+    ) -> list[AgentEventResponse]:
+        resolved_window_hours = max(1, min(24 * 30, int(window_hours or 24)))
+        resolved_limit = max(1, min(200, int(limit or 50)))
+        since = now_utc() - timedelta(hours=resolved_window_hours)
+        conditions = [AgentEvent.occurred_at >= since]
+        if agent_run_id:
+            conditions.append(AgentEvent.agent_run_id == agent_run_id)
+        if event_type:
+            conditions.append(AgentEvent.event_type == event_type)
+        if phase:
+            conditions.append(AgentEvent.phase == phase)
+        if agent_key:
+            conditions.append(AgentRun.agent_key == agent_key)
+        if run_id:
+            conditions.append(AgentRun.run_id == run_id)
+        events = list(
+            session.scalars(
+                select(AgentEvent)
+                .join(AgentRun, AgentRun.id == AgentEvent.agent_run_id)
+                .where(*conditions)
+                .order_by(AgentEvent.occurred_at.desc(), AgentEvent.seq_no.desc())
+                .limit(resolved_limit)
+            ).all()
+        )
+        return [self._build_agent_event_response(event) for event in events]
+
+    def list_tool_calls(
+        self,
+        session: Session,
+        *,
+        window_hours: int = 24,
+        agent_run_id: str | None = None,
+        agent_key: str | None = None,
+        run_id: str | None = None,
+        tool_name: str | None = None,
+        status: str | None = None,
+        side_effect_level: str | None = None,
+        limit: int = 50,
+    ) -> list[AgentToolCallResponse]:
+        resolved_window_hours = max(1, min(24 * 30, int(window_hours or 24)))
+        resolved_limit = max(1, min(200, int(limit or 50)))
+        since = now_utc() - timedelta(hours=resolved_window_hours)
+        conditions = [AgentToolCall.created_at >= since]
+        if agent_run_id:
+            conditions.append(AgentToolCall.agent_run_id == agent_run_id)
+        if tool_name:
+            conditions.append(AgentToolCall.tool_name == tool_name)
+        if status:
+            conditions.append(AgentToolCall.status == status)
+        if side_effect_level:
+            conditions.append(AgentToolCall.side_effect_level == side_effect_level)
+        if agent_key:
+            conditions.append(AgentRun.agent_key == agent_key)
+        if run_id:
+            conditions.append(AgentRun.run_id == run_id)
+        calls = list(
+            session.scalars(
+                select(AgentToolCall)
+                .join(AgentRun, AgentRun.id == AgentToolCall.agent_run_id)
+                .where(*conditions)
+                .order_by(AgentToolCall.updated_at.desc(), AgentToolCall.created_at.desc())
+                .limit(resolved_limit)
+            ).all()
+        )
+        return [self._build_tool_call_response(call) for call in calls]
+
+    def list_model_calls(
+        self,
+        session: Session,
+        *,
+        window_hours: int = 24,
+        agent_run_id: str | None = None,
+        agent_key: str | None = None,
+        run_id: str | None = None,
+        provider: str | None = None,
+        status: str | None = None,
+        route_key: str | None = None,
+        limit: int = 50,
+    ) -> list[AgentModelCallResponse]:
+        resolved_window_hours = max(1, min(24 * 30, int(window_hours or 24)))
+        resolved_limit = max(1, min(200, int(limit or 50)))
+        since = now_utc() - timedelta(hours=resolved_window_hours)
+        conditions = [AgentModelCall.created_at >= since]
+        if agent_run_id:
+            conditions.append(AgentModelCall.agent_run_id == agent_run_id)
+        if provider:
+            conditions.append(AgentModelCall.provider == provider)
+        if status:
+            conditions.append(AgentModelCall.status == status)
+        if route_key:
+            conditions.append(AgentModelCall.route_key == route_key)
+        if agent_key:
+            conditions.append(AgentRun.agent_key == agent_key)
+        if run_id:
+            conditions.append(AgentRun.run_id == run_id)
+        calls = list(
+            session.scalars(
+                select(AgentModelCall)
+                .join(AgentRun, AgentRun.id == AgentModelCall.agent_run_id)
+                .where(*conditions)
+                .order_by(AgentModelCall.created_at.desc())
+                .limit(resolved_limit)
+            ).all()
+        )
+        return [self._build_model_call_response(call) for call in calls]
+
+    def list_skill_activations(
+        self,
+        session: Session,
+        *,
+        window_hours: int = 24,
+        agent_run_id: str | None = None,
+        agent_key: str | None = None,
+        run_id: str | None = None,
+        package_id: str | None = None,
+        version_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SkillActivationResponse]:
+        resolved_window_hours = max(1, min(24 * 30, int(window_hours or 24)))
+        resolved_limit = max(1, min(200, int(limit or 50)))
+        since = now_utc() - timedelta(hours=resolved_window_hours)
+        conditions = [SkillActivation.created_at >= since]
+        if agent_run_id:
+            conditions.append(SkillActivation.agent_run_id == agent_run_id)
+        if package_id:
+            conditions.append(SkillActivation.package_id == package_id)
+        if version_id:
+            conditions.append(SkillActivation.version_id == version_id)
+        if agent_key:
+            conditions.append(AgentRun.agent_key == agent_key)
+        if run_id:
+            conditions.append(AgentRun.run_id == run_id)
+        activations = list(
+            session.scalars(
+                select(SkillActivation)
+                .join(AgentRun, AgentRun.id == SkillActivation.agent_run_id)
+                .where(*conditions)
+                .order_by(SkillActivation.created_at.desc())
+                .limit(resolved_limit)
+            ).all()
+        )
+        return [self._build_skill_activation_response(activation) for activation in activations]
+
+    def list_tool_authorizations(
+        self,
+        session: Session,
+        *,
+        window_hours: int = 24,
+        agent_run_id: str | None = None,
+        agent_key: str | None = None,
+        run_id: str | None = None,
+        tool_name: str | None = None,
+        status: str | None = None,
+        risk_level: str | None = None,
+        side_effect_level: str | None = None,
+        limit: int = 50,
+    ) -> list[AgentToolAuthorizationResponse]:
+        resolved_window_hours = max(1, min(24 * 30, int(window_hours or 24)))
+        resolved_limit = max(1, min(200, int(limit or 50)))
+        since = now_utc() - timedelta(hours=resolved_window_hours)
+        conditions = [AgentToolAuthorization.created_at >= since]
+        if agent_run_id:
+            conditions.append(AgentToolAuthorization.agent_run_id == agent_run_id)
+        if run_id:
+            conditions.append(AgentToolAuthorization.run_id == run_id)
+        if tool_name:
+            conditions.append(AgentToolAuthorization.tool_name == tool_name)
+        if status:
+            conditions.append(AgentToolAuthorization.status == status)
+        if risk_level:
+            conditions.append(AgentToolAuthorization.risk_level == risk_level)
+        if side_effect_level:
+            conditions.append(AgentToolAuthorization.side_effect_level == side_effect_level)
+        if agent_key:
+            conditions.append(AgentRun.agent_key == agent_key)
+        authorizations = list(
+            session.scalars(
+                select(AgentToolAuthorization)
+                .join(AgentRun, AgentRun.id == AgentToolAuthorization.agent_run_id)
+                .where(*conditions)
+                .order_by(AgentToolAuthorization.created_at.desc())
+                .limit(resolved_limit)
+            ).all()
+        )
+        return [self._build_tool_authorization_response(authorization) for authorization in authorizations]
 
     def _pskill_metrics(self, session: Session, *, since: datetime) -> PSkillDashboardMetrics:
         status_counts = self._count_by(session, PSkillDefinition.status)
@@ -241,6 +513,12 @@ class ObservabilityService:
                 AgentToolCall.side_effect_level,
                 AgentToolCall.created_at >= since,
             ),
+            skill_activation_count=self._count(session, SkillActivation, SkillActivation.created_at >= since),
+            skill_activation_package_counts=self._count_by(
+                session,
+                SkillActivation.package_id,
+                SkillActivation.created_at >= since,
+            ),
             tool_authorization_count=self._count(
                 session,
                 AgentToolAuthorization,
@@ -256,6 +534,152 @@ class ObservabilityService:
                 AgentToolAuthorization.risk_level,
                 AgentToolAuthorization.created_at >= since,
             ),
+        )
+
+    @staticmethod
+    def _build_run_trace_response(trace: RunTrace) -> RunTraceResponse:
+        return RunTraceResponse(
+            id=trace.id,
+            run_id=trace.run_id,
+            agent_run_id=trace.agent_run_id,
+            seq_no=trace.seq_no,
+            phase=trace.phase,
+            event_type=trace.event_type,
+            span_id=trace.span_id,
+            parent_span_id=trace.parent_span_id,
+            payload=trace.payload,
+            occurred_at=trace.occurred_at,
+        )
+
+    def _build_run_event_response(self, session: Session, event: RunEvent) -> RunEventResponse:
+        return RunEventResponse(
+            id=event.id,
+            terminal_session_id=event.terminal_session_id,
+            run_id=event.run_id,
+            run_trace_id=event.run_trace_id,
+            trace_event_id=event.run_trace_id,
+            agent_run_id=event.agent_run_id,
+            artifact_object_id=event.artifact_object_id,
+            run_capability_binding_id=event.run_capability_binding_id,
+            direction=event.direction,
+            event_kind=event.event_kind,
+            mime_type=event.mime_type,
+            payload_inline=event.payload_inline,
+            seq_no=event.seq_no,
+            external_event_id=event.external_event_id,
+            source_ref=event.source_ref,
+            parts=[
+                self._build_run_event_part_response(part)
+                for part in session.scalars(
+                    select(RunEventPart)
+                    .where(RunEventPart.run_event_id == event.id)
+                    .order_by(RunEventPart.order_index.asc())
+                ).all()
+            ],
+            occurred_at=event.occurred_at,
+            created_at=event.created_at,
+        )
+
+    @staticmethod
+    def _build_run_event_part_response(part: RunEventPart) -> RunEventPartResponse:
+        return RunEventPartResponse(
+            id=part.id,
+            run_event_id=part.run_event_id,
+            terminal_event_id=part.run_event_id,
+            run_id=part.run_id,
+            artifact_object_id=part.artifact_object_id,
+            part_id=part.part_id,
+            order_index=part.order_index,
+            kind=part.kind,
+            mime_type=part.mime_type,
+            text=part.text_inline,
+            size_bytes=part.size_bytes,
+            checksum=part.checksum,
+            metadata=part.part_metadata,
+            created_at=part.created_at,
+        )
+
+    @staticmethod
+    def _build_agent_event_response(event: AgentEvent) -> AgentEventResponse:
+        return AgentEventResponse(
+            id=event.id,
+            agent_run_id=event.agent_run_id,
+            seq_no=event.seq_no,
+            event_type=event.event_type,
+            phase=event.phase,
+            payload=event.payload,
+            occurred_at=event.occurred_at,
+        )
+
+    @staticmethod
+    def _build_tool_call_response(call: AgentToolCall) -> AgentToolCallResponse:
+        return AgentToolCallResponse(
+            id=call.id,
+            agent_run_id=call.agent_run_id,
+            tool_name=call.tool_name,
+            tool_provider=call.tool_provider,
+            status=call.status,
+            arguments_summary=call.arguments_summary,
+            result_summary=call.result_summary,
+            side_effect_level=call.side_effect_level,
+            idempotency_key=call.idempotency_key,
+            created_at=call.created_at,
+            updated_at=call.updated_at,
+        )
+
+    @staticmethod
+    def _build_model_call_response(call: AgentModelCall) -> AgentModelCallResponse:
+        return AgentModelCallResponse(
+            id=call.id,
+            agent_run_id=call.agent_run_id,
+            provider=call.provider,
+            route_key=call.route_key,
+            model_name=call.model_name,
+            status=call.status,
+            request_payload=call.request_payload,
+            response_payload=call.response_payload,
+            usage_json=call.usage_json,
+            error_message=call.error_message,
+            started_at=call.started_at,
+            ended_at=call.ended_at,
+            created_at=call.created_at,
+        )
+
+    @staticmethod
+    def _build_skill_activation_response(activation: SkillActivation) -> SkillActivationResponse:
+        return SkillActivationResponse(
+            id=activation.id,
+            agent_run_id=activation.agent_run_id,
+            package_id=activation.package_id,
+            version_id=activation.version_id,
+            activation_context=activation.activation_context,
+            created_at=activation.created_at,
+        )
+
+    @staticmethod
+    def _build_tool_authorization_response(authorization: AgentToolAuthorization) -> AgentToolAuthorizationResponse:
+        return AgentToolAuthorizationResponse(
+            id=authorization.id,
+            agent_run_id=authorization.agent_run_id,
+            agent_tool_call_id=authorization.agent_tool_call_id,
+            run_id=authorization.run_id,
+            run_event_id=authorization.run_event_id,
+            tool_name=authorization.tool_name,
+            tool_provider=authorization.tool_provider,
+            mcp_server_name=authorization.mcp_server_name,
+            side_effect_level=authorization.side_effect_level,
+            risk_level=authorization.risk_level,
+            authorization_reason=authorization.authorization_reason,
+            tool_arguments_summary=authorization.tool_arguments_summary,
+            expected_effect_summary=authorization.expected_effect_summary,
+            reversible=authorization.reversible,
+            idempotency_key=authorization.idempotency_key,
+            status=authorization.status,
+            request_payload=authorization.request_payload,
+            response_payload=authorization.response_payload,
+            created_at=authorization.created_at,
+            responded_at=authorization.responded_at,
+            executed_at=authorization.executed_at,
         )
 
     @staticmethod

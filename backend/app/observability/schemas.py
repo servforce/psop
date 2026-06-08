@@ -90,6 +90,8 @@ class AgentObservabilityMetrics(BaseModel):
     tool_call_count: int = 0
     tool_call_status_counts: dict[str, int] = Field(default_factory=dict)
     tool_call_side_effect_counts: dict[str, int] = Field(default_factory=dict)
+    skill_activation_count: int = 0
+    skill_activation_package_counts: dict[str, int] = Field(default_factory=dict)
     tool_authorization_count: int = 0
     tool_authorization_status_counts: dict[str, int] = Field(default_factory=dict)
     tool_authorization_risk_counts: dict[str, int] = Field(default_factory=dict)

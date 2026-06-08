@@ -7,7 +7,8 @@ from app.agents.models import AgentEvent, AgentModelCall, AgentRun, AgentToolAut
 from app.evaluations.models import RunEvaluation, RunEvaluationFinding
 from app.governance.models import PsopImprovementProposal
 from app.pskills.models import PSkillDefinition, PSkillVersion, now_utc
-from app.runtime.models import Run, RunEvent, RunTrace, TerminalSession
+from app.runtime.models import Run, RunEvent, RunEventPart, RunTrace, TerminalSession
+from app.skills.models import SkillActivation, SkillPackage, SkillVersion
 from app.testing.models import PSkillPublishGate
 from tests.test_skills_api import create_test_client
 
@@ -305,6 +306,35 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
                         side_effect_level="high_write",
                         created_at=now - timedelta(minutes=1),
                     ),
+                    SkillPackage(
+                        id="skill-package-metrics-1",
+                        name="pskill-runner-field-assistant-metrics",
+                        scope="psop",
+                        description="metrics package",
+                        source_uri="skills/psop/pskill-runner-field-assistant",
+                        created_at=now - timedelta(minutes=1),
+                        updated_at=now - timedelta(minutes=1),
+                    ),
+                    SkillVersion(
+                        id="skill-version-metrics-1",
+                        package_id="skill-package-metrics-1",
+                        version_label="v1",
+                        content_hash="skill-version-metrics-hash",
+                        manifest_json={},
+                        body_object_key="",
+                        resource_index=[],
+                        allowed_tools=[],
+                        created_at=now - timedelta(minutes=1),
+                        updated_at=now - timedelta(minutes=1),
+                    ),
+                    SkillActivation(
+                        id="skill-activation-metrics-1",
+                        agent_run_id=agent_run.id,
+                        package_id="skill-package-metrics-1",
+                        version_id="skill-version-metrics-1",
+                        activation_context={"usage": "runner"},
+                        created_at=now - timedelta(minutes=1),
+                    ),
                     AgentToolAuthorization(
                         id="agent-tool-auth-metrics-1",
                         agent_run_id=agent_run.id,
@@ -339,8 +369,1031 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
     assert payload["agents"]["model_call_provider_counts"]["deterministic"] == 1
     assert payload["agents"]["tool_call_status_counts"]["failed"] == 1
     assert payload["agents"]["tool_call_side_effect_counts"]["high_write"] == 1
+    assert payload["agents"]["skill_activation_count"] == 1
+    assert payload["agents"]["skill_activation_package_counts"]["skill-package-metrics-1"] == 1
     assert payload["agents"]["tool_authorization_status_counts"]["pending"] == 1
     assert payload["agents"]["tool_authorization_risk_counts"]["high"] == 1
     assert payload["open_telemetry"]["enabled"] is True
     assert payload["open_telemetry"]["configured"] is True
     assert payload["open_telemetry"]["service_name"] == expected_otel_service_name
+
+
+def test_observability_run_trace_query_filters_recent_runtime_traces() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        now = now_utc()
+        db_manager = client.app.state.db_manager
+        with db_manager.session() as session:
+            pskill = PSkillDefinition(
+                id="pskill-observe-traces-1",
+                key="observe-traces-demo",
+                name="Observe Traces Demo",
+                gitlab_project_id="observe-traces-project",
+                repository_url="https://gitlab.example.local/skills/observe-traces-demo",
+            )
+            version = PSkillVersion(
+                id="pskill-version-observe-traces-1",
+                pskill_definition_id=pskill.id,
+                version_no=1,
+                status="published",
+                source_ref="main",
+            )
+            run = Run(
+                id="run-observe-traces-1",
+                invocation_id="invocation-observe-traces-1",
+                pskill_definition_id=pskill.id,
+                pskill_version_id=version.id,
+                compile_artifact_id="artifact-observe-traces-1",
+                status="failed",
+                runtime_phase="failed",
+                created_at=now - timedelta(minutes=5),
+            )
+            agent_run = AgentRun(
+                id="agent-run-observe-traces-1",
+                agent_key="pskill.runner",
+                status="failed",
+                owner_type="runtime",
+                owner_id=run.id,
+                run_id=run.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            session.add_all(
+                [
+                    pskill,
+                    version,
+                    run,
+                    agent_run,
+                    RunTrace(
+                        id="run-trace-observe-newer",
+                        run_id=run.id,
+                        agent_run_id=agent_run.id,
+                        seq_no=2,
+                        phase="runtime",
+                        event_type="runtime.failed",
+                        span_id="span-newer",
+                        payload={"error": "newer"},
+                        occurred_at=now - timedelta(minutes=1),
+                    ),
+                    RunTrace(
+                        id="run-trace-observe-older",
+                        run_id=run.id,
+                        agent_run_id=agent_run.id,
+                        seq_no=1,
+                        phase="runtime",
+                        event_type="runtime.failed",
+                        span_id="span-older",
+                        payload={"error": "older"},
+                        occurred_at=now - timedelta(minutes=2),
+                    ),
+                    RunTrace(
+                        id="run-trace-observe-completed",
+                        run_id=run.id,
+                        seq_no=3,
+                        phase="runtime",
+                        event_type="runtime.completed",
+                        span_id="span-completed",
+                        payload={},
+                        occurred_at=now - timedelta(minutes=1),
+                    ),
+                    RunTrace(
+                        id="run-trace-observe-old-window",
+                        run_id=run.id,
+                        seq_no=4,
+                        phase="runtime",
+                        event_type="runtime.failed",
+                        span_id="span-old-window",
+                        payload={"error": "old"},
+                        occurred_at=now - timedelta(days=2),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = client.get(
+            "/api/v1/observability/run-traces",
+            params={"window_hours": 24, "event_type": "runtime.failed", "limit": 10},
+        )
+        run_response = client.get(
+            "/api/v1/observability/run-traces",
+            params={"window_hours": 24, "run_id": run.id, "agent_run_id": agent_run.id, "limit": 10},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["id"] for item in payload] == ["run-trace-observe-newer", "run-trace-observe-older"]
+    assert payload[0]["run_id"] == run.id
+    assert payload[0]["agent_run_id"] == agent_run.id
+    assert payload[0]["event_type"] == "runtime.failed"
+    assert payload[0]["payload"] == {"error": "newer"}
+
+    assert run_response.status_code == 200
+    run_payload = run_response.json()
+    assert {item["id"] for item in run_payload} == {"run-trace-observe-newer", "run-trace-observe-older"}
+
+
+def test_observability_run_event_query_filters_recent_runtime_events() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        now = now_utc()
+        db_manager = client.app.state.db_manager
+        with db_manager.session() as session:
+            pskill = PSkillDefinition(
+                id="pskill-observe-events-1",
+                key="observe-events-demo",
+                name="Observe Events Demo",
+                gitlab_project_id="observe-events-project",
+                repository_url="https://gitlab.example.local/skills/observe-events-demo",
+            )
+            version = PSkillVersion(
+                id="pskill-version-observe-events-1",
+                pskill_definition_id=pskill.id,
+                version_no=1,
+                status="published",
+                source_ref="main",
+            )
+            run = Run(
+                id="run-observe-events-1",
+                invocation_id="invocation-observe-events-1",
+                pskill_definition_id=pskill.id,
+                pskill_version_id=version.id,
+                compile_artifact_id="artifact-observe-events-1",
+                status="waiting_input",
+                runtime_phase="wait",
+                created_at=now - timedelta(minutes=5),
+            )
+            terminal_session = TerminalSession(
+                id="terminal-session-observe-events-1",
+                run_id=run.id,
+                mode="web",
+                status="open",
+                opened_at=now - timedelta(minutes=5),
+                created_at=now - timedelta(minutes=5),
+            )
+            agent_run = AgentRun(
+                id="agent-run-observe-events-1",
+                agent_key="pskill.runner",
+                status="succeeded",
+                owner_type="runtime",
+                owner_id=run.id,
+                run_id=run.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            session.add_all(
+                [
+                    pskill,
+                    version,
+                    run,
+                    terminal_session,
+                    agent_run,
+                    RunEvent(
+                        id="run-event-observe-newer",
+                        terminal_session_id=terminal_session.id,
+                        run_id=run.id,
+                        agent_run_id=agent_run.id,
+                        direction="system",
+                        event_kind="tool.authorization.requested",
+                        mime_type="application/json",
+                        payload_inline={"tool_name": "psop.repository.commit_patch"},
+                        seq_no=2,
+                        external_event_id="event-newer",
+                        source_ref={"kind": "agent_tool_authorization"},
+                        occurred_at=now - timedelta(minutes=1),
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    RunEventPart(
+                        id="run-event-part-observe-newer",
+                        run_event_id="run-event-observe-newer",
+                        run_id=run.id,
+                        part_id="summary",
+                        order_index=0,
+                        kind="text",
+                        mime_type="text/plain",
+                        text_inline="Authorization summary",
+                        part_metadata={"source": "test"},
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    RunEvent(
+                        id="run-event-observe-older",
+                        terminal_session_id=terminal_session.id,
+                        run_id=run.id,
+                        agent_run_id=agent_run.id,
+                        direction="system",
+                        event_kind="tool.authorization.requested",
+                        mime_type="application/json",
+                        payload_inline={"tool_name": "psop.repository.commit_patch"},
+                        seq_no=1,
+                        external_event_id="event-older",
+                        source_ref={"kind": "agent_tool_authorization"},
+                        occurred_at=now - timedelta(minutes=2),
+                        created_at=now - timedelta(minutes=2),
+                    ),
+                    RunEvent(
+                        id="run-event-observe-user",
+                        terminal_session_id=terminal_session.id,
+                        run_id=run.id,
+                        direction="input",
+                        event_kind="terminal.multimodal.input.v1",
+                        mime_type="text/plain",
+                        payload_inline={"text": "user input"},
+                        seq_no=3,
+                        external_event_id="event-user",
+                        source_ref={"kind": "web"},
+                        occurred_at=now - timedelta(minutes=1),
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    RunEvent(
+                        id="run-event-observe-old-window",
+                        terminal_session_id=terminal_session.id,
+                        run_id=run.id,
+                        direction="system",
+                        event_kind="tool.authorization.requested",
+                        mime_type="application/json",
+                        payload_inline={},
+                        seq_no=4,
+                        external_event_id="event-old-window",
+                        source_ref={"kind": "agent_tool_authorization"},
+                        occurred_at=now - timedelta(days=2),
+                        created_at=now - timedelta(days=2),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = client.get(
+            "/api/v1/observability/run-events",
+            params={"window_hours": 24, "event_kind": "tool.authorization.requested", "limit": 10},
+        )
+        run_response = client.get(
+            "/api/v1/observability/run-events",
+            params={"window_hours": 24, "run_id": run.id, "agent_run_id": agent_run.id, "limit": 10},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["id"] for item in payload] == ["run-event-observe-newer", "run-event-observe-older"]
+    assert payload[0]["run_id"] == run.id
+    assert payload[0]["agent_run_id"] == agent_run.id
+    assert payload[0]["event_kind"] == "tool.authorization.requested"
+    assert payload[0]["payload_inline"] == {"tool_name": "psop.repository.commit_patch"}
+    assert payload[0]["parts"][0]["text"] == "Authorization summary"
+
+    assert run_response.status_code == 200
+    run_payload = run_response.json()
+    assert {item["id"] for item in run_payload} == {"run-event-observe-newer", "run-event-observe-older"}
+
+
+def test_observability_agent_event_query_filters_recent_agent_events() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        now = now_utc()
+        db_manager = client.app.state.db_manager
+        with db_manager.session() as session:
+            pskill = PSkillDefinition(
+                id="pskill-observe-agent-events-1",
+                key="observe-agent-events-demo",
+                name="Observe Agent Events Demo",
+                gitlab_project_id="observe-agent-events-project",
+                repository_url="https://gitlab.example.local/skills/observe-agent-events-demo",
+            )
+            version = PSkillVersion(
+                id="pskill-version-observe-agent-events-1",
+                pskill_definition_id=pskill.id,
+                version_no=1,
+                status="published",
+                source_ref="main",
+            )
+            run = Run(
+                id="run-observe-agent-events-1",
+                invocation_id="invocation-observe-agent-events-1",
+                pskill_definition_id=pskill.id,
+                pskill_version_id=version.id,
+                compile_artifact_id="artifact-observe-agent-events-1",
+                status="failed",
+                runtime_phase="failed",
+                created_at=now - timedelta(minutes=5),
+            )
+            runner_run = AgentRun(
+                id="agent-run-observe-agent-events-1",
+                agent_key="pskill.runner",
+                status="failed",
+                owner_type="runtime",
+                owner_id=run.id,
+                run_id=run.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            builder_run = AgentRun(
+                id="agent-run-observe-agent-events-2",
+                agent_key="pskill.builder",
+                status="succeeded",
+                owner_type="pskill",
+                owner_id=pskill.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            session.add_all(
+                [
+                    pskill,
+                    version,
+                    run,
+                    runner_run,
+                    builder_run,
+                    AgentEvent(
+                        id="agent-event-observe-newer",
+                        agent_run_id=runner_run.id,
+                        seq_no=2,
+                        event_type="agent.tool.authorization.requested",
+                        phase="tools",
+                        payload={"tool_name": "psop.repository.commit_patch"},
+                        occurred_at=now - timedelta(minutes=1),
+                    ),
+                    AgentEvent(
+                        id="agent-event-observe-older",
+                        agent_run_id=runner_run.id,
+                        seq_no=1,
+                        event_type="agent.tool.authorization.requested",
+                        phase="tools",
+                        payload={"tool_name": "psop.repository.commit_patch"},
+                        occurred_at=now - timedelta(minutes=2),
+                    ),
+                    AgentEvent(
+                        id="agent-event-observe-builder",
+                        agent_run_id=builder_run.id,
+                        seq_no=1,
+                        event_type="agent.run.created",
+                        phase="created",
+                        payload={},
+                        occurred_at=now - timedelta(minutes=1),
+                    ),
+                    AgentEvent(
+                        id="agent-event-observe-old-window",
+                        agent_run_id=runner_run.id,
+                        seq_no=3,
+                        event_type="agent.tool.authorization.requested",
+                        phase="tools",
+                        payload={"old": True},
+                        occurred_at=now - timedelta(days=2),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = client.get(
+            "/api/v1/observability/agent-events",
+            params={"window_hours": 24, "event_type": "agent.tool.authorization.requested", "limit": 10},
+        )
+        scoped_response = client.get(
+            "/api/v1/observability/agent-events",
+            params={"window_hours": 24, "agent_key": "pskill.runner", "run_id": run.id, "limit": 10},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["id"] for item in payload] == ["agent-event-observe-newer", "agent-event-observe-older"]
+    assert payload[0]["agent_run_id"] == runner_run.id
+    assert payload[0]["event_type"] == "agent.tool.authorization.requested"
+    assert payload[0]["payload"] == {"tool_name": "psop.repository.commit_patch"}
+
+    assert scoped_response.status_code == 200
+    scoped_payload = scoped_response.json()
+    assert {item["id"] for item in scoped_payload} == {"agent-event-observe-newer", "agent-event-observe-older"}
+
+
+def test_observability_tool_call_query_filters_recent_agent_tool_calls() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        now = now_utc()
+        db_manager = client.app.state.db_manager
+        with db_manager.session() as session:
+            pskill = PSkillDefinition(
+                id="pskill-observe-tool-calls-1",
+                key="observe-tool-calls-demo",
+                name="Observe Tool Calls Demo",
+                gitlab_project_id="observe-tool-calls-project",
+                repository_url="https://gitlab.example.local/skills/observe-tool-calls-demo",
+            )
+            version = PSkillVersion(
+                id="pskill-version-observe-tool-calls-1",
+                pskill_definition_id=pskill.id,
+                version_no=1,
+                status="published",
+                source_ref="main",
+            )
+            run = Run(
+                id="run-observe-tool-calls-1",
+                invocation_id="invocation-observe-tool-calls-1",
+                pskill_definition_id=pskill.id,
+                pskill_version_id=version.id,
+                compile_artifact_id="artifact-observe-tool-calls-1",
+                status="failed",
+                runtime_phase="failed",
+                created_at=now - timedelta(minutes=5),
+            )
+            runner_run = AgentRun(
+                id="agent-run-observe-tool-calls-1",
+                agent_key="pskill.runner",
+                status="failed",
+                owner_type="runtime",
+                owner_id=run.id,
+                run_id=run.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            builder_run = AgentRun(
+                id="agent-run-observe-tool-calls-2",
+                agent_key="pskill.builder",
+                status="succeeded",
+                owner_type="pskill",
+                owner_id=pskill.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            session.add_all(
+                [
+                    pskill,
+                    version,
+                    run,
+                    runner_run,
+                    builder_run,
+                    AgentToolCall(
+                        id="tool-call-observe-newer",
+                        agent_run_id=runner_run.id,
+                        tool_name="psop.repository.commit_patch",
+                        tool_provider="native",
+                        status="failed",
+                        arguments_summary={"path": "SKILL.md"},
+                        result_summary={"error": "denied"},
+                        side_effect_level="high_write",
+                        idempotency_key="tool-call-newer",
+                        created_at=now - timedelta(minutes=1),
+                        updated_at=now - timedelta(seconds=30),
+                    ),
+                    AgentToolCall(
+                        id="tool-call-observe-older",
+                        agent_run_id=runner_run.id,
+                        tool_name="psop.repository.commit_patch",
+                        tool_provider="native",
+                        status="failed",
+                        arguments_summary={"path": "README.md"},
+                        result_summary={"error": "denied"},
+                        side_effect_level="high_write",
+                        idempotency_key="tool-call-older",
+                        created_at=now - timedelta(minutes=2),
+                        updated_at=now - timedelta(minutes=2),
+                    ),
+                    AgentToolCall(
+                        id="tool-call-observe-builder",
+                        agent_run_id=builder_run.id,
+                        tool_name="psop.memory.search",
+                        tool_provider="native",
+                        status="succeeded",
+                        arguments_summary={"query": "materials"},
+                        result_summary={},
+                        side_effect_level="read",
+                        created_at=now - timedelta(minutes=1),
+                        updated_at=now - timedelta(minutes=1),
+                    ),
+                    AgentToolCall(
+                        id="tool-call-observe-old-window",
+                        agent_run_id=runner_run.id,
+                        tool_name="psop.repository.commit_patch",
+                        tool_provider="native",
+                        status="failed",
+                        arguments_summary={},
+                        result_summary={},
+                        side_effect_level="high_write",
+                        created_at=now - timedelta(days=2),
+                        updated_at=now - timedelta(days=2),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = client.get(
+            "/api/v1/observability/tool-calls",
+            params={"window_hours": 24, "status": "failed", "limit": 10},
+        )
+        scoped_response = client.get(
+            "/api/v1/observability/tool-calls",
+            params={
+                "window_hours": 24,
+                "agent_key": "pskill.runner",
+                "run_id": run.id,
+                "tool_name": "psop.repository.commit_patch",
+                "side_effect_level": "high_write",
+                "limit": 10,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["id"] for item in payload] == ["tool-call-observe-newer", "tool-call-observe-older"]
+    assert payload[0]["agent_run_id"] == runner_run.id
+    assert payload[0]["tool_name"] == "psop.repository.commit_patch"
+    assert payload[0]["arguments_summary"] == {"path": "SKILL.md"}
+    assert payload[0]["status"] == "failed"
+
+    assert scoped_response.status_code == 200
+    scoped_payload = scoped_response.json()
+    assert {item["id"] for item in scoped_payload} == {"tool-call-observe-newer", "tool-call-observe-older"}
+
+
+def test_observability_model_call_query_filters_recent_agent_model_calls() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        now = now_utc()
+        db_manager = client.app.state.db_manager
+        with db_manager.session() as session:
+            pskill = PSkillDefinition(
+                id="pskill-observe-model-calls-1",
+                key="observe-model-calls-demo",
+                name="Observe Model Calls Demo",
+                gitlab_project_id="observe-model-calls-project",
+                repository_url="https://gitlab.example.local/skills/observe-model-calls-demo",
+            )
+            version = PSkillVersion(
+                id="pskill-version-observe-model-calls-1",
+                pskill_definition_id=pskill.id,
+                version_no=1,
+                status="published",
+                source_ref="main",
+            )
+            run = Run(
+                id="run-observe-model-calls-1",
+                invocation_id="invocation-observe-model-calls-1",
+                pskill_definition_id=pskill.id,
+                pskill_version_id=version.id,
+                compile_artifact_id="artifact-observe-model-calls-1",
+                status="failed",
+                runtime_phase="failed",
+                created_at=now - timedelta(minutes=5),
+            )
+            runner_run = AgentRun(
+                id="agent-run-observe-model-calls-1",
+                agent_key="pskill.runner",
+                status="failed",
+                owner_type="runtime",
+                owner_id=run.id,
+                run_id=run.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            builder_run = AgentRun(
+                id="agent-run-observe-model-calls-2",
+                agent_key="pskill.builder",
+                status="succeeded",
+                owner_type="pskill",
+                owner_id=pskill.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            session.add_all(
+                [
+                    pskill,
+                    version,
+                    run,
+                    runner_run,
+                    builder_run,
+                    AgentModelCall(
+                        id="model-call-observe-newer",
+                        agent_run_id=runner_run.id,
+                        provider="deterministic",
+                        route_key="runner",
+                        model_name="test-runner",
+                        status="failed",
+                        request_payload={"prompt": "newer"},
+                        response_payload={},
+                        usage_json={"total_tokens": 120},
+                        error_message="provider failed",
+                        started_at=now - timedelta(minutes=1, seconds=10),
+                        ended_at=now - timedelta(minutes=1),
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    AgentModelCall(
+                        id="model-call-observe-older",
+                        agent_run_id=runner_run.id,
+                        provider="deterministic",
+                        route_key="runner",
+                        model_name="test-runner",
+                        status="failed",
+                        request_payload={"prompt": "older"},
+                        response_payload={},
+                        usage_json={"total_tokens": 80},
+                        error_message="provider failed",
+                        started_at=now - timedelta(minutes=2, seconds=10),
+                        ended_at=now - timedelta(minutes=2),
+                        created_at=now - timedelta(minutes=2),
+                    ),
+                    AgentModelCall(
+                        id="model-call-observe-builder",
+                        agent_run_id=builder_run.id,
+                        provider="deterministic",
+                        route_key="builder",
+                        model_name="test-builder",
+                        status="succeeded",
+                        request_payload={},
+                        response_payload={"ok": True},
+                        usage_json={"total_tokens": 10},
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    AgentModelCall(
+                        id="model-call-observe-old-window",
+                        agent_run_id=runner_run.id,
+                        provider="deterministic",
+                        route_key="runner",
+                        model_name="test-runner",
+                        status="failed",
+                        request_payload={},
+                        response_payload={},
+                        usage_json={"total_tokens": 1},
+                        error_message="old",
+                        created_at=now - timedelta(days=2),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = client.get(
+            "/api/v1/observability/model-calls",
+            params={"window_hours": 24, "provider": "deterministic", "status": "failed", "limit": 10},
+        )
+        scoped_response = client.get(
+            "/api/v1/observability/model-calls",
+            params={
+                "window_hours": 24,
+                "agent_key": "pskill.runner",
+                "run_id": run.id,
+                "route_key": "runner",
+                "limit": 10,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["id"] for item in payload] == ["model-call-observe-newer", "model-call-observe-older"]
+    assert payload[0]["agent_run_id"] == runner_run.id
+    assert payload[0]["provider"] == "deterministic"
+    assert payload[0]["usage_json"] == {"total_tokens": 120}
+    assert payload[0]["error_message"] == "provider failed"
+
+    assert scoped_response.status_code == 200
+    scoped_payload = scoped_response.json()
+    assert {item["id"] for item in scoped_payload} == {"model-call-observe-newer", "model-call-observe-older"}
+
+
+def test_observability_tool_authorization_query_filters_recent_agent_authorizations() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        now = now_utc()
+        db_manager = client.app.state.db_manager
+        with db_manager.session() as session:
+            pskill = PSkillDefinition(
+                id="pskill-observe-tool-authorizations-1",
+                key="observe-tool-authorizations-demo",
+                name="Observe Tool Authorizations Demo",
+                gitlab_project_id="observe-tool-authorizations-project",
+                repository_url="https://gitlab.example.local/skills/observe-tool-authorizations-demo",
+            )
+            version = PSkillVersion(
+                id="pskill-version-observe-tool-authorizations-1",
+                pskill_definition_id=pskill.id,
+                version_no=1,
+                status="published",
+                source_ref="main",
+            )
+            run = Run(
+                id="run-observe-tool-authorizations-1",
+                invocation_id="invocation-observe-tool-authorizations-1",
+                pskill_definition_id=pskill.id,
+                pskill_version_id=version.id,
+                compile_artifact_id="artifact-observe-tool-authorizations-1",
+                status="waiting_input",
+                runtime_phase="wait",
+                created_at=now - timedelta(minutes=5),
+            )
+            runner_run = AgentRun(
+                id="agent-run-observe-tool-authorizations-1",
+                agent_key="pskill.runner",
+                status="waiting_tool_authorization",
+                owner_type="runtime",
+                owner_id=run.id,
+                run_id=run.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            builder_run = AgentRun(
+                id="agent-run-observe-tool-authorizations-2",
+                agent_key="pskill.builder",
+                status="succeeded",
+                owner_type="pskill",
+                owner_id=pskill.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            session.add_all(
+                [
+                    pskill,
+                    version,
+                    run,
+                    runner_run,
+                    builder_run,
+                    AgentToolAuthorization(
+                        id="tool-auth-observe-newer",
+                        agent_run_id=runner_run.id,
+                        run_id=run.id,
+                        tool_name="psop.repository.commit_patch",
+                        tool_provider="native",
+                        side_effect_level="high_write",
+                        risk_level="high",
+                        authorization_reason="needs write approval",
+                        tool_arguments_summary={"path": "SKILL.md"},
+                        expected_effect_summary="update skill source",
+                        reversible=False,
+                        status="pending",
+                        request_payload={"request": "newer"},
+                        response_payload={},
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    AgentToolAuthorization(
+                        id="tool-auth-observe-older",
+                        agent_run_id=runner_run.id,
+                        run_id=run.id,
+                        tool_name="psop.repository.commit_patch",
+                        tool_provider="native",
+                        side_effect_level="high_write",
+                        risk_level="high",
+                        authorization_reason="needs write approval",
+                        tool_arguments_summary={"path": "README.md"},
+                        expected_effect_summary="update docs",
+                        reversible=False,
+                        status="pending",
+                        request_payload={"request": "older"},
+                        response_payload={},
+                        created_at=now - timedelta(minutes=2),
+                    ),
+                    AgentToolAuthorization(
+                        id="tool-auth-observe-builder",
+                        agent_run_id=builder_run.id,
+                        tool_name="psop.memory.search",
+                        tool_provider="native",
+                        side_effect_level="read",
+                        risk_level="medium",
+                        tool_arguments_summary={"query": "materials"},
+                        status="approved",
+                        request_payload={},
+                        response_payload={"decision": "approved"},
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    AgentToolAuthorization(
+                        id="tool-auth-observe-old-window",
+                        agent_run_id=runner_run.id,
+                        run_id=run.id,
+                        tool_name="psop.repository.commit_patch",
+                        tool_provider="native",
+                        side_effect_level="high_write",
+                        risk_level="high",
+                        tool_arguments_summary={},
+                        status="pending",
+                        request_payload={},
+                        response_payload={},
+                        created_at=now - timedelta(days=2),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = client.get(
+            "/api/v1/observability/tool-authorizations",
+            params={"window_hours": 24, "status": "pending", "limit": 10},
+        )
+        scoped_response = client.get(
+            "/api/v1/observability/tool-authorizations",
+            params={
+                "window_hours": 24,
+                "agent_key": "pskill.runner",
+                "run_id": run.id,
+                "risk_level": "high",
+                "side_effect_level": "high_write",
+                "tool_name": "psop.repository.commit_patch",
+                "limit": 10,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["id"] for item in payload] == ["tool-auth-observe-newer", "tool-auth-observe-older"]
+    assert payload[0]["agent_run_id"] == runner_run.id
+    assert payload[0]["tool_name"] == "psop.repository.commit_patch"
+    assert payload[0]["status"] == "pending"
+    assert payload[0]["risk_level"] == "high"
+    assert payload[0]["side_effect_level"] == "high_write"
+    assert payload[0]["tool_arguments_summary"] == {"path": "SKILL.md"}
+
+    assert scoped_response.status_code == 200
+    scoped_payload = scoped_response.json()
+    assert {item["id"] for item in scoped_payload} == {"tool-auth-observe-newer", "tool-auth-observe-older"}
+
+
+def test_observability_skill_activation_query_filters_recent_agent_skill_activations() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        now = now_utc()
+        db_manager = client.app.state.db_manager
+        with db_manager.session() as session:
+            pskill = PSkillDefinition(
+                id="pskill-observe-skill-activations-1",
+                key="observe-skill-activations-demo",
+                name="Observe Skill Activations Demo",
+                gitlab_project_id="observe-skill-activations-project",
+                repository_url="https://gitlab.example.local/skills/observe-skill-activations-demo",
+            )
+            version = PSkillVersion(
+                id="pskill-version-observe-skill-activations-1",
+                pskill_definition_id=pskill.id,
+                version_no=1,
+                status="published",
+                source_ref="main",
+            )
+            run = Run(
+                id="run-observe-skill-activations-1",
+                invocation_id="invocation-observe-skill-activations-1",
+                pskill_definition_id=pskill.id,
+                pskill_version_id=version.id,
+                compile_artifact_id="artifact-observe-skill-activations-1",
+                status="failed",
+                runtime_phase="failed",
+                created_at=now - timedelta(minutes=5),
+            )
+            runner_run = AgentRun(
+                id="agent-run-observe-skill-activations-1",
+                agent_key="pskill.runner",
+                status="failed",
+                owner_type="runtime",
+                owner_id=run.id,
+                run_id=run.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            builder_run = AgentRun(
+                id="agent-run-observe-skill-activations-2",
+                agent_key="pskill.builder",
+                status="succeeded",
+                owner_type="pskill",
+                owner_id=pskill.id,
+                input_payload={},
+                output_payload={},
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=4),
+            )
+            runner_package = SkillPackage(
+                id="skill-package-observe-runner",
+                name="pskill-runner-field-assistant",
+                scope="psop",
+                description="runner package",
+                source_uri="skills/psop/pskill-runner-field-assistant",
+                created_at=now - timedelta(minutes=10),
+                updated_at=now - timedelta(minutes=10),
+            )
+            runner_version = SkillVersion(
+                id="skill-version-observe-runner",
+                package_id=runner_package.id,
+                version_label="v1",
+                content_hash="hash-runner",
+                manifest_json={},
+                body_object_key="",
+                resource_index=[],
+                allowed_tools=[],
+                created_at=now - timedelta(minutes=10),
+                updated_at=now - timedelta(minutes=10),
+            )
+            builder_package = SkillPackage(
+                id="skill-package-observe-builder",
+                name="pskill-builder",
+                scope="psop",
+                description="builder package",
+                source_uri="skills/psop/pskill-builder",
+                created_at=now - timedelta(minutes=10),
+                updated_at=now - timedelta(minutes=10),
+            )
+            builder_version = SkillVersion(
+                id="skill-version-observe-builder",
+                package_id=builder_package.id,
+                version_label="v1",
+                content_hash="hash-builder",
+                manifest_json={},
+                body_object_key="",
+                resource_index=[],
+                allowed_tools=[],
+                created_at=now - timedelta(minutes=10),
+                updated_at=now - timedelta(minutes=10),
+            )
+            session.add_all(
+                [
+                    pskill,
+                    version,
+                    run,
+                    runner_run,
+                    builder_run,
+                    runner_package,
+                    runner_version,
+                    builder_package,
+                    builder_version,
+                    SkillActivation(
+                        id="skill-activation-observe-newer",
+                        agent_run_id=runner_run.id,
+                        package_id=runner_package.id,
+                        version_id=runner_version.id,
+                        activation_context={"reason": "runtime field guidance"},
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    SkillActivation(
+                        id="skill-activation-observe-older",
+                        agent_run_id=runner_run.id,
+                        package_id=runner_package.id,
+                        version_id=runner_version.id,
+                        activation_context={"reason": "runtime evidence"},
+                        created_at=now - timedelta(minutes=2),
+                    ),
+                    SkillActivation(
+                        id="skill-activation-observe-builder",
+                        agent_run_id=builder_run.id,
+                        package_id=builder_package.id,
+                        version_id=builder_version.id,
+                        activation_context={"reason": "builder"},
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    SkillActivation(
+                        id="skill-activation-observe-old-window",
+                        agent_run_id=runner_run.id,
+                        package_id=runner_package.id,
+                        version_id=runner_version.id,
+                        activation_context={"old": True},
+                        created_at=now - timedelta(days=2),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = client.get(
+            "/api/v1/observability/skill-activations",
+            params={"window_hours": 24, "package_id": runner_package.id, "limit": 10},
+        )
+        scoped_response = client.get(
+            "/api/v1/observability/skill-activations",
+            params={
+                "window_hours": 24,
+                "agent_key": "pskill.runner",
+                "run_id": run.id,
+                "version_id": runner_version.id,
+                "limit": 10,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["id"] for item in payload] == [
+        "skill-activation-observe-newer",
+        "skill-activation-observe-older",
+    ]
+    assert payload[0]["agent_run_id"] == runner_run.id
+    assert payload[0]["package_id"] == runner_package.id
+    assert payload[0]["version_id"] == runner_version.id
+    assert payload[0]["activation_context"] == {"reason": "runtime field guidance"}
+
+    assert scoped_response.status_code == 200
+    scoped_payload = scoped_response.json()
+    assert {item["id"] for item in scoped_payload} == {
+        "skill-activation-observe-newer",
+        "skill-activation-observe-older",
+    }

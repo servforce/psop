@@ -150,10 +150,10 @@
                   <p class="text-xs font-medium text-slate-300">RunEvent Kind</p>
                   <div class="mt-3 space-y-2">
                     <template x-for="item in observabilityTopEntries(observabilityMetrics.runtime.run_event_kind_counts)" :key="'run-event-' + item.key">
-                      <div class="flex items-center justify-between gap-3 text-xs">
-                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="selectObservabilityRunEventKind(item.key)">
+                        <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
                         <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
-                      </div>
+                      </button>
                     </template>
                   </div>
                 </div>
@@ -161,10 +161,10 @@
                   <p class="text-xs font-medium text-slate-300">RunTrace Type</p>
                   <div class="mt-3 space-y-2">
                     <template x-for="item in observabilityTopEntries(observabilityMetrics.runtime.run_trace_event_type_counts)" :key="'run-trace-' + item.key">
-                      <div class="flex items-center justify-between gap-3 text-xs">
-                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="selectObservabilityTraceEventType(item.key)">
+                        <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
                         <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
-                      </div>
+                      </button>
                     </template>
                   </div>
                 </div>
@@ -174,9 +174,9 @@
             <section class="rounded-md border border-slate-800 bg-slate-900/40">
               <div class="border-b border-slate-800 px-4 py-3">
                 <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Agent Distributions</p>
-                <p class="mt-1 text-[11px] text-slate-500">AgentEvents / ModelCalls / ToolCalls / ToolAuthorizations</p>
+                <p class="mt-1 text-[11px] text-slate-500">AgentEvents / ModelCalls / SkillActivations / ToolCalls / ToolAuthorizations</p>
               </div>
-              <div class="grid grid-cols-1 divide-y divide-slate-800 lg:grid-cols-5 lg:divide-x lg:divide-y-0">
+              <div class="grid grid-cols-1 divide-y divide-slate-800 lg:grid-cols-7 lg:divide-x lg:divide-y-0">
                 <div class="p-4">
                   <p class="text-xs font-medium text-slate-300">Agent Key</p>
                   <div class="mt-3 space-y-2">
@@ -203,10 +203,32 @@
                   <p class="text-xs font-medium text-slate-300">AgentEvent</p>
                   <div class="mt-3 space-y-2">
                     <template x-for="item in observabilityTopEntries(observabilityMetrics.agents.agent_event_type_counts)" :key="'agent-event-' + item.key">
-                      <div class="flex items-center justify-between gap-3 text-xs">
-                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="selectObservabilityAgentEventType(item.key)">
+                        <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
                         <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
-                      </div>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+                <div class="p-4">
+                  <p class="text-xs font-medium text-slate-300">ModelCall</p>
+                  <div class="mt-3 space-y-2">
+                    <template x-for="item in observabilityTopEntries(observabilityMetrics.agents.model_call_provider_counts)" :key="'model-call-' + item.key">
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="selectObservabilityModelCallProvider(item.key)">
+                        <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
+                        <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+                <div class="p-4">
+                  <p class="text-xs font-medium text-slate-300">SkillActivation</p>
+                  <div class="mt-3 space-y-2">
+                    <template x-for="item in observabilityTopEntries(observabilityMetrics.agents.skill_activation_package_counts)" :key="'skill-activation-' + item.key">
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="selectObservabilitySkillActivationPackage(item.key)">
+                        <span class="min-w-0 truncate font-mono text-slate-300" x-text="item.key"></span>
+                        <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
+                      </button>
                     </template>
                   </div>
                 </div>
@@ -214,10 +236,10 @@
                   <p class="text-xs font-medium text-slate-300">ToolCall</p>
                   <div class="mt-3 space-y-2">
                     <template x-for="item in observabilityTopEntries(observabilityMetrics.agents.tool_call_status_counts)" :key="'tool-call-' + item.key">
-                      <div class="flex items-center justify-between gap-3 text-xs">
-                        <span class="min-w-0 truncate text-slate-400" x-text="item.key"></span>
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="selectObservabilityToolCallStatus(item.key)">
+                        <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
                         <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
-                      </div>
+                      </button>
                     </template>
                   </div>
                 </div>
@@ -225,7 +247,7 @@
                   <p class="text-xs font-medium text-slate-300">Authorization</p>
                   <div class="mt-3 space-y-2">
                     <template x-for="item in observabilityTopEntries(observabilityMetrics.agents.tool_authorization_status_counts)" :key="'tool-auth-' + item.key">
-                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="navigate(observabilityToolAuthorizationsStatusPath(item.key))">
+                      <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition hover:bg-slate-900/70" @click="selectObservabilityToolAuthorizationStatus(item.key)">
                         <span class="min-w-0 truncate text-slate-300" x-text="item.key"></span>
                         <span class="font-mono text-slate-200 tabular-nums" x-text="observabilityNumber(item.value)"></span>
                       </button>
@@ -238,12 +260,84 @@
 
           <section class="rounded-md border border-slate-800 bg-slate-900/40">
             <div class="border-b border-slate-800 px-4 py-3">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">RunEvent Query</p>
+            </div>
+            <div class="border-b border-slate-800 bg-slate-950/30 px-4 py-3">
+              <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+                <label class="field-block min-w-72 flex-1">
+                  <span class="field-label">Run ID（可选）</span>
+                  <input x-model="observabilityFilters.event_run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="run_id" @keydown.enter.prevent="loadObservabilityRunEvents()" />
+                </label>
+                <label class="field-block w-72 shrink-0">
+                  <span class="field-label">RunEvent Kind</span>
+                  <select x-model="observabilityFilters.run_event_kind" class="input-field h-9 py-0" @change="loadObservabilityRunEvents()">
+                    <option value="">全部</option>
+                    <template x-for="eventKind in observabilityRunEventKindOptions()" :key="eventKind">
+                      <option :value="eventKind" x-text="eventKind"></option>
+                    </template>
+                  </select>
+                </label>
+                <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.observabilityEventLookup" @click="loadObservabilityRunEvents()">
+                  <span class="material-symbols-outlined text-[18px]">search</span>
+                  <span class="hidden sm:inline">查询</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetObservabilityEventQuery()">
+                  <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+                </button>
+              </div>
+            </div>
+
+            <template x-if="observabilityRunEvents.length === 0">
+              <div class="empty-state min-h-72">
+                <span class="material-symbols-outlined text-[32px] text-slate-400">fact_check</span>
+                <p class="mt-3 text-base font-medium text-slate-100">暂无 RunEvent</p>
+                <p class="mt-1 text-xs text-slate-500">输入 Run ID，或点击上方 RunEvent Kind 分布项查询最近事件。</p>
+              </div>
+            </template>
+
+            <template x-if="observabilityRunEvents.length > 0">
+              <div class="divide-y divide-slate-800">
+                <template x-for="event in observabilityRunEvents" :key="event.id">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[8rem_minmax(13rem,0.45fr)_minmax(0,1fr)]">
+                    <div>
+                      <p class="font-mono text-slate-300" x-text="'#' + event.seq_no"></p>
+                      <p class="mt-1 font-mono text-[11px] text-slate-500" x-text="formatDateTime(event.occurred_at)"></p>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="truncate font-semibold text-slate-100" x-text="event.event_kind"></p>
+                      <p class="mt-1 truncate text-slate-500" x-text="event.direction || 'N/A'"></p>
+                      <p class="mt-2 truncate font-mono text-[11px] text-slate-500" x-text="event.run_id || 'run:N/A'"></p>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <button type="button" class="button-secondary h-8 px-2 text-xs" @click="navigate(observabilityRunEventReplayPath(event))">
+                          <span class="material-symbols-outlined text-[16px]">history</span>
+                          <span>Replay</span>
+                        </button>
+                        <button type="button" class="button-secondary h-8 px-2 text-xs" x-show="event.run_id" @click="navigate(observabilityRunLivePath(event.run_id))">
+                          <span class="material-symbols-outlined text-[16px]">play_circle</span>
+                          <span>Run</span>
+                        </button>
+                        <button type="button" class="button-secondary h-8 px-2 text-xs" x-show="event.agent_run_id" @click="navigate(observabilityAgentRunPath(event.agent_run_id))">
+                          <span class="material-symbols-outlined text-[16px]">manage_history</span>
+                          <span>AgentRun</span>
+                        </button>
+                      </div>
+                      <p class="mt-2 font-mono text-[11px] text-slate-500" x-text="'parts:' + observabilityNumber((event.parts || []).length)"></p>
+                    </div>
+                    <pre class="max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="observabilityPayloadPreview(event.payload_inline)"></pre>
+                  </article>
+                </template>
+              </div>
+            </template>
+          </section>
+
+          <section class="rounded-md border border-slate-800 bg-slate-900/40">
+            <div class="border-b border-slate-800 px-4 py-3">
               <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">RunTrace Query</p>
             </div>
             <div class="border-b border-slate-800 bg-slate-950/30 px-4 py-3">
               <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
                 <label class="field-block min-w-72 flex-1">
-                  <span class="field-label">Run ID</span>
+                  <span class="field-label">Run ID（可选）</span>
                   <input x-model="observabilityFilters.run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="run_id" @keydown.enter.prevent="loadObservabilityRunTraces()" />
                 </label>
                 <label class="field-block w-72 shrink-0">
@@ -273,6 +367,7 @@
               <div class="empty-state min-h-72">
                 <span class="material-symbols-outlined text-[32px] text-slate-400">timeline</span>
                 <p class="mt-3 text-base font-medium text-slate-100">暂无 RunTrace</p>
+                <p class="mt-1 text-xs text-slate-500">输入 Run ID，或点击上方 RunTrace Type 分布项查询最近 trace。</p>
               </div>
             </template>
 
@@ -300,6 +395,405 @@
                       </div>
                     </div>
                     <pre class="max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="observabilityTracePayloadPreview(trace)"></pre>
+                  </article>
+                </template>
+              </div>
+            </template>
+          </section>
+
+          <section class="rounded-md border border-slate-800 bg-slate-900/40">
+            <div class="border-b border-slate-800 px-4 py-3">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">AgentEvent Query</p>
+            </div>
+            <div class="border-b border-slate-800 bg-slate-950/30 px-4 py-3">
+              <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+                <label class="field-block w-56 shrink-0">
+                  <span class="field-label">Agent Key</span>
+                  <select x-model="observabilityFilters.agent_event_agent_key" class="input-field h-9 py-0" @change="loadObservabilityAgentEvents()">
+                    <option value="">全部</option>
+                    <template x-for="agentKey in observabilityAgentKeyOptions()" :key="agentKey">
+                      <option :value="agentKey" x-text="agentKey"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block min-w-64 flex-1">
+                  <span class="field-label">Run ID（可选）</span>
+                  <input x-model="observabilityFilters.agent_event_run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="run_id" @keydown.enter.prevent="loadObservabilityAgentEvents()" />
+                </label>
+                <label class="field-block w-72 shrink-0">
+                  <span class="field-label">AgentEvent Type</span>
+                  <select x-model="observabilityFilters.agent_event_type" class="input-field h-9 py-0" @change="loadObservabilityAgentEvents()">
+                    <option value="">全部</option>
+                    <template x-for="eventType in observabilityAgentEventTypeOptions()" :key="eventType">
+                      <option :value="eventType" x-text="eventType"></option>
+                    </template>
+                  </select>
+                </label>
+                <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.observabilityAgentEventLookup" @click="loadObservabilityAgentEvents()">
+                  <span class="material-symbols-outlined text-[18px]">search</span>
+                  <span class="hidden sm:inline">查询</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetObservabilityAgentEventQuery()">
+                  <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+                </button>
+              </div>
+            </div>
+
+            <template x-if="observabilityAgentEventResults.length === 0">
+              <div class="empty-state min-h-72">
+                <span class="material-symbols-outlined text-[32px] text-slate-400">manage_search</span>
+                <p class="mt-3 text-base font-medium text-slate-100">暂无 AgentEvent</p>
+                <p class="mt-1 text-xs text-slate-500">选择 Agent / Run / EventType，或点击上方 AgentEvent 分布项查询最近事件。</p>
+              </div>
+            </template>
+
+            <template x-if="observabilityAgentEventResults.length > 0">
+              <div class="divide-y divide-slate-800">
+                <template x-for="event in observabilityAgentEventResults" :key="event.id">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[8rem_minmax(13rem,0.45fr)_minmax(0,1fr)]">
+                    <div>
+                      <p class="font-mono text-slate-300" x-text="'#' + event.seq_no"></p>
+                      <p class="mt-1 font-mono text-[11px] text-slate-500" x-text="formatDateTime(event.occurred_at)"></p>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="truncate font-semibold text-slate-100" x-text="event.event_type"></p>
+                      <p class="mt-1 truncate text-slate-500" x-text="event.phase || 'N/A'"></p>
+                      <p class="mt-2 truncate font-mono text-[11px] text-slate-500" x-text="event.agent_run_id || 'agent:N/A'"></p>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <button type="button" class="button-secondary h-8 px-2 text-xs" @click="navigate(observabilityAgentEventPath(event))">
+                          <span class="material-symbols-outlined text-[16px]">manage_history</span>
+                          <span>AgentRun</span>
+                        </button>
+                      </div>
+                    </div>
+                    <pre class="max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="observabilityPayloadPreview(event.payload)"></pre>
+                  </article>
+                </template>
+              </div>
+            </template>
+          </section>
+
+          <section class="rounded-md border border-slate-800 bg-slate-900/40">
+            <div class="border-b border-slate-800 px-4 py-3">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">ModelCall Query</p>
+            </div>
+            <div class="border-b border-slate-800 bg-slate-950/30 px-4 py-3">
+              <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+                <label class="field-block w-56 shrink-0">
+                  <span class="field-label">Agent Key</span>
+                  <select x-model="observabilityFilters.model_call_agent_key" class="input-field h-9 py-0" @change="loadObservabilityModelCalls()">
+                    <option value="">全部</option>
+                    <template x-for="agentKey in observabilityAgentKeyOptions()" :key="agentKey">
+                      <option :value="agentKey" x-text="agentKey"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block min-w-64 flex-1">
+                  <span class="field-label">Run ID（可选）</span>
+                  <input x-model="observabilityFilters.model_call_run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="run_id" @keydown.enter.prevent="loadObservabilityModelCalls()" />
+                </label>
+                <label class="field-block w-52 shrink-0">
+                  <span class="field-label">Provider</span>
+                  <select x-model="observabilityFilters.model_call_provider" class="input-field h-9 py-0" @change="loadObservabilityModelCalls()">
+                    <option value="">全部</option>
+                    <template x-for="provider in observabilityModelCallProviderOptions()" :key="provider">
+                      <option :value="provider" x-text="provider"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block w-44 shrink-0">
+                  <span class="field-label">Status</span>
+                  <select x-model="observabilityFilters.model_call_status" class="input-field h-9 py-0" @change="loadObservabilityModelCalls()">
+                    <option value="">全部</option>
+                    <template x-for="status in observabilityModelCallStatusOptions()" :key="status">
+                      <option :value="status" x-text="status"></option>
+                    </template>
+                  </select>
+                </label>
+                <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.observabilityModelCallLookup" @click="loadObservabilityModelCalls()">
+                  <span class="material-symbols-outlined text-[18px]">search</span>
+                  <span class="hidden sm:inline">查询</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetObservabilityModelCallQuery()">
+                  <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+                </button>
+              </div>
+            </div>
+
+            <template x-if="observabilityModelCallResults.length === 0">
+              <div class="empty-state min-h-72">
+                <span class="material-symbols-outlined text-[32px] text-slate-400">psychology</span>
+                <p class="mt-3 text-base font-medium text-slate-100">暂无 ModelCall</p>
+                <p class="mt-1 text-xs text-slate-500">选择 Agent / Run / provider / 状态，或点击上方 ModelCall 分布项查询最近调用。</p>
+              </div>
+            </template>
+
+            <template x-if="observabilityModelCallResults.length > 0">
+              <div class="divide-y divide-slate-800">
+                <template x-for="call in observabilityModelCallResults" :key="call.id">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[8rem_minmax(13rem,0.45fr)_minmax(0,1fr)]">
+                    <div>
+                      <span class="status-badge border-slate-700 bg-slate-950/40 text-slate-300" x-text="call.status"></span>
+                      <p class="mt-2 font-mono text-[11px] text-slate-500" x-text="formatDateTime(call.created_at)"></p>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="truncate font-semibold text-slate-100" x-text="call.model_name || call.provider"></p>
+                      <p class="mt-1 truncate text-slate-500" x-text="call.route_key || 'N/A'"></p>
+                      <p class="mt-2 truncate font-mono text-[11px] text-slate-500" x-text="call.agent_run_id || 'agent:N/A'"></p>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <button type="button" class="button-secondary h-8 px-2 text-xs" @click="navigate(observabilityModelCallPath(call))">
+                          <span class="material-symbols-outlined text-[16px]">manage_history</span>
+                          <span>AgentRun</span>
+                        </button>
+                      </div>
+                      <p class="mt-2 font-mono text-[11px] text-slate-500" x-text="'tokens:' + observabilityNumber((call.usage_json || {}).total_tokens)"></p>
+                    </div>
+                    <pre class="max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="observabilityPayloadPreview(call.response_payload || call.request_payload)"></pre>
+                  </article>
+                </template>
+              </div>
+            </template>
+          </section>
+
+          <section class="rounded-md border border-slate-800 bg-slate-900/40">
+            <div class="border-b border-slate-800 px-4 py-3">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">SkillActivation Query</p>
+            </div>
+            <div class="border-b border-slate-800 bg-slate-950/30 px-4 py-3">
+              <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+                <label class="field-block w-56 shrink-0">
+                  <span class="field-label">Agent Key</span>
+                  <select x-model="observabilityFilters.skill_activation_agent_key" class="input-field h-9 py-0" @change="loadObservabilitySkillActivations()">
+                    <option value="">全部</option>
+                    <template x-for="agentKey in observabilityAgentKeyOptions()" :key="agentKey">
+                      <option :value="agentKey" x-text="agentKey"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block min-w-64 flex-1">
+                  <span class="field-label">Run ID（可选）</span>
+                  <input x-model="observabilityFilters.skill_activation_run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="run_id" @keydown.enter.prevent="loadObservabilitySkillActivations()" />
+                </label>
+                <label class="field-block w-72 shrink-0">
+                  <span class="field-label">Package ID</span>
+                  <select x-model="observabilityFilters.skill_activation_package_id" class="input-field h-9 py-0 font-mono text-xs" @change="loadObservabilitySkillActivations()">
+                    <option value="">全部</option>
+                    <template x-for="packageId in observabilitySkillActivationPackageOptions()" :key="packageId">
+                      <option :value="packageId" x-text="packageId"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block w-72 shrink-0">
+                  <span class="field-label">Version ID</span>
+                  <input x-model="observabilityFilters.skill_activation_version_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="skill_version_id" @keydown.enter.prevent="loadObservabilitySkillActivations()" />
+                </label>
+                <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.observabilitySkillActivationLookup" @click="loadObservabilitySkillActivations()">
+                  <span class="material-symbols-outlined text-[18px]">search</span>
+                  <span class="hidden sm:inline">查询</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetObservabilitySkillActivationQuery()">
+                  <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+                </button>
+              </div>
+            </div>
+
+            <template x-if="observabilitySkillActivationResults.length === 0">
+              <div class="empty-state min-h-72">
+                <span class="material-symbols-outlined text-[32px] text-slate-400">extension</span>
+                <p class="mt-3 text-base font-medium text-slate-100">暂无 SkillActivation</p>
+                <p class="mt-1 text-xs text-slate-500">选择 Agent / Run / package / version，或点击上方 SkillActivation 分布项查询最近激活记录。</p>
+              </div>
+            </template>
+
+            <template x-if="observabilitySkillActivationResults.length > 0">
+              <div class="divide-y divide-slate-800">
+                <template x-for="activation in observabilitySkillActivationResults" :key="activation.id">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[8rem_minmax(13rem,0.45fr)_minmax(0,1fr)]">
+                    <div>
+                      <p class="font-mono text-slate-300" x-text="formatShortId(activation.id)"></p>
+                      <p class="mt-1 font-mono text-[11px] text-slate-500" x-text="formatDateTime(activation.created_at)"></p>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="truncate font-semibold text-slate-100" x-text="activation.package_id"></p>
+                      <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="activation.version_id"></p>
+                      <p class="mt-2 truncate font-mono text-[11px] text-slate-500" x-text="activation.agent_run_id || 'agent:N/A'"></p>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <button type="button" class="button-secondary h-8 px-2 text-xs" @click="navigate(observabilitySkillActivationPath(activation))">
+                          <span class="material-symbols-outlined text-[16px]">manage_history</span>
+                          <span>AgentRun</span>
+                        </button>
+                      </div>
+                    </div>
+                    <pre class="max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="observabilityPayloadPreview(activation.activation_context)"></pre>
+                  </article>
+                </template>
+              </div>
+            </template>
+          </section>
+
+          <section class="rounded-md border border-slate-800 bg-slate-900/40">
+            <div class="border-b border-slate-800 px-4 py-3">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">ToolCall Query</p>
+            </div>
+            <div class="border-b border-slate-800 bg-slate-950/30 px-4 py-3">
+              <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+                <label class="field-block w-56 shrink-0">
+                  <span class="field-label">Agent Key</span>
+                  <select x-model="observabilityFilters.tool_call_agent_key" class="input-field h-9 py-0" @change="loadObservabilityToolCalls()">
+                    <option value="">全部</option>
+                    <template x-for="agentKey in observabilityAgentKeyOptions()" :key="agentKey">
+                      <option :value="agentKey" x-text="agentKey"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block min-w-64 flex-1">
+                  <span class="field-label">Run ID（可选）</span>
+                  <input x-model="observabilityFilters.tool_call_run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="run_id" @keydown.enter.prevent="loadObservabilityToolCalls()" />
+                </label>
+                <label class="field-block w-44 shrink-0">
+                  <span class="field-label">Status</span>
+                  <select x-model="observabilityFilters.tool_call_status" class="input-field h-9 py-0" @change="loadObservabilityToolCalls()">
+                    <option value="">全部</option>
+                    <template x-for="status in observabilityToolCallStatusOptions()" :key="status">
+                      <option :value="status" x-text="status"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block w-72 shrink-0">
+                  <span class="field-label">Tool Name</span>
+                  <input x-model="observabilityFilters.tool_call_tool_name" class="input-field h-9 py-0 font-mono text-xs" placeholder="psop.memory.search" @keydown.enter.prevent="loadObservabilityToolCalls()" />
+                </label>
+                <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.observabilityToolCallLookup" @click="loadObservabilityToolCalls()">
+                  <span class="material-symbols-outlined text-[18px]">search</span>
+                  <span class="hidden sm:inline">查询</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetObservabilityToolCallQuery()">
+                  <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+                </button>
+              </div>
+            </div>
+
+            <template x-if="observabilityToolCallResults.length === 0">
+              <div class="empty-state min-h-72">
+                <span class="material-symbols-outlined text-[32px] text-slate-400">build</span>
+                <p class="mt-3 text-base font-medium text-slate-100">暂无 ToolCall</p>
+                <p class="mt-1 text-xs text-slate-500">选择 Agent / Run / 状态 / 工具名，或点击上方 ToolCall 状态分布项查询最近调用。</p>
+              </div>
+            </template>
+
+            <template x-if="observabilityToolCallResults.length > 0">
+              <div class="divide-y divide-slate-800">
+                <template x-for="call in observabilityToolCallResults" :key="call.id">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[8rem_minmax(13rem,0.45fr)_minmax(0,1fr)]">
+                    <div>
+                      <span class="status-badge border-slate-700 bg-slate-950/40 text-slate-300" x-text="call.status"></span>
+                      <p class="mt-2 font-mono text-[11px] text-slate-500" x-text="formatDateTime(call.updated_at)"></p>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="truncate font-semibold text-slate-100" x-text="call.tool_name"></p>
+                      <p class="mt-1 truncate text-slate-500" x-text="call.side_effect_level || 'N/A'"></p>
+                      <p class="mt-2 truncate font-mono text-[11px] text-slate-500" x-text="call.agent_run_id || 'agent:N/A'"></p>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <button type="button" class="button-secondary h-8 px-2 text-xs" @click="navigate(observabilityToolCallPath(call))">
+                          <span class="material-symbols-outlined text-[16px]">manage_history</span>
+                          <span>AgentRun</span>
+                        </button>
+                      </div>
+                    </div>
+                    <pre class="max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="observabilityPayloadPreview(call.arguments_summary)"></pre>
+                  </article>
+                </template>
+              </div>
+            </template>
+          </section>
+
+          <section class="rounded-md border border-slate-800 bg-slate-900/40">
+            <div class="border-b border-slate-800 px-4 py-3">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">ToolAuthorization Query</p>
+            </div>
+            <div class="border-b border-slate-800 bg-slate-950/30 px-4 py-3">
+              <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+                <label class="field-block w-56 shrink-0">
+                  <span class="field-label">Agent Key</span>
+                  <select x-model="observabilityFilters.tool_authorization_agent_key" class="input-field h-9 py-0" @change="loadObservabilityToolAuthorizations()">
+                    <option value="">全部</option>
+                    <template x-for="agentKey in observabilityAgentKeyOptions()" :key="agentKey">
+                      <option :value="agentKey" x-text="agentKey"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block min-w-64 flex-1">
+                  <span class="field-label">Run ID（可选）</span>
+                  <input x-model="observabilityFilters.tool_authorization_run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="run_id" @keydown.enter.prevent="loadObservabilityToolAuthorizations()" />
+                </label>
+                <label class="field-block w-44 shrink-0">
+                  <span class="field-label">Status</span>
+                  <select x-model="observabilityFilters.tool_authorization_status" class="input-field h-9 py-0" @change="loadObservabilityToolAuthorizations()">
+                    <option value="">全部</option>
+                    <template x-for="status in observabilityToolAuthorizationStatusOptions()" :key="status">
+                      <option :value="status" x-text="status"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block w-44 shrink-0">
+                  <span class="field-label">Risk</span>
+                  <select x-model="observabilityFilters.tool_authorization_risk_level" class="input-field h-9 py-0" @change="loadObservabilityToolAuthorizations()">
+                    <option value="">全部</option>
+                    <template x-for="riskLevel in observabilityToolAuthorizationRiskOptions()" :key="riskLevel">
+                      <option :value="riskLevel" x-text="riskLevel"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="field-block w-72 shrink-0">
+                  <span class="field-label">Tool Name</span>
+                  <input x-model="observabilityFilters.tool_authorization_tool_name" class="input-field h-9 py-0 font-mono text-xs" placeholder="psop.repository.commit_patch" @keydown.enter.prevent="loadObservabilityToolAuthorizations()" />
+                </label>
+                <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.observabilityToolAuthorizationLookup" @click="loadObservabilityToolAuthorizations()">
+                  <span class="material-symbols-outlined text-[18px]">search</span>
+                  <span class="hidden sm:inline">查询</span>
+                </button>
+                <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetObservabilityToolAuthorizationQuery()">
+                  <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+                </button>
+              </div>
+            </div>
+
+            <template x-if="observabilityToolAuthorizationResults.length === 0">
+              <div class="empty-state min-h-72">
+                <span class="material-symbols-outlined text-[32px] text-slate-400">admin_panel_settings</span>
+                <p class="mt-3 text-base font-medium text-slate-100">暂无 ToolAuthorization</p>
+                <p class="mt-1 text-xs text-slate-500">选择 Agent / Run / 状态 / 风险 / 工具名，或点击上方 Authorization 状态分布项查询最近授权请求。</p>
+              </div>
+            </template>
+
+            <template x-if="observabilityToolAuthorizationResults.length > 0">
+              <div class="divide-y divide-slate-800">
+                <template x-for="authorization in observabilityToolAuthorizationResults" :key="authorization.id">
+                  <article class="grid gap-3 p-4 text-xs xl:grid-cols-[8rem_minmax(14rem,0.45fr)_minmax(0,1fr)]">
+                    <div>
+                      <span class="status-badge border-slate-700 bg-slate-950/40 text-slate-300" x-text="authorization.status"></span>
+                      <p class="mt-2 font-mono text-[11px] text-slate-500" x-text="formatDateTime(authorization.created_at)"></p>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="truncate font-semibold text-slate-100" x-text="authorization.tool_name"></p>
+                      <p class="mt-1 truncate text-slate-500" x-text="(authorization.risk_level || 'N/A') + ' / ' + (authorization.side_effect_level || 'N/A')"></p>
+                      <p class="mt-2 truncate font-mono text-[11px] text-slate-500" x-text="authorization.agent_run_id || 'agent:N/A'"></p>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <button type="button" class="button-secondary h-8 px-2 text-xs" @click="navigate(observabilityToolAuthorizationPath(authorization))">
+                          <span class="material-symbols-outlined text-[16px]">manage_history</span>
+                          <span>AgentRun</span>
+                        </button>
+                        <button type="button" class="button-secondary h-8 px-2 text-xs" @click="navigate(observabilityToolAuthorizationHistoryPath(authorization))">
+                          <span class="material-symbols-outlined text-[16px]">admin_panel_settings</span>
+                          <span>授权页</span>
+                        </button>
+                        <button type="button" class="button-secondary h-8 px-2 text-xs" x-show="authorization.run_id && authorization.run_event_id" @click="navigate(observabilityRunEventReplayPath({ id: authorization.run_event_id, run_id: authorization.run_id }))">
+                          <span class="material-symbols-outlined text-[16px]">history</span>
+                          <span>Replay</span>
+                        </button>
+                      </div>
+                    </div>
+                    <pre class="max-h-56 overflow-auto rounded-md bg-slate-950/60 p-3 font-mono text-xs leading-5 text-slate-300" x-text="observabilityPayloadPreview(authorization.tool_arguments_summary)"></pre>
                   </article>
                 </template>
               </div>
