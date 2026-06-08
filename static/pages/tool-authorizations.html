@@ -33,6 +33,7 @@
           <span class="material-symbols-outlined text-[18px]">account_tree</span>
           <span>治理</span>
         </button>
+        <span class="status-badge shrink-0" :class="statusBadgeTone(toolAuthorizationWsStatus)" x-text="wsStatusLabel(toolAuthorizationWsStatus)"></span>
       </div>
     </div>
 

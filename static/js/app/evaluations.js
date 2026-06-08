@@ -54,8 +54,20 @@
 
   window.PSOPConsoleEvaluationMethods = {
     async loadEvaluationReportsPage() {
-      if (this.evaluationForm.evaluation_id && !this.currentEvaluation) {
-        await this.loadEvaluationReport(this.evaluationForm.evaluation_id);
+      this.disconnectEvaluationActivityWebSocket?.();
+      this.currentEvaluation = null;
+      await this.loadEvaluationReports();
+    },
+
+    async loadEvaluationReports() {
+      this.busy.evaluationReports = true;
+      try {
+        const reports = await this.apiRequest("/evaluations?limit=50");
+        this.evaluationReports = Array.isArray(reports) ? reports : [];
+      } catch (error) {
+        this.showNotice("error", error.message || "Run 评估报告加载失败。");
+      } finally {
+        this.busy.evaluationReports = false;
       }
     },
 
@@ -75,6 +87,7 @@
         this.currentEvaluation = evaluation;
         this.evaluationForm.evaluation_id = evaluation.id;
         this.evaluationForm.run_id = evaluation.run_id;
+        this.upsertEvaluationReport(evaluation);
         await this.navigate(this.evaluationReportPath(evaluation.id));
       } catch (error) {
         this.showNotice("error", error.message || "创建 Run 评估失败。");
@@ -100,6 +113,7 @@
       this.busy.evaluationReport = true;
       try {
         const evaluation = await this.apiRequest(`/evaluations/${encodeURIComponent(id)}`);
+        this.upsertEvaluationReport(evaluation);
         this.applyEvaluationActivitySnapshot({ evaluation });
         this.connectEvaluationActivityWebSocket(evaluation.id);
       } finally {
@@ -175,6 +189,7 @@
         this.currentEvaluation = evaluation;
         this.evaluationForm.evaluation_id = evaluation.id;
         this.evaluationForm.run_id = evaluation.run_id;
+        this.upsertEvaluationReport(evaluation);
       }
       if (snapshot.agent_run) {
         this.evaluationAgentRun = snapshot.agent_run;
@@ -198,6 +213,17 @@
         });
         this.syncEvaluationFindingSelection();
       }
+    },
+
+    upsertEvaluationReport(evaluation) {
+      if (!evaluation?.id) {
+        return;
+      }
+      const existing = Array.isArray(this.evaluationReports) ? this.evaluationReports : [];
+      this.evaluationReports = [
+        evaluation,
+        ...existing.filter((item) => item.id !== evaluation.id)
+      ].slice(0, 50);
     },
 
     async loadEvaluationFindings() {

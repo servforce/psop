@@ -34,6 +34,7 @@ VALID_FINDING_CATEGORIES = {
     "environment_issue",
 }
 VALID_FINDING_SEVERITIES = {"low", "medium", "high", "critical"}
+VALID_EVALUATION_OUTCOMES = {"success", "completed_with_issues", "failed", "aborted", "cancelled"}
 SEVERITY_PENALTIES = {"low": 5, "medium": 12, "high": 24, "critical": 40}
 
 
@@ -170,6 +171,27 @@ class EvaluationService:
         if not evaluation:
             raise SkillNotFoundError("未找到 RunEvaluation。", details={"evaluation_id": evaluation_id})
         return self._build_evaluation_response(session, evaluation)
+
+    def list_evaluations(
+        self,
+        session: Session,
+        *,
+        run_id: str | None = None,
+        pskill_definition_id: str | None = None,
+        overall_outcome: str | None = None,
+        limit: int = 50,
+    ) -> list[RunEvaluationResponse]:
+        self._validate_optional_filter("overall_outcome", overall_outcome, VALID_EVALUATION_OUTCOMES)
+        return [
+            self._build_evaluation_response(session, item)
+            for item in self.repository.list_evaluations(
+                session,
+                run_id=run_id,
+                pskill_definition_id=pskill_definition_id,
+                overall_outcome=overall_outcome,
+                limit=limit,
+            )
+        ]
 
     def list_evaluation_findings(self, session: Session, evaluation_id: str) -> list[RunEvaluationFindingResponse]:
         evaluation = self.repository.get_evaluation(session, evaluation_id)

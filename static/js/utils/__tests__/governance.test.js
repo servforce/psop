@@ -251,6 +251,57 @@ test("governance methods keep tool authorization filters in location", async () 
   expect(context.toolAuthorizationLocationSearch).toBe("?status=pending");
 });
 
+test("tool authorization page connects websocket and applies realtime updates", async () => {
+  const { methods, FakeWebSocket } = loadGovernanceHarness("?status=pending");
+  const initial = { id: "auth-1", status: "pending", tool_name: "psop.repository.commit_patch" };
+  const next = { id: "auth-2", status: "pending", tool_name: "psop.agent_version.activate" };
+  const ignored = { id: "auth-3", status: "approved", tool_name: "psop.agent_version.activate" };
+  const context = {
+    ...methods,
+    apiBaseUrl: "/api/v1",
+    busy: { toolAuthorizations: false },
+    toolAuthorizationFilters: { status: "pending", tool_name: "" },
+    toolAuthorizationLocationSearch: "",
+    toolAuthorizations: [],
+    toolAuthorizationWs: null,
+    toolAuthorizationWsStatus: "idle",
+    apiRequest: jest.fn(async () => [initial]),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadToolAuthorizationsPage.call(context);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/tool-authorizations?status=pending");
+  expect(FakeWebSocket.instances).toHaveLength(1);
+  expect(FakeWebSocket.instances[0].url).toBe("ws://localhost/ws/tool-authorizations");
+  expect(context.toolAuthorizations).toEqual([initial]);
+  expect(context.toolAuthorizationWsStatus).toBe("connecting");
+
+  FakeWebSocket.instances[0].open();
+  expect(context.toolAuthorizationWsStatus).toBe("open");
+
+  FakeWebSocket.instances[0].message({
+    event_type: "tool.authorization_requested",
+    payload: next
+  });
+  FakeWebSocket.instances[0].message({
+    event_type: "tool.authorization_approved",
+    payload: ignored
+  });
+  FakeWebSocket.instances[0].message({
+    event_type: "tool.authorization_approved",
+    payload: { ...initial, status: "approved" }
+  });
+
+  expect(context.toolAuthorizations.map((item) => item.id)).toEqual(["auth-2", "auth-1"]);
+  expect(context.toolAuthorizations[1].status).toBe("approved");
+
+  methods.disconnectToolAuthorizationWebSocket.call(context);
+
+  expect(context.toolAuthorizationWs).toBeNull();
+  expect(context.toolAuthorizationWsStatus).toBe("idle");
+});
+
 test("governance methods extract tool authorization patch diffs", () => {
   const methods = loadGovernanceMethods();
   const context = { ...methods };

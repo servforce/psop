@@ -828,6 +828,7 @@
       evaluationAgentRun: null,
       evaluationAgentEvents: [],
       evaluationModelCalls: [],
+      evaluationReports: [],
       evaluationForm: {
         run_id: "",
         evaluation_id: ""
@@ -886,6 +887,8 @@
       governanceExperimentDetail: null,
       governanceExperimentProposal: null,
       toolAuthorizations: [],
+      toolAuthorizationWs: null,
+      toolAuthorizationWsStatus: "idle",
       toolAuthorizationFilters: {
         status: "pending",
         tool_name: ""
@@ -1146,6 +1149,7 @@
         skillTestSendData: false,
         skillTestCancel: false,
         tasks: false,
+        evaluationReports: false,
         evaluationReport: false,
         evaluationFindings: false,
         evaluationFindingUpdate: false,

@@ -125,10 +125,9 @@
             this.selectedLiveRunSnapshotBaseSeq = "";
             this.selectedLiveRunSnapshotTargetSeq = "";
           }
-          const [run, bindings, terminalSession, terminalEvents, traceEvents, replayDetail, toolAuthorizations] = await Promise.all([
+          const [run, bindings, terminalEvents, traceEvents, replayDetail, toolAuthorizations] = await Promise.all([
             this.apiRequest(`/runs/${runId}`),
             this.apiRequest(`/runs/${runId}/bindings`),
-            this.apiRequest(`/terminal/sessions/${runId}`),
             this.apiRequest(`/runs/${runId}/events`),
             this.apiRequest(`/runs/${runId}/traces`),
             this.apiRequest(`/replay/runs/${runId}`),
@@ -137,7 +136,7 @@
           this.liveRun = run;
           this.liveRunLoadedRunId = runId;
           this.liveRunBindings = bindings;
-          this.liveRunTerminalSession = terminalSession.terminal_session;
+          this.liveRunTerminalSession = this.liveRunTerminalSessionFromRun(run);
           this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq([], terminalEvents);
           this.liveRunToolAuthorizations = Array.isArray(toolAuthorizations) ? toolAuthorizations : [];
           this.updateLiveRunLatestTerminalSeq();
@@ -585,8 +584,24 @@
       },
 
 
-      terminalRunEnded() {
-        return ["succeeded", "failed", "cancelled", "canceled"].includes(String(this.liveRun?.status || "").toLowerCase());
+      liveRunTerminalSessionFromRun(run) {
+        const sessionId = String(run?.terminal_session_id || "").trim();
+        if (!sessionId) {
+          return null;
+        }
+        return {
+          id: sessionId,
+          run_id: run.id,
+          status: this.terminalRunEnded(run) ? "closed" : "open",
+          opened_at: run.started_at || run.created_at || null,
+          closed_at: run.ended_at || null,
+          created_at: run.created_at || null
+        };
+      },
+
+
+      terminalRunEnded(run = this.liveRun) {
+        return ["succeeded", "failed", "cancelled", "canceled"].includes(String(run?.status || "").toLowerCase());
       },
 
 

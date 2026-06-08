@@ -25,6 +25,24 @@ router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 evaluation_activity_ws_router = APIRouter(prefix="/ws", tags=["ws"])
 
 
+@router.get("", response_model=list[RunEvaluationResponse])
+def list_evaluations(
+    run_id: str | None = Query(default=None),
+    pskill_definition_id: str | None = Query(default=None),
+    overall_outcome: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: Session = Depends(get_db_session),
+    service: EvaluationService = Depends(get_evaluation_service),
+) -> list[RunEvaluationResponse]:
+    return service.list_evaluations(
+        session,
+        run_id=run_id,
+        pskill_definition_id=pskill_definition_id,
+        overall_outcome=overall_outcome,
+        limit=limit,
+    )
+
+
 @router.post("/runs/{run_id}", response_model=RunEvaluationResponse, status_code=status.HTTP_201_CREATED)
 def create_run_evaluation(
     run_id: str,

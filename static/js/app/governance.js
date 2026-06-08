@@ -599,6 +599,12 @@
       return rows.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
     },
 
+    async loadToolAuthorizationsPage() {
+      this.syncToolAuthorizationFiltersFromLocation?.();
+      await this.loadToolAuthorizations();
+      this.connectToolAuthorizationWebSocket();
+    },
+
     async loadToolAuthorizations() {
       this.busy.toolAuthorizations = true;
       try {
@@ -611,6 +617,79 @@
       } finally {
         this.busy.toolAuthorizations = false;
       }
+    },
+
+    connectToolAuthorizationWebSocket() {
+      if (typeof WebSocket === "undefined" || typeof resolveWsUrl !== "function") {
+        return false;
+      }
+      if (
+        this.toolAuthorizationWs &&
+        [WebSocket.CONNECTING, WebSocket.OPEN].includes(this.toolAuthorizationWs.readyState)
+      ) {
+        return true;
+      }
+
+      this.disconnectToolAuthorizationWebSocket();
+      const socket = new WebSocket(resolveWsUrl(this.apiBaseUrl, "/ws/tool-authorizations"));
+      this.toolAuthorizationWs = socket;
+      this.toolAuthorizationWsStatus = "connecting";
+      socket.addEventListener("open", () => {
+        if (this.toolAuthorizationWs === socket) {
+          this.toolAuthorizationWsStatus = "open";
+        }
+      });
+      socket.addEventListener("message", (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (String(message.event_type || "").startsWith("tool.authorization_") && message.payload) {
+            this.applyToolAuthorizationRealtimeUpdate(message.payload);
+          }
+        } catch {
+          // Ignore malformed authorization events; REST refresh remains available.
+        }
+      });
+      socket.addEventListener("close", () => {
+        if (this.toolAuthorizationWs === socket) {
+          this.toolAuthorizationWsStatus = "closed";
+        }
+      });
+      socket.addEventListener("error", () => {
+        if (this.toolAuthorizationWs === socket) {
+          this.toolAuthorizationWsStatus = "error";
+        }
+      });
+      return true;
+    },
+
+    disconnectToolAuthorizationWebSocket() {
+      if (this.toolAuthorizationWs) {
+        this.toolAuthorizationWs.close();
+      }
+      this.toolAuthorizationWs = null;
+      this.toolAuthorizationWsStatus = "idle";
+    },
+
+    applyToolAuthorizationRealtimeUpdate(authorization) {
+      if (!authorization?.id) {
+        return;
+      }
+      const index = this.toolAuthorizations.findIndex((item) => item.id === authorization.id);
+      if (index >= 0 || this.toolAuthorizationMatchesFilters(authorization)) {
+        this.replaceToolAuthorization(authorization);
+      }
+    },
+
+    toolAuthorizationMatchesFilters(authorization) {
+      const status = String(this.toolAuthorizationFilters?.status || "").trim();
+      const toolName = String(this.toolAuthorizationFilters?.tool_name || "").trim();
+      if (status && authorization.status !== status) {
+        return false;
+      }
+      if (toolName && authorization.tool_name !== toolName) {
+        return false;
+      }
+      return true;
     },
 
     toolAuthorizationQueryString() {

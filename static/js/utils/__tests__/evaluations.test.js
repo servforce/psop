@@ -115,6 +115,32 @@ test("evaluation methods build finding filters and labels", () => {
   expect(methods.evaluationScoreBarWidth(105)).toBe("100%");
 });
 
+test("evaluation reports page loads recent reports", async () => {
+  const methods = loadEvaluationMethods();
+  const reports = [{ id: "evaluation-1", run_id: "run-1", findings: [] }];
+  const context = {
+    ...methods,
+    busy: { evaluationReports: false },
+    currentEvaluation: { id: "evaluation-old" },
+    evaluationReports: [],
+    apiRequest: jest.fn(async () => reports),
+    disconnectEvaluationActivityWebSocket: jest.fn(),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadEvaluationReportsPage.call(context);
+
+  expect(context.disconnectEvaluationActivityWebSocket).toHaveBeenCalled();
+  expect(context.currentEvaluation).toBe(null);
+  expect(context.apiRequest).toHaveBeenCalledWith("/evaluations?limit=50");
+  expect(context.evaluationReports).toBe(reports);
+  expect(context.busy.evaluationReports).toBe(false);
+
+  const htmlReport = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-reports.html"), "utf8");
+  expect(htmlReport).toContain("evaluationReports.length");
+  expect(htmlReport).toContain("navigate(evaluationReportPath(evaluation.id))");
+});
+
 test("evaluation finding evidence refs build run replay deep links", () => {
   const methods = loadEvaluationMethods();
   const context = {

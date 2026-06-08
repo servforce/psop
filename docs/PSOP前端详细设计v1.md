@@ -251,7 +251,7 @@ static/
 | Agent Prompts | `/api/v1/agent-prompts*`、`/api/v1/agent-prompt-bindings*` |
 | Tasks | `GET /api/v1/runtime/jobs`、`GET /api/v1/runtime/jobs/stats` |
 | Invocations | `GET/POST /api/v1/gateway/invocations` |
-| Run Live | `GET /api/v1/runs/{run_id}`、`POST /api/v1/runs/{run_id}/cancel`、`/snapshots`、`/traces`、`/bindings`、`/events`、`/terminal/sessions/{run_id}` |
+| Run Live | `GET /api/v1/runs/{run_id}`、`POST /api/v1/runs/{run_id}/cancel`、`/snapshots`、`/traces`、`/bindings`、`/events` |
 | Terminal WS | `/ws/runs/{run_id}` |
 | Replay | `GET /api/v1/replay/runs`、`GET /api/v1/replay/runs/{run_id}` |
 | Skill Tests | `/api/v1/pskills/{skill_id}/test-scenarios*`、`/api/v1/skill-test-scenario-runs*` |
@@ -280,12 +280,13 @@ static/
 | 场景 | 当前方式 |
 | --- | --- |
 | Publish progress | SSE：`/api/v1/compiler/requests/{id}/events`，断线可读 `/progress` |
-| Run Live terminal event | WebSocket `/ws/runs/{run_id}` 接收 `terminal.event.appended`，REST 补齐 |
+| Run Live run event | WebSocket `/ws/runs/{run_id}` 接收 `terminal.event.appended`，REST 补齐 |
 | Run Live 状态 | REST 刷新 run、run events、run traces、bindings |
 | Tasks | 轮询 runtime jobs 和 stats |
 | Skill Test Review | REST 拉取 review DTO，必要时轮询运行状态 |
 | Replay | REST 一次性拉取 replay detail |
 | Evaluation / Governance activity | WebSocket 活动快照 + REST 补齐 |
+| Tool Authorizations | WebSocket `/ws/tool-authorizations` 接收授权变更，REST 补齐 |
 | Observability | REST 查询 dashboard、metrics、run events、run traces、agent/tool/model facts |
 
 WebSocket 不是状态源。断线、刷新或 seq 不连续时必须通过 REST 从 `latest_seq + 1` 补齐 run events。
@@ -298,7 +299,7 @@ Run Live 当前负责：
 - 展示 terminal transcript。
 - 支持 JSON text input。
 - 支持 multipart text + image/audio/video 输入。
-- 媒体 part 通过 `/terminal/sessions/{run_id}/events/{event_id}/parts/{part_id}/content` 读取。
+- 媒体 part 通过 `/runs/{run_id}/events/{event_id}/parts/{part_id}/content` 读取。
 - 将 runtime output、input、错误提示和 replay 视图区分展示。
 
 输入规则与 [PSOP终端接入说明v1.md](./PSOP终端接入说明v1.md) 保持一致：前端不构造 `parts[]`，只提交 `text` 和文件字段。

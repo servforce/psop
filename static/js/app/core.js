@@ -476,6 +476,9 @@
           this.disconnectGovernanceProposalActivityWebSocket?.();
           this.currentGovernanceProposal = null;
         }
+        if (this.route.name !== "tool-authorizations") {
+          this.disconnectToolAuthorizationWebSocket?.();
+        }
         if (!["platform-tools", "platform-tool"].includes(this.route.name)) {
           this.currentPlatformTool = null;
         }
@@ -586,8 +589,7 @@
 
           if (this.route.name === "tool-authorizations") {
             this.currentSkill = null;
-            this.syncToolAuthorizationFiltersFromLocation?.();
-            await this.loadToolAuthorizations();
+            await this.loadToolAuthorizationsPage();
             return;
           }
 

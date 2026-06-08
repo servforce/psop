@@ -112,13 +112,10 @@ test("loadRunLive loads run-scoped tool authorizations", async () => {
     route: { params: {} },
     apiRequest: jest.fn(async (url) => {
       if (url === "/runs/run-1") {
-        return { id: "run-1", status: "waiting_input" };
+        return { id: "run-1", status: "waiting_input", terminal_session_id: "terminal-1" };
       }
       if (url === "/runs/run-1/bindings") {
         return [];
-      }
-      if (url === "/terminal/sessions/run-1") {
-        return { terminal_session: { id: "terminal-1", status: "open" } };
       }
       if (url === "/runs/run-1/events") {
         return [];
@@ -141,6 +138,8 @@ test("loadRunLive loads run-scoped tool authorizations", async () => {
 
   await methods.loadRunLive.call(context, "run-1");
 
+  expect(context.apiRequest).not.toHaveBeenCalledWith("/terminal/sessions/run-1");
+  expect(context.liveRunTerminalSession).toMatchObject({ id: "terminal-1", status: "open" });
   expect(context.apiRequest).toHaveBeenCalledWith("/runs/run-1/tool-authorizations");
   expect(context.liveRunToolAuthorizations).toEqual([authorization]);
   expect(context.liveRunAuthorizationCountByStatus("pending")).toBe(1);

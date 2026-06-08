@@ -1280,6 +1280,7 @@ waiting_tool_authorization
 
 | Method | Path | 中文说明 |
 |---|---|---|
+| `GET` | `/api/v1/evaluations` | 查询 Run 评估报告列表。 |
 | `POST` | `/api/v1/evaluations/runs/{run_id}` | 创建 Run 评估。 |
 | `GET` | `/api/v1/evaluations/{evaluation_id}` | 评估详情。 |
 | `GET` | `/api/v1/evaluations/{evaluation_id}/findings` | 评估 findings。 |

@@ -58,6 +58,7 @@ def test_api_routes_use_pskill_and_materials_naming() -> None:
     assert "/api/v1/runs/{run_id}/events" in route_paths
     assert "/api/v1/runs/{run_id}/traces" in route_paths
     assert "/api/v1/memory/{memory_id}" in route_paths
+    assert "/api/v1/evaluations" in route_paths
     assert "/api/v1/skills" in route_paths
 
 
@@ -98,6 +99,7 @@ def test_server_design_keeps_pskill_api_paths_distinct_from_skill_packages() -> 
     assert "`GET` | `/api/v1/pskills` | PSkill 列表" in design
     assert "`GET` | `/api/v1/skills` | Skill 包列表" in design
     assert "`GET` | `/api/v1/memory/{memory_id}` | Memory 详情" in design
+    assert "`GET` | `/api/v1/evaluations` | Run evaluation report 列表" in design
     assert "RunEvent / RunEventPart" in design
     assert "RunTrace" in design
     assert "`POST` | `/api/v1/runs/{run_id}/cancel`" in design
@@ -150,6 +152,7 @@ def test_frontend_design_uses_pskill_materials_and_run_trace_paths() -> None:
         "raw materials",
         "/terminal-events",
         "/trace-events",
+        "/terminal/sessions",
     }
     violations = sorted(fragment for fragment in forbidden_fragments if fragment in design)
 
@@ -163,5 +166,6 @@ def test_frontend_design_uses_pskill_materials_and_run_trace_paths() -> None:
     assert "`/admin/platform/observability`" in design
     assert "`/admin/governance/proposals`" in design
     assert "`/admin/platform/tool-authorizations`" in design
+    assert "`/ws/tool-authorizations`" in design
     assert "`/api/v1/observability/*`" in design
     assert "- `/api/v1/runs/{run_id}/cancel`" not in design

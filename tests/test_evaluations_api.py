@@ -57,6 +57,45 @@ def test_evaluation_api_creates_report_for_completed_run_and_records_evaluator_a
     assert replay_payload["run_evaluation_findings"] == []
 
 
+def test_evaluation_api_lists_reports_with_run_pskill_and_outcome_filters() -> None:
+    client, _, failing_inference = create_test_client()
+
+    with client:
+        success_run_id = _publish_and_complete_successful_run(client, key="evaluation-list-success")
+        failed_run_id, _, _ = _publish_and_complete_failed_run(
+            client,
+            key="evaluation-list-failed",
+            restore_gateway=failing_inference,
+        )
+
+        success_evaluation = client.post(f"/api/v1/evaluations/runs/{success_run_id}").json()
+        failed_evaluation = client.post(f"/api/v1/evaluations/runs/{failed_run_id}").json()
+
+        all_reports_response = client.get("/api/v1/evaluations")
+        run_filtered_response = client.get("/api/v1/evaluations", params={"run_id": success_run_id})
+        pskill_filtered_response = client.get(
+            "/api/v1/evaluations",
+            params={"pskill_definition_id": failed_evaluation["pskill_definition_id"]},
+        )
+        outcome_filtered_response = client.get("/api/v1/evaluations", params={"overall_outcome": "failed"})
+
+    assert all_reports_response.status_code == 200
+    report_ids = {item["id"] for item in all_reports_response.json()}
+    assert {success_evaluation["id"], failed_evaluation["id"]} <= report_ids
+
+    assert run_filtered_response.status_code == 200
+    assert [item["id"] for item in run_filtered_response.json()] == [success_evaluation["id"]]
+
+    assert pskill_filtered_response.status_code == 200
+    assert [item["id"] for item in pskill_filtered_response.json()] == [failed_evaluation["id"]]
+
+    assert outcome_filtered_response.status_code == 200
+    failed_reports = outcome_filtered_response.json()
+    assert failed_evaluation["id"] in {item["id"] for item in failed_reports}
+    assert success_evaluation["id"] not in {item["id"] for item in failed_reports}
+    assert failed_reports[0]["findings"][0]["run_id"] == failed_run_id
+
+
 def test_evaluation_api_generates_findings_for_failed_run_and_updates_status() -> None:
     client, _, failing_inference = create_test_client()
 

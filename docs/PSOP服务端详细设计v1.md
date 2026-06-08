@@ -477,6 +477,7 @@ Claim 规则：
 | `POST` | `/api/v1/memory/search` | Memory 搜索 |
 | `POST` | `/api/v1/memory/compactions/queue` | 创建 memory compaction job |
 | `PATCH` | `/api/v1/memory/{memory_id}` | 审核或编辑 Memory |
+| `GET` | `/api/v1/evaluations` | Run evaluation report 列表 |
 | `GET` | `/api/v1/evaluations/findings` | Run evaluation finding 列表 |
 | `GET` | `/api/v1/governance/proposals` | 治理提案列表 |
 | `GET` | `/api/v1/tool-authorizations` | AgentRun 工具授权列表 |

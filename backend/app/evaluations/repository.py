@@ -26,6 +26,25 @@ class EvaluationRepository:
             session.scalars(select(RunEvaluation).where(RunEvaluation.id.in_(sorted(evaluation_ids)))).all()
         )
 
+    def list_evaluations(
+        self,
+        session: Session,
+        *,
+        run_id: str | None = None,
+        pskill_definition_id: str | None = None,
+        overall_outcome: str | None = None,
+        limit: int = 50,
+    ) -> list[RunEvaluation]:
+        query = select(RunEvaluation)
+        if run_id:
+            query = query.where(RunEvaluation.run_id == run_id)
+        if pskill_definition_id:
+            query = query.where(RunEvaluation.pskill_definition_id == pskill_definition_id)
+        if overall_outcome:
+            query = query.where(RunEvaluation.overall_outcome == overall_outcome)
+        query = query.order_by(RunEvaluation.created_at.desc(), RunEvaluation.id.desc()).limit(limit)
+        return list(session.scalars(query).all())
+
     def list_snapshots(self, session: Session, run_id: str) -> list[SessionTokenSnapshot]:
         return list(
             session.scalars(
