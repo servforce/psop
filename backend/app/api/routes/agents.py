@@ -29,6 +29,7 @@ from app.skills.service import SkillPackageService
 agents_router = APIRouter(tags=["agents"])
 agent_runs_router = APIRouter(prefix="/agent-runs", tags=["agent-runs"])
 tool_authorizations_router = APIRouter(prefix="/tool-authorizations", tags=["tool-authorizations"])
+run_tool_authorizations_router = APIRouter(prefix="/runs", tags=["tool-authorizations"])
 
 
 @agents_router.get("/agents", response_model=list[AgentDefinitionSummaryResponse])
@@ -192,6 +193,16 @@ def list_agent_run_tool_authorizations(
     service: AgentService = Depends(get_agent_service),
 ) -> list[AgentToolAuthorizationResponse]:
     return service.list_tool_authorizations(session, agent_run_id=agent_run_id)
+
+
+@run_tool_authorizations_router.get("/{run_id}/tool-authorizations", response_model=list[AgentToolAuthorizationResponse])
+def list_run_tool_authorizations(
+    run_id: str,
+    status: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    service: AgentService = Depends(get_agent_service),
+) -> list[AgentToolAuthorizationResponse]:
+    return service.list_tool_authorizations(session, run_id=run_id, status=status)
 
 
 @tool_authorizations_router.post(

@@ -526,11 +526,17 @@ class AgentService:
         session: Session,
         *,
         agent_run_id: str | None = None,
+        run_id: str | None = None,
         status: str | None = None,
     ) -> list[AgentToolAuthorizationResponse]:
         return [
             self._build_tool_authorization_response(item)
-            for item in self.repository.list_tool_authorizations(session, agent_run_id=agent_run_id, status=status)
+            for item in self.repository.list_tool_authorizations(
+                session,
+                agent_run_id=agent_run_id,
+                run_id=run_id,
+                status=status,
+            )
         ]
 
     def get_tool_authorization(self, session: Session, authorization_id: str) -> AgentToolAuthorizationResponse:

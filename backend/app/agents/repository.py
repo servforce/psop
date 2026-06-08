@@ -159,11 +159,14 @@ class AgentRepository:
         session: Session,
         *,
         agent_run_id: str | None = None,
+        run_id: str | None = None,
         status: str | None = None,
     ) -> list[AgentToolAuthorization]:
         query = select(AgentToolAuthorization).order_by(AgentToolAuthorization.created_at.desc())
         if agent_run_id:
             query = query.where(AgentToolAuthorization.agent_run_id == agent_run_id)
+        if run_id:
+            query = query.where(AgentToolAuthorization.run_id == run_id)
         if status:
             query = query.where(AgentToolAuthorization.status == status)
         return list(session.scalars(query).all())

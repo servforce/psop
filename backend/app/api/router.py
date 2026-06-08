@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.routes.agents import agents_router, agent_runs_router, tool_authorizations_router
+from app.api.routes.agents import agents_router, agent_runs_router, run_tool_authorizations_router, tool_authorizations_router
 from app.api.routes.agent_prompts import router as agent_prompts_router
 from app.api.routes.compiler import router as compiler_router
 from app.api.routes.evaluations import router as evaluations_router
@@ -21,6 +21,7 @@ api_router.include_router(system_router)
 api_router.include_router(agents_router)
 api_router.include_router(agent_runs_router)
 api_router.include_router(tool_authorizations_router)
+api_router.include_router(run_tool_authorizations_router)
 api_router.include_router(agent_prompts_router)
 api_router.include_router(skill_packages_router)
 api_router.include_router(skills_router, prefix="/pskills")

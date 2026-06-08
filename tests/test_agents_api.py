@@ -19,6 +19,7 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
                 "agent_key": "pskill.runner",
                 "owner_type": "runtime",
                 "owner_id": "run-owner",
+                "run_id": "runtime-run-auth-1",
                 "input_payload": {"node_id": "inspect"},
             },
         )
@@ -36,6 +37,7 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
             "/api/v1/tool-authorizations",
             json={
                 "agent_run_id": agent_run["id"],
+                "run_id": agent_run["run_id"],
                 "tool_name": "psop.repository.commit_patch",
                 "side_effect_level": "high_write",
                 "risk_level": "high",
@@ -46,6 +48,11 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
             },
         )
         authorization = authorization_response.json()
+        run_authorizations_response = client.get(f"/api/v1/runs/{agent_run['run_id']}/tool-authorizations")
+        pending_run_authorizations_response = client.get(
+            f"/api/v1/runs/{agent_run['run_id']}/tool-authorizations",
+            params={"status": "pending"},
+        )
         waiting_run_response = client.get(f"/api/v1/agent-runs/{agent_run['id']}")
         approve_response = client.post(
             f"/api/v1/tool-authorizations/{authorization['id']}/approve",
@@ -99,6 +106,10 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
 
     assert authorization_response.status_code == 201
     assert authorization["status"] == "pending"
+    assert run_authorizations_response.status_code == 200
+    assert [item["id"] for item in run_authorizations_response.json()] == [authorization["id"]]
+    assert pending_run_authorizations_response.status_code == 200
+    assert [item["id"] for item in pending_run_authorizations_response.json()] == [authorization["id"]]
     assert waiting_run_response.json()["status"] == "waiting_tool_authorization"
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved"
