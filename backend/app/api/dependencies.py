@@ -67,7 +67,10 @@ def get_agent_service(_: Request) -> AgentService:
 
 
 def get_agent_runner(request: Request) -> AgentRunner:
-    return AgentRunner(pskills_service=get_skills_service(request))
+    return AgentRunner(
+        pskills_service=get_skills_service(request),
+        runtime_service=get_runtime_service(request),
+    )
 
 
 def get_skills_service(request: Request) -> SkillsService:

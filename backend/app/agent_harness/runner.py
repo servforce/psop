@@ -26,6 +26,7 @@ from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.manifest import SkillDocument, document_from_manifest_snapshot, parse_skill_yaml, render_skill_yaml
 from app.pskills.models import now_utc
 from app.pskills.service import SkillsService
+from app.runtime.service import RuntimeService
 from app.skills.models import SkillActivation
 from app.skills.repository import SkillPackageRepository
 from app.skills.service import SkillPackageService
@@ -51,6 +52,7 @@ class AgentRunner:
         tool_policy: ToolPolicy | None = None,
         memory_service: MemoryService | None = None,
         pskills_service: SkillsService | None = None,
+        runtime_service: RuntimeService | None = None,
         governance_service: GovernanceService | None = None,
         output_guardrail: OutputGuardrail | None = None,
         planner: AgentPlanner | None = None,
@@ -61,6 +63,7 @@ class AgentRunner:
         self.tool_policy = tool_policy or ToolPolicy()
         self.memory_service = memory_service or MemoryService()
         self.pskills_service = pskills_service
+        self.runtime_service = runtime_service
         self.governance_service = governance_service or GovernanceService()
         self.output_guardrail = output_guardrail or OutputGuardrail()
         self.planner = planner or AgentPlanner()
@@ -458,6 +461,8 @@ class AgentRunner:
                     "entries": [item.model_dump(mode="json") for item in entries],
                 }
             }
+        if tool_call.tool_name == "psop.runtime.read":
+            return {"result": self._read_runtime_facts(session, tool_call=tool_call, arguments=arguments)}
         if tool_call.tool_name == "psop.governance.write_proposal":
             proposal_arguments = arguments.get("proposal", arguments)
             if not isinstance(proposal_arguments, dict):
@@ -596,6 +601,60 @@ class AgentRunner:
             raise SkillValidationError("AgentRunner 未配置 PSkill service，无法执行 PSkill repository 工具。")
         return self.pskills_service
 
+    def _require_runtime_service(self) -> RuntimeService:
+        if not self.runtime_service:
+            raise SkillValidationError("AgentRunner 未配置 Runtime service，无法执行 Runtime 工具。")
+        return self.runtime_service
+
+    def _read_runtime_facts(self, session: Session, *, tool_call: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+        runtime_service = self._require_runtime_service()
+        run_id = str(arguments.get("run_id") or "").strip()
+        if not run_id:
+            agent_run = self.agent_service.get_run_model(session, tool_call.agent_run_id)
+            run_id = str(agent_run.run_id or "").strip()
+        if not run_id:
+            raise SkillValidationError(
+                "psop.runtime.read 缺少 run_id。",
+                details={"required_any_of": ["arguments_summary.run_id", "agent_run.run_id"]},
+            )
+        snapshot_limit = self._bounded_tool_limit(arguments.get("snapshot_limit"), default=1, maximum=20)
+        event_limit = self._bounded_tool_limit(
+            arguments.get("event_limit", arguments.get("run_event_limit")),
+            default=20,
+            maximum=100,
+        )
+        trace_limit = self._bounded_tool_limit(
+            arguments.get("trace_limit", arguments.get("run_trace_limit")),
+            default=20,
+            maximum=100,
+        )
+        run = runtime_service.get_run(session, run_id)
+        snapshots = runtime_service.list_snapshots(session, run_id)
+        run_events = runtime_service.list_run_events(session, run_id)
+        run_traces = runtime_service.list_run_traces(session, run_id)
+        selected_snapshots = snapshots[-snapshot_limit:] if snapshot_limit else []
+        selected_events = run_events[-event_limit:] if event_limit else []
+        selected_traces = run_traces[-trace_limit:] if trace_limit else []
+        return {
+            "state_source": "runtime_persisted_facts",
+            "used_as_runtime_state": False,
+            "run": run.model_dump(mode="json"),
+            "latest_snapshot": snapshots[-1].model_dump(mode="json") if snapshots else None,
+            "snapshots": [item.model_dump(mode="json") for item in selected_snapshots],
+            "run_events": [item.model_dump(mode="json") for item in selected_events],
+            "run_traces": [item.model_dump(mode="json") for item in selected_traces],
+            "counts": {
+                "snapshot_count": len(snapshots),
+                "run_event_count": len(run_events),
+                "run_trace_count": len(run_traces),
+            },
+            "limits": {
+                "snapshot_limit": snapshot_limit,
+                "event_limit": event_limit,
+                "trace_limit": trace_limit,
+            },
+        }
+
     def _pskill_id_from_arguments(self, session: Session, arguments: dict[str, Any]) -> str:
         pskill_id = str(arguments.get("pskill_id") or arguments.get("skill_id") or "").strip()
         if pskill_id:
@@ -618,6 +677,16 @@ class AgentRunner:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         raise SkillValidationError("工具参数缺失。", details={"required_any_of": list(names), "arguments_summary": arguments})
+
+    @staticmethod
+    def _bounded_tool_limit(value: Any, *, default: int, maximum: int) -> int:
+        if value is None or value == "":
+            return default
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as error:
+            raise SkillValidationError("工具 limit 参数必须是整数。", details={"value": value}) from error
+        return max(0, min(parsed, maximum))
 
     @staticmethod
     def _document_from_tool_manifest(manifest: dict[str, Any]) -> SkillDocument:

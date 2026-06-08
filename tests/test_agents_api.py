@@ -337,6 +337,87 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
     assert "tool_authorization_response" in replay_event_kinds
 
 
+def test_agent_runner_executes_runtime_read_tool_from_persisted_facts() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        skill = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "runtime-read-tool",
+                "name": "Runtime Read Tool",
+                "description": "Validate AgentRunner runtime.read uses persisted runtime facts.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill['id']}/publish",
+            json={"publish_reason": "Runtime read tool test"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/runtime/invocations",
+            json={
+                "skill_key": "runtime-read-tool",
+                "input_envelope": {"user_input": "读取 Runtime 持久化事实。"},
+                "gateway_type": "web",
+                "terminal_context": {"terminal_kind": "web"},
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+        agent_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.runner",
+                "owner_type": "runtime_run",
+                "owner_id": run_id,
+                "run_id": run_id,
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.runtime.read",
+                        "side_effect_level": "read",
+                        "arguments_summary": {"snapshot_limit": 1, "event_limit": 5, "trace_limit": 5},
+                    }
+                },
+            },
+        )
+        agent_run_id = agent_run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert invocation_response.status_code == 201
+    assert agent_run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    payload = run_once_response.json()
+    assert payload["status"] == "succeeded"
+    result = payload["output_payload"]["tool_result"]["result"]
+    assert result["state_source"] == "runtime_persisted_facts"
+    assert result["used_as_runtime_state"] is False
+    assert result["run"]["id"] == run_id
+    assert result["latest_snapshot"]["run_id"] == run_id
+    assert len(result["snapshots"]) == 1
+    assert result["counts"]["snapshot_count"] >= 1
+    assert result["counts"]["run_event_count"] >= 1
+    assert result["counts"]["run_trace_count"] >= 1
+    assert "terminal.text.input.v1" in {item["event_kind"] for item in result["run_events"]}
+    assert "native_execution" not in result
+    assert authorizations_response.json() == []
+
+    tool_call = tool_calls_response.json()[0]
+    assert tool_call["tool_name"] == "psop.runtime.read"
+    assert tool_call["status"] == "succeeded"
+    assert tool_call["result_summary"]["executed"] is True
+    assert tool_call["result_summary"]["result"]["run"]["id"] == run_id
+
+    event_types = [item["event_type"] for item in events_response.json()]
+    assert "tool.execution_started" in event_types
+    assert "tool.execution_succeeded" in event_types
+    assert "agent.tool_call.succeeded" in event_types
+
+
 def test_agent_version_api_creates_publishes_and_activates_draft() -> None:
     client, _, _ = create_test_client()
 
