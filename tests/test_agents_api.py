@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from app.memory.models import AgentMemoryEntry
 from app.skills.models import SkillPackage, SkillVersion
 from tests.test_skills_api import create_test_client
 
@@ -183,6 +184,21 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
     client, _, _ = create_test_client()
 
     with client:
+        with client.app.state.db_manager.session() as session:
+            session.add(
+                AgentMemoryEntry(
+                    namespace="governance",
+                    memory_type="episodic",
+                    agent_key="psop.governance",
+                    status="active",
+                    confidence=91,
+                    title="Agent activation requires authorization",
+                    content="Activating AgentVersion is high_write and must be routed through tool authorization.",
+                    source_refs=[{"kind": "agent_tool_authorization", "id": "auth-pattern-1"}],
+                    tags=["authorization", "agent-version"],
+                )
+            )
+            session.commit()
         compiler_before = client.get("/api/v1/agents/pskill.compiler").json()
         compiler_spec = {
             **compiler_before["active_version"]["spec_json"],
@@ -251,8 +267,17 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
     assert tool_calls[0]["side_effect_level"] == "high_write"
 
     assert model_calls_response.status_code == 200
-    assert model_calls_response.json()[0]["provider"] == "deterministic"
-    assert model_calls_response.json()[0]["response_payload"]["decision_type"] == "tool_call"
+    model_call = model_calls_response.json()[0]
+    assert model_call["provider"] == "deterministic"
+    assert model_call["response_payload"]["decision_type"] == "tool_call"
+    assert model_call["request_payload"]["memory_context"][0]["title"] == "Agent activation requires authorization"
+    assert model_call["request_payload"]["memory_context"][0]["source_refs"] == [
+        {"kind": "agent_tool_authorization", "id": "auth-pattern-1"}
+    ]
+    assert model_call["request_payload"]["plan"]["steps"][1]["id"] == "retrieve_memory"
+    assert model_call["request_payload"]["plan"]["memory_entry_ids"] == [
+        model_call["request_payload"]["memory_context"][0]["id"]
+    ]
 
     activation_names = {item["activation_context"]["package_name"] for item in skill_activations_response.json()}
     assert skill_activations_response.status_code == 200
@@ -265,9 +290,14 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
 
     event_types = [item["event_type"] for item in events_response.json()]
     assert "agent.skills.activated" in event_types
+    assert "agent.memory.retrieved" in event_types
+    assert "agent.plan.created" in event_types
     assert "agent.model_call.completed" in event_types
     assert "tool.authorization_requested" in event_types
     assert "agent.waiting_tool_authorization" in event_types
+    memory_event = next(item for item in events_response.json() if item["event_type"] == "agent.memory.retrieved")
+    assert memory_event["payload"]["memory_entry_count"] == 1
+    assert memory_event["payload"]["used_as_runtime_state"] is False
 
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved"

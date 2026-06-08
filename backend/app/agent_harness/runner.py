@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.agent_harness.agent_decision import AgentDecision
 from app.agent_harness.guardrails import OutputGuardrail
+from app.agent_harness.planning import AgentPlanner
 from app.agent_harness.tools import ToolPolicy
 from app.agents.models import AgentRun
 from app.agents.schemas import (
@@ -43,6 +44,7 @@ class AgentRunner:
         tool_policy: ToolPolicy | None = None,
         memory_service: MemoryService | None = None,
         output_guardrail: OutputGuardrail | None = None,
+        planner: AgentPlanner | None = None,
     ) -> None:
         self.agent_service = agent_service or AgentService()
         self.skill_service = skill_service or SkillPackageService()
@@ -50,6 +52,7 @@ class AgentRunner:
         self.tool_policy = tool_policy or ToolPolicy()
         self.memory_service = memory_service or MemoryService()
         self.output_guardrail = output_guardrail or OutputGuardrail()
+        self.planner = planner or AgentPlanner()
 
     def run_once(self, session: Session, agent_run_id: str) -> AgentRunResponse:
         agent_run = self.agent_service.get_run_model(session, agent_run_id)
@@ -75,7 +78,45 @@ class AgentRunner:
             commit=False,
         )
 
-        active_tools = self._activate_skills(session, agent_run=agent_run, spec=spec)
+        active_tools, active_skill_names = self._activate_skills(session, agent_run=agent_run, spec=spec)
+        memory_context = self.memory_service.retrieve_context_for_agent(
+            session,
+            agent_key=agent_run.agent_key,
+            limit=self._memory_context_limit(spec),
+        )
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="agent.memory.retrieved",
+                phase="memory",
+                payload={
+                    "memory_entry_ids": [str(item.get("id")) for item in memory_context],
+                    "memory_entry_count": len(memory_context),
+                    "status": "active",
+                    "used_as_runtime_state": False,
+                },
+            ),
+            commit=False,
+        )
+        plan = self.planner.create_plan(
+            agent_key=agent_run.agent_key,
+            spec=spec,
+            input_payload=agent_run.input_payload,
+            active_skill_names=active_skill_names,
+            memory_context=memory_context,
+        )
+        plan_payload = plan.as_dict()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="agent.plan.created",
+                phase="planning",
+                payload=plan_payload,
+            ),
+            commit=False,
+        )
         decision = self._decision_from_input(agent_run.input_payload)
         self.agent_service.record_model_call(
             session,
@@ -84,7 +125,12 @@ class AgentRunner:
             route_key=str(spec.get("model_policy", {}).get("route_key") or "json"),
             model_name="agent-harness-deterministic",
             status="succeeded",
-            request_payload={"input_payload": agent_run.input_payload, "agent_key": agent_run.agent_key},
+            request_payload={
+                "input_payload": agent_run.input_payload,
+                "agent_key": agent_run.agent_key,
+                "memory_context": memory_context,
+                "plan": plan_payload,
+            },
             response_payload=decision.model_dump(mode="json"),
             usage_json={"input_tokens": 0, "output_tokens": 0},
             commit=False,
@@ -334,10 +380,11 @@ class AgentRunner:
             return {"result": activation}
         return {"result": {"authorized_execution": True}}
 
-    def _activate_skills(self, session: Session, *, agent_run: AgentRun, spec: dict[str, Any]) -> set[str]:
+    def _activate_skills(self, session: Session, *, agent_run: AgentRun, spec: dict[str, Any]) -> tuple[set[str], list[str]]:
         self.skill_service.sync_packages(session)
         selected_names = list(spec.get("allowed_skill_names") or DEFAULT_AGENT_SKILLS.get(agent_run.agent_key, []))
         active_tools: set[str] = set()
+        active_skill_names: list[str] = []
         for package_name in selected_names:
             package = self.skill_repository.get_package_by_name(session, package_name)
             if not package or not package.active_version_id:
@@ -345,6 +392,7 @@ class AgentRunner:
             version = self.skill_repository.get_version(session, package.active_version_id)
             if not version:
                 continue
+            active_skill_names.append(package.name)
             active_tools.update(str(tool) for tool in version.allowed_tools)
             activation = self.skill_repository.get_activation(
                 session,
@@ -370,11 +418,15 @@ class AgentRunner:
             AppendAgentEventRequest(
                 event_type="agent.skills.activated",
                 phase="skills",
-                payload={"skill_names": selected_names, "allowed_tools": sorted(active_tools)},
+                payload={
+                    "skill_names": selected_names,
+                    "active_skill_names": active_skill_names,
+                    "allowed_tools": sorted(active_tools),
+                },
             ),
             commit=False,
         )
-        return active_tools
+        return active_tools, active_skill_names
 
     def _handle_tool_call(
         self,
@@ -517,6 +569,16 @@ class AgentRunner:
             commit=False,
         )
         return len(entries)
+
+    @staticmethod
+    def _memory_context_limit(spec: dict[str, Any]) -> int:
+        policy = spec.get("memory_policy")
+        if not isinstance(policy, dict):
+            return 5
+        try:
+            return max(1, min(20, int(policy.get("context_limit") or 5)))
+        except (TypeError, ValueError):
+            return 5
 
     @staticmethod
     def _decision_from_input(input_payload: dict[str, Any]) -> AgentDecision:

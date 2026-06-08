@@ -64,6 +64,33 @@ class MemoryService:
             )
         ]
 
+    def retrieve_context_for_agent(
+        self,
+        session: Session,
+        *,
+        agent_key: str,
+        limit: int = 5,
+    ) -> list[dict[str, object]]:
+        entries = self.repository.list_entries(
+            session,
+            status="active",
+            agent_key=agent_key,
+            limit=max(1, min(20, int(limit or 5))),
+        )
+        return [
+            {
+                "id": item.id,
+                "namespace": item.namespace,
+                "memory_type": item.memory_type,
+                "title": item.title,
+                "content": item.content[:500],
+                "confidence": item.confidence,
+                "source_refs": list(item.source_refs or []),
+                "tags": list(item.tags or []),
+            }
+            for item in entries
+        ]
+
     def search(self, session: Session, payload: MemorySearchRequest) -> list[MemoryEntryResponse]:
         query = payload.query.strip()
         status = payload.status.strip() if payload.status else None
