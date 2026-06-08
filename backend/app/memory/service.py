@@ -73,6 +73,9 @@ class MemoryService:
             )
         ]
 
+    def get_entry(self, session: Session, memory_id: str) -> MemoryEntryResponse:
+        return self._build_entry_response(self._get_entry(session, memory_id))
+
     def retrieve_context_for_agent(
         self,
         session: Session,

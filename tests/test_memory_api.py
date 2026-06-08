@@ -45,6 +45,7 @@ def test_memory_api_lists_searches_and_reviews_agent_memory_candidates() -> None
             params={"namespace": "evaluation", "memory_type": "episodic", "status": "pending_review"},
         )
         entry = memory_list_response.json()[0]
+        detail_response = client.get(f"/api/v1/memory/{entry['id']}")
         search_pending_response = client.post(
             "/api/v1/memory/search",
             json={"query": "provider failure", "status": "pending_review", "limit": 10},
@@ -62,6 +63,7 @@ def test_memory_api_lists_searches_and_reviews_agent_memory_candidates() -> None
             "/api/v1/memory/search",
             json={"query": "OTel correlation", "namespace": "evaluation"},
         )
+        missing_detail_response = client.get("/api/v1/memory/missing-memory")
 
     assert run_response.status_code == 201
     assert run_once_response.status_code == 200
@@ -79,6 +81,9 @@ def test_memory_api_lists_searches_and_reviews_agent_memory_candidates() -> None
     assert entry["created_by_agent_run_id"] == agent_run_id
     assert entry["source_refs"] == [{"kind": "run_trace", "id": "trace-1"}]
 
+    assert detail_response.status_code == 200
+    assert detail_response.json()["id"] == entry["id"]
+    assert detail_response.json()["title"] == "Runtime provider failure replay pattern"
     assert search_pending_response.status_code == 200
     assert search_pending_response.json()[0]["id"] == entry["id"]
     assert patch_response.status_code == 200
@@ -88,6 +93,8 @@ def test_memory_api_lists_searches_and_reviews_agent_memory_candidates() -> None
     assert patch_response.json()["content"].startswith("Runtime provider failures require replay")
     assert search_active_response.status_code == 200
     assert search_active_response.json()[0]["id"] == entry["id"]
+    assert missing_detail_response.status_code == 404
+    assert missing_detail_response.json()["code"] == "skill_not_found"
 
 
 def test_memory_api_rejects_invalid_memory_type_filter() -> None:

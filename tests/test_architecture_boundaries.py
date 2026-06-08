@@ -57,6 +57,7 @@ def test_api_routes_use_pskill_and_materials_naming() -> None:
     assert "/api/v1/pskills/{skill_id}/materials" in route_paths
     assert "/api/v1/runs/{run_id}/events" in route_paths
     assert "/api/v1/runs/{run_id}/traces" in route_paths
+    assert "/api/v1/memory/{memory_id}" in route_paths
     assert "/api/v1/skills" in route_paths
 
 
@@ -86,15 +87,58 @@ def test_server_design_keeps_pskill_api_paths_distinct_from_skill_packages() -> 
         "/raw-materials",
         "/agent-skills",
         "raw materials",
+        "Trace Event",
+        "Terminal Event / Part",
     }
     violations = sorted(fragment for fragment in forbidden_fragments if fragment in design)
 
     assert violations == []
+    assert "`PSkills -> GitLab source -> Publish -> Compile -> EG Compile Artifact`" in design
     assert "### 9.2 PSkills / Materials" in design
     assert "`GET` | `/api/v1/pskills` | PSkill 列表" in design
     assert "`GET` | `/api/v1/skills` | Skill 包列表" in design
+    assert "`GET` | `/api/v1/memory/{memory_id}` | Memory 详情" in design
+    assert "RunEvent / RunEventPart" in design
+    assert "RunTrace" in design
     assert "`POST` | `/api/v1/runs/{run_id}/cancel`" in design
     assert "无 `/api/v1/runs/{run_id}/cancel`" not in design
+
+
+def test_overview_design_uses_current_closed_loop_job_and_runtime_names() -> None:
+    design = (PROJECT_ROOT / "docs" / "PSOP概要设计v1.md").read_text(encoding="utf-8")
+
+    forbidden_fragments = {
+        "raw_material_analysis",
+        "skill_raw_material_generation",
+        "job_type=compile",
+        "job_type=runtime)",
+        "domain/*",
+        "- Skill 总对象",
+        "用户定义的是 `Skills`",
+        "terminal input 同步",
+        "terminal transcript",
+        "recoverable terminal turn failure",
+        "`/api/v1/runs/{run_id}/cancel` 路由；服务层已有",
+    }
+    violations = sorted(fragment for fragment in forbidden_fragments if fragment in design)
+
+    assert violations == []
+    assert "当前代码中必须区分四层对象" in design
+    assert "用户定义的是 `PSkills`" in design
+    assert "Agent 使用的是 `Skills` 能力包" in design
+    assert "backend/app/* domains" in design
+    assert "`material_analysis`" in design
+    assert "`pskill_build`" in design
+    assert "`pskill_compile`" in design
+    assert "`runtime_step`" in design
+    assert "`run_evaluation`" in design
+    assert "`governance_proposal`" in design
+    assert "Claim 前会恢复过期 lease" in design
+    assert "进入 `dead_letter`" in design
+    assert "`run_event`、`run_event_part`、`run_trace`" in design
+    assert "`pskill.evaluator` 基于 run facts" in design
+    assert "`psop.governance` 转成治理提案" in design
+    assert "`Observability`" in design
 
 
 def test_frontend_design_uses_pskill_materials_and_run_trace_paths() -> None:

@@ -836,3 +836,69 @@ test("platform methods search and save memory entries", async () => {
   ]);
   expect(context.busy.memoryUpdate).toBe(false);
 });
+
+test("platform memory deep link fetches detail when entry is outside current filters", async () => {
+  const methods = loadPlatformMethods();
+  const listedEntry = {
+    id: "mem-listed",
+    namespace: "evaluation",
+    memory_type: "episodic",
+    agent_key: "pskill.evaluator",
+    status: "active",
+    confidence: 80,
+    title: "Listed memory",
+    content: "Visible in current filters.",
+    source_refs: [],
+    tags: [],
+    metadata: {}
+  };
+  const deepLinkedEntry = {
+    id: "mem-deep",
+    namespace: "runtime",
+    memory_type: "artifact",
+    agent_key: "pskill.runner",
+    status: "archived",
+    confidence: 72,
+    title: "Deep linked memory",
+    content: "Loaded by id outside current filters.",
+    source_refs: [],
+    tags: [],
+    metadata: {}
+  };
+  const context = {
+    ...methods,
+    busy: { memoryEntries: false, memoryUpdate: false, memoryCompaction: false },
+    memoryFilters: {
+      namespace: "evaluation",
+      memory_type: "episodic",
+      status: "active",
+      agent_key: "",
+      q: ""
+    },
+    memoryEntries: [],
+    currentMemoryEntry: null,
+    memoryEditForm: {},
+    apiRequest: jest.fn(async (url) => {
+      if (url === "/memory?namespace=evaluation&memory_type=episodic&status=active&limit=100") {
+        return [listedEntry];
+      }
+      if (url === "/memory/mem-deep") {
+        return deepLinkedEntry;
+      }
+      throw new Error(`unexpected url ${url}`);
+    }),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadPlatformMemoryPage.call(context, "mem-deep");
+
+  expect(context.apiRequest).toHaveBeenNthCalledWith(
+    1,
+    "/memory?namespace=evaluation&memory_type=episodic&status=active&limit=100"
+  );
+  expect(context.apiRequest).toHaveBeenNthCalledWith(2, "/memory/mem-deep");
+  expect(context.currentMemoryEntry).toEqual(deepLinkedEntry);
+  expect(context.memoryEntries.map((item) => item.id)).toEqual(["mem-deep", "mem-listed"]);
+  expect(context.showNotice).not.toHaveBeenCalled();
+  expect(context.busy.memoryEntries).toBe(false);
+});

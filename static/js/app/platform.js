@@ -656,7 +656,7 @@
         if (selected) {
           this.selectMemoryEntry(selected);
         } else {
-          this.showNotice("error", "未在当前筛选结果中找到该 Memory。");
+          await this.loadMemoryEntry(requestedId);
         }
         return;
       }
@@ -680,6 +680,25 @@
         }
       } catch (error) {
         this.showNotice("error", error.message || "Memory 加载失败。");
+      } finally {
+        this.busy.memoryEntries = false;
+      }
+    },
+
+    async loadMemoryEntry(memoryId) {
+      const id = String(memoryId || "").trim();
+      if (!id) {
+        return null;
+      }
+      this.busy.memoryEntries = true;
+      try {
+        const entry = await this.apiRequest(`/memory/${encodeURIComponent(id)}`);
+        this.replaceMemoryEntry(entry);
+        this.selectMemoryEntry(entry);
+        return entry;
+      } catch (error) {
+        this.showNotice("error", error.message || "Memory 详情加载失败。");
+        return null;
       } finally {
         this.busy.memoryEntries = false;
       }

@@ -10,10 +10,10 @@
 
 当前代码覆盖以下闭环：
 
-- `Skills -> GitLab source -> Publish -> Compile -> EG Compile Artifact`
-- `Invocation -> Run -> Terminal Session -> Session Token Snapshot -> Trace Event`
-- `Terminal input/output -> Terminal Event / Part -> Object Store`
-- `Replay -> timeline / snapshots / trace / terminal transcript`
+- `PSkills -> GitLab source -> Publish -> Compile -> EG Compile Artifact`
+- `Invocation -> Run -> Terminal Session -> Session Token Snapshot -> RunTrace`
+- `Run input/output -> RunEvent / RunEventPart -> Object Store`
+- `Replay -> timeline / snapshots / run traces / run events`
 - `Skill Test Scenario -> real invocation/run -> timeline driver -> semantic judge`
 - `Agent Prompt Pack -> version -> published -> active binding`
 - `Runtime Job -> DB claim -> embedded worker`
@@ -463,6 +463,23 @@ Claim 规则：
 | `POST` | `/api/v1/skill-test-scenario-runs/{scenario_run_id}/evaluate` | 重新评估 |
 | `POST` | `/api/v1/skill-test-scenario-runs/{scenario_run_id}/fork-scenario` | fork 新测试场景 |
 | `POST` | `/api/v1/skill-test-scenario-runs/{scenario_run_id}/fork-debug` | fork 调试 invocation |
+
+### 9.9 Agent / Skills / Tools / Memory / Governance
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/v1/agents` | Agent 定义列表 |
+| `GET` | `/api/v1/agent-runs` | AgentRun 列表 |
+| `GET` | `/api/v1/skills` | Skill 包列表 |
+| `GET` | `/api/v1/tools` | ToolPolicy 工具列表 |
+| `GET` | `/api/v1/memory` | Memory 列表 |
+| `GET` | `/api/v1/memory/{memory_id}` | Memory 详情 |
+| `POST` | `/api/v1/memory/search` | Memory 搜索 |
+| `POST` | `/api/v1/memory/compactions/queue` | 创建 memory compaction job |
+| `PATCH` | `/api/v1/memory/{memory_id}` | 审核或编辑 Memory |
+| `GET` | `/api/v1/evaluations/findings` | Run evaluation finding 列表 |
+| `GET` | `/api/v1/governance/proposals` | 治理提案列表 |
+| `GET` | `/api/v1/tool-authorizations` | AgentRun 工具授权列表 |
 
 ## 10. WebSocket
 

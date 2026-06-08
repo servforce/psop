@@ -49,6 +49,15 @@ def search_memory(
     return service.search(session, payload)
 
 
+@router.get("/{memory_id}", response_model=MemoryEntryResponse)
+def get_memory_entry(
+    memory_id: str,
+    session: Session = Depends(get_db_session),
+    service: MemoryService = Depends(get_memory_service),
+) -> MemoryEntryResponse:
+    return service.get_entry(session, memory_id)
+
+
 @router.post("/compactions/queue", response_model=RuntimeJobResponse, status_code=status.HTTP_202_ACCEPTED)
 def queue_memory_compaction(
     payload: QueueMemoryCompactionRequest,
