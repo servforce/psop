@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-function loadRuntimeMethods() {
+function loadRuntimeMethods(locationSearch = "") {
   const source = fs.readFileSync(path.join(__dirname, "../../app/runtime.js"), "utf8");
   const helperNames = [
     "normalizePath",
@@ -29,6 +29,7 @@ function loadRuntimeMethods() {
   ];
   const context = {
     window: {
+      location: { search: locationSearch },
       PSOPConsoleHelpers: Object.fromEntries(helperNames.map((name) => [name, jest.fn()])),
       PSOPRuntimeEvents: {
         mergeBySeq: (_existing, incoming) => incoming || [],
@@ -158,6 +159,38 @@ test("run live websocket authorization events refresh authorization list", async
 
   expect(context.apiRequest).toHaveBeenCalledWith("/runs/run-1/tool-authorizations");
   expect(context.liveRunToolAuthorizations).toEqual([latest]);
+});
+
+test("run replay selection follows event id from location", () => {
+  const methods = loadRuntimeMethods("?event_id=run-event-1");
+  const replayEvent = {
+    seq_no: 4,
+    event_type: "terminal.event.appended",
+    occurred_at: "2026-01-01T00:00:04.000Z",
+    payload: { id: "run-event-1" }
+  };
+  const context = {
+    ...methods,
+    liveRun: { id: "run-1" },
+    replayDetail: {
+      run: { id: "run-1" },
+      timeline: [
+        {
+          seq_no: 1,
+          event_type: "runtime.step",
+          occurred_at: "2026-01-01T00:00:01.000Z",
+          payload: { id: "trace-1" }
+        },
+        replayEvent
+      ]
+    },
+    selectedLiveRunReplayItemKey: ""
+  };
+
+  methods.syncLiveRunReplaySelectionFromLocation.call(context);
+
+  expect(context.selectedLiveRunReplayItemKey).toBe(methods.liveRunReplayItemKey(replayEvent));
+  expect(methods.selectedLiveRunReplayItem.call(context)).toBe(replayEvent);
 });
 
 test("run live authorization decisions update local list and refresh run", async () => {

@@ -338,6 +338,24 @@ async def reject_tool_authorization(
     return authorization
 
 
+@tool_authorizations_router.post("/{authorization_id}/expire", response_model=AgentToolAuthorizationResponse)
+async def expire_tool_authorization(
+    authorization_id: str,
+    payload: ToolAuthorizationDecisionRequest | None = None,
+    session: Session = Depends(get_db_session),
+    service: AgentService = Depends(get_agent_service),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
+) -> AgentToolAuthorizationResponse:
+    authorization = service.expire_tool_authorization(session, authorization_id, payload or ToolAuthorizationDecisionRequest())
+    await _broadcast_tool_authorization_change(
+        session=session,
+        runtime_service=runtime_service,
+        authorization=authorization,
+        action="expired",
+    )
+    return authorization
+
+
 @agent_runs_ws_router.websocket("/agent-runs/{agent_run_id}")
 async def agent_run_activity_websocket(websocket: WebSocket, agent_run_id: str) -> None:
     await websocket.accept()

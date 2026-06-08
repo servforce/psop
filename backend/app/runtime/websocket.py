@@ -50,6 +50,8 @@ def tool_authorization_ws_message(authorization: Any, *, action: str) -> dict[st
         "requested": "tool.authorization_requested",
         "approved": "tool.authorization_approved",
         "rejected": "tool.authorization_rejected",
+        "expired": "tool.authorization_expired",
+        "cancelled": "tool.authorization_cancelled",
     }.get(action, "tool.authorization_updated")
     return {
         "event_type": event_type,

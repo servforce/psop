@@ -740,6 +740,9 @@
   .max-w-5xl {
     max-width: var(--container-5xl);
   }
+  .max-w-36 {
+    max-width: calc(var(--spacing) * 36);
+  }
   .max-w-\[2\.75rem\] {
     max-width: 2.75rem;
   }
@@ -2794,6 +2797,11 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
+  .md\:grid-cols-3 {
+    @media (width >= 48rem) {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
   .md\:grid-cols-\[minmax\(0\,0\.8fr\)_minmax\(0\,1fr\)_10rem\] {
     @media (width >= 48rem) {
       grid-template-columns: minmax(0,0.8fr) minmax(0,1fr) 10rem;
@@ -2826,6 +2834,17 @@
         border-inline-style: var(--tw-border-style);
         border-inline-start-width: calc(1px * var(--tw-divide-x-reverse));
         border-inline-end-width: calc(1px * calc(1 - var(--tw-divide-x-reverse)));
+      }
+    }
+  }
+  .md\:divide-y-0 {
+    @media (width >= 48rem) {
+      :where(& > :not(:last-child)) {
+        --tw-divide-y-reverse: 0;
+        border-bottom-style: var(--tw-border-style);
+        border-top-style: var(--tw-border-style);
+        border-top-width: calc(0px * var(--tw-divide-y-reverse));
+        border-bottom-width: calc(0px * calc(1 - var(--tw-divide-y-reverse)));
       }
     }
   }

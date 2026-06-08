@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import (
     get_app_settings,
+    get_agent_service,
     get_db_session,
     get_job_query_service,
     get_object_store,
@@ -42,7 +43,14 @@ from app.runtime.schemas import (
     RunTraceResponse,
 )
 from app.runtime.service import RuntimeService
-from app.runtime.websocket import run_event_ws_message, run_ws_hub
+from app.runtime.websocket import (
+    run_event_ws_message,
+    run_ws_hub,
+    tool_authorization_ws_hub,
+    tool_authorization_ws_message,
+)
+from app.agents.schemas import AgentToolAuthorizationResponse
+from app.agents.service import AgentService
 from app.pskills.exceptions import SkillValidationError, SkillsGatewayError
 from app.infra.object_store import ObjectStoreService
 
@@ -53,6 +61,7 @@ terminal_router = APIRouter(prefix="/terminal", tags=["terminal"])
 replay_router = APIRouter(prefix="/replay", tags=["replay"])
 runtime_router = APIRouter(prefix="/runtime", tags=["runtime"])
 ws_router = APIRouter(prefix="/ws", tags=["ws"])
+TOOL_AUTHORIZATION_WS_CHANNEL = "global"
 
 
 @gateway_router.post("", response_model=InvocationResponse, status_code=201)
@@ -112,15 +121,23 @@ def get_run(
 
 
 @runs_router.post("/{run_id}/cancel", response_model=RunResponse)
-def cancel_run(
+async def cancel_run(
     run_id: str,
     payload: CancelRunRequest | None = None,
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
+    agent_service: AgentService = Depends(get_agent_service),
 ) -> RunResponse:
     request = payload or CancelRunRequest()
     reason = request.reason.strip() or "cancelled by user"
-    return service.cancel_run(session, run_id, reason=reason)
+    run = service.cancel_run(session, run_id, reason=reason)
+    cancelled_authorizations = agent_service.cancel_open_tool_authorizations_for_run(session, run_id, reason=reason)
+    await _broadcast_cancelled_tool_authorizations(
+        session=session,
+        runtime_service=service,
+        authorizations=cancelled_authorizations,
+    )
+    return run
 
 
 @runs_router.get("/{run_id}/snapshots", response_model=list[SessionTokenSnapshotResponse])
@@ -536,6 +553,43 @@ async def _broadcast_run_events_after(
     events = service.list_run_events(session, run_id, from_seq=previous_terminal_seq + 1)
     for event in events:
         await run_ws_hub.broadcast(run_id, run_event_ws_message(run_id, event))
+
+
+async def _broadcast_cancelled_tool_authorizations(
+    *,
+    session: Session,
+    runtime_service: RuntimeService,
+    authorizations: list[AgentToolAuthorizationResponse],
+) -> None:
+    for authorization in authorizations:
+        await tool_authorization_ws_hub.broadcast(
+            TOOL_AUTHORIZATION_WS_CHANNEL,
+            tool_authorization_ws_message(authorization, action="cancelled"),
+        )
+        run_event = _find_tool_authorization_response_run_event(
+            session=session,
+            runtime_service=runtime_service,
+            authorization=authorization,
+        )
+        if run_event and authorization.run_id:
+            await run_ws_hub.broadcast(authorization.run_id, run_event_ws_message(authorization.run_id, run_event))
+
+
+def _find_tool_authorization_response_run_event(
+    *,
+    session: Session,
+    runtime_service: RuntimeService,
+    authorization: AgentToolAuthorizationResponse,
+) -> RunEventResponse | None:
+    if not authorization.run_id:
+        return None
+    events = runtime_service.list_run_events(session, authorization.run_id)
+    for event in reversed(events):
+        if event.event_kind != "tool_authorization_response":
+            continue
+        if event.source_ref.get("authorization_id") == authorization.id:
+            return event
+    return None
 
 
 def _validate_terminal_upload(*, settings: Settings, filename: str, content: bytes, mime_type: str) -> None:

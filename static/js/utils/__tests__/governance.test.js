@@ -61,6 +61,8 @@ function loadGovernanceHarness(locationSearch = "") {
         })
       },
       PSOPConsoleHelpers: {
+        buildSkillDetailPath: (skillId) => `/admin/skills/${skillId}`,
+        buildEvaluationReportPath: (evaluationId) => `/admin/evaluations/${evaluationId}`,
         buildGovernanceProposalsPath: () => "/admin/governance/proposals",
         buildGovernanceProposalPath: (proposalId) => `/admin/governance/proposals/${proposalId}`,
         buildGovernanceExperimentsPath: () => "/admin/governance/experiments",
@@ -74,6 +76,27 @@ function loadGovernanceHarness(locationSearch = "") {
           }
           const query = params.toString();
           return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
+        },
+        buildPlatformAgentPath: (agentKey) => `/admin/platform/agents/${agentKey}`,
+        buildPlatformAgentRunPath: (agentRunId, focus = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+            if (focus[key]) {
+              params.set(key, focus[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
+        },
+        buildPlatformSkillPath: (packageName) => `/admin/platform/skills/${packageName}`,
+        buildPlatformMemoryEntryPath: (memoryId) => `/admin/platform/memory/${memoryId}`,
+        buildReplayPath: (runId, focus = {}) => {
+          const params = new URLSearchParams();
+          if (focus.event_id) {
+            params.set("event_id", focus.event_id);
+          }
+          const query = params.toString();
+          return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
         },
         resolveWsUrl: (_apiBaseUrl, pathname) => `ws://localhost${pathname}`
       }
@@ -115,7 +138,62 @@ test("governance methods build filters and labels", () => {
   expect(methods.governanceExperimentTypeLabel.call(context, "canary")).toBe("Canary");
   expect(methods.governanceExperimentStatusLabel.call(context, "rolled_back")).toBe("已回滚");
   expect(methods.toolAuthorizationStatusLabel.call(context, "approved")).toBe("已批准");
+  expect(methods.toolAuthorizationStatusLabel.call(context, "expired")).toBe("已过期");
+  expect(methods.toolAuthorizationStatusLabel.call(context, "cancelled")).toBe("已取消");
+  expect(methods.toolAuthorizationStatusLabel.call(context, "executed")).toBe("已执行");
   expect(methods.governanceProposalPath("proposal-1")).toBe("/admin/governance/proposals/proposal-1");
+});
+
+test("governance methods build tool authorization context links", () => {
+  const methods = loadGovernanceMethods();
+  const authorization = {
+    agent_run_id: "agent-run-1",
+    agent_tool_call_id: "tool-call-1",
+    run_id: "runtime-run-1",
+    run_event_id: "event-1",
+    tool_arguments_summary: {
+      package_name: "pskill.runner",
+      nested: { evaluation_id: "eval-1" }
+    },
+    request_payload: {
+      decision: {
+        arguments_summary: {
+          proposal_id: "proposal-1",
+          agent_key: "psop.governance"
+        }
+      }
+    },
+    response_payload: {
+      result: {
+        memory_id: "memory-1"
+      }
+    }
+  };
+  const links = methods.toolAuthorizationContextLinks.call(methods, authorization);
+
+  expect(links.map((item) => item.key)).toEqual([
+    "agent-run-agent-run-1",
+    "tool-call-tool-call-1",
+    "run-replay-runtime-run-1",
+    "run-event-event-1",
+    "proposal-proposal-1",
+    "evaluation-eval-1",
+    "skill-package-pskill.runner",
+    "agent-psop.governance",
+    "memory-memory-1"
+  ]);
+  expect(links.find((item) => item.key === "tool-call-tool-call-1").href).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-call-1"
+  );
+  expect(links.find((item) => item.key === "run-replay-runtime-run-1").href).toBe(
+    "/admin/runs/runtime-run-1/live/replay"
+  );
+  expect(links.find((item) => item.key === "run-event-event-1").href).toBe(
+    "/admin/runs/runtime-run-1/live/replay?event_id=event-1"
+  );
+  expect(links.find((item) => item.key === "proposal-proposal-1").href).toBe(
+    "/admin/governance/proposals/proposal-1"
+  );
 });
 
 test("governance methods sync tool authorization filters from location", () => {
@@ -129,6 +207,20 @@ test("governance methods sync tool authorization filters from location", () => {
   methods.syncToolAuthorizationFiltersFromLocation.call(context);
 
   expect(context.toolAuthorizationFilters.status).toBe("approved");
+  expect(context.toolAuthorizationFilters.tool_name).toBe("psop.agent_version.activate");
+});
+
+test("governance methods treat tool authorization tool-only location as history", () => {
+  const methods = loadGovernanceMethods("?tool_name=psop.agent_version.activate");
+  const context = {
+    ...methods,
+    toolAuthorizationFilters: { status: "pending", tool_name: "" },
+    toolAuthorizationLocationSearch: ""
+  };
+
+  methods.syncToolAuthorizationFiltersFromLocation.call(context);
+
+  expect(context.toolAuthorizationFilters.status).toBe("");
   expect(context.toolAuthorizationFilters.tool_name).toBe("psop.agent_version.activate");
 });
 

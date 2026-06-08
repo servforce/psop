@@ -302,8 +302,16 @@ export function buildPlatformAgentRunsPath() {
   return "/admin/platform/agent-runs";
 }
 
-export function buildPlatformAgentRunPath(agentRunId) {
-  return `/admin/platform/agent-runs/${agentRunId}`;
+export function buildPlatformAgentRunPath(agentRunId, focus = {}) {
+  const params = new URLSearchParams();
+  for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+    const value = String(focus?.[key] || "").trim();
+    if (value) {
+      params.set(key, value);
+    }
+  }
+  const query = params.toString();
+  return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
 }
 
 export function buildPlatformSkillsPath() {
@@ -346,8 +354,16 @@ export function buildSkillDebugRunLivePath(skillId, runId) {
   return `/admin/skills/${skillId}/debug/runs/${runId}/live`;
 }
 
-export function buildReplayPath(runId) {
-  return `/admin/runs/${runId}/live/replay`;
+export function buildReplayPath(runId, focus = {}) {
+  const params = new URLSearchParams();
+  for (const key of ["event_id", "seq_no", "snapshot_seq"]) {
+    const value = String(focus?.[key] || "").trim();
+    if (value) {
+      params.set(key, value);
+    }
+  }
+  const query = params.toString();
+  return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
 }
 
 export function buildSkillReplayPath(skillId, runId) {

@@ -81,8 +81,10 @@
     },
 
     async loadPlatformAgentRunPage(agentRunId) {
+      this.syncAgentRunDetailFromLocation();
       await this.loadAgentRuns();
       await this.loadPlatformAgentRunDetail(agentRunId);
+      this.syncAgentRunDetailFromLocation();
     },
 
     async loadAgentRuns() {
@@ -856,6 +858,14 @@
       return buildPlatformAgentRunPath(agentRunId);
     },
 
+    agentRunToolCallPath(agentRunId, toolCallId) {
+      return buildPlatformAgentRunPath(agentRunId, { tab: "tools", tool_call_id: toolCallId });
+    },
+
+    agentRunAuthorizationPath(agentRunId, authorizationId) {
+      return buildPlatformAgentRunPath(agentRunId, { tab: "authorizations", authorization_id: authorizationId });
+    },
+
     platformSkillsPath() {
       return buildPlatformSkillsPath();
     },
@@ -886,10 +896,9 @@
 
     platformToolAuthorizationsPath(toolName) {
       const normalized = String(toolName || "").trim();
-      return buildToolAuthorizationsPath({
-        status: "pending",
-        tool_name: normalized
-      });
+      return normalized
+        ? buildToolAuthorizationsPath({ tool_name: normalized })
+        : buildToolAuthorizationsPath({ status: "pending" });
     },
 
     platformToolSideEffectOptions() {
@@ -1230,6 +1239,53 @@
 
     platformJsonPreview(value) {
       return JSON.stringify(value ?? null, null, 2);
+    },
+
+    syncAgentRunDetailFromLocation() {
+      if (typeof window === "undefined" || !window.location) {
+        return;
+      }
+      const params = new URLSearchParams(window.location.search || "");
+      const tab = String(params.get("tab") || "").trim();
+      if (["events", "model", "tools", "authorizations", "skills", "memory", "payload"].includes(tab)) {
+        this.agentRunDetailTab = tab;
+        return;
+      }
+      if (params.get("tool_call_id")) {
+        this.agentRunDetailTab = "tools";
+        return;
+      }
+      if (params.get("authorization_id")) {
+        this.agentRunDetailTab = "authorizations";
+        return;
+      }
+      if (params.get("event_id")) {
+        this.agentRunDetailTab = "events";
+      }
+    },
+
+    agentRunFocusedToolCallId() {
+      if (typeof window === "undefined" || !window.location) {
+        return "";
+      }
+      return String(new URLSearchParams(window.location.search || "").get("tool_call_id") || "").trim();
+    },
+
+    agentRunFocusedAuthorizationId() {
+      if (typeof window === "undefined" || !window.location) {
+        return "";
+      }
+      return String(new URLSearchParams(window.location.search || "").get("authorization_id") || "").trim();
+    },
+
+    isAgentRunToolCallFocused(call) {
+      const focusedId = this.agentRunFocusedToolCallId();
+      return Boolean(focusedId && call?.id === focusedId);
+    },
+
+    isAgentRunAuthorizationFocused(authorization) {
+      const focusedId = this.agentRunFocusedAuthorizationId();
+      return Boolean(focusedId && authorization?.id === focusedId);
     }
   };
 })();

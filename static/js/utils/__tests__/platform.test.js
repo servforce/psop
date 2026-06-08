@@ -48,11 +48,12 @@ function createFakeWebSocketClass() {
   return FakeWebSocket;
 }
 
-function loadPlatformHarness() {
+function loadPlatformHarness(locationSearch = "") {
   const FakeWebSocket = createFakeWebSocketClass();
   const code = fs.readFileSync(path.join(__dirname, "../../app/platform.js"), "utf8");
   const sandbox = {
     window: {
+      location: { search: locationSearch },
       PSOPConsoleHelpers: {
         buildTasksPath: (filters = {}) => {
           const params = new URLSearchParams();
@@ -65,7 +66,16 @@ function loadPlatformHarness() {
           return query ? `/admin/tasks?${query}` : "/admin/tasks";
         },
         buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
-        buildPlatformAgentRunPath: (agentRunId) => `/admin/platform/agent-runs/${agentRunId}`,
+        buildPlatformAgentRunPath: (agentRunId, focus = {}) => {
+          const params = new URLSearchParams();
+          for (const key of ["tab", "tool_call_id", "authorization_id", "event_id"]) {
+            if (focus[key]) {
+              params.set(key, focus[key]);
+            }
+          }
+          const query = params.toString();
+          return query ? `/admin/platform/agent-runs/${agentRunId}?${query}` : `/admin/platform/agent-runs/${agentRunId}`;
+        },
         buildPlatformSkillsPath: () => "/admin/platform/skills",
         buildPlatformSkillPath: (packageName) => `/admin/platform/skills/${packageName}`,
         buildPlatformToolsPath: () => "/admin/platform/tools",
@@ -103,8 +113,8 @@ function loadPlatformHarness() {
   return { methods: sandbox.window.PSOPConsolePlatformMethods, FakeWebSocket };
 }
 
-function loadPlatformMethods() {
-  return loadPlatformHarness().methods;
+function loadPlatformMethods(locationSearch = "") {
+  return loadPlatformHarness(locationSearch).methods;
 }
 
 test("platform methods build filters, labels, and paths", () => {
@@ -148,6 +158,12 @@ test("platform methods build filters, labels, and paths", () => {
   expect(methods.platformToolSideEffectLabel.call(context, "low_write")).toBe("Low Write");
   expect(methods.memoryStatusLabel.call(context, "pending_review")).toBe("待审核");
   expect(methods.platformAgentRunPath("run-1")).toBe("/admin/platform/agent-runs/run-1");
+  expect(methods.agentRunToolCallPath("agent-run-1", "tool-call-1")).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=tools&tool_call_id=tool-call-1"
+  );
+  expect(methods.agentRunAuthorizationPath("agent-run-1", "auth-1")).toBe(
+    "/admin/platform/agent-runs/agent-run-1?tab=authorizations&authorization_id=auth-1"
+  );
   expect(methods.platformTasksPath()).toBe("/admin/tasks");
   expect(methods.platformTaskJobPath({ id: "job-memory-1", job_type: "memory_compaction" })).toBe(
     "/admin/tasks?job_type=memory_compaction&q=job-memory-1"
@@ -156,6 +172,26 @@ test("platform methods build filters, labels, and paths", () => {
   expect(methods.platformRunLivePath("runtime-run-1")).toBe("/admin/runs/runtime-run-1/live");
   expect(methods.platformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
   expect(methods.platformMemoryEntryPath("mem-1")).toBe("/admin/platform/memory/mem-1");
+});
+
+test("platform methods sync agent run detail focus from location", () => {
+  const methods = loadPlatformMethods("?tool_call_id=tool-call-1");
+  const context = { ...methods, agentRunDetailTab: "events" };
+
+  methods.syncAgentRunDetailFromLocation.call(context);
+
+  expect(context.agentRunDetailTab).toBe("tools");
+  expect(methods.agentRunFocusedToolCallId.call(context)).toBe("tool-call-1");
+  expect(methods.isAgentRunToolCallFocused.call(context, { id: "tool-call-1" })).toBe(true);
+  expect(methods.isAgentRunToolCallFocused.call(context, { id: "tool-call-2" })).toBe(false);
+
+  const authorizationMethods = loadPlatformMethods("?authorization_id=auth-1");
+  const authorizationContext = { ...authorizationMethods, agentRunDetailTab: "events" };
+  authorizationMethods.syncAgentRunDetailFromLocation.call(authorizationContext);
+
+  expect(authorizationContext.agentRunDetailTab).toBe("authorizations");
+  expect(authorizationMethods.agentRunFocusedAuthorizationId.call(authorizationContext)).toBe("auth-1");
+  expect(authorizationMethods.isAgentRunAuthorizationFocused.call(authorizationContext, { id: "auth-1" })).toBe(true);
 });
 
 test("platform methods load agent runs with detail observability streams", async () => {
@@ -471,7 +507,12 @@ test("platform methods load tools and select the first row", async () => {
       name: "psop.memory.search",
       side_effect_level: "read",
       requires_authorization: false,
-      failure_rate: 0
+      failure_rate: 0,
+      policy_summary: {
+        policy_reason: "auto_allowed",
+        policy_decision: { reason: "auto_allowed" },
+        permission_rule: "AgentSpec.allowed_tools ∩ SkillPackage.allowed_tools ∩ ToolPolicy.allowed_tools"
+      }
     }
   ];
   const dryRun = {
@@ -515,11 +556,23 @@ test("platform methods load tools and select the first row", async () => {
   expect(context.platformTools).toEqual(tools);
   expect(context.currentPlatformTool.name).toBe("psop.memory.search");
   expect(methods.platformToolAuthorizationsPath.call(context, context.currentPlatformTool.name)).toBe(
-    "/admin/platform/tool-authorizations?status=pending&tool_name=psop.memory.search"
+    "/admin/platform/tool-authorizations?tool_name=psop.memory.search"
   );
+  expect(methods.platformToolAuthorizationsPath.call(context)).toBe(
+    "/admin/platform/tool-authorizations?status=pending"
+  );
+  expect(context.currentPlatformTool.policy_summary.policy_reason).toBe("auto_allowed");
   expect(context.platformToolTestResult.policy_reason).toBe("console_test_allowed");
   expect(context.busy.platformTools).toBe(false);
   expect(context.busy.platformToolAction).toBe(false);
+});
+
+test("platform tools page exposes default ToolPolicy reason", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/platform-tools.html"), "utf8");
+
+  expect(html).toContain("Policy Reason");
+  expect(html).toContain("currentPlatformTool.policy_summary?.policy_reason");
+  expect(html).toContain("currentPlatformTool.policy_summary?.policy_decision?.reason");
 });
 
 test("platform methods search and save memory entries", async () => {

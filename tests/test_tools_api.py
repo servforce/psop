@@ -46,12 +46,15 @@ def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
     assert tools["psop.pskills.read"]["side_effect_level"] == "read"
     assert tools["psop.pskills.read"]["requires_authorization"] is False
     assert tools["psop.pskills.read"]["policy_summary"]["native_implemented"] is True
+    assert tools["psop.pskills.read"]["policy_summary"]["policy_reason"] == "auto_allowed"
     assert tools["psop.media.compute"]["side_effect_level"] == "compute"
     assert tools["psop.media.compute"]["requires_authorization"] is False
     assert tools["psop.media.compute"]["policy_summary"]["native_implemented"] is False
     assert tools["psop.media.compute"]["policy_summary"]["auto_executable"] is False
+    assert tools["psop.media.compute"]["policy_summary"]["policy_reason"] == "native_tool_not_implemented"
     assert tools["psop.agent_version.activate"]["side_effect_level"] == "high_write"
     assert tools["psop.agent_version.activate"]["requires_authorization"] is True
+    assert tools["psop.agent_version.activate"]["policy_summary"]["policy_reason"] == "requires_tool_authorization"
 
     high_write_names = {item["name"] for item in high_write_response.json()}
     assert high_write_response.status_code == 200
@@ -66,6 +69,7 @@ def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
     assert detail["name"] == "psop.agent_version.activate"
     assert detail["provider"] == "native"
     assert detail["requires_authorization"] is True
+    assert detail["policy_summary"]["policy_decision"]["reason"] == "requires_authorization"
     assert detail["allowed_agent_keys"] == ["psop.governance"]
     assert detail["policy_summary"]["permission_rule"] == (
         "AgentSpec.allowed_tools ∩ SkillPackage.allowed_tools ∩ ToolPolicy.allowed_tools"

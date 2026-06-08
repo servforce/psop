@@ -64,6 +64,52 @@ class RunToolAuthorizationEventWriter:
         )
         return event.id if event else None
 
+    def append_expired_event(self, session: Session, authorization: Any) -> str | None:
+        event = self._append_event(
+            session,
+            authorization=authorization,
+            event_kind="tool_authorization_response",
+            external_event_id=f"tool-authorization:{authorization.id}:expired",
+            payload={
+                "authorization_id": authorization.id,
+                "agent_run_id": authorization.agent_run_id,
+                "agent_tool_call_id": authorization.agent_tool_call_id,
+                "tool_name": authorization.tool_name,
+                "tool_provider": authorization.tool_provider,
+                "side_effect_level": authorization.side_effect_level,
+                "risk_level": authorization.risk_level,
+                "decision": "expired",
+                "status": authorization.status,
+                "response_payload": authorization.response_payload,
+                "responded_at": authorization.responded_at.isoformat() if authorization.responded_at else None,
+                "request_run_event_id": authorization.run_event_id,
+            },
+        )
+        return event.id if event else None
+
+    def append_cancelled_event(self, session: Session, authorization: Any) -> str | None:
+        event = self._append_event(
+            session,
+            authorization=authorization,
+            event_kind="tool_authorization_response",
+            external_event_id=f"tool-authorization:{authorization.id}:cancelled",
+            payload={
+                "authorization_id": authorization.id,
+                "agent_run_id": authorization.agent_run_id,
+                "agent_tool_call_id": authorization.agent_tool_call_id,
+                "tool_name": authorization.tool_name,
+                "tool_provider": authorization.tool_provider,
+                "side_effect_level": authorization.side_effect_level,
+                "risk_level": authorization.risk_level,
+                "decision": "cancelled",
+                "status": authorization.status,
+                "response_payload": authorization.response_payload,
+                "responded_at": authorization.responded_at.isoformat() if authorization.responded_at else None,
+                "request_run_event_id": authorization.run_event_id,
+            },
+        )
+        return event.id if event else None
+
     def _append_event(
         self,
         session: Session,

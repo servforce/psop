@@ -62,14 +62,37 @@
                     <dd class="truncate font-mono text-slate-300" x-text="authorization.agent_run_id"></dd>
                   </div>
                   <div class="flex min-w-0 justify-between gap-3">
+                    <dt class="text-slate-500">ToolCall</dt>
+                    <dd class="truncate font-mono text-slate-300" x-text="authorization.agent_tool_call_id || 'N/A'"></dd>
+                  </div>
+                  <div class="flex min-w-0 justify-between gap-3">
                     <dt class="text-slate-500">Run</dt>
                     <dd class="truncate font-mono text-slate-300" x-text="authorization.run_id || 'N/A'"></dd>
+                  </div>
+                  <div class="flex min-w-0 justify-between gap-3">
+                    <dt class="text-slate-500">RunEvent</dt>
+                    <dd class="truncate font-mono text-slate-300" x-text="authorization.run_event_id || 'N/A'"></dd>
                   </div>
                   <div class="flex min-w-0 justify-between gap-3">
                     <dt class="text-slate-500">Reversible</dt>
                     <dd class="text-slate-300" x-text="toolAuthorizationReversibleLabel(authorization)"></dd>
                   </div>
                 </dl>
+                <div class="mt-4">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">上下文入口</p>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <template x-for="link in toolAuthorizationContextLinks(authorization)" :key="link.key">
+                      <button type="button" class="button-secondary h-8 max-w-full px-2 text-xs" :title="`${link.label} ${link.value}`" @click="navigate(link.href)">
+                        <span class="material-symbols-outlined text-[16px]" x-text="link.icon"></span>
+                        <span class="shrink-0" x-text="link.label"></span>
+                        <span class="max-w-36 truncate font-mono text-[11px] text-slate-400" x-text="link.value"></span>
+                      </button>
+                    </template>
+                    <template x-if="toolAuthorizationContextLinks(authorization).length === 0">
+                      <span class="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-500">N/A</span>
+                    </template>
+                  </div>
+                </div>
               </section>
 
               <section class="min-w-0 divide-y divide-slate-800">

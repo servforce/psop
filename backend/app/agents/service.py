@@ -662,6 +662,115 @@ class AgentService:
         session.commit()
         return self._build_tool_authorization_response(authorization)
 
+    def expire_tool_authorization(
+        self,
+        session: Session,
+        authorization_id: str,
+        payload: ToolAuthorizationDecisionRequest,
+    ) -> AgentToolAuthorizationResponse:
+        authorization = self._get_pending_tool_authorization(session, authorization_id)
+        authorization.status = "expired"
+        authorization.response_payload = payload.response_payload
+        authorization.responded_at = now_utc()
+        agent_run = self._get_run(session, authorization.agent_run_id)
+        agent_run.status = "failed"
+        agent_run.error_message = "tool_authorization_expired"
+        agent_run.ended_at = now_utc()
+        tool_call = self.repository.get_tool_call(session, authorization.agent_tool_call_id)
+        if tool_call:
+            tool_call.status = "denied"
+        self.run_tool_authorization_events.append_expired_event(session, authorization)
+        self.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="tool.authorization_expired",
+                phase="tool_authorization",
+                payload={
+                    **self._tool_authorization_event_payload(authorization),
+                    "decision": "expired",
+                    "response_payload": authorization.response_payload,
+                },
+            ),
+            commit=False,
+        )
+        self.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="agent.failed_tool_authorization_expired",
+                phase="tool_authorization",
+                payload={"authorization_id": authorization.id, "decision": "expired"},
+            ),
+            commit=False,
+        )
+        session.commit()
+        return self._build_tool_authorization_response(authorization)
+
+    def cancel_open_tool_authorizations_for_run(
+        self,
+        session: Session,
+        run_id: str,
+        *,
+        reason: str = "runtime run cancelled",
+    ) -> list[AgentToolAuthorizationResponse]:
+        open_authorizations = [
+            *self.repository.list_tool_authorizations(session, run_id=run_id, status="pending"),
+            *self.repository.list_tool_authorizations(session, run_id=run_id, status="approved"),
+        ]
+        if not open_authorizations:
+            return []
+
+        cancelled_at = now_utc()
+        for authorization in open_authorizations:
+            authorization.status = "cancelled"
+            authorization.response_payload = {
+                **(authorization.response_payload or {}),
+                "reason": reason,
+                "cancel_source": "runtime.cancel_run",
+            }
+            authorization.responded_at = cancelled_at
+
+            agent_run = self.repository.get_run(session, authorization.agent_run_id)
+            if agent_run and agent_run.status not in {"succeeded", "failed", "cancelled"}:
+                agent_run.status = "cancelled"
+                agent_run.error_message = "tool_authorization_cancelled"
+                agent_run.ended_at = cancelled_at
+
+            tool_call = self.repository.get_tool_call(session, authorization.agent_tool_call_id)
+            if tool_call and tool_call.status not in {"succeeded", "failed", "blocked"}:
+                tool_call.status = "denied"
+
+            self.run_tool_authorization_events.append_cancelled_event(session, authorization)
+            if agent_run:
+                self.append_event(
+                    session,
+                    agent_run.id,
+                    AppendAgentEventRequest(
+                        event_type="tool.authorization_cancelled",
+                        phase="tool_authorization",
+                        payload={
+                            **self._tool_authorization_event_payload(authorization),
+                            "decision": "cancelled",
+                            "response_payload": authorization.response_payload,
+                        },
+                    ),
+                    commit=False,
+                )
+                self.append_event(
+                    session,
+                    agent_run.id,
+                    AppendAgentEventRequest(
+                        event_type="agent.cancelled_tool_authorization",
+                        phase="tool_authorization",
+                        payload={"authorization_id": authorization.id, "decision": "cancelled"},
+                    ),
+                    commit=False,
+                )
+
+        session.commit()
+        return [self._build_tool_authorization_response(item) for item in open_authorizations]
+
     def _get_definition_by_key(self, session: Session, agent_key: str) -> AgentDefinition:
         definition = self.repository.get_definition_by_key(session, agent_key)
         if not definition:

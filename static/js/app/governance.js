@@ -1,9 +1,16 @@
 (function () {
   const {
+    buildSkillDetailPath,
+    buildEvaluationReportPath,
     buildGovernanceProposalsPath,
     buildGovernanceProposalPath,
     buildGovernanceExperimentsPath,
     buildToolAuthorizationsPath,
+    buildPlatformAgentPath,
+    buildPlatformAgentRunPath,
+    buildPlatformSkillPath,
+    buildPlatformMemoryEntryPath,
+    buildReplayPath,
     resolveWsUrl
   } = window.PSOPConsoleHelpers;
 
@@ -30,7 +37,10 @@
   const TOOL_AUTH_STATUS_OPTIONS = [
     { value: "pending", label: "待处理" },
     { value: "approved", label: "已批准" },
-    { value: "rejected", label: "已拒绝" }
+    { value: "rejected", label: "已拒绝" },
+    { value: "expired", label: "已过期" },
+    { value: "cancelled", label: "已取消" },
+    { value: "executed", label: "已执行" }
   ];
 
   const EXPERIMENT_STATUS_OPTIONS = [
@@ -447,7 +457,7 @@
       const params = new URLSearchParams(search);
       this.toolAuthorizationFilters = {
         ...this.toolAuthorizationFilters,
-        status: params.get("status") || this.toolAuthorizationFilters.status || "pending",
+        status: params.has("status") ? params.get("status") || "" : "",
         tool_name: params.get("tool_name") || ""
       };
     },
@@ -557,6 +567,211 @@
 
     toolAuthorizationStatusLabel(value) {
       return this.optionLabel(TOOL_AUTH_STATUS_OPTIONS, value);
+    },
+
+    toolAuthorizationContextLinks(authorization) {
+      const links = [];
+      const agentRunId = String(authorization?.agent_run_id || "").trim();
+      const toolCallId = String(authorization?.agent_tool_call_id || "").trim();
+      const runId = String(authorization?.run_id || "").trim();
+      const runEventId = String(authorization?.run_event_id || "").trim();
+
+      if (agentRunId) {
+        links.push({
+          key: `agent-run-${agentRunId}`,
+          label: "AgentRun",
+          value: agentRunId,
+          href: buildPlatformAgentRunPath(agentRunId, { tab: "events" }),
+          icon: "timeline"
+        });
+      }
+      if (agentRunId && toolCallId) {
+        links.push({
+          key: `tool-call-${toolCallId}`,
+          label: "ToolCall",
+          value: toolCallId,
+          href: buildPlatformAgentRunPath(agentRunId, { tab: "tools", tool_call_id: toolCallId }),
+          icon: "build"
+        });
+      }
+      if (runId) {
+        links.push({
+          key: `run-replay-${runId}`,
+          label: "Run Replay",
+          value: runId,
+          href: buildReplayPath(runId),
+          icon: "history"
+        });
+      }
+      if (runId && runEventId) {
+        links.push({
+          key: `run-event-${runEventId}`,
+          label: "RunEvent",
+          value: runEventId,
+          href: buildReplayPath(runId, { event_id: runEventId }),
+          icon: "receipt_long"
+        });
+      }
+
+      return this.uniqueToolAuthorizationLinks([
+        ...links,
+        ...this.toolAuthorizationBusinessLinks(authorization)
+      ]);
+    },
+
+    toolAuthorizationBusinessLinks(authorization) {
+      const links = [];
+      const proposalId = this.toolAuthorizationFirstNestedValue(authorization, [
+        "proposal_id",
+        "governance_proposal_id"
+      ]);
+      const evaluationId = this.toolAuthorizationFirstNestedValue(authorization, [
+        "evaluation_id",
+        "evaluation_report_id"
+      ]);
+      const skillId = this.toolAuthorizationFirstNestedValue(authorization, [
+        "skill_id",
+        "pskill_definition_id",
+        "pskill_id"
+      ]);
+      const packageName = this.toolAuthorizationFirstNestedValue(authorization, [
+        "package_name",
+        "skill_package",
+        "skill_package_name"
+      ]);
+      const agentKey = this.toolAuthorizationFirstNestedValue(authorization, ["agent_key"]);
+      const memoryId = this.toolAuthorizationFirstNestedValue(authorization, [
+        "memory_id",
+        "memory_entry_id"
+      ]);
+
+      if (proposalId) {
+        links.push({
+          key: `proposal-${proposalId}`,
+          label: "Governance Proposal",
+          value: proposalId,
+          href: buildGovernanceProposalPath(proposalId),
+          icon: "account_tree"
+        });
+      }
+      if (evaluationId) {
+        links.push({
+          key: `evaluation-${evaluationId}`,
+          label: "Evaluation",
+          value: evaluationId,
+          href: buildEvaluationReportPath(evaluationId),
+          icon: "fact_check"
+        });
+      }
+      if (skillId) {
+        links.push({
+          key: `skill-${skillId}`,
+          label: "PSkill",
+          value: skillId,
+          href: buildSkillDetailPath(skillId),
+          icon: "hub"
+        });
+      }
+      if (packageName) {
+        links.push({
+          key: `skill-package-${packageName}`,
+          label: "Skill Package",
+          value: packageName,
+          href: buildPlatformSkillPath(packageName),
+          icon: "inventory_2"
+        });
+      }
+      if (agentKey) {
+        links.push({
+          key: `agent-${agentKey}`,
+          label: "Agent",
+          value: agentKey,
+          href: buildPlatformAgentPath(agentKey),
+          icon: "smart_toy"
+        });
+      }
+      if (memoryId) {
+        links.push({
+          key: `memory-${memoryId}`,
+          label: "Memory",
+          value: memoryId,
+          href: buildPlatformMemoryEntryPath(memoryId),
+          icon: "database"
+        });
+      }
+      return links;
+    },
+
+    uniqueToolAuthorizationLinks(links) {
+      const seen = new Set();
+      return (links || []).filter((link) => {
+        const key = `${link?.key || ""}:${link?.href || ""}`;
+        if (!link?.href || seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      });
+    },
+
+    toolAuthorizationFirstNestedValue(authorization, keys) {
+      const keySet = new Set(keys);
+      const sources = [
+        authorization?.tool_arguments_summary,
+        authorization?.request_payload,
+        authorization?.request_payload?.decision,
+        authorization?.request_payload?.decision?.arguments_summary,
+        authorization?.request_payload?.proposal,
+        authorization?.response_payload,
+        authorization?.response_payload?.result,
+        authorization?.response_payload?.proposal
+      ];
+      const seen = new Set();
+
+      const walk = (value, depth = 0) => {
+        if (value === null || value === undefined || depth > 8) {
+          return "";
+        }
+        if (typeof value !== "object") {
+          return "";
+        }
+        if (seen.has(value)) {
+          return "";
+        }
+        seen.add(value);
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            const nested = walk(item, depth + 1);
+            if (nested) {
+              return nested;
+            }
+          }
+          return "";
+        }
+        for (const [key, item] of Object.entries(value)) {
+          if (keySet.has(key)) {
+            const normalized = String(item || "").trim();
+            if (normalized && typeof item !== "object") {
+              return normalized;
+            }
+          }
+        }
+        for (const item of Object.values(value)) {
+          const nested = walk(item, depth + 1);
+          if (nested) {
+            return nested;
+          }
+        }
+        return "";
+      };
+
+      for (const source of sources) {
+        const value = walk(source);
+        if (value) {
+          return value;
+        }
+      }
+      return "";
     },
 
     governanceProposalSourceLabel(proposal) {

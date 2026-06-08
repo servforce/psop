@@ -106,7 +106,29 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
         )
         rejected_run_response = client.get(f"/api/v1/agent-runs/{reject_run['id']}")
         rejected_events_response = client.get(f"/api/v1/agent-runs/{reject_run['id']}/events")
+        expire_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={"agent_key": "psop.governance", "owner_type": "governance", "owner_id": "proposal-expire"},
+        )
+        expire_run = expire_run_response.json()
+        expire_authorization_response = client.post(
+            "/api/v1/tool-authorizations",
+            json={
+                "agent_run_id": expire_run["id"],
+                "tool_name": "psop.skill_version.activate",
+                "side_effect_level": "high_write",
+                "authorization_reason": "激活 SkillVersion 属于高副作用写操作。",
+            },
+        )
+        expire_authorization = expire_authorization_response.json()
+        expire_response = client.post(
+            f"/api/v1/tool-authorizations/{expire_authorization['id']}/expire",
+            json={"response_payload": {"reason": "timeout"}},
+        )
+        expired_run_response = client.get(f"/api/v1/agent-runs/{expire_run['id']}")
+        expired_events_response = client.get(f"/api/v1/agent-runs/{expire_run['id']}/events")
         pending_authorizations_response = client.get("/api/v1/tool-authorizations", params={"status": "pending"})
+        expired_authorizations_response = client.get("/api/v1/tool-authorizations", params={"status": "expired"})
         commit_patch_authorizations_response = client.get(
             "/api/v1/tool-authorizations",
             params={"tool_name": "psop.repository.commit_patch"},
@@ -161,7 +183,16 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert "tool.authorization_requested" in rejected_event_types
     assert "tool.authorization_rejected" in rejected_event_types
     assert "agent.failed_tool_authorization_denied" in rejected_event_types
+    assert expire_response.status_code == 200
+    assert expire_response.json()["status"] == "expired"
+    assert expired_run_response.json()["status"] == "failed"
+    assert expired_run_response.json()["error_message"] == "tool_authorization_expired"
+    expired_event_types = [item["event_type"] for item in expired_events_response.json()]
+    assert "tool.authorization_requested" in expired_event_types
+    assert "tool.authorization_expired" in expired_event_types
+    assert "agent.failed_tool_authorization_expired" in expired_event_types
     assert pending_authorizations_response.json() == []
+    assert [item["id"] for item in expired_authorizations_response.json()] == [expire_authorization["id"]]
     assert [item["id"] for item in commit_patch_authorizations_response.json()] == [authorization["id"]]
     assert [item["id"] for item in activate_authorizations_response.json()] == [reject_authorization["id"]]
 
@@ -298,6 +329,28 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
                 )
                 response_run_ws_message = run_ws.receive_json()
                 response_tool_authorization_ws_message = tool_authorization_ws.receive_json()
+                expiring_authorization_response = client.post(
+                    "/api/v1/tool-authorizations",
+                    json={
+                        "agent_run_id": agent_run["id"],
+                        "run_id": run_id,
+                        "tool_name": "psop.skill_version.activate",
+                        "side_effect_level": "high_write",
+                        "risk_level": "high",
+                        "authorization_reason": "激活 SkillVersion 属于高副作用操作。",
+                        "tool_arguments_summary": {"package_name": "runtime-tool-auth-events"},
+                        "expected_effect_summary": "激活新的 SkillVersion。",
+                    },
+                )
+                expiring_authorization = expiring_authorization_response.json()
+                expiring_request_run_ws_message = run_ws.receive_json()
+                expiring_request_tool_authorization_ws_message = tool_authorization_ws.receive_json()
+                expire_response = client.post(
+                    f"/api/v1/tool-authorizations/{expiring_authorization['id']}/expire",
+                    json={"response_payload": {"reason": "timeout"}},
+                )
+                expired_run_ws_message = run_ws.receive_json()
+                expired_tool_authorization_ws_message = tool_authorization_ws.receive_json()
         response_events_response = client.get(f"/api/v1/runs/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
 
@@ -329,13 +382,27 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
     assert response_run_ws_message["payload"]["event_kind"] == "tool_authorization_response"
     assert response_tool_authorization_ws_message["event_type"] == "tool.authorization_approved"
     assert response_tool_authorization_ws_message["authorization_id"] == authorization["id"]
+    assert expiring_authorization_response.status_code == 201
+    assert expiring_authorization["status"] == "pending"
+    assert expiring_request_run_ws_message["event_type"] == "terminal.event.appended"
+    assert expiring_request_run_ws_message["payload"]["event_kind"] == "tool_authorization_request"
+    assert expiring_request_tool_authorization_ws_message["event_type"] == "tool.authorization_requested"
+    assert expiring_request_tool_authorization_ws_message["authorization_id"] == expiring_authorization["id"]
+    assert expire_response.status_code == 200
+    assert expire_response.json()["status"] == "expired"
+    assert expired_run_ws_message["event_type"] == "terminal.event.appended"
+    assert expired_run_ws_message["payload"]["event_kind"] == "tool_authorization_response"
+    assert expired_tool_authorization_ws_message["event_type"] == "tool.authorization_expired"
+    assert expired_tool_authorization_ws_message["authorization_id"] == expiring_authorization["id"]
     response_events = [
         event for event in response_events_response.json() if event["event_kind"] == "tool_authorization_response"
     ]
-    assert len(response_events) == 1
-    assert response_events[0]["payload_inline"]["authorization_id"] == authorization["id"]
-    assert response_events[0]["payload_inline"]["decision"] == "approved"
-    assert response_events[0]["payload_inline"]["request_run_event_id"] == authorization["run_event_id"]
+    assert len(response_events) == 2
+    response_payloads = {event["payload_inline"]["authorization_id"]: event["payload_inline"] for event in response_events}
+    assert response_payloads[authorization["id"]]["decision"] == "approved"
+    assert response_payloads[authorization["id"]]["request_run_event_id"] == authorization["run_event_id"]
+    assert response_payloads[expiring_authorization["id"]]["decision"] == "expired"
+    assert response_payloads[expiring_authorization["id"]]["request_run_event_id"] == expiring_authorization["run_event_id"]
 
     replay_run_events = replay_response.json()["run_events"]
     replay_event_kinds = [event["event_kind"] for event in replay_run_events]
@@ -419,6 +486,109 @@ def test_agent_runner_tool_authorization_request_broadcasts_run_live_and_global_
     assert request_tool_authorization_ws_message["run_id"] == run_id
     assert request_tool_authorization_ws_message["agent_run_id"] == agent_run["id"]
     assert request_tool_authorization_ws_message["payload"]["tool_name"] == "psop.agent_version.activate"
+
+
+def test_runtime_cancel_cancels_open_tool_authorizations_and_agent_run() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        skill = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "runtime-cancel-open-tool-auth",
+                "name": "Runtime Cancel Open Tool Auth",
+                "description": "Validate runtime cancellation closes open tool authorization gates.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill['id']}/publish",
+            json={"publish_reason": "Runtime cancellation tool authorization test"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/runtime/invocations",
+            json={
+                "skill_key": "runtime-cancel-open-tool-auth",
+                "gateway_type": "web",
+                "terminal_context": {"terminal_kind": "web"},
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+        agent_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "psop.governance",
+                "owner_type": "governance",
+                "owner_id": "proposal-runtime-cancel",
+                "run_id": run_id,
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.agent_version.activate",
+                        "side_effect_level": "high_write",
+                        "arguments_summary": {"agent_key": "pskill.compiler", "version_id": "candidate-version"},
+                        "expected_effect_summary": "激活新的 compiler AgentVersion。",
+                        "authorization_reason": "激活 AgentVersion 会改变生产智能体配置。",
+                    }
+                },
+            },
+        )
+        agent_run = agent_run_response.json()
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run['id']}/run-once")
+        authorization = client.get(f"/api/v1/agent-runs/{agent_run['id']}/tool-authorizations").json()[0]
+
+        with client.websocket_connect(f"/ws/runs/{run_id}") as run_ws:
+            run_ws_connected = run_ws.receive_json()
+            with client.websocket_connect("/ws/tool-authorizations") as tool_authorization_ws:
+                tool_authorization_ws_connected = tool_authorization_ws.receive_json()
+                cancel_response = client.post(f"/api/v1/runs/{run_id}/cancel", json={"reason": "用户取消运行"})
+                cancelled_run_ws_message = run_ws.receive_json()
+                cancelled_tool_authorization_ws_message = tool_authorization_ws.receive_json()
+
+        cancelled_authorization_response = client.get(f"/api/v1/tool-authorizations/{authorization['id']}")
+        cancelled_agent_run_response = client.get(f"/api/v1/agent-runs/{agent_run['id']}")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run['id']}/tool-calls")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run['id']}/events")
+        run_events_response = client.get(f"/api/v1/runs/{run_id}/events")
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+
+    assert invocation_response.status_code == 201
+    assert agent_run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "waiting_tool_authorization"
+    assert authorization["status"] == "pending"
+    assert run_ws_connected["event_type"] == "ws.connected"
+    assert tool_authorization_ws_connected["event_type"] == "ws.connected"
+
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["status"] == "cancelled"
+    assert cancelled_authorization_response.json()["status"] == "cancelled"
+    assert cancelled_authorization_response.json()["response_payload"] == {
+        "reason": "用户取消运行",
+        "cancel_source": "runtime.cancel_run",
+    }
+    assert cancelled_agent_run_response.json()["status"] == "cancelled"
+    assert cancelled_agent_run_response.json()["error_message"] == "tool_authorization_cancelled"
+    assert tool_calls_response.json()[0]["status"] == "denied"
+
+    assert cancelled_run_ws_message["event_type"] == "terminal.event.appended"
+    assert cancelled_run_ws_message["payload"]["event_kind"] == "tool_authorization_response"
+    assert cancelled_run_ws_message["payload"]["payload_inline"]["decision"] == "cancelled"
+    assert cancelled_tool_authorization_ws_message["event_type"] == "tool.authorization_cancelled"
+    assert cancelled_tool_authorization_ws_message["authorization_id"] == authorization["id"]
+
+    event_types = [item["event_type"] for item in events_response.json()]
+    assert "tool.authorization_cancelled" in event_types
+    assert "agent.cancelled_tool_authorization" in event_types
+
+    run_response_events = [
+        event for event in run_events_response.json() if event["event_kind"] == "tool_authorization_response"
+    ]
+    assert len(run_response_events) == 1
+    assert run_response_events[0]["payload_inline"]["decision"] == "cancelled"
+    assert run_response_events[0]["payload_inline"]["authorization_id"] == authorization["id"]
+    assert "tool_authorization_response" in [event["event_kind"] for event in replay_response.json()["run_events"]]
 
 
 def test_agent_runner_cannot_write_run_events_directly() -> None:
@@ -1658,7 +1828,7 @@ def test_agent_runner_records_authorized_tool_execution_failure_event() -> None:
             json={"response_payload": {"approved_by": "tester"}},
         )
         resumed_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
-        failed_authorization_response = client.get(f"/api/v1/tool-authorizations/{authorization['id']}")
+        executed_authorization_response = client.get(f"/api/v1/tool-authorizations/{authorization['id']}")
         tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
         events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
 
@@ -1668,7 +1838,8 @@ def test_agent_runner_records_authorized_tool_execution_failure_event() -> None:
     assert resumed_response.status_code == 200
     assert resumed_response.json()["status"] == "failed"
     assert "缺少 agent_key 或 version_id" in resumed_response.json()["error_message"]
-    assert failed_authorization_response.json()["status"] == "failed"
+    assert executed_authorization_response.json()["status"] == "executed"
+    assert executed_authorization_response.json()["executed_at"]
     assert tool_calls_response.json()[0]["status"] == "failed"
     assert tool_calls_response.json()[0]["result_summary"]["executed"] is False
 

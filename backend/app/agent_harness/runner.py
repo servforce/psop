@@ -294,7 +294,7 @@ class AgentRunner:
             tool_call.status = "failed"
             tool_call.result_summary = {"executed": False, "error": error.message, "details": error.details}
             if authorization:
-                authorization.status = "failed"
+                authorization.status = "executed"
                 authorization.executed_at = now_utc()
             agent_run.status = "failed"
             agent_run.error_message = error.message

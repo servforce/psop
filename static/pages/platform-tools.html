@@ -134,6 +134,20 @@
                 <p class="mt-1 font-mono text-slate-300" x-text="platformFailureRateLabel(currentPlatformTool)"></p>
               </div>
             </div>
+            <div class="grid grid-cols-1 divide-y divide-slate-800 text-xs md:grid-cols-3 md:divide-x md:divide-y-0">
+              <div class="p-4">
+                <p class="text-slate-500">Policy Reason</p>
+                <p class="mt-1 truncate font-mono text-slate-200" x-text="currentPlatformTool.policy_summary?.policy_reason || 'N/A'"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Decision</p>
+                <p class="mt-1 truncate font-mono text-slate-200" x-text="currentPlatformTool.policy_summary?.policy_decision?.reason || 'N/A'"></p>
+              </div>
+              <div class="p-4">
+                <p class="text-slate-500">Permission</p>
+                <p class="mt-1 truncate font-mono text-slate-300" x-text="currentPlatformTool.policy_summary?.permission_rule || 'N/A'"></p>
+              </div>
+            </div>
 
             <template x-if="platformToolTestResult">
               <div class="grid grid-cols-1 divide-y divide-slate-800 xl:grid-cols-[minmax(16rem,0.45fr)_minmax(0,1fr)] xl:divide-x xl:divide-y-0">

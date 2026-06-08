@@ -142,6 +142,7 @@
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], traceEvents);
           this.replayDetail = replayDetail;
           this.syncLiveRunInteractionTabFromRoute(isSameRun);
+          this.syncLiveRunReplaySelectionFromLocation();
           this.connectRunWebSocket(runId);
         } finally {
           this.busy.liveRun = false;
@@ -1113,6 +1114,28 @@
           timeline.find((item) => this.liveRunReplayItemKey(item) === this.selectedLiveRunReplayItemKey) ||
           timeline[0]
         );
+      },
+
+
+      syncLiveRunReplaySelectionFromLocation() {
+        if (typeof window === "undefined" || !window.location) {
+          return;
+        }
+        const params = new URLSearchParams(window.location.search || "");
+        const eventId = String(params.get("event_id") || "").trim();
+        const seqNo = String(params.get("seq_no") || "").trim();
+        if (!eventId && !seqNo) {
+          return;
+        }
+        const timeline = this.liveRunReplayTimeline();
+        const selected = timeline.find((item) => {
+          const payload = item?.payload || {};
+          const payloadEventId = String(payload.id || payload.event_id || payload.run_event_id || "").trim();
+          return Boolean(eventId && payloadEventId === eventId);
+        }) || timeline.find((item) => Boolean(seqNo && String(item?.seq_no ?? "") === seqNo));
+        if (selected) {
+          this.selectedLiveRunReplayItemKey = this.liveRunReplayItemKey(selected);
+        }
       },
 
 

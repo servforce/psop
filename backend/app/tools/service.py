@@ -209,6 +209,18 @@ class ToolService:
         recent_call_count = self.repository.count_tool_calls(session, tool.name)
         failed_call_count = self.repository.count_failed_tool_calls(session, tool.name)
         failure_rate = round(failed_call_count / recent_call_count, 4) if recent_call_count else 0.0
+        policy_decision = self.tool_policy.check(
+            tool_name=tool.name,
+            tool_provider=tool.provider,
+            requested_side_effect_level=tool.side_effect_level,
+            effective_allowed_tools=set(DEFAULT_TOOL_SIDE_EFFECTS),
+        )
+        native_implemented = tool.name in NATIVE_TOOL_EXECUTORS
+        policy_reason = self._tool_definition_policy_reason(
+            tool,
+            policy_decision.reason,
+            native_implemented=native_implemented,
+        )
         return ToolDefinitionResponse(
             id=tool.id,
             name=tool.name,
@@ -226,8 +238,15 @@ class ToolService:
             failure_rate=failure_rate,
             policy_summary={
                 "registered": True,
-                "native_implemented": tool.name in NATIVE_TOOL_EXECUTORS,
-                "auto_executable": not tool.requires_authorization and tool.name in NATIVE_TOOL_EXECUTORS,
+                "native_implemented": native_implemented,
+                "auto_executable": not tool.requires_authorization and native_implemented,
+                "policy_reason": policy_reason,
+                "policy_decision": {
+                    "allowed": policy_decision.allowed,
+                    "reason": policy_decision.reason,
+                    "side_effect_level": policy_decision.side_effect_level,
+                    "requires_authorization": policy_decision.requires_authorization,
+                },
                 "auth_required_levels": sorted(AUTH_REQUIRED_LEVELS),
                 "permission_rule": "AgentSpec.allowed_tools ∩ SkillPackage.allowed_tools ∩ ToolPolicy.allowed_tools",
             },
@@ -263,6 +282,21 @@ class ToolService:
             return "requires_tool_authorization"
         if tool.side_effect_level not in {"read", "compute"}:
             return "unsupported_side_effect_for_console_test"
+        if not native_implemented:
+            return "native_tool_not_implemented"
+        return policy_reason
+
+    @staticmethod
+    def _tool_definition_policy_reason(
+        tool: ToolDefinition,
+        policy_reason: str,
+        *,
+        native_implemented: bool,
+    ) -> str:
+        if tool.status != "active":
+            return "tool_not_active"
+        if policy_reason == "requires_authorization":
+            return "requires_tool_authorization"
         if not native_implemented:
             return "native_tool_not_implemented"
         return policy_reason
