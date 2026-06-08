@@ -2769,6 +2769,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert scenario_run["result_summary"]["passed"] == 1
     assert scenario_run["status"] == "passed"
     assert sorted(event["event_id"] for event in scenario_run["driver_events"]) == ["fault_photo", "initial_fault_context"]
+    assert all(event["run_event_id"] == event["terminal_event_id"] for event in scenario_run["driver_events"])
 
     terminal_events = terminal_events_response.json()
     scripted_inputs = [event for event in terminal_events if event["direction"] == "input"]
@@ -3227,6 +3228,8 @@ def test_skill_test_scenario_sensor_timeline_review_stage_outputs_and_fork() -> 
     assert stage_output["time_ms"] == 5000
     assert stage_output["expectation"] == "系统应基于定位和现场输入确认到达目标设备。"
     assert stage_output["actual_outputs"]
+    assert stage_output["actual_outputs"][0]["run_event_id"]
+    assert stage_output["actual_outputs"][0]["run_event_id"] == stage_output["actual_outputs"][0]["terminal_event_id"]
     assert stage_output["judge_result"]["status"] == "passed"
     assert stage_output["human_review"] == {"status": "pending", "reviewer": None, "reason": "", "updated_at": None}
     assert stage_output["cursor"]["time_ms"] == 5000

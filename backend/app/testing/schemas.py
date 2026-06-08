@@ -180,6 +180,7 @@ class SkillTestForkCursor(BaseModel):
 
 class SkillTestStageActualOutputResponse(BaseModel):
     id: str
+    run_event_id: str | None = None
     terminal_event_id: str | None = None
     seq_no: int | None = None
     at_ms: int

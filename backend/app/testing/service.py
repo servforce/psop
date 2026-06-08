@@ -674,6 +674,7 @@ class SkillTestService:
                     "scheduled_at": scheduled_at.isoformat(),
                     "actual_sent_at": actual_sent_at.isoformat(),
                     "drift_ms": max(0, int((actual_sent_at - scheduled_at).total_seconds() * 1000)),
+                    "run_event_id": append_response.event_id,
                     "terminal_event_id": append_response.event_id,
                     "terminal_seq": append_response.seq_no,
                 }
@@ -2629,6 +2630,7 @@ class SkillTestService:
         event_id = str(self._event_value(event, "id") or f"terminal_output_{seq_no or uuid.uuid4()}")
         return SkillTestStageActualOutputResponse(
             id=f"stage_output_{event_id}",
+            run_event_id=event_id,
             terminal_event_id=event_id,
             seq_no=int(seq_no) if seq_no is not None else None,
             at_ms=self._terminal_event_at_ms(scenario_run, event),
