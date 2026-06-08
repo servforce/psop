@@ -46,7 +46,6 @@ def list_compile_requests(
     return service.list_compile_requests(session, skill_id=skill_id, status=status)
 
 
-@router.post("/skills/{skill_id}/compile", response_model=CompileRequestResponse, status_code=status.HTTP_202_ACCEPTED)
 @router.post("/pskills/{skill_id}/compile", response_model=CompileRequestResponse, status_code=status.HTTP_202_ACCEPTED)
 def create_skill_compile_request(
     skill_id: str,

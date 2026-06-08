@@ -2044,6 +2044,7 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
         ).json()
         skill_id = created["id"]
 
+        legacy_compile_response = client.post(f"/api/v1/compiler/skills/{skill_id}/compile")
         compile_response = client.post(f"/api/v1/compiler/pskills/{skill_id}/compile")
         compile_payload = compile_response.json()
         compile_request_id = compile_payload["id"]
@@ -2057,6 +2058,7 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
         list_response = client.get("/api/v1/compiler/requests")
         detail_response = client.get(f"/api/v1/pskills/{skill_id}")
 
+    assert legacy_compile_response.status_code == 404
     assert compile_response.status_code == 202
     assert compile_payload["trigger_type"] == "manual"
     assert compile_payload["status"] == "pending"

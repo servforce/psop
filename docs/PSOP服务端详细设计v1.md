@@ -372,7 +372,7 @@ Claim 规则：
 | Method | Path | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/v1/compiler/requests` | 编译请求列表；支持 `skill_id`、`status` |
-| `POST` | `/api/v1/compiler/skills/{skill_id}/compile` | 手动创建编译请求 |
+| `POST` | `/api/v1/compiler/pskills/{skill_id}/compile` | 手动创建编译请求 |
 | `GET` | `/api/v1/compiler/requests/{compile_request_id}` | 编译请求详情 |
 | `POST` | `/api/v1/compiler/requests/{compile_request_id}/retry` | 同步重试该请求 |
 | `GET` | `/api/v1/compiler/requests/{compile_request_id}/progress` | 发布/编译进度快照 |
