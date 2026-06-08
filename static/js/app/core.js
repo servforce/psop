@@ -741,6 +741,7 @@
 
           if (this.route.name === "compiler-list") {
             this.currentSkill = null;
+            this.syncCompilerFiltersFromLocation();
             await this.loadCompilerRequests();
             return;
           }

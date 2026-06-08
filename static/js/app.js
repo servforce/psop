@@ -433,6 +433,16 @@
     return `/admin/compiler/artifacts/${artifactId}`;
   }
 
+  function buildCompilerRequestPath(compileRequestId) {
+    const params = new URLSearchParams();
+    const normalized = String(compileRequestId || "").trim();
+    if (normalized) {
+      params.set("compile_request_id", normalized);
+    }
+    const query = params.toString();
+    return query ? `/admin/compiler?${query}` : "/admin/compiler";
+  }
+
   function buildSkillCompilerArtifactPath(skillId, artifactId) {
     return `/admin/skills/${skillId}/compiler/artifacts/${artifactId}`;
   }
@@ -814,6 +824,7 @@
       agentPromptFileDraft: "",
       agentPromptValidation: null,
       compilerFilters: {
+        compile_request_id: "",
         skill_search: "",
         status: "",
         requested_from: "",
@@ -1240,6 +1251,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildCompilerRequestPath,
     buildSkillCompilerArtifactPath,
     buildAgentPromptPath,
     generateSkillKey,

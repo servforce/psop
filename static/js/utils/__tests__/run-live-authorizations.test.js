@@ -66,6 +66,7 @@ function loadRuntimeHarness(locationSearch = "") {
     "buildSkillTestScenarioNewPath",
     "buildSkillTestScenarioRunReviewPath",
     "buildCompilerArtifactPath",
+    "buildCompilerRequestPath",
     "buildPlatformAgentRunPath",
     "generateSkillKey",
     "resolveApiBaseUrl",
@@ -129,6 +130,9 @@ function loadRuntimeHarness(locationSearch = "") {
   context.window.PSOPConsoleHelpers.buildSkillRunEventsPath = (skillId, runId) => (
     `/admin/skills/${skillId}/runs/${runId}/events`
   );
+  context.window.PSOPConsoleHelpers.buildCompilerRequestPath = (compileRequestId) => (
+    `/admin/compiler?compile_request_id=${encodeURIComponent(compileRequestId)}`
+  );
   context.window.PSOPConsoleHelpers.buildPlatformAgentRunPath = (agentRunId, focus = {}) => {
     const params = new URLSearchParams();
     for (const key of ["tab", "event_id", "model_call_id", "tool_call_id", "authorization_id"]) {
@@ -168,10 +172,28 @@ test("run live page exposes embedded tool authorization tab", () => {
   expect(runtimeJs).toContain("isToolAuthorizationRunEvent");
   expect(runtimeJs).toContain("refreshLiveRunToolAuthorizations");
   expect(html).toContain("Replay Provenance");
-  expect(html).toContain("liveRun.compile_request_id");
+  expect(html).toContain("liveRunCompileRequestId()");
+  expect(html).toContain("openLiveRunCompileRequest()");
   expect(html).toContain("openCompilerArtifact(liveRun.compile_artifact_id)");
   expect(html).toContain("replayDetail?.provenance?.compile_request_id");
   expect(html).toContain("replayDetail?.provenance?.latest_session_token_snapshot_id");
+});
+
+test("run live compile request evidence link opens compiler request filter", () => {
+  const methods = loadRuntimeMethods();
+  const context = {
+    ...methods,
+    liveRun: { compile_request_id: "compile-1" },
+    replayDetail: null,
+    navigate: jest.fn()
+  };
+
+  expect(methods.liveRunCompileRequestId.call(context)).toBe("compile-1");
+  expect(methods.liveRunCompileRequestPath.call(context)).toBe("/admin/compiler?compile_request_id=compile-1");
+
+  methods.openLiveRunCompileRequest.call(context);
+
+  expect(context.navigate).toHaveBeenCalledWith("/admin/compiler?compile_request_id=compile-1");
 });
 
 test("run live opens the raw events tab from the Run Events route view", () => {

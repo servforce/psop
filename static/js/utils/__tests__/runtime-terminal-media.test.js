@@ -19,6 +19,7 @@ function loadRuntimeMethods() {
     "buildSkillTestScenarioNewPath",
     "buildSkillTestScenarioRunReviewPath",
     "buildCompilerArtifactPath",
+    "buildCompilerRequestPath",
     "generateSkillKey",
     "resolveApiBaseUrl",
     "resolveWsUrl",

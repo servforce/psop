@@ -2,11 +2,12 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-function loadCompilerMethods() {
+function loadCompilerMethods(locationSearch = "") {
   const code = fs.readFileSync(path.join(__dirname, "../../app/compiler.js"), "utf8");
   const helper = () => "";
   const sandbox = {
     window: {
+      location: { search: locationSearch },
       PSOPConsoleHelpers: {
         normalizePath: helper,
         resolveAdminRoute: helper,
@@ -60,6 +61,7 @@ test("compiler list page exposes progress, AgentRun, and artifact evidence actio
 
   expect(html).toContain("compilerRequestProgressLabel(compileRequest)");
   expect(html).toContain("compilerRequestProgressBarWidth(compileRequest)");
+  expect(html).toContain("compilerFilters.compile_request_id");
   expect(html).toContain("openCompilerAgentRun(compileRequest)");
   expect(html).toContain("compileRequest.agent_run_id");
   expect(html).toContain("openCompilerArtifact(compileRequest.artifact_id)");
@@ -135,4 +137,36 @@ test("compiler progress percentage is clamped for partial or malformed responses
   expect(methods.compilerRequestProgressPercent.call(context, { progress: { percent: -10 } })).toBe(0);
   expect(methods.compilerRequestProgressPercent.call(context, { progress: { percent: 140 } })).toBe(100);
   expect(methods.compilerRequestProgressPercent.call(context, { progress: { percent: "bad" } })).toBe(0);
+});
+
+test("compiler list filters can focus a compile request from URL", () => {
+  const methods = loadCompilerMethods("?compile_request_id=compile-2");
+  const context = {
+    ...methods,
+    compilerFilters: {
+      compile_request_id: "",
+      skill_search: "",
+      status: "",
+      requested_from: "",
+      requested_to: ""
+    },
+    compilerRequests: [
+      { id: "compile-1", pskill_definition_id: "skill-1", status: "succeeded", requested_at: "2026-01-01" },
+      { id: "compile-2", pskill_definition_id: "skill-2", status: "running", requested_at: "2026-01-02" }
+    ],
+    skills: [
+      { id: "skill-1", name: "技能一" },
+      { id: "skill-2", name: "技能二" }
+    ],
+    inDateRange: () => true
+  };
+
+  methods.syncCompilerFiltersFromLocation.call(context);
+
+  expect(context.compilerFilters.compile_request_id).toBe("compile-2");
+  expect(methods.filteredCompilerRequests.call(context).map((item) => item.id)).toEqual(["compile-2"]);
+
+  methods.clearCompilerFilters.call(context);
+
+  expect(context.compilerFilters.compile_request_id).toBe("");
 });

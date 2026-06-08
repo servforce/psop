@@ -424,6 +424,16 @@ export function buildCompilerArtifactPath(artifactId) {
   return `/admin/compiler/artifacts/${artifactId}`;
 }
 
+export function buildCompilerRequestPath(compileRequestId) {
+  const params = new URLSearchParams();
+  const normalized = String(compileRequestId || "").trim();
+  if (normalized) {
+    params.set("compile_request_id", normalized);
+  }
+  const query = params.toString();
+  return query ? `/admin/compiler?${query}` : "/admin/compiler";
+}
+
 export function buildSkillCompilerArtifactPath(skillId, artifactId) {
   return `/admin/skills/${skillId}/compiler/artifacts/${artifactId}`;
 }

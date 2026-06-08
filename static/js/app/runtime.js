@@ -14,6 +14,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildCompilerRequestPath,
     buildPlatformAgentRunPath,
     generateSkillKey,
     resolveApiBaseUrl,
@@ -1613,6 +1614,24 @@
         return this.currentSkill?.id
           ? buildSkillReplayPath(this.currentSkill.id, runId)
           : buildReplayPath(runId);
+      },
+
+      liveRunCompileRequestId() {
+        return String(this.liveRun?.compile_request_id || this.replayDetail?.provenance?.compile_request_id || "").trim();
+      },
+
+
+      liveRunCompileRequestPath() {
+        return buildCompilerRequestPath(this.liveRunCompileRequestId());
+      },
+
+
+      openLiveRunCompileRequest() {
+        const compileRequestId = this.liveRunCompileRequestId();
+        if (!compileRequestId) {
+          return;
+        }
+        this.navigate(this.liveRunCompileRequestPath());
       },
 
 

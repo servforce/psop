@@ -13,6 +13,7 @@ const {
   buildSkillTestScenarioNewPath,
   buildSkillTestScenarioRunReviewPath,
   buildCompilerArtifactPath,
+  buildCompilerRequestPath,
   buildSkillCompilerArtifactPath,
   buildTasksPath,
   buildEvaluationReportsPath,
@@ -274,6 +275,8 @@ test("runtime route builders create live and replay locations", () => {
     "/admin/skills/skill-123/tests/scenario-123/runs/scenario-run-123/review"
   );
   expect(buildCompilerArtifactPath("artifact-123")).toBe("/admin/compiler/artifacts/artifact-123");
+  expect(buildCompilerRequestPath("compile-123")).toBe("/admin/compiler?compile_request_id=compile-123");
+  expect(buildCompilerRequestPath("")).toBe("/admin/compiler");
   expect(buildSkillCompilerArtifactPath("skill-123", "artifact-123")).toBe(
     "/admin/skills/skill-123/compiler/artifacts/artifact-123"
   );

@@ -41,6 +41,12 @@
       },
 
 
+      syncCompilerFiltersFromLocation() {
+        const params = new URLSearchParams(window.location.search || "");
+        this.compilerFilters.compile_request_id = String(params.get("compile_request_id") || params.get("request_id") || "").trim();
+      },
+
+
       async startManualCompile() {
         if (!this.currentSkill) {
           return;
@@ -757,12 +763,15 @@
 
       filteredCompilerRequests() {
         return this.compilerRequests.filter((compileRequest) => {
+          const requestQuery = this.compilerFilters.compile_request_id.trim().toLowerCase();
           const skillQuery = this.compilerFilters.skill_search.trim().toLowerCase();
+          const requestMatched = !requestQuery || String(compileRequest.id || "").toLowerCase().includes(requestQuery);
           const skillName = this.skillNameForCompileRequest(compileRequest).toLowerCase();
           const skillMatched = !skillQuery || skillName.includes(skillQuery);
           const statusMatched = !this.compilerFilters.status || compileRequest.status === this.compilerFilters.status;
 
           return (
+            requestMatched &&
             skillMatched &&
             statusMatched &&
             this.inDateRange(
@@ -777,6 +786,7 @@
 
       clearCompilerFilters() {
         this.compilerFilters = {
+          compile_request_id: "",
           skill_search: "",
           status: "",
           requested_from: "",
