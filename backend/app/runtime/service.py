@@ -49,6 +49,7 @@ from app.runtime.schemas import (
     InvocationResponse,
     ReplayDetailResponse,
     ReplayEgNodePathItem,
+    ReplayProvenanceResponse,
     ReplayTraceLookupResponse,
     ReplayTimelineItem,
     ResolveRunBindingsRequest,
@@ -437,8 +438,11 @@ class RuntimeService:
         session.flush()
 
         token: dict[str, Any] = {}
+        latest_snapshot: SessionTokenSnapshot | None = None
         try:
-            token = self.repository.list_snapshots(session, run.id)[-1].token_payload
+            snapshots = self.repository.list_snapshots(session, run.id)
+            latest_snapshot = snapshots[-1] if snapshots else None
+            token = latest_snapshot.token_payload if latest_snapshot else {}
             token = self._compact_runtime_token(token)
             token = self._sync_run_events(session, run=run, token=token)
             run.status = "running"
@@ -456,11 +460,12 @@ class RuntimeService:
             max_steps = int(artifact_payload.get("policies", {}).get("max_steps") or 16)
             with start_span(
                 "runtime.loop",
-                run_id=run.id,
-                invocation_id=invocation.id,
-                skill_id=run.pskill_definition_id,
-                pskill_version_id=run.pskill_version_id,
-                compile_artifact_id=run.compile_artifact_id,
+                **self._runtime_span_attributes(
+                    run=run,
+                    invocation=invocation,
+                    artifact=artifact,
+                    latest_snapshot=latest_snapshot,
+                ),
             ) as loop_span:
                 for _ in range(max_steps):
                     if self._halt_success(artifact_payload, token):
@@ -485,13 +490,16 @@ class RuntimeService:
                         raise RuntimeError("Runtime deadlock: no enabled nodes and no wait condition matched.")
 
                     node = self._select_node(enabled_nodes)
+                    actor_span_attributes = self._runtime_span_attributes(
+                        run=run,
+                        invocation=invocation,
+                        artifact=artifact,
+                        latest_snapshot=latest_snapshot,
+                        node=node,
+                    )
                     with start_span(
                         "runtime.actor",
-                        run_id=run.id,
-                        invocation_id=invocation.id,
-                        skill_id=run.pskill_definition_id,
-                        node_id=node.get("id"),
-                        node_kind=node.get("kind"),
+                        **actor_span_attributes,
                     ) as actor_span:
                         try:
                             LOGGER.info(
@@ -504,6 +512,7 @@ class RuntimeService:
                                 node=node,
                                 token=token,
                                 artifact_payload=artifact_payload,
+                                span_attributes=actor_span_attributes,
                             )
                         except Exception as exc:
                             record_span_exception(actor_span, exc)
@@ -528,6 +537,8 @@ class RuntimeService:
                         else [item["id"] for item in self._enabled_nodes(artifact_payload, token)],
                         agent_run_id=self._agent_run_id_from_observation(observation),
                     )
+                    snapshots = self.repository.list_snapshots(session, run.id)
+                    latest_snapshot = snapshots[-1] if snapshots else latest_snapshot
                     if entered_wait:
                         run.status = "waiting_input"
                         run.runtime_phase = self._runtime_phase_from_token(token)
@@ -984,6 +995,7 @@ class RuntimeService:
         timeline.sort(key=lambda item: (item.occurred_at, item.seq_no, item.event_type))
         return ReplayDetailResponse(
             run=self._build_run_response(session, run),
+            provenance=self._build_replay_provenance(session, run=run, snapshots=snapshots),
             timeline=timeline,
             eg_node_path=self._build_eg_node_path(run_traces),
             snapshots=snapshots,
@@ -1015,8 +1027,60 @@ class RuntimeService:
             ],
         )
 
+    def _build_replay_provenance(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        snapshots: list[SessionTokenSnapshotResponse],
+    ) -> ReplayProvenanceResponse:
+        artifact = self.repository.get_artifact(session, run.compile_artifact_id)
+        latest_snapshot = snapshots[-1] if snapshots else None
+        return ReplayProvenanceResponse(
+            invocation_id=run.invocation_id,
+            run_id=run.id,
+            pskill_definition_id=run.pskill_definition_id,
+            pskill_version_id=run.pskill_version_id,
+            compile_artifact_id=run.compile_artifact_id,
+            compile_request_id=artifact.compile_request_id if artifact else "",
+            latest_session_token_snapshot_id=latest_snapshot.id if latest_snapshot else "",
+            latest_session_token_seq=latest_snapshot.seq_no if latest_snapshot else 0,
+        )
+
+    @staticmethod
+    def _runtime_span_attributes(
+        *,
+        run: Run,
+        invocation: SkillInvocation,
+        artifact: Any,
+        latest_snapshot: SessionTokenSnapshot | None,
+        node: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        attributes: dict[str, Any] = {
+            "run_id": run.id,
+            "invocation_id": invocation.id,
+            "skill_id": run.pskill_definition_id,
+            "pskill_definition_id": run.pskill_definition_id,
+            "pskill_version_id": run.pskill_version_id,
+            "skill_version_id": run.pskill_version_id,
+            "compile_artifact_id": run.compile_artifact_id,
+            "compile_request_id": getattr(artifact, "compile_request_id", ""),
+            "session_token_id": latest_snapshot.id if latest_snapshot else "",
+            "session_token_seq": latest_snapshot.seq_no if latest_snapshot else 0,
+        }
+        if node is not None:
+            attributes.update(
+                {
+                    "node_id": node.get("id"),
+                    "node_kind": node.get("kind"),
+                }
+            )
+        return attributes
+
     def build_replay_for_trace(self, session: Session, trace_id: str) -> ReplayTraceLookupResponse:
         trace = self.repository.get_run_trace(session, trace_id)
+        if not trace:
+            trace = self.repository.get_latest_run_trace_by_otel_trace_id(session, trace_id)
         if not trace:
             raise SkillNotFoundError("未找到 RunTrace。", details={"trace_id": trace_id})
         trace_response = self._build_run_trace_response(trace)
@@ -2353,6 +2417,7 @@ class RuntimeService:
         node: dict[str, Any],
         token: dict[str, Any],
         artifact_payload: dict[str, Any],
+        span_attributes: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         kind = node.get("kind")
         actor_name = _actor_name(node.get("actor"))
@@ -2390,7 +2455,14 @@ class RuntimeService:
                 input_parts=input_parts,
             )
             try:
-                with start_span("gateway.inference", route_key=route_key, node_id=node.get("id")):
+                with start_span(
+                    "gateway.inference",
+                    **{
+                        **(span_attributes or {}),
+                        "route_key": route_key,
+                        "node_id": node.get("id"),
+                    },
+                ):
                     if attachments:
                         if not hasattr(self.inference_gateway, "complete_multimodal"):
                             raise RuntimeError("当前 LLM Inference Gateway 不支持多模态输入。")

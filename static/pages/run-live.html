@@ -91,6 +91,14 @@
               <dt class="field-label">Artifact</dt>
               <dd class="mt-1 mono-field break-all" x-text="liveRun.compile_artifact_id"></dd>
             </div>
+            <div x-show="replayDetail?.provenance">
+              <dt class="field-label">Replay Provenance</dt>
+              <dd class="mt-2 space-y-1 rounded-lg border border-slate-200 bg-white p-3">
+                <p class="mono-field break-all" x-text="'compile:' + (replayDetail?.provenance?.compile_request_id || 'N/A')"></p>
+                <p class="mono-field break-all" x-text="'snapshot:' + (replayDetail?.provenance?.latest_session_token_snapshot_id || 'N/A')"></p>
+                <p class="mono-field break-all" x-text="'seq:' + (replayDetail?.provenance?.latest_session_token_seq ?? 0)"></p>
+              </dd>
+            </div>
             <div>
               <dt class="field-label">Binding</dt>
               <dd class="mt-2 space-y-2">

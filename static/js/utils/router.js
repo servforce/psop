@@ -244,6 +244,11 @@ export function resolveAdminRoute(pathname) {
     return { name: "run-live", params: { runId: replayRunMatch[1], view: "replay" } };
   }
 
+  const replayTraceMatch = normalized.match(/^\/admin\/replay\/traces\/([^/]+)$/);
+  if (replayTraceMatch) {
+    return { name: "replay-trace", params: { traceId: replayTraceMatch[1] } };
+  }
+
   return { name: "skills-list", params: {} };
 }
 
@@ -393,6 +398,10 @@ export function buildReplayPath(runId, focus = {}) {
   }
   const query = params.toString();
   return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
+}
+
+export function buildReplayTracePath(traceId) {
+  return `/admin/replay/traces/${traceId}`;
 }
 
 export function buildSkillReplayPath(skillId, runId) {

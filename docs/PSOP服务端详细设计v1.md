@@ -403,8 +403,8 @@ Claim 规则：
 | `GET` | `/api/v1/runs/{run_id}/events/{event_id}/content` | 事件级对象内容，支持 Range |
 | `GET` | `/api/v1/runs/{run_id}/events/{event_id}/parts/{part_id}/content` | part 内容，支持 Range |
 | `GET` | `/api/v1/replay/runs` | replay run 列表 |
-| `GET` | `/api/v1/replay/runs/{run_id}` | replay detail |
-| `GET` | `/api/v1/replay/traces/{trace_id}` | 按 run trace 定位 replay detail 和选中 timeline item |
+| `GET` | `/api/v1/replay/runs/{run_id}` | replay detail；包含 provenance 关联 `invocation_id`、`run_id`、`pskill_version_id`、`compile_artifact_id`、`compile_request_id` 和最新 Session Token snapshot |
+| `GET` | `/api/v1/replay/traces/{trace_id}` | 按 RunTrace 记录 id 或 OTel trace_id 定位 replay detail 和选中 timeline item |
 | `GET` | `/api/v1/runtime/jobs/stats` | job 统计；支持 `window_hours` |
 | `GET` | `/api/v1/runtime/jobs` | job 列表；支持状态、类型、关键字、时间和分页 |
 
@@ -528,7 +528,7 @@ Claim 规则：
 - `gateway.gitlab`
 - `gateway.inference`
 
-运行时 trace 事件写入数据库 `run_trace`，Replay 直接读取持久化事件，不推断未落库状态。
+运行时 trace 事件写入数据库 `run_trace`，Replay 直接读取持久化事件，不推断未落库状态。Replay detail 中的 `provenance` 直接串联 `invocation_id / run_id / pskill_version_id / compile_artifact_id / compile_request_id / latest_session_token_snapshot_id`。Runtime 关键 span（`runtime.loop`、`runtime.actor`、`gateway.inference`）写入同一组 provenance 属性，并额外包含当前输入 `session_token_id / session_token_seq`。`/api/v1/replay/traces/{trace_id}` 优先按 RunTrace 记录 id 查询，未命中时按 `run_trace.trace_id` 反查最近一条 OTel 关联事件，用于从 OTel 排障上下文跳转到 Replay。
 
 `/api/v1/observability/metrics` 返回窗口内 Runtime、Agent、Evaluation、Governance 与 OpenTelemetry 状态聚合：
 

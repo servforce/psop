@@ -2293,6 +2293,13 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert len(replay_payload["terminal_events"]) == 6
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
+    assert replay_payload["provenance"]["invocation_id"] == invocation_payload["id"]
+    assert replay_payload["provenance"]["run_id"] == run_id
+    assert replay_payload["provenance"]["pskill_version_id"] == publish_payload["published_version"]["id"]
+    assert replay_payload["provenance"]["compile_artifact_id"] == artifact_id
+    assert replay_payload["provenance"]["compile_request_id"] == compile_request_id
+    assert replay_payload["provenance"]["latest_session_token_snapshot_id"]
+    assert replay_payload["provenance"]["latest_session_token_seq"] == run_payload["latest_snapshot_seq"]
     eg_node_path = replay_payload["eg_node_path"]
     assert [item["node_id"] for item in eg_node_path] == [
         "start",
@@ -2313,6 +2320,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert replay_trace_payload["timeline_item"]["source_id"] == replay_trace_id
     assert replay_trace_payload["timeline_item"]["event_type"] == "runtime.wait_checkpoint.entered"
     assert replay_trace_payload["replay"]["run"]["id"] == run_id
+    assert replay_trace_payload["replay"]["provenance"]["compile_request_id"] == compile_request_id
     assert replay_trace_payload["replay"]["eg_node_path"][1]["trace_id"] == replay_trace_id
     assert missing_replay_trace_response.status_code == 404
 

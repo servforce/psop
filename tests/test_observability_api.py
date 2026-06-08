@@ -585,6 +585,74 @@ def test_observability_run_trace_query_filters_recent_runtime_traces() -> None:
     assert {item["id"] for item in run_payload} == {"run-trace-observe-newer", "run-trace-observe-older"}
 
 
+def test_replay_trace_lookup_accepts_otel_trace_id() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        now = now_utc()
+        db_manager = client.app.state.db_manager
+        with db_manager.session() as session:
+            pskill = PSkillDefinition(
+                id="pskill-replay-otel-1",
+                key="replay-otel-demo",
+                name="Replay OTel Demo",
+                gitlab_project_id="replay-otel-demo-project",
+                repository_url="https://gitlab.example.local/skills/replay-otel-demo",
+            )
+            version = PSkillVersion(
+                id="pskill-version-replay-otel-1",
+                pskill_definition_id=pskill.id,
+                version_no=1,
+                status="published",
+                source_ref="main",
+            )
+            pskill.latest_published_version_id = version.id
+            runtime_run = Run(
+                id="run-replay-otel-1",
+                invocation_id="invocation-replay-otel-1",
+                pskill_definition_id=pskill.id,
+                pskill_version_id=version.id,
+                compile_artifact_id="artifact-replay-otel-1",
+                status="waiting_input",
+                runtime_phase="waiting_input",
+                latest_trace_seq=1,
+                created_at=now - timedelta(minutes=1),
+            )
+            session.add_all(
+                [
+                    pskill,
+                    version,
+                    runtime_run,
+                    RunTrace(
+                        id="run-trace-replay-otel-1",
+                        run_id=runtime_run.id,
+                        seq_no=1,
+                        phase="runtime",
+                        event_type="runtime.wait_checkpoint.entered",
+                        trace_id="0123456789abcdef0123456789abcdef",
+                        span_id="0123456789abcdef",
+                        payload={"node_id": "instruct_collect_context"},
+                        occurred_at=now - timedelta(seconds=30),
+                    ),
+                ]
+            )
+            session.commit()
+
+        by_run_trace_id_response = client.get("/api/v1/replay/traces/run-trace-replay-otel-1")
+        by_otel_trace_id_response = client.get("/api/v1/replay/traces/0123456789abcdef0123456789abcdef")
+
+    assert by_run_trace_id_response.status_code == 200
+    assert by_otel_trace_id_response.status_code == 200
+    by_run_trace_id_payload = by_run_trace_id_response.json()
+    by_otel_trace_id_payload = by_otel_trace_id_response.json()
+    assert by_run_trace_id_payload["trace"]["id"] == "run-trace-replay-otel-1"
+    assert by_otel_trace_id_payload["trace"]["id"] == "run-trace-replay-otel-1"
+    assert by_otel_trace_id_payload["trace"]["trace_id"] == "0123456789abcdef0123456789abcdef"
+    assert by_otel_trace_id_payload["run"]["id"] == "run-replay-otel-1"
+    assert by_otel_trace_id_payload["timeline_item"]["source_kind"] == "run_trace"
+    assert by_otel_trace_id_payload["timeline_item"]["source_id"] == "run-trace-replay-otel-1"
+
+
 def test_observability_run_event_query_filters_recent_runtime_events() -> None:
     client, _, _ = create_test_client()
 

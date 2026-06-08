@@ -154,6 +154,7 @@ static/
 | `/admin/runs/:runId/live/replay` | `run-live` + `view=replay` | Run replay 视图 |
 | `/admin/replay` | `replay-list` | Replay run 列表 |
 | `/admin/replay/runs/:runId` | `run-live` + `view=replay` | Replay detail |
+| `/admin/replay/traces/:traceId` | `replay-trace` -> `run-live` + `view=replay` | RunTrace/OTel trace 深链 |
 | `/admin/evaluations` | `evaluation-reports` | RunEvaluation reports |
 | `/admin/evaluations/:evaluationId` | `evaluation-report` | RunEvaluation report |
 | `/admin/evaluations/findings` | `evaluation-findings` | RunEvaluation findings |
@@ -253,7 +254,7 @@ static/
 | Invocations | `GET/POST /api/v1/gateway/invocations` |
 | Run Live | `GET /api/v1/runs/{run_id}`、`POST /api/v1/runs/{run_id}/cancel`、`/snapshots`、`/traces`、`/bindings`、`/events` |
 | Terminal WS | `/ws/runs/{run_id}` |
-| Replay | `GET /api/v1/replay/runs`、`GET /api/v1/replay/runs/{run_id}` |
+| Replay | `GET /api/v1/replay/runs`、`GET /api/v1/replay/runs/{run_id}`、`GET /api/v1/replay/traces/{trace_id}` |
 | Skill Tests | `/api/v1/pskills/{skill_id}/test-scenarios*`、`/api/v1/skill-test-scenario-runs*` |
 | Inference Models | `GET /api/v1/gateway/inference/models` |
 | Evaluations | `/api/v1/evaluations*` |
@@ -263,7 +264,7 @@ static/
 | Platform Skill Packages | `/api/v1/skills*` |
 | Platform Tools | `/api/v1/tools*` |
 | Platform Memory | `/api/v1/memory*` |
-| Platform Observability | `/api/v1/observability/*`；metrics 面板展示 Runtime、Agent、Evaluation、Governance 与 OTel 状态 |
+| Platform Observability | `/api/v1/observability/*`；metrics 面板展示 Runtime、Agent、Evaluation、Governance 与 OTel 状态；RunTrace 列表展示 OTel trace/span 并可跳转 Replay |
 
 当前前端不应调用以下未实现接口：
 
@@ -274,7 +275,6 @@ static/
 - `/api/v1/gateway/inference/routes`
 - `/api/v1/runtime/workers`
 - `/api/v1/runtime/sandboxes`
-- `/api/v1/replay/traces/{trace_id}`
 ## 10. 同步策略
 
 | 场景 | 当前方式 |
@@ -287,7 +287,7 @@ static/
 | Run Live binding | WebSocket `/ws/runs/{run_id}` 接收 `binding.updated`，增量更新 Binding 列表和 Replay binding evidence，REST 补齐 |
 | Tasks | 轮询 runtime jobs 和 stats |
 | Skill Test Review | REST 拉取 review DTO，必要时轮询运行状态 |
-| Replay | REST 一次性拉取 replay detail；deep link 支持 `event_id`、`trace_id`、`seq_no`、`snapshot_seq` 定位证据 |
+| Replay | REST 一次性拉取 replay detail；侧栏展示 Replay Provenance；deep link 支持 `event_id`、`trace_id`、`seq_no`、`snapshot_seq` 定位证据 |
 | Evaluation / Governance activity | WebSocket 活动快照 + REST 补齐 |
 | Tool Authorizations | WebSocket `/ws/tool-authorizations` 接收授权变更，REST 补齐 |
 | Observability | REST 查询 dashboard、metrics、run events、run traces、agent/tool/model facts |

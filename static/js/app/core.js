@@ -387,6 +387,31 @@
         await this.loadCurrentRoute();
       },
 
+      async resolveReplayTraceDeepLink(traceId) {
+        const id = String(traceId || "").trim();
+        if (!id) {
+          throw new Error("Replay trace id 不能为空。");
+        }
+        const lookup = await this.apiRequest(`/replay/traces/${encodeURIComponent(id)}`);
+        const runId = String(lookup?.run?.id || lookup?.trace?.run_id || "").trim();
+        const runTraceId = String(lookup?.trace?.id || lookup?.timeline_item?.source_id || id).trim();
+        if (!runId) {
+          throw new Error("Replay trace lookup 未返回 run。");
+        }
+        const replayPath = buildReplayPath(runId, { trace_id: runTraceId });
+        const currentPath = `${window.location.pathname}${window.location.search || ""}`;
+        if (replayPath !== currentPath) {
+          if (window.history?.replaceState) {
+            window.history.replaceState({}, "", replayPath);
+          } else {
+            await this.navigate(replayPath);
+            return;
+          }
+        }
+        this.syncRoute();
+        await this.loadCurrentRoute();
+      },
+
 
       toggleSidebar() {
         this.sidebarCollapsed = !this.sidebarCollapsed;
@@ -753,6 +778,12 @@
             return;
           }
 
+          if (this.route.name === "replay-trace") {
+            this.currentSkill = null;
+            await this.resolveReplayTraceDeepLink(this.route.params.traceId);
+            return;
+          }
+
           if (this.route.name === "replay-list") {
             this.currentSkill = null;
             await this.loadReplayRuns();
@@ -1003,6 +1034,9 @@
           return "Run Events";
         }
         if (this.route.name === "run-live" && this.route.params?.view === "replay") {
+          return "Run Replay";
+        }
+        if (this.route.name === "replay-trace") {
           return "Run Replay";
         }
         if (this.route.name === "run-live") {

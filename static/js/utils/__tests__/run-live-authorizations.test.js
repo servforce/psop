@@ -155,6 +155,9 @@ test("run live page exposes embedded tool authorization tab", () => {
   expect(runtimeJs).toContain("connectLiveRunToolAuthorizationWebSocket");
   expect(runtimeJs).toContain("isToolAuthorizationRunEvent");
   expect(runtimeJs).toContain("refreshLiveRunToolAuthorizations");
+  expect(html).toContain("Replay Provenance");
+  expect(html).toContain("replayDetail?.provenance?.compile_request_id");
+  expect(html).toContain("replayDetail?.provenance?.latest_session_token_snapshot_id");
 });
 
 test("run live opens the raw events tab from the Run Events route view", () => {

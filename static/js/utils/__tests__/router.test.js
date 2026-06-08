@@ -7,6 +7,7 @@ const {
   buildSkillRunLivePath,
   buildSkillDebugRunLivePath,
   buildReplayPath,
+  buildReplayTracePath,
   buildSkillReplayPath,
   buildSkillTestScenarioPath,
   buildSkillTestScenarioNewPath,
@@ -233,6 +234,10 @@ test("resolveAdminRoute maps issue #1 runtime pages", () => {
     name: "run-live",
     params: { runId: "run-123", view: "replay" }
   });
+  expect(resolveAdminRoute("/admin/replay/traces/trace-123")).toEqual({
+    name: "replay-trace",
+    params: { traceId: "trace-123" }
+  });
   expect(resolveAdminRoute("/admin/runs/run-123/live/replay")).toEqual({
     name: "run-live",
     params: { runId: "run-123", view: "replay" }
@@ -258,6 +263,7 @@ test("runtime route builders create live and replay locations", () => {
   expect(buildReplayPath("run-123", { trace_id: "trace-1" })).toBe(
     "/admin/runs/run-123/live/replay?trace_id=trace-1"
   );
+  expect(buildReplayTracePath("trace-1")).toBe("/admin/replay/traces/trace-1");
   expect(buildSkillReplayPath("skill-123", "run-123")).toBe("/admin/skills/skill-123/runs/run-123/live/replay");
   expect(buildSkillTestScenarioNewPath("skill-123")).toBe("/admin/skills/skill-123/tests/new");
   expect(buildSkillTestScenarioPath("skill-123", "scenario-123")).toBe("/admin/skills/skill-123/tests/scenario-123");

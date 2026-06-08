@@ -1279,7 +1279,7 @@ waiting_tool_authorization
 | `GET` | `/api/v1/runs/{run_id}/traces` | 查询 RunTrace。 |
 | `POST` | `/api/v1/runs/{run_id}/cancel` | 取消 Run。 |
 | `GET` | `/api/v1/replay/runs/{run_id}` | Replay 数据聚合。 |
-| `GET` | `/api/v1/replay/traces/{trace_id}` | 通过 RunTrace 定位 Replay 数据和选中 timeline item。 |
+| `GET` | `/api/v1/replay/traces/{trace_id}` | 通过 RunTrace 记录 id 或 OTel trace_id 定位 Replay 数据和选中 timeline item。 |
 
 ### 8.7 Evaluation API
 
@@ -1803,6 +1803,7 @@ Replay 页面应聚合：
 
 ```text
 run
+replay_provenance
 session_token_snapshot
 run_event
 run_event_part
@@ -1814,6 +1815,8 @@ agent_model_call
 run_evaluation
 run_evaluation_finding
 ```
+
+其中 `replay_provenance` 必须直接串联 `invocation_id / run_id / pskill_version_id / compile_artifact_id / compile_request_id / latest_session_token_snapshot_id`，与 `run_trace.trace_id / span_id` 共同支撑 Replay + OTel 排障闭环。Runtime 关键 span 必须带上同一组 provenance 属性，以及当前输入 `session_token_id / session_token_seq`。
 
 ---
 

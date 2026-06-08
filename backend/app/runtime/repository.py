@@ -198,3 +198,12 @@ class RuntimeRepository:
 
     def get_run_trace(self, session: Session, trace_id: str) -> RunTrace | None:
         return session.get(RunTrace, trace_id)
+
+    def get_latest_run_trace_by_otel_trace_id(self, session: Session, trace_id: str) -> RunTrace | None:
+        if not trace_id:
+            return None
+        return session.scalar(
+            select(RunTrace)
+            .where(RunTrace.trace_id == trace_id)
+            .order_by(RunTrace.occurred_at.desc(), RunTrace.seq_no.desc())
+        )

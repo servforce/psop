@@ -244,6 +244,11 @@ function resolveAdminRoute(pathname) {
     return { name: "run-live", params: { runId: replayRunMatch[1], view: "replay" } };
   }
 
+  const replayTraceMatch = normalized.match(/^\/admin\/replay\/traces\/([^/]+)$/);
+  if (replayTraceMatch) {
+    return { name: "replay-trace", params: { traceId: replayTraceMatch[1] } };
+  }
+
   return { name: "skills-list", params: {} };
 }
 
@@ -395,6 +400,10 @@ function buildReplayPath(runId, focus = {}) {
   return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
 }
 
+function buildReplayTracePath(traceId) {
+  return `/admin/replay/traces/${traceId}`;
+}
+
 function buildSkillReplayPath(skillId, runId) {
   return `/admin/skills/${skillId}/runs/${runId}/live/replay`;
 }
@@ -449,6 +458,7 @@ module.exports = {
   buildSkillRunEventsPath,
   buildSkillDebugRunLivePath,
   buildReplayPath,
+  buildReplayTracePath,
   buildSkillReplayPath,
   buildSkillTestScenarioPath,
   buildSkillTestScenarioNewPath,

@@ -13,6 +13,7 @@ function loadCoreHarness() {
     "buildSkillRunLivePath",
     "buildSkillDebugRunLivePath",
     "buildReplayPath",
+    "buildReplayTracePath",
     "buildSkillReplayPath",
     "buildSkillTestScenarioPath",
     "buildSkillTestScenarioNewPath",
@@ -28,11 +29,24 @@ function loadCoreHarness() {
     "renderInlineMarkdown",
     "renderMarkdown"
   ];
+  const helpers = Object.fromEntries(helperNames.map((name) => [name, jest.fn()]));
+  helpers.buildReplayPath = jest.fn((runId, focus = {}) => {
+    const params = new URLSearchParams();
+    if (focus.trace_id) {
+      params.set("trace_id", focus.trace_id);
+    }
+    const query = params.toString();
+    return query ? `/admin/runs/${runId}/live/replay?${query}` : `/admin/runs/${runId}/live/replay`;
+  });
   const context = {
     window: {
-      PSOPConsoleHelpers: Object.fromEntries(helperNames.map((name) => [name, jest.fn()])),
+      PSOPConsoleHelpers: helpers,
       location: { pathname: "/admin/tasks", search: "" },
       history: { pushState: jest.fn((_state, _title, pathValue) => {
+        const [pathname, search = ""] = String(pathValue).split("?");
+        context.window.location.pathname = pathname;
+        context.window.location.search = search ? `?${search}` : "";
+      }), replaceState: jest.fn((_state, _title, pathValue) => {
         const [pathname, search = ""] = String(pathValue).split("?");
         context.window.location.pathname = pathname;
         context.window.location.search = search ? `?${search}` : "";
@@ -141,6 +155,34 @@ test("navigate treats query string changes as route changes", async () => {
   expect(window.history.pushState).toHaveBeenCalledWith({}, "", "/admin/tasks?job_type=skill_sync&q=job-1");
   expect(window.location.pathname).toBe("/admin/tasks");
   expect(window.location.search).toBe("?job_type=skill_sync&q=job-1");
+  expect(context.syncRoute).toHaveBeenCalledTimes(1);
+  expect(context.loadCurrentRoute).toHaveBeenCalledTimes(1);
+});
+
+test("replay trace deep links resolve through the lookup API", async () => {
+  const { methods, window } = loadCoreHarness();
+  window.location.pathname = "/admin/replay/traces/otel%20trace";
+  window.location.search = "";
+  const context = {
+    apiRequest: jest.fn(async () => ({
+      run: { id: "run-1" },
+      trace: { id: "run-trace-1", run_id: "run-1" },
+      timeline_item: { source_id: "run-trace-1" }
+    })),
+    syncRoute: jest.fn(),
+    loadCurrentRoute: jest.fn()
+  };
+
+  await methods.resolveReplayTraceDeepLink.call(context, "otel trace");
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/replay/traces/otel%20trace");
+  expect(window.history.replaceState).toHaveBeenCalledWith(
+    {},
+    "",
+    "/admin/runs/run-1/live/replay?trace_id=run-trace-1"
+  );
+  expect(window.location.pathname).toBe("/admin/runs/run-1/live/replay");
+  expect(window.location.search).toBe("?trace_id=run-trace-1");
   expect(context.syncRoute).toHaveBeenCalledTimes(1);
   expect(context.loadCurrentRoute).toHaveBeenCalledTimes(1);
 });

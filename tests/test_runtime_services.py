@@ -724,6 +724,87 @@ def test_runtime_run_traces_capture_current_otel_context(runtime_stack, monkeypa
     assert {trace.span_id for trace in replay.run_traces} == {"2" * 16}
 
 
+def test_runtime_spans_include_replay_provenance_context(runtime_stack, monkeypatch) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+    captured_spans: list[dict] = []
+
+    class CapturedSpan:
+        def __init__(self, name: str, attributes: dict) -> None:
+            self.name = name
+            self.attributes = dict(attributes)
+
+        def __enter__(self):
+            captured_spans.append({"name": self.name, "attributes": self.attributes})
+            return self
+
+        def __exit__(self, *_exc_info) -> None:
+            return None
+
+        def set_attribute(self, key: str, value) -> None:
+            self.attributes[key] = value
+
+        def record_exception(self, _exception: Exception) -> None:
+            return None
+
+        def set_status(self, _status) -> None:
+            return None
+
+    def fake_start_span(name: str, **attributes):
+        return CapturedSpan(name, attributes)
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-span-provenance",
+                name="Runtime Span Provenance",
+                description="Validate Runtime OTel span correlation.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime span provenance publish"),
+        )
+        compile_request_id = published.compile_request.id
+        compile_request = process_publish_job(session, compiler_service, compile_request_id)
+        artifact_id = compile_request.artifact_id or ""
+
+        monkeypatch.setattr("app.runtime.service.start_span", fake_start_span)
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="runtime-span-provenance",
+                input_envelope={"user_input": "请检查现场任务。"},
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
+
+    runtime_span_names = {"runtime.loop", "runtime.actor", "gateway.inference"}
+    runtime_spans = [span for span in captured_spans if span["name"] in runtime_span_names]
+    assert {span["name"] for span in runtime_spans} == runtime_span_names
+    assert snapshots
+    snapshot_seq_by_id = {snapshot.id: snapshot.seq_no for snapshot in snapshots}
+    for span in runtime_spans:
+        attributes = span["attributes"]
+        assert attributes["run_id"] == invocation.run_id
+        assert attributes["invocation_id"] == invocation.id
+        assert attributes["skill_id"] == skill.id
+        assert attributes["pskill_definition_id"] == skill.id
+        assert attributes["pskill_version_id"] == published.published_version.id
+        assert attributes["skill_version_id"] == published.published_version.id
+        assert attributes["compile_artifact_id"] == artifact_id
+        assert attributes["compile_request_id"] == compile_request_id
+        assert attributes["session_token_id"] in snapshot_seq_by_id
+        assert attributes["session_token_seq"] == snapshot_seq_by_id[attributes["session_token_id"]]
+    actor_span = next(span for span in runtime_spans if span["name"] == "runtime.actor")
+    assert actor_span["attributes"]["node_id"]
+    assert actor_span["attributes"]["node_kind"]
+    inference_span = next(span for span in runtime_spans if span["name"] == "gateway.inference")
+    assert inference_span["attributes"]["route_key"] == "text"
+
+
 def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
     settings = create_test_settings()
     database_manager = DatabaseManager(settings.sqlalchemy_database_url)

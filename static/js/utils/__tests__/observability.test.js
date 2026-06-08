@@ -782,6 +782,8 @@ test("observability page exposes linked distribution filters", () => {
   expect(html).toContain("observabilityToolAuthorizationHistoryPath(authorization)");
   expect(html).toContain("selectObservabilityTraceEventType(item.key)");
   expect(html).toContain("observabilityRunReplayPath(trace)");
+  expect(html).toContain("trace.trace_id");
+  expect(html).toContain("trace.span_id");
   expect(html).toContain("observabilityAgentRunToolCallPath(call)");
   expect(html).toContain("observabilityAgentRunAuthorizationPath(authorization)");
 });

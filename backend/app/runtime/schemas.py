@@ -260,8 +260,20 @@ class ReplayEgNodePathItem(BaseModel):
     occurred_at: datetime
 
 
+class ReplayProvenanceResponse(BaseModel):
+    invocation_id: str
+    run_id: str
+    pskill_definition_id: str
+    pskill_version_id: str
+    compile_artifact_id: str
+    compile_request_id: str = ""
+    latest_session_token_snapshot_id: str = ""
+    latest_session_token_seq: int = 0
+
+
 class ReplayDetailResponse(BaseModel):
     run: RunResponse
+    provenance: ReplayProvenanceResponse
     timeline: list[ReplayTimelineItem]
     eg_node_path: list[ReplayEgNodePathItem] = Field(default_factory=list)
     snapshots: list[SessionTokenSnapshotResponse]
