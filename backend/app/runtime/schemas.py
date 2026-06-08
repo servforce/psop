@@ -246,6 +246,7 @@ class ReplayTimelineItem(BaseModel):
     occurred_at: datetime
     source_kind: str | None = None
     source_id: str | None = None
+    agent_run_id: str | None = None
 
 
 class ReplayEgNodePathItem(BaseModel):

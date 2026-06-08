@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 import logging
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -947,7 +947,7 @@ class RuntimeService:
         run_evaluation_findings = self._list_replay_run_evaluation_findings(session, run_id=run_id)
         timeline = [self._build_timeline_item(event) for event in run_traces]
         timeline.extend(self._build_terminal_timeline_item(event) for event in run_events)
-        timeline.sort(key=lambda item: (item.occurred_at, item.seq_no, item.event_type))
+        timeline.sort(key=lambda item: (self._timeline_occurred_at_sort_key(item.occurred_at), item.seq_no, item.event_type))
         return ReplayDetailResponse(
             run=self._build_run_response(session, run),
             provenance=self._build_replay_provenance(session, run=run, snapshots=snapshots),
@@ -979,6 +979,13 @@ class RuntimeService:
                 for item in run_evaluation_findings
             ],
         )
+
+    @staticmethod
+    def _timeline_occurred_at_sort_key(value: Any) -> float:
+        if hasattr(value, "tzinfo") and hasattr(value, "timestamp"):
+            normalized = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+            return float(normalized.astimezone(timezone.utc).timestamp())
+        return 0.0
 
     def _build_replay_provenance(
         self,
@@ -2432,6 +2439,19 @@ class RuntimeService:
                         )
             except Exception as exc:
                 self._mark_runtime_agent_failed(session, agent_run_id=agent_run_id, node=node, error_message=str(exc))
+                self._append_run_trace(
+                    session,
+                    run=run,
+                    phase=str(node.get("id") or ""),
+                    event_type="gateway.inference.failed",
+                    agent_run_id=agent_run_id,
+                    payload={
+                        "node_id": str(node.get("id") or ""),
+                        "node_kind": str(node.get("kind") or ""),
+                        "route_key": route_key,
+                        **self._runtime_exception_trace_payload(exc),
+                    },
+                )
                 raise
             budgets = token.setdefault("budgets", {})
             budgets["llm_calls"] = int(budgets.get("llm_calls", 0)) + 1
@@ -3317,6 +3337,7 @@ class RuntimeService:
             "runtime.input.accepted": "输入",
             "runtime.wait_checkpoint.entered": "等待现场证据",
             "gateway.inference.completed": "LLM 输出",
+            "gateway.inference.failed": "LLM 失败",
             "gateway.tool.completed": "工具调用",
             "runtime.final.completed": "最终结果",
             "runtime.aborted": "已中止",
@@ -3345,6 +3366,7 @@ class RuntimeService:
             occurred_at=event.occurred_at,
             source_kind="run_trace",
             source_id=event.id,
+            agent_run_id=event.agent_run_id,
         )
 
     @staticmethod
@@ -3376,6 +3398,7 @@ class RuntimeService:
             occurred_at=event.occurred_at,
             source_kind="run_event",
             source_id=event.id,
+            agent_run_id=event.agent_run_id,
         )
 
 

@@ -1112,11 +1112,28 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
         run = failing_runtime.get_run(session, invocation.run_id or "")
         run_traces = failing_runtime.list_run_traces(session, invocation.run_id or "")
         run_events = failing_runtime.list_run_events(session, invocation.run_id or "")
+        replay = failing_runtime.build_replay(session, invocation.run_id or "")
 
     assert invocation.status == "failed"
     assert run.status == "failed"
     assert run.exit_reason == "LLM provider unavailable"
     assert run_traces[-1].event_type == "runtime.failed"
+    failed_gateway_trace = next(item for item in run_traces if item.event_type == "gateway.inference.failed")
+    assert failed_gateway_trace.agent_run_id
+    assert failed_gateway_trace.payload["node_id"] == "instruct_collect_context"
+    assert failed_gateway_trace.payload["node_kind"] == "llm"
+    assert failed_gateway_trace.payload["route_key"] == "text"
+    assert failed_gateway_trace.payload["error"] == "LLM provider unavailable"
+    runner_runs = [item for item in replay.agent_runs if item.agent_key == "pskill.runner"]
+    assert len(runner_runs) == 1
+    assert runner_runs[0].id == failed_gateway_trace.agent_run_id
+    assert runner_runs[0].status == "failed"
+    assert any(
+        item.source_kind == "run_trace"
+        and item.source_id == failed_gateway_trace.id
+        and item.agent_run_id == failed_gateway_trace.agent_run_id
+        for item in replay.timeline
+    )
     assert run_events[-1].direction == "output"
     assert run_events[-1].event_kind == "terminal.text.output.v1"
     assert run_events[-1].external_event_id == f"runtime:{invocation.run_id}:failed"
@@ -1156,6 +1173,9 @@ def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(r
         )
         run_traces = failing_runtime.list_run_traces(session, invocation.run_id or "")
 
+    failed_gateway_trace = next(item for item in run_traces if item.event_type == "gateway.inference.failed")
+    assert failed_gateway_trace.agent_run_id
+    assert failed_gateway_trace.payload["error_details"]["request_id"] == "request-test"
     payload = run_traces[-1].payload
     details = payload["error_details"]
     assert run_traces[-1].event_type == "runtime.failed"

@@ -867,6 +867,7 @@ test("run replay finding evidence refs select matching timeline item", () => {
 
   expect(methods.liveRunReplayEvidenceRefs({ evidence_refs: [traceRef] })).toEqual([traceRef]);
   expect(methods.liveRunReplayEvidenceRefLabel(traceRef)).toBe("run_trace:runtime.failed");
+  expect(methods.liveRunReplayTraceTitle({ event_type: "gateway.inference.failed" })).toBe("LLM 失败");
   expect(methods.liveRunReplayEvidenceRefLabel(legacyEventRef)).toBe("run_event:agent_output");
   expect(methods.liveRunReplayFindEvidenceItem.call(context, traceRef)).toBe(traceItem);
   expect(methods.liveRunReplayFindEvidenceItem.call(context, eventRef)).toBe(eventItem);

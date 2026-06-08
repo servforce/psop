@@ -1516,6 +1516,7 @@
           "runtime.input.accepted": "输入",
           "runtime.wait_checkpoint.entered": "等待现场证据",
           "gateway.inference.completed": "LLM 输出",
+          "gateway.inference.failed": "LLM 失败",
           "gateway.tool.completed": "工具调用",
           "runtime.final.completed": "最终结果",
           "runtime.aborted": "已中止",
