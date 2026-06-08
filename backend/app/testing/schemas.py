@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.agents.schemas import AgentRunResponse
+
 
 class SkillTestScenarioRunSummary(BaseModel):
     id: str
@@ -29,6 +31,14 @@ class SkillTestScenarioCreateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)
     judge_policy: dict[str, Any] = Field(default_factory=dict)
     fork_seed: dict[str, Any] = Field(default_factory=dict)
+
+
+class GenerateSkillTestScenariosRequest(BaseModel):
+    pskill_version_id: str | None = None
+    compile_artifact_id: str | None = None
+    scenario_count: int = Field(default=1, ge=1, le=5)
+    focus: str = Field(default="", max_length=1000)
+    route_key: str = Field(default="text", max_length=80)
 
 
 class SkillTestScenarioUpdateRequest(BaseModel):
@@ -59,6 +69,13 @@ class SkillTestScenarioResponse(BaseModel):
     latest_run: SkillTestScenarioRunSummary | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class GenerateSkillTestScenariosResponse(BaseModel):
+    agent_run: AgentRunResponse
+    scenarios: list[SkillTestScenarioResponse] = Field(default_factory=list)
+    diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+    raw_generation_result: dict[str, Any] = Field(default_factory=dict)
 
 
 class SkillTestAssetResponse(BaseModel):

@@ -39,6 +39,8 @@ from app.testing.schemas import (
     DeleteSkillTestAssetResponse,
     ForkSkillDebugRequest,
     ForkSkillTestScenarioRequest,
+    GenerateSkillTestScenariosRequest,
+    GenerateSkillTestScenariosResponse,
     PSkillPublishGateResponse,
     RunPublishGateRequest,
     SkillTestAssetResponse,
@@ -141,26 +143,99 @@ class SkillTestService:
         payload: SkillTestScenarioCreateRequest,
     ) -> SkillTestScenarioResponse:
         skill = self._get_skill(session, skill_id)
-        self._validate_target_artifact(session, skill_id, payload.target_compile_artifact_id)
-        timeline = self._normalize_timeline(payload.timeline, duration_ms=payload.duration_ms)
-        artifact = self.repository.get_artifact(session, payload.target_compile_artifact_id)
-        suite = self._ensure_default_suite(session, skill=skill, pskill_version_id=artifact.pskill_version_id if artifact else None)
-        scenario = SkillTestScenario(
-            pskill_definition_id=skill_id,
-            suite_id=suite.id,
-            target_compile_artifact_id=payload.target_compile_artifact_id,
-            name=self._normalize_name(payload.name, field="name"),
-            description=payload.description or "",
-            target_version_selector=payload.target_version_selector or "latest",
-            duration_ms=timeline["duration_ms"],
-            timeline=timeline,
-            judge_policy=self._normalize_judge_policy(payload.judge_policy),
-            fork_seed=payload.fork_seed or {},
-            status="active",
-        )
-        session.add(scenario)
+        scenario = self._create_scenario_model(session, skill=skill, payload=payload)
         session.commit()
         return self._build_scenario_response(session, scenario)
+
+    def generate_scenarios(
+        self,
+        session: Session,
+        skill_id: str,
+        payload: GenerateSkillTestScenariosRequest,
+    ) -> GenerateSkillTestScenariosResponse:
+        skill = self._get_skill(session, skill_id)
+        artifact = self.repository.get_artifact(session, payload.compile_artifact_id)
+        if payload.compile_artifact_id and (not artifact or artifact.status != "ready"):
+            raise SkillValidationError("指定编译产物不存在或尚不可运行。", details={"compile_artifact_id": payload.compile_artifact_id})
+        version_id = payload.pskill_version_id or (artifact.pskill_version_id if artifact else None)
+        version_id = version_id or skill.latest_published_version_id or skill.latest_draft_version_id
+        version = self.repository.get_pskill_version(session, version_id)
+        if not version or version.pskill_definition_id != skill.id:
+            raise SkillValidationError("测试场景生成缺少有效 PSkillVersion。", details={"pskill_version_id": version_id})
+        if artifact and artifact.pskill_version_id != version.id:
+            raise SkillValidationError(
+                "指定编译产物不属于当前 PSkillVersion。",
+                details={"compile_artifact_id": artifact.id, "pskill_version_id": version.id},
+            )
+        artifact = artifact or self.repository.get_latest_ready_artifact(session, version.id)
+        agent_run = self._create_scenario_generation_agent_run(
+            session,
+            skill=skill,
+            version_id=version.id,
+            artifact_id=artifact.id if artifact else None,
+            payload=payload,
+        )
+        request_snapshot = self._scenario_generation_request_snapshot(
+            skill=skill,
+            version_id=version.id,
+            artifact_id=artifact.id if artifact else None,
+            payload=payload,
+        )
+        raw_generation_result, diagnostics, provider, model = self._call_scenario_generation_model(request_snapshot)
+        scenario_payloads = self._scenario_payloads_from_generation(
+            skill=skill,
+            artifact_id=artifact.id if artifact else None,
+            scenario_count=payload.scenario_count,
+            raw_generation_result=raw_generation_result,
+        )
+        scenarios: list[SkillTestScenario] = []
+        for index, scenario_payload in enumerate(scenario_payloads):
+            try:
+                scenarios.append(self._create_scenario_model(session, skill=skill, payload=scenario_payload))
+            except SkillValidationError as exc:
+                diagnostics.append(
+                    {
+                        "severity": "warning",
+                        "code": "scenario_generation.invalid_scenario",
+                        "message": exc.message,
+                        "index": index,
+                        "details": exc.details,
+                    }
+                )
+        if not scenarios:
+            fallback_payload = self._fallback_generated_scenario_payload(skill=skill, artifact_id=artifact.id if artifact else None)
+            scenarios.append(self._create_scenario_model(session, skill=skill, payload=fallback_payload))
+            diagnostics.append(
+                {
+                    "severity": "warning",
+                    "code": "scenario_generation.used_fallback",
+                    "message": "pskill.tester 未生成可用场景，已创建基础发布前场景。",
+                }
+            )
+        self._record_scenario_generation_model_call(
+            session,
+            agent_run_id=agent_run.id,
+            request_snapshot=request_snapshot,
+            response_payload=raw_generation_result,
+            provider=provider,
+            model=model,
+        )
+        output_payload = {
+            "decision": "generated",
+            "pskill_definition_id": skill.id,
+            "pskill_version_id": version.id,
+            "compile_artifact_id": artifact.id if artifact else None,
+            "scenario_ids": [scenario.id for scenario in scenarios],
+            "diagnostics": diagnostics,
+        }
+        self._mark_scenario_generation_succeeded(session, agent_run_id=agent_run.id, output_payload=output_payload)
+        session.commit()
+        return GenerateSkillTestScenariosResponse(
+            agent_run=self.agent_service.get_run(session, agent_run.id),
+            scenarios=[self._build_scenario_response(session, scenario) for scenario in scenarios],
+            diagnostics=diagnostics,
+            raw_generation_result=raw_generation_result,
+        )
 
     def get_scenario(self, session: Session, skill_id: str, scenario_id: str) -> SkillTestScenarioResponse:
         scenario = self._get_scenario(session, skill_id, scenario_id)
@@ -1223,6 +1298,343 @@ class SkillTestService:
     def _publish_gate_summary(status: str, score: int, checks: dict[str, dict[str, Any]]) -> str:
         check_summary = ", ".join(f"{name}:{check.get('status')}" for name, check in checks.items())
         return f"publish gate {status} with score {score}; {check_summary}"
+
+    def _create_scenario_model(
+        self,
+        session: Session,
+        *,
+        skill: PSkillDefinition,
+        payload: SkillTestScenarioCreateRequest,
+    ) -> SkillTestScenario:
+        self._validate_target_artifact(session, skill.id, payload.target_compile_artifact_id)
+        timeline = self._normalize_timeline(payload.timeline, duration_ms=payload.duration_ms)
+        artifact = self.repository.get_artifact(session, payload.target_compile_artifact_id)
+        suite = self._ensure_default_suite(session, skill=skill, pskill_version_id=artifact.pskill_version_id if artifact else None)
+        scenario = SkillTestScenario(
+            pskill_definition_id=skill.id,
+            suite_id=suite.id,
+            target_compile_artifact_id=payload.target_compile_artifact_id,
+            name=self._normalize_name(payload.name, field="name"),
+            description=payload.description or "",
+            target_version_selector=payload.target_version_selector or "latest",
+            duration_ms=timeline["duration_ms"],
+            timeline=timeline,
+            judge_policy=self._normalize_judge_policy(payload.judge_policy),
+            fork_seed=payload.fork_seed or {},
+            status="active",
+        )
+        session.add(scenario)
+        session.flush()
+        return scenario
+
+    def _create_scenario_generation_agent_run(
+        self,
+        session: Session,
+        *,
+        skill: PSkillDefinition,
+        version_id: str,
+        artifact_id: str | None,
+        payload: GenerateSkillTestScenariosRequest,
+    ):
+        agent_run = self.agent_service.create_run(
+            session,
+            CreateAgentRunRequest(
+                agent_key="pskill.tester",
+                owner_type="pskill_test_scenario_generation",
+                owner_id=skill.id,
+                input_payload={
+                    "schema": "PSkillTestScenarioGenerationInput",
+                    "pskill_definition_id": skill.id,
+                    "pskill_key": skill.key,
+                    "pskill_version_id": version_id,
+                    "compile_artifact_id": artifact_id,
+                    "scenario_count": payload.scenario_count,
+                    "focus": payload.focus,
+                },
+            ),
+            commit=False,
+        )
+        agent_run_model = self.agent_service.get_run_model(session, agent_run.id)
+        agent_run_model.status = "running"
+        agent_run_model.started_at = agent_run_model.started_at or now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="testing.scenario_generation.started",
+                phase="testing",
+                payload={"pskill_definition_id": skill.id, "pskill_version_id": version_id, "compile_artifact_id": artifact_id},
+            ),
+            commit=False,
+        )
+        return agent_run
+
+    @staticmethod
+    def _scenario_generation_request_snapshot(
+        *,
+        skill: PSkillDefinition,
+        version_id: str,
+        artifact_id: str | None,
+        payload: GenerateSkillTestScenariosRequest,
+    ) -> dict[str, Any]:
+        prompt_payload = {
+            "operation": "generate_psop_test_scenarios",
+            "pskill": {
+                "id": skill.id,
+                "key": skill.key,
+                "name": skill.name,
+                "description": skill.description,
+            },
+            "pskill_version_id": version_id,
+            "compile_artifact_id": artifact_id,
+            "scenario_count": payload.scenario_count,
+            "focus": payload.focus,
+            "output_contract": {
+                "type": "object",
+                "required": ["scenarios"],
+                "scenario_shape": {
+                    "name": "string",
+                    "description": "string",
+                    "duration_ms": "integer",
+                    "timeline": "psop-skill-test-timeline/v1",
+                    "judge_policy": "object",
+                },
+            },
+        }
+        system_prompt = (
+            "你是 PSOP 的 PSkill 测试场景生成智能体 pskill.tester。"
+            "只输出 JSON，对发布前黑盒时序测试生成 scenarios 数组。"
+        )
+        user_prompt = json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True)
+        return {
+            "route_key": payload.route_key or TEXT_ROUTE_KEY,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "prompt_payload": prompt_payload,
+        }
+
+    def _call_scenario_generation_model(
+        self,
+        request_snapshot: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], str, str]:
+        diagnostics: list[dict[str, Any]] = []
+        provider = ""
+        model = ""
+        try:
+            completion = self.inference_gateway.complete(
+                system_prompt=str(request_snapshot["system_prompt"]),
+                user_prompt=str(request_snapshot["user_prompt"]),
+                route_key=str(request_snapshot.get("route_key") or TEXT_ROUTE_KEY),
+            )
+            provider = completion.provider
+            model = completion.model
+            parsed = self._parse_generation_json(completion.content)
+            return (
+                {
+                    "request": request_snapshot,
+                    "content": completion.content,
+                    "parsed": parsed,
+                    "usage": completion.usage,
+                    "raw": completion.raw_response,
+                },
+                diagnostics,
+                provider,
+                model,
+            )
+        except Exception as exc:
+            diagnostics.append(
+                {
+                    "severity": "warning",
+                    "code": "scenario_generation.model_response_invalid",
+                    "message": f"pskill.tester 场景生成响应不可用：{exc.__class__.__name__}",
+                }
+            )
+            return (
+                {"request": request_snapshot, "error": str(exc), "error_type": exc.__class__.__name__},
+                diagnostics,
+                provider,
+                model,
+            )
+
+    @staticmethod
+    def _parse_generation_json(content: str) -> dict[str, Any]:
+        text = content.strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines:
+                lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return {"scenarios": parsed}
+        if isinstance(parsed, dict):
+            return parsed
+        raise ValueError("generation response must be a JSON object or array")
+
+    def _scenario_payloads_from_generation(
+        self,
+        *,
+        skill: PSkillDefinition,
+        artifact_id: str | None,
+        scenario_count: int,
+        raw_generation_result: dict[str, Any],
+    ) -> list[SkillTestScenarioCreateRequest]:
+        parsed = raw_generation_result.get("parsed") if isinstance(raw_generation_result, dict) else None
+        raw_scenarios = parsed.get("scenarios") if isinstance(parsed, dict) else None
+        if not isinstance(raw_scenarios, list):
+            return []
+        scenario_payloads: list[SkillTestScenarioCreateRequest] = []
+        for index, raw_scenario in enumerate(raw_scenarios[:scenario_count]):
+            if not isinstance(raw_scenario, dict):
+                continue
+            duration_ms = self._coerce_generation_duration(raw_scenario.get("duration_ms"))
+            timeline = self._ensure_generated_timeline_contract(
+                raw_scenario.get("timeline"),
+                skill=skill,
+                duration_ms=duration_ms,
+                index=index,
+            )
+            scenario_payloads.append(
+                SkillTestScenarioCreateRequest(
+                    name=self._truncate_generated_name(
+                        str(raw_scenario.get("name") or f"{skill.name} 发布前场景 {index + 1}")
+                    ),
+                    description=str(raw_scenario.get("description") or "由 pskill.tester 生成的发布前测试场景。"),
+                    target_version_selector=str(raw_scenario.get("target_version_selector") or "latest"),
+                    target_compile_artifact_id=str(raw_scenario.get("target_compile_artifact_id") or artifact_id or "") or None,
+                    duration_ms=duration_ms,
+                    timeline=timeline,
+                    judge_policy=raw_scenario.get("judge_policy") if isinstance(raw_scenario.get("judge_policy"), dict) else {},
+                    fork_seed={"source": "pskill.tester.generate_scenarios", "raw_index": index},
+                )
+            )
+        return scenario_payloads
+
+    def _fallback_generated_scenario_payload(
+        self,
+        *,
+        skill: PSkillDefinition,
+        artifact_id: str | None,
+    ) -> SkillTestScenarioCreateRequest:
+        duration_ms = 300_000
+        return SkillTestScenarioCreateRequest(
+            name=self._truncate_generated_name(f"{skill.name} 发布前基础场景"),
+            description="pskill.tester 生成失败后的基础发布前冒烟场景。",
+            target_compile_artifact_id=artifact_id,
+            duration_ms=duration_ms,
+            timeline=self._ensure_generated_timeline_contract(None, skill=skill, duration_ms=duration_ms, index=0),
+            judge_policy={"route_key": TEXT_ROUTE_KEY, "confidence_threshold": 0.7},
+            fork_seed={"source": "pskill.tester.generate_scenarios", "fallback": True},
+        )
+
+    def _ensure_generated_timeline_contract(
+        self,
+        value: Any,
+        *,
+        skill: PSkillDefinition,
+        duration_ms: int,
+        index: int,
+    ) -> dict[str, Any]:
+        timeline = dict(value) if isinstance(value, dict) else {}
+        events = [dict(item) for item in timeline.get("events", []) if isinstance(item, dict)]
+        if not any(str(item.get("lane_id") or "") != "expected.semantic" for item in events):
+            events.insert(
+                0,
+                {
+                    "id": f"generated_user_request_{index + 1}",
+                    "lane_id": "input.text",
+                    "at_ms": 0,
+                    "event_kind": "terminal.text.input.v1",
+                    "mime_type": "text/plain",
+                    "payload_inline": f"请使用 {skill.name} 完成一次标准任务。",
+                },
+            )
+        if not any(str(item.get("lane_id") or "") == "expected.semantic" for item in events):
+            events.append(
+                {
+                    "id": f"expect_generated_completion_{index + 1}",
+                    "lane_id": "expected.semantic",
+                    "at_ms": min(duration_ms, 60_000),
+                    "expectation": "系统应给出清晰、安全、可执行的下一步指引。",
+                }
+            )
+        timeline["schema_version"] = str(timeline.get("schema_version") or TIMELINE_SCHEMA_VERSION)
+        timeline["duration_ms"] = int(timeline.get("duration_ms") or duration_ms)
+        timeline["events"] = events
+        return timeline
+
+    @staticmethod
+    def _coerce_generation_duration(value: Any) -> int:
+        try:
+            duration_ms = int(value or 300_000)
+        except (TypeError, ValueError):
+            duration_ms = 300_000
+        return max(1, duration_ms)
+
+    @staticmethod
+    def _truncate_generated_name(value: str) -> str:
+        normalized = value.strip() or "Generated Test Scenario"
+        return normalized[:160]
+
+    def _record_scenario_generation_model_call(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        request_snapshot: dict[str, Any],
+        response_payload: dict[str, Any],
+        provider: str,
+        model: str,
+    ) -> None:
+        usage = response_payload.get("usage") if isinstance(response_payload.get("usage"), dict) else {}
+        status = "failed" if response_payload.get("error") else "succeeded"
+        self.agent_service.record_model_call(
+            session,
+            agent_run_id=agent_run_id,
+            provider=provider or "llm_inference_gateway",
+            route_key=str(request_snapshot.get("route_key") or TEXT_ROUTE_KEY),
+            model_name=model or "",
+            status=status,
+            request_payload=request_snapshot,
+            response_payload=response_payload,
+            usage_json=dict(usage),
+            commit=False,
+        )
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="testing.scenario_generation.model_call.completed",
+                phase="testing",
+                payload={"status": status},
+            ),
+            commit=False,
+        )
+
+    def _mark_scenario_generation_succeeded(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        output_payload: dict[str, Any],
+    ) -> None:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        agent_run.status = "succeeded"
+        agent_run.output_payload = output_payload
+        agent_run.error_message = ""
+        agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="testing.scenario_generation.completed",
+                phase="testing",
+                payload=output_payload,
+            ),
+            commit=False,
+        )
 
     def _ensure_default_suite(
         self,

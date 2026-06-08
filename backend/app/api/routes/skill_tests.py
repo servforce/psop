@@ -13,6 +13,8 @@ from app.testing.schemas import (
     DeleteSkillTestAssetResponse,
     ForkSkillDebugRequest,
     ForkSkillTestScenarioRequest,
+    GenerateSkillTestScenariosRequest,
+    GenerateSkillTestScenariosResponse,
     PSkillPublishGateResponse,
     RunPublishGateRequest,
     SkillTestAssetResponse,
@@ -46,6 +48,20 @@ def create_test_scenario(
     service: SkillTestService = Depends(get_skill_test_service),
 ) -> SkillTestScenarioResponse:
     return service.create_scenario(session, skill_id, payload)
+
+
+@router.post(
+    "/testing/pskills/{skill_id}/generate-scenarios",
+    response_model=GenerateSkillTestScenariosResponse,
+    status_code=201,
+)
+def generate_test_scenarios(
+    skill_id: str,
+    payload: GenerateSkillTestScenariosRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillTestService = Depends(get_skill_test_service),
+) -> GenerateSkillTestScenariosResponse:
+    return service.generate_scenarios(session, skill_id, payload)
 
 
 @router.get("/pskills/{skill_id}/test-scenarios/{scenario_id}", response_model=SkillTestScenarioResponse)

@@ -317,6 +317,41 @@ class FakeInferenceGateway:
                 },
                 ensure_ascii=False,
             )
+        elif "generate_psop_test_scenarios" in user_prompt:
+            content = json.dumps(
+                {
+                    "scenarios": [
+                        {
+                            "name": "自动生成发布前冒烟场景",
+                            "description": "由 pskill.tester 根据 PSkill 和 EG 生成。",
+                            "duration_ms": 120000,
+                            "timeline": {
+                                "schema_version": "psop-skill-test-timeline/v1",
+                                "duration_ms": 120000,
+                                "events": [
+                                    {
+                                        "id": "generated_user_request",
+                                        "lane_id": "input.text",
+                                        "at_ms": 0,
+                                        "event_kind": "terminal.text.input.v1",
+                                        "mime_type": "text/plain",
+                                        "payload_inline": "请按技能完成一次标准现场任务。",
+                                    },
+                                    {
+                                        "id": "expect_safe_guidance",
+                                        "lane_id": "expected.semantic",
+                                        "at_ms": 60000,
+                                        "expectation": "系统应给出安全、清晰、可执行的现场指导。",
+                                    },
+                                ],
+                            },
+                            "judge_policy": {"route_key": "text", "confidence_threshold": 0.7},
+                        }
+                    ],
+                    "diagnostics": [],
+                },
+                ensure_ascii=False,
+            )
         elif "黑盒时序测试 Judge" in system_prompt:
             content = json.dumps(
                 {
@@ -1738,6 +1773,72 @@ def test_publish_gate_runs_after_publish_compile() -> None:
     assert testing_gate_response.status_code == 201
     assert testing_gate_response.json()["pskill_definition_id"] == skill_id
     assert testing_gate_response.json()["status"] == "review_required"
+
+
+def test_tester_agent_generates_test_scenarios() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "tester-generation-demo",
+                "name": "Tester Generation Demo",
+                "description": "Validate pskill.tester scenario generation.",
+            },
+        ).json()
+        skill_id = created["id"]
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill_id}/publish",
+            json={"publish_reason": "Generate test scenarios"},
+        )
+        publish_payload = publish_response.json()
+        compile_request_id = publish_payload["compile_request"]["id"]
+        compile_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        compile_payload = compile_response.json()
+
+        generate_response = client.post(
+            f"/api/v1/testing/pskills/{skill_id}/generate-scenarios",
+            json={"compile_artifact_id": compile_payload["artifact_id"], "scenario_count": 1, "focus": "smoke"},
+        )
+        generated_payload = generate_response.json()
+        agent_run_id = generated_payload["agent_run"]["id"]
+        scenarios_response = client.get(f"/api/v1/pskills/{skill_id}/test-scenarios")
+        agent_events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        model_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/model-calls")
+
+    assert publish_response.status_code == 202
+    assert compile_response.status_code == 200
+    assert compile_payload["artifact_id"]
+    assert generate_response.status_code == 201
+    assert generated_payload["agent_run"]["agent_key"] == "pskill.tester"
+    assert generated_payload["agent_run"]["owner_type"] == "pskill_test_scenario_generation"
+    assert generated_payload["agent_run"]["status"] == "succeeded"
+    assert generated_payload["agent_run"]["output_payload"]["decision"] == "generated"
+    assert generated_payload["agent_run"]["output_payload"]["compile_artifact_id"] == compile_payload["artifact_id"]
+    assert generated_payload["diagnostics"] == []
+
+    scenario = generated_payload["scenarios"][0]
+    assert scenario["pskill_definition_id"] == skill_id
+    assert scenario["target_compile_artifact_id"] == compile_payload["artifact_id"]
+    assert scenario["name"] == "自动生成发布前冒烟场景"
+    assert scenario["timeline"]["schema_version"] == "psop-skill-test-timeline/v1"
+    assert [event["id"] for event in scenario["timeline"]["events"]] == [
+        "generated_user_request",
+        "expect_safe_guidance",
+    ]
+    assert scenarios_response.json()[0]["id"] == scenario["id"]
+
+    event_types = [item["event_type"] for item in agent_events_response.json()]
+    assert "testing.scenario_generation.started" in event_types
+    assert "testing.scenario_generation.model_call.completed" in event_types
+    assert "testing.scenario_generation.completed" in event_types
+
+    model_call = model_calls_response.json()[0]
+    assert model_call["provider"] == "fake-openai-compatible"
+    assert model_call["route_key"] == "text"
+    assert model_call["request_payload"]["prompt_payload"]["operation"] == "generate_psop_test_scenarios"
+    assert model_call["response_payload"]["parsed"]["scenarios"][0]["name"] == "自动生成发布前冒烟场景"
 
 
 def test_manual_compile_request_does_not_publish_draft() -> None:
