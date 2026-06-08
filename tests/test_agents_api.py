@@ -593,6 +593,71 @@ def test_agent_runner_executes_authorized_skill_version_activation_tool() -> Non
     assert executed_authorization_response.json()["status"] == "executed"
 
 
+def test_agent_runner_executes_governance_write_proposal_tool_without_hitl() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "psop.governance",
+                "owner_type": "governance",
+                "owner_id": "proposal-tool-run",
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.governance.write_proposal",
+                        "side_effect_level": "low_write",
+                        "arguments_summary": {
+                            "proposal_type": "test_suite_update",
+                            "target": {"kind": "regression_suite", "name": "governance-tool"},
+                            "problem_statement": "补充治理工具执行路径的回归覆盖。",
+                            "evidence_refs": [{"kind": "agent_run", "id": "proposal-tool-run"}],
+                        },
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        proposal_id = run_once_response.json()["output_payload"]["tool_result"]["result"]["proposal_id"]
+        proposal_response = client.get(f"/api/v1/governance/proposals/{proposal_id}")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    run_payload = run_once_response.json()
+    assert run_payload["status"] == "succeeded"
+    assert run_payload["output_payload"]["tool_result"]["tool_name"] == "psop.governance.write_proposal"
+    assert authorizations_response.json() == []
+
+    proposal = proposal_response.json()
+    assert proposal_response.status_code == 200
+    assert proposal["id"] == proposal_id
+    assert proposal["agent_run_id"] == agent_run_id
+    assert proposal["status"] == "draft"
+    assert proposal["proposal_type"] == "test_suite_update"
+    assert proposal["target"] == {"kind": "regression_suite", "name": "governance-tool"}
+    assert proposal["risk_assessment"]["requires_human_review"] is True
+    assert proposal["activation_plan"]["direct_activation_allowed"] is False
+    assert proposal["required_tests"][0]["kind"] == "regression"
+
+    tool_call = tool_calls_response.json()[0]
+    assert tool_call["tool_name"] == "psop.governance.write_proposal"
+    assert tool_call["status"] == "succeeded"
+    assert tool_call["result_summary"]["executed"] is True
+    assert tool_call["result_summary"]["result"]["proposal_id"] == proposal_id
+    assert "native_execution" not in tool_call["result_summary"]["result"]
+
+    event_types = [item["event_type"] for item in events_response.json()]
+    assert "tool.execution_started" in event_types
+    assert "governance.proposal.created" in event_types
+    assert "tool.execution_succeeded" in event_types
+    assert "agent.tool_call.succeeded" in event_types
+
+
 def test_agent_runner_executes_auto_allowed_memory_tools() -> None:
     client, _, _ = create_test_client()
 

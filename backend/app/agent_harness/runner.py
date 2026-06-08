@@ -18,6 +18,8 @@ from app.agents.schemas import (
     AgentRunResponse,
 )
 from app.agents.service import AgentService
+from app.governance.schemas import GovernanceProposalCreateRequest
+from app.governance.service import GovernanceService
 from app.memory.schemas import MemorySearchRequest
 from app.memory.service import MemoryService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
@@ -49,6 +51,7 @@ class AgentRunner:
         tool_policy: ToolPolicy | None = None,
         memory_service: MemoryService | None = None,
         pskills_service: SkillsService | None = None,
+        governance_service: GovernanceService | None = None,
         output_guardrail: OutputGuardrail | None = None,
         planner: AgentPlanner | None = None,
     ) -> None:
@@ -58,6 +61,7 @@ class AgentRunner:
         self.tool_policy = tool_policy or ToolPolicy()
         self.memory_service = memory_service or MemoryService()
         self.pskills_service = pskills_service
+        self.governance_service = governance_service or GovernanceService()
         self.output_guardrail = output_guardrail or OutputGuardrail()
         self.planner = planner or AgentPlanner()
 
@@ -452,6 +456,32 @@ class AgentRunner:
                     "memory_entry_count": len(entries),
                     "memory_entry_ids": [item.id for item in entries],
                     "entries": [item.model_dump(mode="json") for item in entries],
+                }
+            }
+        if tool_call.tool_name == "psop.governance.write_proposal":
+            proposal_arguments = arguments.get("proposal", arguments)
+            if not isinstance(proposal_arguments, dict):
+                raise SkillValidationError(
+                    "psop.governance.write_proposal 参数必须是对象。",
+                    details={"arguments_summary": arguments},
+                )
+            try:
+                payload = GovernanceProposalCreateRequest(**proposal_arguments)
+            except ValidationError as error:
+                raise SkillValidationError(
+                    "psop.governance.write_proposal 参数无效。",
+                    details={"arguments_summary": arguments, "error": str(error)},
+                ) from error
+            proposal = self.governance_service.create_proposal_from_agent_tool(
+                session,
+                agent_run_id=tool_call.agent_run_id,
+                payload=payload,
+                commit=False,
+            )
+            return {
+                "result": {
+                    "proposal_id": proposal.id,
+                    "proposal": proposal.model_dump(mode="json"),
                 }
             }
         if tool_call.tool_name == "psop.agent_version.activate":

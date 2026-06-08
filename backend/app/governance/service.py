@@ -125,6 +125,55 @@ class GovernanceService:
         session.commit()
         return self.get_proposal(session, proposal.id)
 
+    def create_proposal_from_agent_tool(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        payload: GovernanceProposalCreateRequest,
+        commit: bool = True,
+    ) -> GovernanceProposalResponse:
+        result = self._proposal_result_from_request(payload)
+        source_findings = []
+        for finding_id in payload.source_finding_ids:
+            finding = self.repository.get_finding(session, finding_id)
+            if not finding:
+                raise SkillNotFoundError("未找到 RunEvaluationFinding。", details={"finding_id": finding_id})
+            source_findings.append(finding)
+        proposal = PsopImprovementProposal(
+            id=generate_uuid(),
+            agent_run_id=agent_run_id,
+            source_finding_ids=list(payload.source_finding_ids),
+            source_evaluation_id=payload.source_evaluation_id,
+            source_run_id=payload.source_run_id,
+            proposal_type=str(result["proposal_type"]),
+            target_json=dict(result["target"]),
+            problem_statement=str(result["problem_statement"]),
+            evidence_refs=list(result["evidence_refs"]),
+            proposed_changes=list(result["proposed_changes"]),
+            risk_assessment=dict(result["risk_assessment"]),
+            required_tests=list(result["required_tests"]),
+            activation_plan=dict(result["activation_plan"]),
+            status="draft",
+        )
+        session.add(proposal)
+        for finding in source_findings:
+            finding.status = "converted_to_proposal"
+        session.flush()
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="governance.proposal.created",
+                phase="governance",
+                payload={"proposal_id": proposal.id, "status": "draft", "created_by_tool": True},
+            ),
+            commit=False,
+        )
+        if commit:
+            session.commit()
+        return self._build_proposal_response(session, proposal)
+
     def list_proposals(self, session: Session, *, status: str | None = None) -> list[GovernanceProposalResponse]:
         if status is not None and status not in VALID_PROPOSAL_STATUSES:
             raise SkillValidationError("proposal status 无效。", details={"status": status})
