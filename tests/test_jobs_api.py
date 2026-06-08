@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
-from app.jobs.types import LEGACY_RUNTIME_JOB_TYPE, PSKILL_COMPILE_JOB_TYPE, RUNTIME_STEP_JOB_TYPE
+from app.jobs.types import DEAD_LETTER_JOB_STATUS, LEGACY_RUNTIME_JOB_TYPE, PSKILL_COMPILE_JOB_TYPE, RUNTIME_STEP_JOB_TYPE
 from app.jobs.worker import RuntimeJobWorker
 from app.pskills.models import now_utc
 from tests.test_skills_api import create_test_client
@@ -219,7 +219,7 @@ def test_runtime_job_repository_recovers_expired_leases_with_retry_and_failure()
     assert retryable_state["last_error"] == "runtime_job lease expired before worker completed the job."
     assert retryable_state["metrics"]["lease_recovery_count"] == 1
 
-    assert exhausted_state["status"] == "failed"
+    assert exhausted_state["status"] == DEAD_LETTER_JOB_STATUS
     assert exhausted_state["worker_name"] == ""
     assert exhausted_state["lease_until"] is None
     assert exhausted_state["finished_at"] is not None
@@ -275,3 +275,48 @@ def test_runtime_job_worker_recovers_expired_leases_before_claiming() -> None:
     assert recovered_state["worker_name"] == ""
     assert recovered_state["lease_until"] is None
     assert recovered_state["metrics"]["lease_recovery_count"] == 1
+
+
+def test_runtime_job_worker_moves_exhausted_unhandled_failures_to_dead_letter() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        with client.app.state.db_manager.session() as session:
+            job = RuntimeJob(
+                job_type=PSKILL_COMPILE_JOB_TYPE,
+                status="pending",
+                payload={},
+                dedupe_key="job:dead-letter-compile",
+                attempt_no=2,
+                max_attempts=3,
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+
+        worker = RuntimeJobWorker(
+            settings=client.app.state.settings,
+            database_manager=client.app.state.db_manager,
+            gitlab_gateway=client.app.state.gitlab_gateway,
+            inference_gateway=client.app.state.inference_gateway,
+            asr_gateway=client.app.state.asr_gateway,
+            object_store=client.app.state.object_store,
+        )
+        processed = worker.run_once()
+
+        with client.app.state.db_manager.session() as session:
+            refreshed = session.get(RuntimeJob, job_id)
+            job_state = {
+                "status": refreshed.status,
+                "attempt_no": refreshed.attempt_no,
+                "last_error": refreshed.last_error,
+                "finished_at": refreshed.finished_at,
+                "payload": dict(refreshed.payload or {}),
+            }
+
+    assert processed is True
+    assert job_state["attempt_no"] == 3
+    assert job_state["status"] == DEAD_LETTER_JOB_STATUS
+    assert job_state["last_error"]
+    assert job_state["finished_at"] is not None
+    assert job_state["payload"]["terminal_status"] == "failed"

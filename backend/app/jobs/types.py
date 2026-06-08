@@ -7,6 +7,8 @@ PSKILL_COMPILE_JOB_TYPE = "pskill_compile"
 PSKILL_TEST_JOB_TYPE = "pskill_test"
 RUNTIME_STEP_JOB_TYPE = "runtime_step"
 
+DEAD_LETTER_JOB_STATUS = "dead_letter"
+
 LEGACY_COMPILE_JOB_TYPE = "compile"
 LEGACY_RUNTIME_JOB_TYPE = "runtime"
 LEGACY_SKILL_TEST_TIMELINE_DRIVER_JOB_TYPE = "skill_test_timeline_driver"

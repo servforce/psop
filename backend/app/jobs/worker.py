@@ -13,6 +13,7 @@ from app.compiler.service import CompilerService
 from app.jobs.progress import ensure_publish_progress_payload, mark_publish_stage
 from app.jobs.repository import JobRepository
 from app.jobs.types import (
+    DEAD_LETTER_JOB_STATUS,
     MATERIAL_ANALYSIS_JOB_TYPE,
     PSKILL_BUILD_JOB_TYPE,
     WORKER_CLAIM_JOB_TYPES,
@@ -175,7 +176,7 @@ class RuntimeJobWorker:
             retryable = job.attempt_no < job.max_attempts
             job.last_error = error_message
             if not is_pskill_compile_job_type(job.job_type):
-                job.status = "pending" if retryable else "failed"
+                job.status = "pending" if retryable else DEAD_LETTER_JOB_STATUS
                 if retryable:
                     job.available_at = now_utc() + timedelta(seconds=5 * job.attempt_no)
                 session.commit()
@@ -184,7 +185,7 @@ class RuntimeJobWorker:
                 job.status = "pending"
                 job.available_at = now_utc() + timedelta(seconds=5 * job.attempt_no)
             else:
-                job.status = "failed"
+                job.status = DEAD_LETTER_JOB_STATUS
                 payload = ensure_publish_progress_payload(job.payload)
                 current_stage = payload.get("current_stage") or "source_loaded"
                 job.payload = mark_publish_stage(

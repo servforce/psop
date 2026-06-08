@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.jobs.models import RuntimeJob
-from app.jobs.types import job_type_filter_values
+from app.jobs.types import DEAD_LETTER_JOB_STATUS, job_type_filter_values
 from app.pskills.models import now_utc
 
 
@@ -56,7 +56,7 @@ class JobRepository:
                 job.status = "pending"
                 job.available_at = now + timedelta(seconds=retry_delay_base_seconds * max(1, job.attempt_no))
             else:
-                job.status = "failed"
+                job.status = DEAD_LETTER_JOB_STATUS
                 job.available_at = now
         if jobs:
             session.commit()
