@@ -35,6 +35,10 @@ class CreateSkillVersionRequest(BaseModel):
     content_hash: str | None = Field(default=None, max_length=128)
 
 
+class QueueSkillSyncRequest(BaseModel):
+    idempotency_key: str | None = Field(default=None, max_length=160)
+
+
 class SkillVersionResponse(BaseModel):
     id: str
     package_id: str

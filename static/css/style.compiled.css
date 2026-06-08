@@ -782,6 +782,9 @@
   .min-w-28 {
     min-width: calc(var(--spacing) * 28);
   }
+  .min-w-44 {
+    min-width: calc(var(--spacing) * 44);
+  }
   .min-w-56 {
     min-width: calc(var(--spacing) * 56);
   }
@@ -2686,6 +2689,13 @@
     &:hover {
       @media (hover: hover) {
         color: var(--color-rose-600);
+      }
+    }
+  }
+  .hover\:text-sky-100 {
+    &:hover {
+      @media (hover: hover) {
+        color: var(--color-sky-100);
       }
     }
   }

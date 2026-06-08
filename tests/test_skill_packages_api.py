@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from app.jobs.types import SKILL_SYNC_JOB_TYPE
+from app.jobs.worker import RuntimeJobWorker
 from app.skills.models import SkillPackage, SkillVersion
 from tests.test_skills_api import create_test_client
 
@@ -75,6 +77,46 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
     assert activate_response.json()["active_version_id"] == version_id
     assert pskills_list_response.status_code == 200
     assert pskills_list_response.json() == []
+
+
+def test_skill_packages_api_queues_sync_job_for_worker_processing() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        payload = {"idempotency_key": "skill-sync-api-1"}
+        queue_response = client.post("/api/v1/skills/sync/queue", json=payload)
+        duplicate_response = client.post("/api/v1/skills/sync/queue", json=payload)
+        job_id = queue_response.json()["id"]
+
+        worker = RuntimeJobWorker(
+            settings=client.app.state.settings,
+            database_manager=client.app.state.db_manager,
+            gitlab_gateway=client.app.state.gitlab_gateway,
+            inference_gateway=client.app.state.inference_gateway,
+            asr_gateway=client.app.state.asr_gateway,
+            object_store=client.app.state.object_store,
+        )
+        processed = worker.run_once()
+        job_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": SKILL_SYNC_JOB_TYPE, "q": job_id},
+        )
+
+    assert queue_response.status_code == 202
+    assert queue_response.json()["job_type"] == SKILL_SYNC_JOB_TYPE
+    assert queue_response.json()["status"] == "pending"
+    assert queue_response.json()["payload"]["operation"] == "skill_sync"
+    assert duplicate_response.status_code == 202
+    assert duplicate_response.json()["id"] == job_id
+
+    assert processed is True
+    job = job_response.json()[0]
+    assert job["status"] == "succeeded"
+    assert job["metrics"]["scanned_count"] == 8
+    assert job["metrics"]["package_count"] == 8
+    assert job["metrics"]["version_count"] == 8
+    assert job["progress"]["percent"] == 100
+    assert "packages=8" in job["progress"]["detail"]
 
 
 def test_skill_package_version_create_validate_and_activate_lifecycle() -> None:

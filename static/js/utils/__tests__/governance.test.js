@@ -84,14 +84,20 @@ test("governance methods build filters and labels", () => {
   const context = {
     ...methods,
     governanceProposalFilters: { status: "testing" },
+    governanceExperimentFilters: { proposal_id: "proposal-1", status: "running", experiment_type: "canary" },
     toolAuthorizationFilters: { status: "pending", tool_name: "psop.repository.commit_patch" },
     optionLabel: (options, value) => options.find((item) => item.value === value)?.label || value
   };
 
   expect(methods.governanceProposalQueryString.call(context)).toBe("status=testing");
+  expect(methods.governanceExperimentQueryString.call(context)).toBe(
+    "proposal_id=proposal-1&status=running&experiment_type=canary"
+  );
   expect(methods.toolAuthorizationQueryString.call(context)).toBe("status=pending&tool_name=psop.repository.commit_patch");
   expect(methods.governanceProposalTypeLabel.call(context, "tool_policy_update")).toBe("Tool Policy");
   expect(methods.governanceProposalStatusLabel.call(context, "rolled_back")).toBe("已回滚");
+  expect(methods.governanceExperimentTypeLabel.call(context, "canary")).toBe("Canary");
+  expect(methods.governanceExperimentStatusLabel.call(context, "rolled_back")).toBe("已回滚");
   expect(methods.toolAuthorizationStatusLabel.call(context, "approved")).toBe("已批准");
   expect(methods.governanceProposalPath("proposal-1")).toBe("/admin/governance/proposals/proposal-1");
 });
@@ -169,6 +175,31 @@ test("governance methods flatten proposal experiments", () => {
   expect(rows.map((item) => item.id)).toEqual(["experiment-2", "experiment-1"]);
   expect(rows[0].proposal_status).toBe("canary");
   expect(rows[0].problem_statement).toBe("adjust agent");
+});
+
+test("governance methods load experiments from read model filters", async () => {
+  const methods = loadGovernanceMethods();
+  const rows = [
+    { id: "experiment-1", proposal_id: "proposal-1", status: "running", experiment_type: "canary" }
+  ];
+  const context = {
+    ...methods,
+    busy: { governanceExperiments: false },
+    governanceExperimentFilters: { proposal_id: "proposal-1", status: "running", experiment_type: "canary" },
+    governanceExperimentRows: [],
+    governanceExperimentDetail: { id: "experiment-1", status: "planned" },
+    apiRequest: jest.fn(async () => rows),
+    showNotice: jest.fn()
+  };
+
+  await methods.loadGovernanceExperiments.call(context);
+
+  expect(context.apiRequest).toHaveBeenCalledWith(
+    "/governance/experiments?proposal_id=proposal-1&status=running&experiment_type=canary"
+  );
+  expect(context.governanceExperimentRows).toEqual(rows);
+  expect(context.governanceExperimentDetail.status).toBe("running");
+  expect(context.busy.governanceExperiments).toBe(false);
 });
 
 test("governance methods create proposals and run state actions", async () => {

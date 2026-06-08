@@ -155,12 +155,30 @@ def get_agent_run(
 
 
 @agent_runs_router.post("/{agent_run_id}/run-once", response_model=AgentRunResponse)
-def run_agent_once(
+async def run_agent_once(
     agent_run_id: str,
     session: Session = Depends(get_db_session),
     runner: AgentRunner = Depends(get_agent_runner),
+    service: AgentService = Depends(get_agent_service),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
 ) -> AgentRunResponse:
-    return runner.run_once(session, agent_run_id)
+    existing_authorization_ids = {
+        item.id for item in service.list_tool_authorizations(session, agent_run_id=agent_run_id)
+    }
+    result = runner.run_once(session, agent_run_id)
+    new_authorizations = [
+        item
+        for item in service.list_tool_authorizations(session, agent_run_id=agent_run_id)
+        if item.id not in existing_authorization_ids and item.status == "pending"
+    ]
+    for authorization in reversed(new_authorizations):
+        await _broadcast_tool_authorization_change(
+            session=session,
+            runtime_service=runtime_service,
+            authorization=authorization,
+            action="requested",
+        )
+    return result
 
 
 @agent_runs_router.get("/{agent_run_id}/events", response_model=list[AgentEventResponse])

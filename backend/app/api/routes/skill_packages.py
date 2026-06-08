@@ -3,9 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db_session, get_skill_package_service
+from app.api.dependencies import get_db_session, get_job_query_service, get_skill_package_service
+from app.jobs.schemas import RuntimeJobResponse
+from app.jobs.service import JobQueryService
 from app.skills.schemas import (
     CreateSkillVersionRequest,
+    QueueSkillSyncRequest,
     SkillPackageDetailResponse,
     SkillPackageSummaryResponse,
     SkillPackageSyncResponse,
@@ -34,6 +37,17 @@ def sync_skill_packages(
     service: SkillPackageService = Depends(get_skill_package_service),
 ) -> SkillPackageSyncResponse:
     return service.sync_packages(session)
+
+
+@router.post("/sync/queue", response_model=RuntimeJobResponse, status_code=status.HTTP_202_ACCEPTED)
+def queue_skill_package_sync(
+    payload: QueueSkillSyncRequest | None = None,
+    session: Session = Depends(get_db_session),
+    service: SkillPackageService = Depends(get_skill_package_service),
+    job_query_service: JobQueryService = Depends(get_job_query_service),
+) -> RuntimeJobResponse:
+    job_id = service.enqueue_skill_sync_job(session, payload)
+    return job_query_service.get_runtime_job(session, job_id)
 
 
 @router.get("/{package_name}", response_model=SkillPackageDetailResponse)

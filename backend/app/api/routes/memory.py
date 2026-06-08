@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db_session, get_memory_service
-from app.memory.schemas import MemoryEntryResponse, MemorySearchRequest, UpdateMemoryEntryRequest
+from app.api.dependencies import get_db_session, get_job_query_service, get_memory_service
+from app.jobs.schemas import RuntimeJobResponse
+from app.jobs.service import JobQueryService
+from app.memory.schemas import (
+    MemoryEntryResponse,
+    MemorySearchRequest,
+    QueueMemoryCompactionRequest,
+    UpdateMemoryEntryRequest,
+)
 from app.memory.service import MemoryService
 
 
@@ -40,6 +47,17 @@ def search_memory(
     service: MemoryService = Depends(get_memory_service),
 ) -> list[MemoryEntryResponse]:
     return service.search(session, payload)
+
+
+@router.post("/compactions/queue", response_model=RuntimeJobResponse, status_code=status.HTTP_202_ACCEPTED)
+def queue_memory_compaction(
+    payload: QueueMemoryCompactionRequest,
+    session: Session = Depends(get_db_session),
+    service: MemoryService = Depends(get_memory_service),
+    job_query_service: JobQueryService = Depends(get_job_query_service),
+) -> RuntimeJobResponse:
+    job_id = service.enqueue_memory_compaction_job(session, payload)
+    return job_query_service.get_runtime_job(session, job_id)
 
 
 @router.patch("/{memory_id}", response_model=MemoryEntryResponse)

@@ -33,6 +33,20 @@
     { value: "rejected", label: "已拒绝" }
   ];
 
+  const EXPERIMENT_STATUS_OPTIONS = [
+    { value: "planned", label: "已计划" },
+    { value: "running", label: "运行中" },
+    { value: "succeeded", label: "成功" },
+    { value: "failed", label: "失败" },
+    { value: "rolled_back", label: "已回滚" }
+  ];
+
+  const EXPERIMENT_TYPE_OPTIONS = [
+    { value: "regression", label: "Regression" },
+    { value: "canary", label: "Canary" },
+    { value: "rollback", label: "Rollback" }
+  ];
+
   window.PSOPConsoleGovernanceMethods = {
     async loadGovernanceProposalsPage() {
       await this.loadGovernanceProposals();
@@ -311,14 +325,47 @@
     async loadGovernanceExperiments() {
       this.busy.governanceExperiments = true;
       try {
-        const proposals = await this.apiRequest("/governance/proposals");
-        this.governanceProposals = Array.isArray(proposals) ? proposals : [];
-        this.refreshGovernanceExperimentRows();
+        const query = this.governanceExperimentQueryString();
+        const suffix = query ? `?${query}` : "";
+        const experiments = await this.apiRequest(`/governance/experiments${suffix}`);
+        this.governanceExperimentRows = Array.isArray(experiments) ? experiments : [];
+        if (this.governanceExperimentDetail) {
+          const refreshed = this.governanceExperimentRows.find((item) => item.id === this.governanceExperimentDetail.id);
+          if (refreshed) {
+            this.governanceExperimentDetail = refreshed;
+          }
+        }
       } catch (error) {
         this.showNotice("error", error.message || "治理实验加载失败。");
       } finally {
         this.busy.governanceExperiments = false;
       }
+    },
+
+    governanceExperimentQueryString() {
+      const params = new URLSearchParams();
+      const proposalId = String(this.governanceExperimentFilters?.proposal_id || "").trim();
+      const status = String(this.governanceExperimentFilters?.status || "").trim();
+      const experimentType = String(this.governanceExperimentFilters?.experiment_type || "").trim();
+      if (proposalId) {
+        params.set("proposal_id", proposalId);
+      }
+      if (status) {
+        params.set("status", status);
+      }
+      if (experimentType) {
+        params.set("experiment_type", experimentType);
+      }
+      return params.toString();
+    },
+
+    applyGovernanceExperimentFilters() {
+      return this.loadGovernanceExperiments();
+    },
+
+    resetGovernanceExperimentFilters() {
+      this.governanceExperimentFilters = { proposal_id: "", status: "", experiment_type: "" };
+      return this.loadGovernanceExperiments();
     },
 
     async openGovernanceExperiment() {
@@ -469,12 +516,28 @@
       return TOOL_AUTH_STATUS_OPTIONS;
     },
 
+    governanceExperimentStatusOptions() {
+      return EXPERIMENT_STATUS_OPTIONS;
+    },
+
+    governanceExperimentTypeOptions() {
+      return EXPERIMENT_TYPE_OPTIONS;
+    },
+
     governanceProposalTypeLabel(value) {
       return this.optionLabel(PROPOSAL_TYPE_OPTIONS, value);
     },
 
     governanceProposalStatusLabel(value) {
       return this.optionLabel(PROPOSAL_STATUS_OPTIONS, value);
+    },
+
+    governanceExperimentStatusLabel(value) {
+      return this.optionLabel(EXPERIMENT_STATUS_OPTIONS, value);
+    },
+
+    governanceExperimentTypeLabel(value) {
+      return this.optionLabel(EXPERIMENT_TYPE_OPTIONS, value);
     },
 
     toolAuthorizationStatusLabel(value) {

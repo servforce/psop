@@ -9,14 +9,16 @@ from typing import Any
 import yaml
 from sqlalchemy.orm import Session
 
+from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.types import SKILL_SYNC_JOB_TYPE
 from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
-from app.pskills.models import now_utc
+from app.pskills.models import generate_uuid, now_utc
 from app.skills.models import SkillPackage, SkillResource, SkillVersion
 from app.skills.repository import SkillPackageRepository
 from app.skills.schemas import (
     CreateSkillVersionRequest,
+    QueueSkillSyncRequest,
     SkillPackageDetailResponse,
     SkillPackageSummaryResponse,
     SkillPackageSyncResponse,
@@ -52,6 +54,23 @@ class SkillPackageService:
         self.repository = repository or SkillPackageRepository()
         self.job_repository = job_repository or JobRepository()
         self.skills_root = skills_root or SKILLS_ROOT
+
+    def enqueue_skill_sync_job(self, session: Session, payload: QueueSkillSyncRequest | None = None) -> str:
+        request = payload or QueueSkillSyncRequest()
+        idempotency_key = _normalize_optional(request.idempotency_key) or generate_uuid()
+        dedupe_key = f"job:skill-sync:{idempotency_key}"
+        existing = self.job_repository.get_runtime_job_by_dedupe_key(session, dedupe_key)
+        if existing:
+            return existing.id
+        job = RuntimeJob(
+            job_type=SKILL_SYNC_JOB_TYPE,
+            status="pending",
+            payload={"operation": "skill_sync", "idempotency_key": idempotency_key},
+            dedupe_key=dedupe_key,
+        )
+        session.add(job)
+        session.commit()
+        return job.id
 
     def process_skill_sync_job(self, session: Session, job_id: str) -> SkillPackageSyncResponse:
         job = self.job_repository.get_runtime_job(session, job_id)
@@ -718,6 +737,13 @@ def _hash_bytes(content: bytes) -> str:
 
 def _normalize_string_list(value: list[Any]) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _normalize_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def _json_clone(value: Any) -> Any:

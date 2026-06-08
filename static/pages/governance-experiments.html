@@ -12,17 +12,39 @@
 
     <div class="shrink-0 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
       <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
-        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.governanceExperiments" @click="loadGovernanceExperiments()">
-          <span class="material-symbols-outlined text-[18px]">refresh</span>
-        </button>
         <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(governanceProposalsPath())">
           <span class="material-symbols-outlined text-[18px]">account_tree</span>
           <span>提案</span>
         </button>
+        <label class="field-block min-w-56">
+          <span class="field-label">Proposal ID</span>
+          <input x-model="governanceExperimentFilters.proposal_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="proposal_id" @input.debounce.300ms="applyGovernanceExperimentFilters()" />
+        </label>
+        <label class="field-block min-w-44">
+          <span class="field-label">状态</span>
+          <select x-model="governanceExperimentFilters.status" class="input-field h-9 py-0" @change="applyGovernanceExperimentFilters()">
+            <option value="">全部</option>
+            <template x-for="option in governanceExperimentStatusOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="field-block min-w-44">
+          <span class="field-label">类型</span>
+          <select x-model="governanceExperimentFilters.experiment_type" class="input-field h-9 py-0" @change="applyGovernanceExperimentFilters()">
+            <option value="">全部</option>
+            <template x-for="option in governanceExperimentTypeOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
         <label class="field-block min-w-72 flex-1">
           <span class="field-label">Experiment ID</span>
           <input x-model="governanceExperimentLookupId" class="input-field h-9 py-0 font-mono text-xs" placeholder="experiment_id" @keydown.enter.prevent="openGovernanceExperiment()" />
         </label>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.governanceExperiments" @click="loadGovernanceExperiments()">
+          <span class="material-symbols-outlined text-[18px]">refresh</span>
+        </button>
         <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.governanceExperimentLookup" @click="openGovernanceExperiment()">
           <span class="material-symbols-outlined text-[18px]">open_in_new</span>
           <span>打开</span>
@@ -53,8 +75,8 @@
                   <span class="block truncate font-semibold text-slate-100" x-text="experiment.summary"></span>
                   <span class="mt-1 block truncate font-mono text-[11px] text-slate-500" x-text="experiment.id"></span>
                 </button>
-                <span class="text-slate-300" x-text="experiment.experiment_type"></span>
-                <span class="status-badge justify-center" :class="statusBadgeTone(experiment.status)" x-text="formatStatus(experiment.status)"></span>
+                <span class="text-slate-300" x-text="governanceExperimentTypeLabel(experiment.experiment_type)"></span>
+                <span class="status-badge justify-center" :class="statusBadgeTone(experiment.status)" x-text="governanceExperimentStatusLabel(experiment.status)"></span>
                 <button type="button" class="truncate font-mono text-[11px] text-sky-300 hover:text-sky-200" @click="navigate(governanceProposalPath(experiment.proposal_id))" x-text="formatShortId(experiment.proposal_id)"></button>
                 <span class="font-mono text-[11px] text-slate-500" x-text="formatDateTime(experiment.created_at)"></span>
               </article>
@@ -79,13 +101,13 @@
                   <p class="mt-1 text-sm font-semibold text-slate-100" x-text="governanceExperimentDetail.summary"></p>
                   <p class="mt-2 truncate font-mono text-[11px] text-slate-500" x-text="governanceExperimentDetail.id"></p>
                 </div>
-                <span class="status-badge" :class="statusBadgeTone(governanceExperimentDetail.status)" x-text="formatStatus(governanceExperimentDetail.status)"></span>
+                <span class="status-badge" :class="statusBadgeTone(governanceExperimentDetail.status)" x-text="governanceExperimentStatusLabel(governanceExperimentDetail.status)"></span>
               </div>
             </header>
             <div class="grid grid-cols-2 divide-x divide-slate-800 text-xs">
               <div class="p-4">
                 <p class="text-slate-500">类型</p>
-                <p class="mt-1 text-slate-200" x-text="governanceExperimentDetail.experiment_type"></p>
+                <p class="mt-1 text-slate-200" x-text="governanceExperimentTypeLabel(governanceExperimentDetail.experiment_type)"></p>
               </div>
               <div class="p-4">
                 <p class="text-slate-500">Proposal</p>

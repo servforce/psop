@@ -60,7 +60,16 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
             json={"decision": "approved", "review_notes": "proposal verified"},
         ).json()
         canary = client.post(f"/api/v1/governance/proposals/{proposal['id']}/activate-canary").json()
+        running_canaries = client.get(
+            "/api/v1/governance/experiments",
+            params={"proposal_id": proposal["id"], "status": "running", "experiment_type": "canary"},
+        ).json()
         rolled_back = client.post(f"/api/v1/governance/proposals/{proposal['id']}/rollback").json()
+        proposal_experiments = client.get(f"/api/v1/governance/proposals/{proposal['id']}/experiments").json()
+        rolled_back_canaries = client.get(
+            "/api/v1/governance/experiments",
+            params={"proposal_id": proposal["id"], "status": "rolled_back", "experiment_type": "canary"},
+        ).json()
         listed = client.get("/api/v1/governance/proposals", params={"status": "rolled_back"}).json()
 
     assert invocation_response.status_code == 201
@@ -99,8 +108,12 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
     assert canary["status"] == "canary"
     assert canary["experiments"][-1]["experiment_type"] == "canary"
     assert canary["experiments"][-1]["status"] == "running"
+    assert [item["id"] for item in running_canaries] == [canary["experiments"][-1]["id"]]
     assert rolled_back["status"] == "rolled_back"
     assert rolled_back["experiments"][-1]["experiment_type"] == "rollback"
+    assert {item["experiment_type"] for item in proposal_experiments} == {"regression", "canary", "rollback"}
+    assert len(proposal_experiments) == 3
+    assert [item["id"] for item in rolled_back_canaries] == [canary["experiments"][-1]["id"]]
     assert listed[0]["id"] == proposal["id"]
 
 

@@ -774,6 +774,11 @@
         review_notes: ""
       },
       governanceExperimentRows: [],
+      governanceExperimentFilters: {
+        proposal_id: "",
+        status: "",
+        experiment_type: ""
+      },
       governanceExperimentLookupId: "",
       governanceExperimentDetail: null,
       toolAuthorizations: [],
@@ -808,6 +813,7 @@
       skillPackages: [],
       currentSkillPackage: null,
       skillPackageSyncResult: null,
+      skillPackageSyncJob: null,
       platformAgentDefinitions: [],
       skillPackageFilters: {
         scope: "",
@@ -822,6 +828,7 @@
       },
       memoryEntries: [],
       currentMemoryEntry: null,
+      memoryCompactionJob: null,
       memoryFilters: {
         namespace: "",
         memory_type: "",
@@ -1048,6 +1055,7 @@
         platformTools: false,
         platformToolAction: false,
         memoryEntries: false,
+        memoryCompaction: false,
         memoryUpdate: false,
         replayRuns: false,
         replayDetail: false,

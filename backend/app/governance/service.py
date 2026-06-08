@@ -390,6 +390,26 @@ class GovernanceService:
             raise SkillNotFoundError("未找到治理实验。", details={"experiment_id": experiment_id})
         return self._build_experiment_response(experiment)
 
+    def list_experiments(
+        self,
+        session: Session,
+        *,
+        proposal_id: str | None = None,
+        status: str | None = None,
+        experiment_type: str | None = None,
+    ) -> list[GovernanceExperimentResponse]:
+        if proposal_id:
+            self._get_proposal(session, proposal_id)
+        return [
+            self._build_experiment_response(item)
+            for item in self.repository.list_experiments(
+                session,
+                proposal_id=self._normalize_optional(proposal_id),
+                status=self._normalize_optional(status),
+                experiment_type=self._normalize_optional(experiment_type),
+            )
+        ]
+
     def _create_proposal_with_governance_agent(
         self,
         session: Session,
@@ -642,6 +662,13 @@ class GovernanceService:
                 "proposal 状态不允许执行该操作。",
                 details={"proposal_id": proposal.id, "status": proposal.status, "action": action},
             )
+
+    @staticmethod
+    def _normalize_optional(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     def _build_proposal_response(
         self,

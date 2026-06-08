@@ -38,9 +38,17 @@
           <span class="material-symbols-outlined text-[18px]">sync</span>
           <span>同步</span>
         </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.skillPackageAction" @click="queueSkillPackageSync()">
+          <span class="material-symbols-outlined text-[18px]">schedule</span>
+          <span>排队同步</span>
+        </button>
         <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformAgentRunsPath())">
           <span class="material-symbols-outlined text-[18px]">manage_history</span>
           <span>Agent Runs</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformTasksPath())">
+          <span class="material-symbols-outlined text-[18px]">fact_check</span>
+          <span>Tasks</span>
         </button>
       </div>
     </div>
@@ -51,6 +59,15 @@
         <span class="ml-3 font-mono" x-text="'packages=' + skillPackageSyncResult.package_count"></span>
         <span class="ml-3 font-mono" x-text="'versions=' + skillPackageSyncResult.version_count"></span>
         <span class="ml-3" x-text="skillPackageSyncResult.changed ? '已发现变更' : '无文件系统变更'"></span>
+      </div>
+    </template>
+
+    <template x-if="skillPackageSyncJob">
+      <div class="shrink-0 border-b border-slate-800 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
+        <span>同步任务已创建</span>
+        <span class="ml-3 font-mono" x-text="skillPackageSyncJob.id"></span>
+        <span class="ml-3 font-mono" x-text="skillPackageSyncJob.status"></span>
+        <button type="button" class="ml-3 text-sky-200 hover:text-sky-100" @click="navigate(platformTasksPath())">查看 Tasks</button>
       </div>
     </template>
 

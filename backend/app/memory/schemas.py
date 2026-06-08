@@ -37,6 +37,22 @@ class UpdateMemoryEntryRequest(BaseModel):
     reviewed_by_agent_run_id: str | None = None
 
 
+class QueueMemoryCompactionRequest(BaseModel):
+    namespace: str | None = Field(default=None, max_length=160)
+    memory_type: str | None = Field(default=None, max_length=40)
+    status: str | None = Field(default="active", max_length=40)
+    agent_key: str | None = Field(default=None, max_length=160)
+    limit: int = Field(default=50, ge=1, le=200)
+    target_namespace: str | None = Field(default=None, max_length=160)
+    target_memory_type: str = Field(default="artifact", max_length=40)
+    target_status: str = Field(default="pending_review", max_length=40)
+    target_agent_key: str | None = Field(default=None, max_length=160)
+    title: str | None = Field(default=None, max_length=255)
+    archive_source_entries: bool = False
+    created_by_agent_run_id: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=160)
+
+
 class MemoryEntryResponse(BaseModel):
     id: str
     namespace: str

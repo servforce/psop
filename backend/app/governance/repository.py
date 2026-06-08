@@ -25,6 +25,26 @@ class GovernanceRepository:
     def get_experiment(self, session: Session, experiment_id: str) -> PsopImprovementExperiment | None:
         return session.get(PsopImprovementExperiment, experiment_id)
 
+    def list_experiments(
+        self,
+        session: Session,
+        *,
+        proposal_id: str | None = None,
+        status: str | None = None,
+        experiment_type: str | None = None,
+    ) -> list[PsopImprovementExperiment]:
+        query = select(PsopImprovementExperiment).order_by(
+            PsopImprovementExperiment.created_at.desc(),
+            PsopImprovementExperiment.id.desc(),
+        )
+        if proposal_id:
+            query = query.where(PsopImprovementExperiment.proposal_id == proposal_id)
+        if status:
+            query = query.where(PsopImprovementExperiment.status == status)
+        if experiment_type:
+            query = query.where(PsopImprovementExperiment.experiment_type == experiment_type)
+        return list(session.scalars(query).all())
+
     def list_experiments_for_proposal(
         self,
         session: Session,

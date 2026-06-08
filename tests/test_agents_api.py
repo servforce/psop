@@ -343,6 +343,84 @@ def test_runtime_tool_authorization_writes_run_events_and_replay_entries() -> No
     assert "tool_authorization_response" in replay_event_kinds
 
 
+def test_agent_runner_tool_authorization_request_broadcasts_run_live_and_global_ws() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        skill = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "runner-tool-auth-broadcast",
+                "name": "Runner Tool Auth Broadcast",
+                "description": "Validate AgentRunner-created tool authorizations reach live channels.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{skill['id']}/publish",
+            json={"publish_reason": "Runner tool authorization broadcast test"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/runtime/invocations",
+            json={
+                "skill_key": "runner-tool-auth-broadcast",
+                "gateway_type": "web",
+                "terminal_context": {"terminal_kind": "web"},
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+        agent_run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "psop.governance",
+                "owner_type": "governance",
+                "owner_id": "proposal-tool-auth-broadcast",
+                "run_id": run_id,
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.agent_version.activate",
+                        "side_effect_level": "high_write",
+                        "arguments_summary": {"agent_key": "pskill.compiler", "version_id": "candidate-version"},
+                        "expected_effect_summary": "激活新的 compiler AgentVersion。",
+                        "authorization_reason": "激活 AgentVersion 会改变生产智能体配置。",
+                        "reversible": True,
+                        "idempotency_key": "runner-tool-auth-broadcast-test",
+                    }
+                },
+            },
+        )
+        agent_run = agent_run_response.json()
+        with client.websocket_connect(f"/ws/runs/{run_id}") as run_ws:
+            run_ws_connected = run_ws.receive_json()
+            with client.websocket_connect("/ws/tool-authorizations") as tool_authorization_ws:
+                tool_authorization_ws_connected = tool_authorization_ws.receive_json()
+                run_once_response = client.post(f"/api/v1/agent-runs/{agent_run['id']}/run-once")
+                request_run_ws_message = run_ws.receive_json()
+                request_tool_authorization_ws_message = tool_authorization_ws.receive_json()
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run['id']}/tool-authorizations")
+        authorization = authorizations_response.json()[0]
+
+    assert invocation_response.status_code == 201
+    assert agent_run_response.status_code == 201
+    assert run_ws_connected["event_type"] == "ws.connected"
+    assert tool_authorization_ws_connected["event_type"] == "ws.connected"
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "waiting_tool_authorization"
+
+    assert request_run_ws_message["event_type"] == "terminal.event.appended"
+    assert request_run_ws_message["payload"]["event_kind"] == "tool_authorization_request"
+    assert request_run_ws_message["payload"]["agent_run_id"] == agent_run["id"]
+    assert request_run_ws_message["payload"]["source_ref"]["authorization_id"] == authorization["id"]
+
+    assert request_tool_authorization_ws_message["event_type"] == "tool.authorization_requested"
+    assert request_tool_authorization_ws_message["authorization_id"] == authorization["id"]
+    assert request_tool_authorization_ws_message["run_id"] == run_id
+    assert request_tool_authorization_ws_message["agent_run_id"] == agent_run["id"]
+    assert request_tool_authorization_ws_message["payload"]["tool_name"] == "psop.agent_version.activate"
+
+
 def test_agent_runner_cannot_write_run_events_directly() -> None:
     client, _, _ = create_test_client()
 

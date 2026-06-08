@@ -54,6 +54,7 @@ function loadPlatformHarness() {
   const sandbox = {
     window: {
       PSOPConsoleHelpers: {
+        buildTasksPath: () => "/admin/tasks",
         buildPlatformAgentRunsPath: () => "/admin/platform/agent-runs",
         buildPlatformAgentRunPath: (agentRunId) => `/admin/platform/agent-runs/${agentRunId}`,
         buildPlatformSkillsPath: () => "/admin/platform/skills",
@@ -128,6 +129,7 @@ test("platform methods build filters, labels, and paths", () => {
   expect(methods.platformToolSideEffectLabel.call(context, "low_write")).toBe("Low Write");
   expect(methods.memoryStatusLabel.call(context, "pending_review")).toBe("待审核");
   expect(methods.platformAgentRunPath("run-1")).toBe("/admin/platform/agent-runs/run-1");
+  expect(methods.platformTasksPath()).toBe("/admin/tasks");
   expect(methods.platformSkillPath("pskill-builder")).toBe("/admin/platform/skills/pskill-builder");
   expect(methods.platformRunLivePath("runtime-run-1")).toBe("/admin/runs/runtime-run-1/live");
   expect(methods.platformToolPath("psop.memory.search")).toBe("/admin/platform/tools/psop.memory.search");
@@ -364,6 +366,7 @@ test("platform methods sync, load, create, validate, and activate skill packages
     skillPackages: [],
     currentSkillPackage: null,
     skillPackageSyncResult: null,
+    skillPackageSyncJob: null,
     platformAgentDefinitions: [],
     apiRequest: jest.fn(async (url) => {
       if (url === "/skills?scope=psop") {
@@ -371,6 +374,9 @@ test("platform methods sync, load, create, validate, and activate skill packages
       }
       if (url === "/skills/sync") {
         return { changed: false, scanned_count: 1, package_count: 1, version_count: 1 };
+      }
+      if (url === "/skills/sync/queue") {
+        return { id: "job-skill-sync-1", job_type: "skill_sync", status: "pending" };
       }
       if (url === "/agents") {
         return [{ key: "pskill.builder" }];
@@ -405,11 +411,16 @@ test("platform methods sync, load, create, validate, and activate skill packages
   };
 
   await methods.syncSkillPackages.call(context);
+  await methods.queueSkillPackageSync.call(context);
   await methods.createSkillPackageVersion.call(context);
   await methods.validateSkillPackageVersion.call(context, detail.versions[0]);
   await methods.activateSkillPackageVersion.call(context, detail.versions[0]);
 
   expect(context.apiRequest).toHaveBeenCalledWith("/skills/sync", { method: "POST" });
+  expect(context.apiRequest).toHaveBeenCalledWith("/skills/sync/queue", {
+    method: "POST",
+    body: expect.stringContaining("ui-skill-sync-")
+  });
   expect(context.apiRequest).toHaveBeenCalledWith("/skills?scope=psop");
   expect(context.apiRequest).toHaveBeenCalledWith("/skills/pskill-builder");
   expect(context.apiRequest).toHaveBeenCalledWith(
@@ -425,6 +436,7 @@ test("platform methods sync, load, create, validate, and activate skill packages
   expect(createBody.resource_index[0].path).toBe("SKILL.md");
   expect(createBody.allowed_tools).toEqual(["psop.pskills.read", "psop.materials.read_analysis"]);
   expect(context.skillPackageSyncResult.package_count).toBe(1);
+  expect(context.skillPackageSyncJob.id).toBe("job-skill-sync-1");
   expect(context.currentSkillPackage.name).toBe("pskill-builder");
   expect(context.currentSkillPackage.versions.find((version) => version.id === "ver-1").validation_diagnostics).toHaveLength(1);
   expect(methods.skillPackageUsedByAgents.call(context, context.currentSkillPackage).map((agent) => agent.key)).toEqual(["pskill.builder"]);
@@ -517,20 +529,24 @@ test("platform methods search and save memory entries", async () => {
   };
   const context = {
     ...methods,
-    busy: { memoryEntries: false, memoryUpdate: false },
+    busy: { memoryEntries: false, memoryUpdate: false, memoryCompaction: false },
     memoryFilters: {
       namespace: "evaluation",
       memory_type: "episodic",
-      status: "pending_review",
+      status: "active",
       agent_key: "",
       q: "finding"
     },
     memoryEntries: [],
     currentMemoryEntry: null,
+    memoryCompactionJob: null,
     memoryEditForm: {},
     apiRequest: jest.fn(async (url) => {
       if (url === "/memory/search") {
         return [entry];
+      }
+      if (url === "/memory/compactions/queue") {
+        return { id: "job-memory-compaction-1", job_type: "memory_compaction", status: "pending" };
       }
       return updated;
     }),
@@ -546,6 +562,7 @@ test("platform methods search and save memory entries", async () => {
     tags: "finding, runtime"
   };
   await methods.saveMemoryEntry.call(context);
+  await methods.queueMemoryCompaction.call(context);
 
   expect(context.apiRequest).toHaveBeenNthCalledWith(1, "/memory/search", {
     method: "POST",
@@ -553,7 +570,7 @@ test("platform methods search and save memory entries", async () => {
       query: "finding",
       namespace: "evaluation",
       memory_type: "episodic",
-      status: "pending_review",
+      status: "active",
       agent_key: null,
       limit: 100
     })
@@ -568,7 +585,24 @@ test("platform methods search and save memory entries", async () => {
       tags: ["finding", "runtime"]
     })
   });
+  expect(context.apiRequest).toHaveBeenNthCalledWith(3, "/memory/compactions/queue", {
+    method: "POST",
+    body: expect.stringContaining("ui-memory-compaction-")
+  });
+  const compactionBody = JSON.parse(context.apiRequest.mock.calls[2][1].body);
+  expect(compactionBody).toMatchObject({
+    namespace: "evaluation",
+    memory_type: "episodic",
+    status: "active",
+    agent_key: null,
+    target_namespace: "evaluation",
+    target_memory_type: "artifact",
+    target_status: "pending_review",
+    title: "Compacted platform memory",
+    archive_source_entries: true
+  });
   expect(context.memoryEntries[0].status).toBe("active");
+  expect(context.memoryCompactionJob.id).toBe("job-memory-compaction-1");
   expect(context.currentMemoryEntry.title).toBe("Updated pattern");
   expect(methods.memorySourceLinks.call(context, context.currentMemoryEntry)).toEqual([
     {

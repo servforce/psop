@@ -1,5 +1,6 @@
 (function () {
   const {
+    buildTasksPath,
     buildPlatformAgentRunsPath,
     buildPlatformAgentRunPath,
     buildPlatformSkillsPath,
@@ -328,6 +329,23 @@
         this.showNotice("success", "Skill packages 已同步。");
       } catch (error) {
         this.showNotice("error", error.message || "Skill packages 同步失败。");
+      } finally {
+        this.busy.skillPackageAction = false;
+      }
+    },
+
+    async queueSkillPackageSync() {
+      this.busy.skillPackageAction = true;
+      try {
+        this.skillPackageSyncJob = await this.apiRequest("/skills/sync/queue", {
+          method: "POST",
+          body: JSON.stringify({
+            idempotency_key: `ui-skill-sync-${Date.now()}`
+          })
+        });
+        this.showNotice("success", "Skill package 同步任务已排队。");
+      } catch (error) {
+        this.showNotice("error", error.message || "Skill package 同步任务排队失败。");
       } finally {
         this.busy.skillPackageAction = false;
       }
@@ -765,6 +783,33 @@
       }
     },
 
+    async queueMemoryCompaction() {
+      this.busy.memoryCompaction = true;
+      try {
+        const status = this.normalizedMemoryFilter("status") || "active";
+        this.memoryCompactionJob = await this.apiRequest("/memory/compactions/queue", {
+          method: "POST",
+          body: JSON.stringify({
+            namespace: this.normalizedMemoryFilter("namespace"),
+            memory_type: this.normalizedMemoryFilter("memory_type"),
+            status,
+            agent_key: this.normalizedMemoryFilter("agent_key"),
+            target_namespace: this.normalizedMemoryFilter("namespace"),
+            target_memory_type: "artifact",
+            target_status: "pending_review",
+            title: "Compacted platform memory",
+            archive_source_entries: status === "active",
+            idempotency_key: `ui-memory-compaction-${Date.now()}`
+          })
+        });
+        this.showNotice("success", "Memory compaction 任务已排队。");
+      } catch (error) {
+        this.showNotice("error", error.message || "Memory compaction 任务排队失败。");
+      } finally {
+        this.busy.memoryCompaction = false;
+      }
+    },
+
     replaceMemoryEntry(entry) {
       if (!entry?.id) {
         return;
@@ -794,6 +839,10 @@
 
     platformAgentRunsPath() {
       return buildPlatformAgentRunsPath();
+    },
+
+    platformTasksPath() {
+      return buildTasksPath();
     },
 
     platformAgentRunPath(agentRunId) {

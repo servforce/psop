@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.types import MEMORY_COMPACTION_JOB_TYPE
 from app.memory.models import AgentMemoryEntry
@@ -10,10 +11,11 @@ from app.memory.schemas import (
     MemoryCandidate,
     MemoryEntryResponse,
     MemorySearchRequest,
+    QueueMemoryCompactionRequest,
     UpdateMemoryEntryRequest,
 )
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
-from app.pskills.models import now_utc
+from app.pskills.models import generate_uuid, now_utc
 
 
 VALID_MEMORY_TYPES = {"short_term", "semantic", "episodic", "procedural", "artifact"}
@@ -180,6 +182,42 @@ class MemoryService:
         if commit:
             session.commit()
         return [self._build_entry_response(item) for item in entries]
+
+    def enqueue_memory_compaction_job(self, session: Session, payload: QueueMemoryCompactionRequest) -> str:
+        self._validate_optional_filter("memory_type", payload.memory_type, VALID_MEMORY_TYPES)
+        self._validate_optional_filter("status", payload.status, VALID_MEMORY_STATUSES)
+        target_memory_type = payload.target_memory_type.strip() or "artifact"
+        self._validate_memory_type(target_memory_type)
+        target_status = payload.target_status.strip() or "pending_review"
+        if target_status not in VALID_MEMORY_STATUSES:
+            raise SkillValidationError("target_status 无效。", details={"target_status": target_status})
+
+        idempotency_key = self._normalize_optional(payload.idempotency_key) or generate_uuid()
+        dedupe_key = f"job:memory-compaction:{idempotency_key}"
+        existing = self.job_repository.get_runtime_job_by_dedupe_key(session, dedupe_key)
+        if existing:
+            return existing.id
+
+        job_payload = payload.model_dump(mode="json", exclude_none=True)
+        job_payload.update(
+            {
+                "operation": "memory_compaction",
+                "idempotency_key": idempotency_key,
+                "limit": max(1, min(200, int(payload.limit or 50))),
+                "target_memory_type": target_memory_type,
+                "target_status": target_status,
+                "archive_source_entries": bool(payload.archive_source_entries),
+            }
+        )
+        job = RuntimeJob(
+            job_type=MEMORY_COMPACTION_JOB_TYPE,
+            status="pending",
+            payload=job_payload,
+            dedupe_key=dedupe_key,
+        )
+        session.add(job)
+        session.commit()
+        return job.id
 
     def process_memory_compaction_job(self, session: Session, job_id: str) -> MemoryEntryResponse:
         job = self.job_repository.get_runtime_job(session, job_id)

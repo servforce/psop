@@ -49,12 +49,29 @@
         <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="resetMemoryFilters()">
           <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
         </button>
+        <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.memoryCompaction" @click="queueMemoryCompaction()">
+          <span class="material-symbols-outlined text-[18px]">compress</span>
+          <span>压缩</span>
+        </button>
         <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformToolsPath())">
           <span class="material-symbols-outlined text-[18px]">build</span>
           <span>Tools</span>
         </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" @click="navigate(platformTasksPath())">
+          <span class="material-symbols-outlined text-[18px]">fact_check</span>
+          <span>Tasks</span>
+        </button>
       </div>
     </div>
+
+    <template x-if="memoryCompactionJob">
+      <div class="shrink-0 border-b border-slate-800 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
+        <span>Memory compaction 任务已创建</span>
+        <span class="ml-3 font-mono" x-text="memoryCompactionJob.id"></span>
+        <span class="ml-3 font-mono" x-text="memoryCompactionJob.status"></span>
+        <button type="button" class="ml-3 text-sky-200 hover:text-sky-100" @click="navigate(platformTasksPath())">查看 Tasks</button>
+      </div>
+    </template>
 
     <div class="grid min-h-0 flex-1 grid-cols-1 divide-y divide-slate-800 lg:grid-cols-[minmax(24rem,0.9fr)_minmax(0,1.25fr)] lg:divide-x lg:divide-y-0">
       <section class="min-h-0 overflow-auto">

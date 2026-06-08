@@ -86,6 +86,38 @@ def rollback_proposal(
     return service.rollback(session, proposal_id)
 
 
+@router.get("/proposals/{proposal_id}/experiments", response_model=list[GovernanceExperimentResponse])
+def list_proposal_experiments(
+    proposal_id: str,
+    status: str | None = Query(default=None),
+    experiment_type: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    service: GovernanceService = Depends(get_governance_service),
+) -> list[GovernanceExperimentResponse]:
+    return service.list_experiments(
+        session,
+        proposal_id=proposal_id,
+        status=status,
+        experiment_type=experiment_type,
+    )
+
+
+@router.get("/experiments", response_model=list[GovernanceExperimentResponse])
+def list_experiments(
+    proposal_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    experiment_type: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    service: GovernanceService = Depends(get_governance_service),
+) -> list[GovernanceExperimentResponse]:
+    return service.list_experiments(
+        session,
+        proposal_id=proposal_id,
+        status=status,
+        experiment_type=experiment_type,
+    )
+
+
 @router.get("/experiments/{experiment_id}", response_model=GovernanceExperimentResponse)
 def get_experiment(
     experiment_id: str,
