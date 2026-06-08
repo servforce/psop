@@ -110,7 +110,8 @@ class SkillPackageService:
                         )
                     )
                 changed = True
-            if package.active_version_id != version.id:
+            active_version = self.repository.get_version(session, package.active_version_id)
+            if not active_version:
                 package.active_version_id = version.id
                 changed = True
         if changed:
@@ -168,24 +169,58 @@ class SkillPackageService:
 
     def activate_version(self, session: Session, package_name: str, version_id: str) -> SkillPackageDetailResponse:
         package, version = self._get_package_version(session, package_name, version_id)
+        try:
+            self._activate_version_model(session, package=package, version=version)
+        except SkillValidationError:
+            session.commit()
+            raise
+        session.commit()
+        return self.get_package(session, package_name)
+
+    def activate_version_from_tool(
+        self,
+        session: Session,
+        *,
+        package_name: str,
+        version_id: str,
+        commit: bool = True,
+    ) -> dict[str, Any]:
+        package, version = self._get_package_version(session, package_name, version_id)
+        result = self._activate_version_model(session, package=package, version=version)
+        if commit:
+            session.commit()
+        return result
+
+    def _activate_version_model(
+        self,
+        session: Session,
+        *,
+        package: SkillPackage,
+        version: SkillVersion,
+    ) -> dict[str, Any]:
         diagnostics = self._validate_version_diagnostics(package, version)
         if any(item["severity"] == "error" for item in diagnostics):
             version.validation_status = "invalid"
             version.validation_diagnostics = diagnostics
             version.updated_at = now_utc()
-            session.commit()
             raise SkillValidationError(
                 "Skill package version 校验失败，不能激活。",
-                details={"package_name": package_name, "version_id": version_id, "diagnostics": diagnostics},
+                details={"package_name": package.name, "version_id": version.id, "diagnostics": diagnostics},
             )
+        previous_version_id = package.active_version_id
         version.validation_status = self._validation_status_from_diagnostics(diagnostics)
         version.validation_diagnostics = diagnostics
         version.status = "active"
         version.activated_at = now_utc()
         package.active_version_id = version.id
         package.updated_at = now_utc()
-        session.commit()
-        return self.get_package(session, package_name)
+        session.flush()
+        return {
+            "package_name": package.name,
+            "version_id": version.id,
+            "version_label": version.version_label,
+            "previous_version_id": previous_version_id,
+        }
 
     def list_activations(self, session: Session, agent_run_id: str) -> list[SkillActivationResponse]:
         return [

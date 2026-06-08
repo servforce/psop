@@ -211,23 +211,40 @@ class AgentRunner:
         return self.agent_service._build_run_response(agent_run)
 
     def _execute_native_tool_call(self, session: Session, *, tool_call: Any) -> dict[str, Any]:
-        if tool_call.tool_name != "psop.agent_version.activate":
-            return {"result": {"authorized_execution": True}}
         arguments = tool_call.arguments_summary or {}
-        agent_key = str(arguments.get("agent_key") or "").strip()
-        version_id = str(arguments.get("version_id") or "").strip()
-        if not agent_key or not version_id:
-            raise SkillValidationError(
-                "psop.agent_version.activate 缺少 agent_key 或 version_id。",
-                details={"arguments_summary": arguments},
+        if tool_call.tool_name == "psop.agent_version.activate":
+            agent_key = str(arguments.get("agent_key") or "").strip()
+            version_id = str(arguments.get("version_id") or "").strip()
+            if not agent_key or not version_id:
+                raise SkillValidationError(
+                    "psop.agent_version.activate 缺少 agent_key 或 version_id。",
+                    details={"arguments_summary": arguments},
+                )
+            activation = self.agent_service.activate_version_from_tool(
+                session,
+                agent_key=agent_key,
+                version_id=version_id,
+                commit=False,
             )
-        activation = self.agent_service.activate_version_from_tool(
-            session,
-            agent_key=agent_key,
-            version_id=version_id,
-            commit=False,
-        )
-        return {"result": activation}
+            return {"result": activation}
+        if tool_call.tool_name == "psop.skill_version.activate":
+            package_name = str(
+                arguments.get("package_name") or arguments.get("skill_package") or arguments.get("skill_name") or ""
+            ).strip()
+            version_id = str(arguments.get("version_id") or "").strip()
+            if not package_name or not version_id:
+                raise SkillValidationError(
+                    "psop.skill_version.activate 缺少 package_name 或 version_id。",
+                    details={"arguments_summary": arguments},
+                )
+            activation = self.skill_service.activate_version_from_tool(
+                session,
+                package_name=package_name,
+                version_id=version_id,
+                commit=False,
+            )
+            return {"result": activation}
+        return {"result": {"authorized_execution": True}}
 
     def _activate_skills(self, session: Session, *, agent_run: AgentRun, spec: dict[str, Any]) -> set[str]:
         self.skill_service.sync_packages(session)

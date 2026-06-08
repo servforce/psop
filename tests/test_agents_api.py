@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from sqlalchemy import select
+
+from app.skills.models import SkillPackage, SkillVersion
 from tests.test_skills_api import create_test_client
 
 
@@ -249,3 +252,82 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
     resumed_event_types = [item["event_type"] for item in resumed_events_response.json()]
     assert "agent.runner.resumed_authorized_tool" in resumed_event_types
     assert "agent.tool_call.succeeded" in resumed_event_types
+
+
+def test_agent_runner_executes_authorized_skill_version_activation_tool() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        sync_response = client.post("/api/v1/skills/sync")
+        before_response = client.get("/api/v1/skills/pskill-builder")
+        with client.app.state.db_manager.session() as session:
+            package = session.scalar(select(SkillPackage).where(SkillPackage.name == "pskill-builder"))
+            assert package is not None
+            candidate = SkillVersion(
+                package_id=package.id,
+                version_label="tool-activation-test",
+                status="candidate",
+                content_hash="tool-activation-test-hash",
+                manifest_json={"name": "pskill-builder", "description": "Tool activation candidate."},
+                body_object_key="skills/psop/pskill-builder/SKILL.md",
+                resource_index=[
+                    {"path": "SKILL.md", "kind": "skill", "content_hash": "skill-md-hash", "size_bytes": 128},
+                    {"path": "references/tool.md", "kind": "references", "content_hash": "ref-hash", "size_bytes": 64},
+                ],
+                allowed_tools=["psop.pskills.read", "psop.materials.read", "psop.run_events.write_low"],
+                validation_status="valid",
+                validation_diagnostics=[],
+            )
+            session.add(candidate)
+            session.commit()
+            candidate_version_id = candidate.id
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "psop.governance",
+                "owner_type": "governance",
+                "owner_id": "proposal-activate-skill",
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.skill_version.activate",
+                        "side_effect_level": "high_write",
+                        "arguments_summary": {"package_name": "pskill-builder", "version_id": candidate_version_id},
+                        "expected_effect_summary": "激活新的 pskill-builder SkillVersion。",
+                        "authorization_reason": "激活 SkillVersion 会改变生产 Skill package 配置。",
+                        "reversible": True,
+                        "idempotency_key": "activate-pskill-builder-version-test",
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        first_run_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        authorization = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations").json()[0]
+        approve_response = client.post(
+            f"/api/v1/tool-authorizations/{authorization['id']}/approve",
+            json={"response_payload": {"approved_by": "tester"}},
+        )
+        resumed_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        after_response = client.get("/api/v1/skills/pskill-builder")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        executed_authorization_response = client.get(f"/api/v1/tool-authorizations/{authorization['id']}")
+
+    assert sync_response.status_code == 200
+    assert before_response.status_code == 200
+    assert before_response.json()["active_version_id"] != candidate_version_id
+    assert run_response.status_code == 201
+    assert first_run_response.json()["status"] == "waiting_tool_authorization"
+    assert authorization["tool_name"] == "psop.skill_version.activate"
+    assert approve_response.status_code == 200
+    assert resumed_response.status_code == 200
+    assert resumed_response.json()["status"] == "succeeded"
+    assert resumed_response.json()["output_payload"]["tool_result"]["result"]["version_id"] == candidate_version_id
+    assert after_response.json()["active_version_id"] == candidate_version_id
+    assert after_response.json()["active_version"]["allowed_tools"] == [
+        "psop.pskills.read",
+        "psop.materials.read",
+        "psop.run_events.write_low",
+    ]
+    assert tool_calls_response.json()[0]["result_summary"]["result"]["package_name"] == "pskill-builder"
+    assert executed_authorization_response.json()["status"] == "executed"
