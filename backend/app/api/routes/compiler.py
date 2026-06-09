@@ -38,21 +38,22 @@ router = APIRouter(prefix="/compiler", tags=["compiler"])
 
 @router.get("/requests", response_model=list[CompileRequestResponse])
 def list_compile_requests(
-    skill_id: str | None = Query(default=None),
+    pskill_id: str | None = Query(default=None),
+    skill_id: str | None = Query(default=None, deprecated=True),
     status: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: CompilerService = Depends(get_compiler_service),
 ) -> list[CompileRequestResponse]:
-    return service.list_compile_requests(session, skill_id=skill_id, status=status)
+    return service.list_compile_requests(session, pskill_id=pskill_id or skill_id, status=status)
 
 
-@router.post("/pskills/{skill_id}/compile", response_model=CompileRequestResponse, status_code=status.HTTP_202_ACCEPTED)
-def create_skill_compile_request(
-    skill_id: str,
+@router.post("/pskills/{pskill_id}/compile", response_model=CompileRequestResponse, status_code=status.HTTP_202_ACCEPTED)
+def create_pskill_compile_request(
+    pskill_id: str,
     session: Session = Depends(get_db_session),
     service: CompilerService = Depends(get_compiler_service),
 ) -> CompileRequestResponse:
-    return service.create_manual_compile_request_for_skill(session, skill_id=skill_id)
+    return service.create_manual_compile_request_for_pskill(session, pskill_id=pskill_id)
 
 
 @router.get("/requests/{compile_request_id}", response_model=CompileRequestResponse)

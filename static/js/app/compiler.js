@@ -30,7 +30,7 @@
         this.busy.compilerRequests = true;
         try {
           const [compilerRequests, skills] = await Promise.all([
-            this.apiRequest(`/compiler/requests${skillId ? `?skill_id=${encodeURIComponent(skillId)}` : ""}`),
+            this.apiRequest(`/compiler/requests${skillId ? `?pskill_id=${encodeURIComponent(skillId)}` : ""}`),
             this.apiRequest("/pskills")
           ]);
           this.compilerRequests = compilerRequests;

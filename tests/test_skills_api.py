@@ -2143,6 +2143,8 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
         compile_agent_model_calls_response = client.get(f"/api/v1/agent-runs/{compile_agent_run_id}/model-calls")
         artifact_response = client.get(f"/api/v1/compiler/artifacts/{compiled_payload['artifact_id']}")
         list_response = client.get("/api/v1/compiler/requests")
+        filtered_list_response = client.get("/api/v1/compiler/requests", params={"pskill_id": skill_id})
+        legacy_filtered_list_response = client.get("/api/v1/compiler/requests", params={"skill_id": skill_id})
         detail_response = client.get(f"/api/v1/pskills/{skill_id}")
 
     assert legacy_compile_response.status_code == 404
@@ -2177,6 +2179,10 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
     assert list_response.json()[0]["agent_run_id"] == compile_agent_run_id
     assert list_response.json()[0]["progress"]["terminal_status"] == "succeeded"
     assert list_response.json()[0]["progress"]["percent"] == 100
+    assert filtered_list_response.status_code == 200
+    assert filtered_list_response.json()[0]["id"] == compile_request_id
+    assert legacy_filtered_list_response.status_code == 200
+    assert legacy_filtered_list_response.json()[0]["id"] == compile_request_id
     assert artifact_response.status_code == 200
     assert artifact_response.json()["compile_request"]["id"] == compile_request_id
     assert artifact_response.json()["compile_request"]["agent_run_id"] == compile_agent_run_id

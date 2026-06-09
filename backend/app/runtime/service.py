@@ -139,7 +139,7 @@ class RuntimeService:
     def create_invocation(self, session: Session, payload: CreateInvocationRequest) -> InvocationResponse:
         pskill_definition = self.repository.get_pskill_definition_by_key(session, payload.skill_key)
         if not pskill_definition or pskill_definition.status == "archived":
-            raise SkillNotFoundError("未找到可调用的 Skill。", details={"skill_key": payload.skill_key})
+            raise SkillNotFoundError("未找到可调用的 PSkill。", details={"skill_key": payload.skill_key})
 
         if payload.compile_artifact_id:
             artifact = self.repository.get_artifact(session, payload.compile_artifact_id)
@@ -149,15 +149,15 @@ class RuntimeService:
                 raise SkillValidationError("指定编译产物尚不可运行。", details={"compile_artifact_id": payload.compile_artifact_id})
             pskill_version = self.repository.get_pskill_version(session, artifact.pskill_version_id)
             if not pskill_version or pskill_version.pskill_definition_id != pskill_definition.id:
-                raise SkillValidationError("指定编译产物不属于当前 Skill。", details={"compile_artifact_id": payload.compile_artifact_id})
+                raise SkillValidationError("指定编译产物不属于当前 PSkill。", details={"compile_artifact_id": payload.compile_artifact_id})
         else:
             pskill_version = self.repository.get_pskill_version(session, pskill_definition.latest_published_version_id)
             if not pskill_version or pskill_version.status != "published":
-                raise SkillValidationError("当前 Skill 尚无已发布版本，无法发起运行。")
+                raise SkillValidationError("当前 PSkill 尚无已发布版本，无法发起运行。")
 
             artifact = self.repository.get_latest_ready_artifact(session, pskill_version.id)
             if not artifact:
-                raise SkillValidationError("当前 Skill 尚无成功编译产物，无法发起运行。")
+                raise SkillValidationError("当前 PSkill 尚无成功编译产物，无法发起运行。")
         artifact_object = self.repository.get_artifact_object(session, artifact.artifact_object_id)
         artifact_payload = artifact_object.content_json if artifact_object else {}
         gateway_type = "terminal" if payload.gateway_type in {"web", "terminal"} else payload.gateway_type

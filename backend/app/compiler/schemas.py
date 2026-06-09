@@ -41,7 +41,6 @@ class CompileRequestResponse(BaseModel):
 class CompileDiagnosticResponse(BaseModel):
     id: str
     compile_request_id: str
-    skill_compile_request_id: str | None = None
     pskill_version_id: str
     severity: str
     code: str
@@ -54,7 +53,6 @@ class CompileDiagnosticResponse(BaseModel):
 class CompileArtifactResponse(BaseModel):
     id: str
     compile_request_id: str
-    skill_compile_request_id: str | None = None
     compile_request: CompileRequestResponse | None = None
     pskill_version_id: str
     artifact_object_id: str

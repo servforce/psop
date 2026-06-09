@@ -1031,7 +1031,7 @@ class AgentRunner:
             )
         definition = self._require_pskills_service().repository.get_pskill_definition_by_key(session, pskill_key)
         if not definition:
-            raise SkillNotFoundError("未找到对应的 Skill。", details={"pskill_key": pskill_key})
+            raise SkillNotFoundError("未找到对应的 PSkill。", details={"pskill_key": pskill_key})
         return definition.id
 
     @staticmethod

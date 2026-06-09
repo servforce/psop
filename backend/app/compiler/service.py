@@ -249,15 +249,15 @@ class CompilerService:
         )
         return compile_request
 
-    def create_manual_compile_request_for_skill(
+    def create_manual_compile_request_for_pskill(
         self,
         session: Session,
         *,
-        skill_id: str,
+        pskill_id: str,
     ) -> CompileRequestResponse:
-        pskill_definition = self.repository.get_pskill_definition(session, skill_id)
+        pskill_definition = self.repository.get_pskill_definition(session, pskill_id)
         if not pskill_definition:
-            raise SkillNotFoundError("未找到对应的 Skill。", details={"skill_id": skill_id})
+            raise SkillNotFoundError("未找到对应的 PSkill。", details={"pskill_id": pskill_id})
 
         pskill_version = None
         if pskill_definition.latest_published_version_id:
@@ -271,7 +271,7 @@ class CompilerService:
                 .order_by(PSkillVersion.updated_at.desc())
             )
         if not pskill_version:
-            raise SkillValidationError("当前 Skill 没有可编译的版本。", details={"skill_id": skill_id})
+            raise SkillValidationError("当前 PSkill 没有可编译的版本。", details={"pskill_id": pskill_id})
 
         source_commit_sha = pskill_version.source_commit_sha
         if not source_commit_sha and pskill_version.source_ref:
@@ -283,8 +283,8 @@ class CompilerService:
             session.flush()
         if not source_commit_sha:
             raise SkillValidationError(
-                "当前 Skill 版本缺少冻结 commit SHA，无法创建手动编译任务。",
-                details={"skill_id": skill_id, "pskill_version_id": pskill_version.id},
+                "当前 PSkill 版本缺少冻结 commit SHA，无法创建手动编译任务。",
+                details={"pskill_id": pskill_id, "pskill_version_id": pskill_version.id},
             )
 
         compile_request = PSkillCompileRequest(
@@ -469,7 +469,7 @@ class CompilerService:
                 )
             self._add_diagnostics(session, compile_request, pskill_version, [item.as_dict() for item in agent_diagnostics])
             if artifact is None:
-                error_message = agent_diagnostics[-1].message if agent_diagnostics else "Skill 编译智能体未生成合法 EG artifact。"
+                error_message = agent_diagnostics[-1].message if agent_diagnostics else "PSkill 编译智能体未生成合法 EG artifact。"
                 compile_request.status = "failed"
                 compile_request.error_message = error_message
                 compile_request.finished_at = now_utc()
@@ -668,12 +668,12 @@ class CompilerService:
         self,
         session: Session,
         *,
-        skill_id: str | None = None,
+        pskill_id: str | None = None,
         status: str | None = None,
     ) -> list[CompileRequestResponse]:
         return [
             self._build_compile_request_response(session, item)
-            for item in self.repository.list_compile_requests(session, skill_id=skill_id, status=status)
+            for item in self.repository.list_compile_requests(session, pskill_id=pskill_id, status=status)
         ]
 
     def get_compile_request(self, session: Session, compile_request_id: str) -> CompileRequestResponse:
@@ -1320,7 +1320,6 @@ class CompilerService:
         return CompileDiagnosticResponse(
             id=diagnostic.id,
             compile_request_id=diagnostic.compile_request_id,
-            skill_compile_request_id=diagnostic.compile_request_id,
             pskill_version_id=diagnostic.pskill_version_id,
             severity=diagnostic.severity,
             code=diagnostic.code,
@@ -1342,7 +1341,6 @@ class CompilerService:
         return CompileArtifactResponse(
             id=artifact.id,
             compile_request_id=artifact.compile_request_id,
-            skill_compile_request_id=artifact.compile_request_id,
             compile_request=(
                 self._build_compile_request_response(session, compile_request)
                 if compile_request

@@ -53,7 +53,7 @@ def test_api_routes_use_pskill_and_materials_naming() -> None:
     )
 
     assert violations == []
-    assert "/api/v1/compiler/pskills/{skill_id}/compile" in route_paths
+    assert "/api/v1/compiler/pskills/{pskill_id}/compile" in route_paths
     assert "/api/v1/pskills/{skill_id}/materials" in route_paths
     assert "/api/v1/runs/{run_id}/events" in route_paths
     assert "/api/v1/runs/{run_id}/terminal-session" in route_paths
@@ -99,8 +99,12 @@ def test_server_design_keeps_pskill_api_paths_distinct_from_skill_packages() -> 
     design = (PROJECT_ROOT / "docs" / "PSOP服务端详细设计v1.md").read_text(encoding="utf-8")
 
     forbidden_fragments = {
+        "  domain/",
         "/api/v1/skills/{skill_id}",
         "/api/v1/compiler/skills/",
+        "`skill_compile_request`",
+        "skill_compile_request_id",
+        "RAW_MATERIAL_",
         "/raw-materials",
         "/agent-skills",
         "raw materials",

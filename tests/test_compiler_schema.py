@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.compiler import schemas as compiler_schemas
 from app.compiler.models import ArtifactObject, EgCompileArtifact, PSkillCompileRequest
 from app.compiler.service import CompilerService
 from app.infra.database import Base, DatabaseManager
@@ -17,6 +18,13 @@ def test_compiler_tables_use_pskill_compile_request_naming() -> None:
     assert "skill_compile_request" not in tables
     assert Base.metadata.tables["eg_compile_artifact"].c.compile_request_id is not None
     assert Base.metadata.tables["compile_diagnostic"].c.compile_request_id is not None
+
+
+def test_compiler_response_models_do_not_expose_legacy_compile_request_aliases() -> None:
+    assert "skill_compile_request_id" not in compiler_schemas.CompileDiagnosticResponse.model_fields
+    assert "skill_compile_request_id" not in compiler_schemas.CompileArtifactResponse.model_fields
+    assert "compile_request_id" in compiler_schemas.CompileDiagnosticResponse.model_fields
+    assert "compile_request_id" in compiler_schemas.CompileArtifactResponse.model_fields
 
 
 def test_compiler_span_attributes_include_closed_loop_provenance() -> None:

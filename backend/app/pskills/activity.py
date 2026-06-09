@@ -33,7 +33,7 @@ class PSkillActivityService:
         if not definition:
             raise SkillNotFoundError("未找到 PSkill。", details={"skill_id": skill_id})
 
-        compile_requests = self.compiler_repository.list_compile_requests(session, skill_id=skill_id)
+        compile_requests = self.compiler_repository.list_compile_requests(session, pskill_id=skill_id)
         publishes = self.skills_repository.get_publish_records(session, skill_id)
         active = any(item.status in {"pending", "running"} for item in compile_requests) or any(
             item.publish_status in {"requested", "compiling"} for item in publishes

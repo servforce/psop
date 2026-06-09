@@ -10,8 +10,8 @@ from app.pskills.models import PSkillDefinition, PSkillVersion
 class CompilerRepository:
     """Database access for compile requests, diagnostics and EG artifacts."""
 
-    def get_pskill_definition(self, session: Session, skill_id: str) -> PSkillDefinition | None:
-        return session.get(PSkillDefinition, skill_id)
+    def get_pskill_definition(self, session: Session, pskill_id: str) -> PSkillDefinition | None:
+        return session.get(PSkillDefinition, pskill_id)
 
     def get_pskill_version(self, session: Session, version_id: str | None) -> PSkillVersion | None:
         if not version_id:
@@ -28,12 +28,12 @@ class CompilerRepository:
         self,
         session: Session,
         *,
-        skill_id: str | None = None,
+        pskill_id: str | None = None,
         status: str | None = None,
     ) -> list[PSkillCompileRequest]:
         query = select(PSkillCompileRequest).order_by(PSkillCompileRequest.requested_at.desc())
-        if skill_id:
-            query = query.where(PSkillCompileRequest.pskill_definition_id == skill_id)
+        if pskill_id:
+            query = query.where(PSkillCompileRequest.pskill_definition_id == pskill_id)
         if status:
             query = query.where(PSkillCompileRequest.status == status)
         return list(session.scalars(query).all())

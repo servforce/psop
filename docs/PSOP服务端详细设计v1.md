@@ -86,13 +86,20 @@ backend/app/
     config.py            PSOP_* 配置
     logging.py           日志与上下文
     observability.py     OTel 配置和 helper
-  domain/
-    skills/              Skill、GitLab source、发布、素材、素材生成
-    compiler/            编译请求、formal-v5 校验、EG artifact
-    runtime/             Invocation、Run、Session Token、Terminal、Replay
-    jobs/                共享 runtime_job 队列、worker、进度 read model
-    skill_tests/         黑盒时序测试、driver、judge、fork
-    agent_prompts/       Prompt Pack 定义、版本、binding
+  pskills/               PSkill、GitLab source、发布、素材、素材生成
+  compiler/              编译请求、formal-v5 校验、EG artifact
+  runtime/               Invocation、Run、Session Token、RunEvent、RunTrace、Replay
+  jobs/                  共享 runtime_job 队列、worker、进度 read model
+  testing/               黑盒时序测试、driver、judge、fork
+  agent_prompts/         Prompt Pack 定义、版本、binding
+  agents/                AgentDefinition、AgentVersion、AgentRun、AgentEvent 和工具授权
+  agent_harness/         AgentRunner、model/skills/tools/memory/planning/guardrails 适配
+  skills/                Skill Package 同步和版本管理
+  tools/                 Tool registry、ToolPolicy 和 tool call read model
+  memory/                Agent memory 检索、写入候选和压缩
+  evaluations/           Run evaluation report 和 finding
+  governance/            PSOP improvement proposal / experiment
+  observability/         平台指标、运行时事实和排障 read model
   gateway/
     gitlab.py            GitLab API adapter
     inference.py         OpenAI-compatible LLM adapter
@@ -114,7 +121,7 @@ backend/app/
 | Database | `DATABASE_URL` 或 `DATABASE_HOST/PORT/NAME/USER/PASSWORD`、`DATABASE_CHECK_ON_STARTUP`、`DATABASE_AUTO_CREATE_SCHEMA` |
 | GitLab | `GITLAB_API_BASE_URL`、`GITLAB_TOKEN`、`GITLAB_SKILLS_GROUP_PATH`、`GITLAB_DEFAULT_BRANCH`、`GITLAB_TIMEOUT_SECONDS` |
 | Object Store | `OBJECT_STORE_ENDPOINT`、`OBJECT_STORE_ACCESS_KEY`、`OBJECT_STORE_SECRET_KEY`、`OBJECT_STORE_BUCKET`、`OBJECT_STORE_REGION`、`OBJECT_STORE_SECURE` |
-| Upload / Media | `TEST_DATA_MAX_UPLOAD_BYTES`、`RAW_MATERIAL_MAX_UPLOAD_BYTES`、`RAW_MATERIAL_VIDEO_MAX_UPLOAD_BYTES`、`RAW_MATERIAL_EXTRACT_TEXT_MAX_CHARS`、`VIDEO_MAX_ANALYZED_FRAMES` |
+| Upload / Media | `TEST_DATA_MAX_UPLOAD_BYTES`、`MATERIAL_MAX_UPLOAD_BYTES`、`MATERIAL_VIDEO_MAX_UPLOAD_BYTES`、`MATERIAL_EXTRACT_TEXT_MAX_CHARS`、`MATERIAL_URL_TIMEOUT_SECONDS`、`VIDEO_MAX_ANALYZED_FRAMES` |
 | OTel | `OTEL_ENABLED`、`OTEL_TRACES_ENABLED`、`OTEL_LOGS_ENABLED`、`OTEL_CONSOLE_EXPORTER`、`OTEL_EXPORTER_OTLP_ENDPOINT`、`OTEL_EXPORTER_OTLP_PROTOCOL`、`OTEL_SERVICE_NAME` |
 | LLM | `LLM_PROVIDER`、`LLM_API_BASE_URL`、`LLM_API_KEY`、`LLM_TEXT_MODEL`、`LLM_MULTIMODAL_MODEL`、thinking 相关字段、`LLM_TIMEOUT_SECONDS` |
 | ASR | `ASR_API_BASE_URL`、`ASR_LANGUAGE`、`ASR_TIMEOUT_SECONDS`、`ASR_TEMPERATURE` |
@@ -297,10 +304,10 @@ Claim 规则：
 
 | 表 | 关键字段 | 说明 |
 | --- | --- | --- |
-| `skill_compile_request` | `pskill_definition_id`、`pskill_version_id`、`trigger_type`、`source_commit_sha`、`status`、`dedupe_key` | 编译请求 |
+| `pskill_compile_request` | `pskill_definition_id`、`pskill_version_id`、`trigger_type`、`source_commit_sha`、`status`、`dedupe_key` | 编译请求 |
 | `artifact_object` | `bucket`、`object_key`、`media_type`、`size_bytes`、`checksum`、`content_json` | 统一对象索引；JSON artifact 当前直接保存在 `content_json` |
-| `eg_compile_artifact` | `skill_compile_request_id`、`pskill_version_id`、`artifact_object_id`、`formal_revision`、`artifact_version`、`graph_summary`、`capability_summary`、`status` | Runtime 正式执行输入索引 |
-| `compile_diagnostic` | `skill_compile_request_id`、`pskill_version_id`、`severity`、`code`、`message`、`location`、`category` | 编译诊断 |
+| `eg_compile_artifact` | `compile_request_id`、`pskill_version_id`、`artifact_object_id`、`formal_revision`、`artifact_version`、`graph_summary`、`capability_summary`、`status` | Runtime 正式执行输入索引 |
+| `compile_diagnostic` | `compile_request_id`、`pskill_version_id`、`severity`、`code`、`message`、`location`、`category` | 编译诊断 |
 
 ### 8.3 Runtime / Terminal / Replay
 
@@ -375,8 +382,8 @@ Claim 规则：
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/v1/compiler/requests` | 编译请求列表；支持 `skill_id`、`status`；每项包含 progress 摘要、`agent_run_id` 和 `artifact_id` |
-| `POST` | `/api/v1/compiler/pskills/{skill_id}/compile` | 手动创建编译请求 |
+| `GET` | `/api/v1/compiler/requests` | 编译请求列表；支持 `pskill_id`、`status`；兼容 deprecated `skill_id`；每项包含 progress 摘要、`agent_run_id` 和 `artifact_id` |
+| `POST` | `/api/v1/compiler/pskills/{pskill_id}/compile` | 手动创建编译请求 |
 | `GET` | `/api/v1/compiler/requests/{compile_request_id}` | 编译请求详情 |
 | `POST` | `/api/v1/compiler/requests/{compile_request_id}/retry` | 同步重试该请求 |
 | `GET` | `/api/v1/compiler/requests/{compile_request_id}/progress` | 发布/编译进度快照 |
