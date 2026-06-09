@@ -741,8 +741,20 @@ def test_agent_runner_tool_authorization_request_broadcasts_run_live_and_global_
                 run_once_response = client.post(f"/api/v1/agent-runs/{agent_run['id']}/run-once")
                 request_run_ws_message = run_ws.receive_json()
                 request_tool_authorization_ws_message = tool_authorization_ws.receive_json()
+                authorization = client.get(f"/api/v1/agent-runs/{agent_run['id']}/tool-authorizations").json()[0]
+                approve_response = client.post(
+                    f"/api/v1/tool-authorizations/{authorization['id']}/approve",
+                    json={"response_payload": {"approved_by": "tester"}},
+                )
+                approved_run_ws_message = run_ws.receive_json()
+                approved_tool_authorization_ws_message = tool_authorization_ws.receive_json()
+                executed_tool_authorization_ws_message = tool_authorization_ws.receive_json()
+                executed_run_ws_message = run_ws.receive_json()
         authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run['id']}/tool-authorizations")
         authorization = authorizations_response.json()[0]
+        resumed_agent_run_response = client.get(f"/api/v1/agent-runs/{agent_run['id']}")
+        run_events_response = client.get(f"/api/v1/runs/{run_id}/events")
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
 
     assert invocation_response.status_code == 201
     assert agent_run_response.status_code == 201
@@ -761,6 +773,42 @@ def test_agent_runner_tool_authorization_request_broadcasts_run_live_and_global_
     assert request_tool_authorization_ws_message["run_id"] == run_id
     assert request_tool_authorization_ws_message["agent_run_id"] == agent_run["id"]
     assert request_tool_authorization_ws_message["payload"]["tool_name"] == "psop.agent_version.activate"
+
+    assert approve_response.status_code == 200
+    assert approve_response.json()["status"] == "executed"
+    assert authorizations_response.json()[0]["status"] == "executed"
+    assert resumed_agent_run_response.json()["status"] == "failed"
+    assert resumed_agent_run_response.json()["error_message"] == "未找到 AgentVersion。"
+
+    assert approved_run_ws_message["event_type"] == "run.event.appended"
+    assert approved_run_ws_message["payload"]["event_kind"] == "tool_authorization_response"
+    assert approved_run_ws_message["payload"]["payload_inline"]["decision"] == "approved"
+    assert approved_run_ws_message["payload"]["source_ref"]["authorization_id"] == authorization["id"]
+    assert approved_tool_authorization_ws_message["event_type"] == "tool.authorization_approved"
+    assert approved_tool_authorization_ws_message["authorization_id"] == authorization["id"]
+
+    assert executed_tool_authorization_ws_message["event_type"] == "tool.authorization_executed"
+    assert executed_tool_authorization_ws_message["authorization_id"] == authorization["id"]
+    assert executed_tool_authorization_ws_message["payload"]["status"] == "executed"
+    assert executed_run_ws_message["event_type"] == "run.event.appended"
+    assert executed_run_ws_message["payload"]["event_kind"] == "tool_authorization_response"
+    assert executed_run_ws_message["payload"]["payload_inline"]["decision"] == "executed"
+    assert executed_run_ws_message["payload"]["payload_inline"]["execution_status"] == "failed"
+    assert executed_run_ws_message["payload"]["source_ref"]["authorization_id"] == authorization["id"]
+
+    run_response_events = [
+        event for event in run_events_response.json() if event["event_kind"] == "tool_authorization_response"
+    ]
+    response_payloads = [event["payload_inline"] for event in run_response_events if event["source_ref"]["authorization_id"] == authorization["id"]]
+    assert [payload["decision"] for payload in response_payloads] == ["approved", "executed"]
+    assert response_payloads[1]["execution_status"] == "failed"
+    replay_response_payloads = [
+        event["payload_inline"]
+        for event in replay_response.json()["run_events"]
+        if event["event_kind"] == "tool_authorization_response"
+        and event["source_ref"]["authorization_id"] == authorization["id"]
+    ]
+    assert [payload["decision"] for payload in replay_response_payloads] == ["approved", "executed"]
 
 
 def test_runtime_cancel_cancels_open_tool_authorizations_and_agent_run() -> None:

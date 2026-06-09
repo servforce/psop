@@ -37,6 +37,8 @@ from app.pskills.service import SkillsService
 from app.runtime.service import RuntimeService
 from app.runtime.websocket import (
     TOOL_AUTHORIZATION_WS_CHANNEL,
+    run_event_ws_message,
+    run_ws_hub,
     tool_authorization_ws_hub,
     tool_authorization_ws_message,
 )
@@ -417,7 +419,7 @@ class AgentRunner:
                 commit=False,
             )
             if authorization:
-                self._append_tool_authorization_executed_event(
+                executed_run_event_id = self._append_tool_authorization_executed_event(
                     session,
                     agent_run=agent_run,
                     tool_call=tool_call,
@@ -437,7 +439,11 @@ class AgentRunner:
             )
             session.commit()
             if authorization:
-                self._broadcast_tool_authorization_executed(authorization)
+                self._broadcast_tool_authorization_executed(
+                    session,
+                    authorization,
+                    run_event_id=executed_run_event_id,
+                )
             return self.agent_service._build_run_response(agent_run)
         tool_call.status = "succeeded"
         tool_call.result_summary = {
@@ -469,7 +475,7 @@ class AgentRunner:
             commit=False,
         )
         if authorization:
-            self._append_tool_authorization_executed_event(
+            executed_run_event_id = self._append_tool_authorization_executed_event(
                 session,
                 agent_run=agent_run,
                 tool_call=tool_call,
@@ -489,18 +495,63 @@ class AgentRunner:
         )
         session.commit()
         if authorization:
-            self._broadcast_tool_authorization_executed(authorization)
+            self._broadcast_tool_authorization_executed(
+                session,
+                authorization,
+                run_event_id=executed_run_event_id,
+            )
         return self.agent_service._build_run_response(agent_run)
 
-    def _broadcast_tool_authorization_executed(self, authorization: AgentToolAuthorization) -> None:
-        response = self.agent_service._build_tool_authorization_response(authorization)
-        message = tool_authorization_ws_message(response, action="executed")
+    def _broadcast_tool_authorization_executed(
+        self,
+        session: Session,
+        authorization: AgentToolAuthorization,
+        *,
+        run_event_id: str | None,
+    ) -> None:
+        messages = [
+            (
+                tool_authorization_ws_hub,
+                TOOL_AUTHORIZATION_WS_CHANNEL,
+                tool_authorization_ws_message(
+                    self.agent_service._build_tool_authorization_response(authorization),
+                    action="executed",
+                ),
+            )
+        ]
+        run_event_message = self._tool_authorization_executed_run_event_message(
+            session,
+            authorization=authorization,
+            run_event_id=run_event_id,
+        )
+        if run_event_message and authorization.run_id:
+            messages.append((run_ws_hub, authorization.run_id, run_event_message))
+
+        async def _broadcast_all() -> None:
+            for hub, channel, message in messages:
+                await hub.broadcast(channel, message)
+
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(tool_authorization_ws_hub.broadcast(TOOL_AUTHORIZATION_WS_CHANNEL, message))
+            asyncio.run(_broadcast_all())
         else:
-            loop.create_task(tool_authorization_ws_hub.broadcast(TOOL_AUTHORIZATION_WS_CHANNEL, message))
+            loop.create_task(_broadcast_all())
+
+    def _tool_authorization_executed_run_event_message(
+        self,
+        session: Session,
+        *,
+        authorization: AgentToolAuthorization,
+        run_event_id: str | None,
+    ) -> dict[str, Any] | None:
+        if not authorization.run_id or not run_event_id:
+            return None
+        try:
+            run_event = self.runtime_service.get_run_event(session, authorization.run_id, run_event_id)
+        except Exception:
+            return None
+        return run_event_ws_message(authorization.run_id, run_event)
 
     def _append_tool_authorization_executed_event(
         self,
@@ -511,7 +562,7 @@ class AgentRunner:
         authorization: AgentToolAuthorization,
         execution_status: str,
         details: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
         self.agent_service.append_event(
             session,
             agent_run.id,
@@ -529,6 +580,12 @@ class AgentRunner:
                 },
             ),
             commit=False,
+        )
+        return self.agent_service.run_tool_authorization_events.append_executed_event(
+            session,
+            authorization,
+            execution_status=execution_status,
+            details=details or {},
         )
 
     def _execute_native_tool_call(self, session: Session, *, tool_call: Any) -> dict[str, Any]:

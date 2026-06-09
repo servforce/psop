@@ -110,6 +110,37 @@ class RunToolAuthorizationEventWriter:
         )
         return event.id if event else None
 
+    def append_executed_event(
+        self,
+        session: Session,
+        authorization: Any,
+        *,
+        execution_status: str,
+        details: dict[str, Any] | None = None,
+    ) -> str | None:
+        event = self._append_event(
+            session,
+            authorization=authorization,
+            event_kind="tool_authorization_response",
+            external_event_id=f"tool-authorization:{authorization.id}:executed",
+            payload={
+                "authorization_id": authorization.id,
+                "agent_run_id": authorization.agent_run_id,
+                "agent_tool_call_id": authorization.agent_tool_call_id,
+                "tool_name": authorization.tool_name,
+                "tool_provider": authorization.tool_provider,
+                "side_effect_level": authorization.side_effect_level,
+                "risk_level": authorization.risk_level,
+                "decision": "executed",
+                "status": authorization.status,
+                "execution_status": execution_status,
+                "executed_at": authorization.executed_at.isoformat() if authorization.executed_at else None,
+                "request_run_event_id": authorization.run_event_id,
+                "details": details or {},
+            },
+        )
+        return event.id if event else None
+
     def _append_event(
         self,
         session: Session,

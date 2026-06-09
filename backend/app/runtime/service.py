@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agent_harness.guardrails import InputGuardrail
 from app.agents.models import AgentEvent, AgentModelCall, AgentRun, AgentToolAuthorization, AgentToolCall
 from app.agents.schemas import (
     AgentEventResponse,
@@ -96,6 +97,7 @@ class RuntimeService:
         job_repository: JobRepository | None = None,
         agent_prompt_service: AgentPromptService | None = None,
         agent_service: AgentService | None = None,
+        input_guardrail: InputGuardrail | None = None,
         object_store: ObjectStoreService | None = None,
     ) -> None:
         self.settings = settings
@@ -104,6 +106,7 @@ class RuntimeService:
         self.job_repository = job_repository or JobRepository()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
         self.agent_service = agent_service or AgentService()
+        self.input_guardrail = input_guardrail or InputGuardrail()
         self.object_store = object_store
 
     def create_invocation(self, session: Session, payload: CreateInvocationRequest) -> InvocationResponse:
@@ -2529,20 +2532,37 @@ class RuntimeService:
                 if attachments
                 else artifact_payload.get("capability_summary", {}).get("llm_route_key", TEXT_ROUTE_KEY)
             )
-            input_summary = self._llm_prompt_summary(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                route_key=route_key,
-                agent_prompt=prompt_metadata,
-            )
             input_parts = self._llm_attachment_summary(attachments)
             agent_run_id = self._create_runtime_agent_run(
                 session,
                 run=run,
                 node=node,
                 token=token,
+                input_parts=input_parts,
+                agent_prompt=prompt_metadata,
+            )
+            skill_context = self._hydrate_runtime_agent_skill_context(
+                session,
+                agent_run_id=agent_run_id,
+            )
+            system_prompt, user_prompt = self._append_runtime_agent_skill_context_to_prompts(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                skill_context=skill_context,
+            )
+            input_summary = self._llm_prompt_summary(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                route_key=route_key,
+                agent_prompt=prompt_metadata,
+            )
+            self._update_runtime_agent_run_prompt_context(
+                session,
+                agent_run_id=agent_run_id,
                 input_summary=input_summary,
                 input_parts=input_parts,
+                agent_prompt=prompt_metadata,
+                skill_context=skill_context,
             )
             try:
                 with start_span(
@@ -2577,6 +2597,8 @@ class RuntimeService:
                     route_key=route_key,
                     input_summary=input_summary,
                     input_parts=input_parts,
+                    agent_prompt=prompt_metadata,
+                    skill_context=skill_context,
                     error_payload=error_payload,
                 )
                 self._mark_runtime_agent_failed(
@@ -2626,6 +2648,8 @@ class RuntimeService:
                 node=node,
                 route_key=route_key,
                 observation=observation,
+                agent_prompt=prompt_metadata,
+                skill_context=skill_context,
             )
             self._mark_runtime_agent_succeeded(
                 session,
@@ -2666,8 +2690,8 @@ class RuntimeService:
         run: Run,
         node: dict[str, Any],
         token: dict[str, Any],
-        input_summary: dict[str, Any],
         input_parts: list[dict[str, Any]],
+        agent_prompt: dict[str, Any] | None,
     ) -> str:
         agent_run = self.agent_service.create_run(
             session,
@@ -2682,13 +2706,46 @@ class RuntimeService:
                     "compile_artifact_id": run.compile_artifact_id,
                     "node": self._runtime_agent_node_payload(node),
                     "runtime_context": self._runtime_agent_context_payload(run=run, token=token),
-                    "input_summary": input_summary,
                     "input_parts": input_parts,
+                    "agent_prompt": dict(agent_prompt or {}),
+                    "skill_context": [],
                 },
             ),
             commit=False,
         )
         agent_run_model = self.agent_service.get_run_model(session, agent_run.id)
+        input_guardrail_result = self.input_guardrail.check(
+            agent_key=agent_run_model.agent_key,
+            input_payload=agent_run_model.input_payload,
+        )
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="agent.input_guardrail.checked",
+                phase="guardrails",
+                payload=input_guardrail_result.as_event_payload(),
+            ),
+            commit=False,
+        )
+        if not input_guardrail_result.passed:
+            agent_run_model.status = "failed"
+            agent_run_model.error_message = "input_guardrail_failed"
+            agent_run_model.ended_at = now_utc()
+            self.agent_service.append_event(
+                session,
+                agent_run.id,
+                AppendAgentEventRequest(
+                    event_type="agent.input_guardrail.failed",
+                    phase="guardrails",
+                    payload={"findings": [item.as_dict() for item in input_guardrail_result.findings]},
+                ),
+                commit=False,
+            )
+            raise SkillValidationError(
+                "Runtime AgentRun 输入未通过输入护栏。",
+                details={"agent_run_id": agent_run.id, "findings": input_guardrail_result.as_event_payload()},
+            )
         agent_run_model.status = "running"
         agent_run_model.started_at = agent_run_model.started_at or now_utc()
         self.agent_service.append_event(
@@ -2707,6 +2764,78 @@ class RuntimeService:
             commit=False,
         )
         return agent_run.id
+
+    def _hydrate_runtime_agent_skill_context(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+    ) -> list[dict[str, Any]]:
+        skill_context = self.agent_service.skill_service.hydrate_agent_run_skill_context(
+            session,
+            agent_run_id=agent_run_id,
+        )
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="agent.skills.hydrated",
+                phase="skills",
+                payload={
+                    "skill_context_count": len(skill_context),
+                    "package_names": [str(item.get("package_name") or "") for item in skill_context],
+                    "content_hashes": {
+                        str(item.get("package_name") or ""): str(item.get("content_hash") or "")
+                        for item in skill_context
+                        if item.get("package_name")
+                    },
+                    "reference_counts": {
+                        str(item.get("package_name") or ""): len(item.get("references") or [])
+                        for item in skill_context
+                        if item.get("package_name")
+                    },
+                },
+            ),
+            commit=False,
+        )
+        return skill_context
+
+    @staticmethod
+    def _append_runtime_agent_skill_context_to_prompts(
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        skill_context: list[dict[str, Any]],
+    ) -> tuple[str, str]:
+        if not skill_context:
+            return system_prompt, user_prompt
+        context_json = json.dumps(skill_context, ensure_ascii=False, sort_keys=True)
+        context_prompt = "\n".join(
+            [
+                "PSOP Runner Skill Package Context:",
+                context_json,
+                "以上 Skill package context 只能作为 pskill.runner 的过程规程和能力边界；正式运行状态只能来自 Session Token、RunEvent 和 RunTrace。",
+            ]
+        )
+        return system_prompt, f"{user_prompt}\n\n{context_prompt}"
+
+    def _update_runtime_agent_run_prompt_context(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        input_summary: dict[str, Any],
+        input_parts: list[dict[str, Any]],
+        agent_prompt: dict[str, Any] | None,
+        skill_context: list[dict[str, Any]],
+    ) -> None:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        payload = dict(agent_run.input_payload or {})
+        payload["input_summary"] = input_summary
+        payload["input_parts"] = input_parts
+        payload["agent_prompt"] = dict(agent_prompt or {})
+        payload["skill_context"] = skill_context
+        agent_run.input_payload = payload
 
     def _mark_runtime_agent_succeeded(
         self,
@@ -2774,6 +2903,8 @@ class RuntimeService:
         route_key: str,
         input_summary: dict[str, Any],
         input_parts: list[dict[str, Any]],
+        agent_prompt: dict[str, Any] | None,
+        skill_context: list[dict[str, Any]],
         error_payload: dict[str, Any],
     ) -> AgentModelCallResponse:
         error_details = error_payload.get("error_details") if isinstance(error_payload.get("error_details"), dict) else {}
@@ -2788,6 +2919,8 @@ class RuntimeService:
                 "node": self._runtime_agent_node_payload(node),
                 "input_summary": input_summary,
                 "input_parts": input_parts,
+                "agent_prompt": dict(agent_prompt or {}),
+                "skill_context": skill_context,
             },
             response_payload={
                 "schema": "RuntimeAgentObservation",
@@ -2807,6 +2940,8 @@ class RuntimeService:
         node: dict[str, Any],
         route_key: str,
         observation: dict[str, Any],
+        agent_prompt: dict[str, Any] | None,
+        skill_context: list[dict[str, Any]],
     ) -> None:
         self.agent_service.record_model_call(
             session,
@@ -2819,6 +2954,8 @@ class RuntimeService:
                 "node": self._runtime_agent_node_payload(node),
                 "input_summary": observation.get("input_summary") if isinstance(observation.get("input_summary"), dict) else {},
                 "input_parts": observation.get("input_parts") if isinstance(observation.get("input_parts"), list) else [],
+                "agent_prompt": dict(agent_prompt or {}),
+                "skill_context": skill_context,
             },
             response_payload=self._runtime_agent_observation_payload(node=node, observation=observation),
             usage_json=dict(observation.get("usage") or {}),
@@ -2937,19 +3074,14 @@ class RuntimeService:
         runtime_contract = artifact_payload.get("runtime_contract", {}) if isinstance(artifact_payload.get("runtime_contract"), dict) else {}
         skill = artifact_payload.get("skill", {}) if isinstance(artifact_payload.get("skill"), dict) else {}
         skill_instruction = str(runtime_contract.get("skill_instruction") or "")
-        prompt_metadata = None
-        if projection.get("system_template") and projection.get("user_template"):
-            system_template = str(projection.get("system_template") or "")
-            user_template = str(projection.get("user_template") or "")
-        else:
-            prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
-                session,
-                usage_key="pskill.run.node",
-                fallback_ref="runtime_execution/llm_node_fallback/v1",
-            )
-            system_template = str(projection.get("system_template") or prompt_pack.system_prompt)
-            user_template = str(projection.get("user_template") or prompt_pack.files.get("user_template.md") or "")
-            prompt_metadata = prompt_pack.metadata()
+        prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
+            session,
+            usage_key="pskill.run.node",
+            fallback_ref="runtime_execution/llm_node_fallback/v1",
+        )
+        system_template = str(projection.get("system_template") or prompt_pack.system_prompt)
+        user_template = str(projection.get("user_template") or prompt_pack.files.get("user_template.md") or "")
+        prompt_metadata = prompt_pack.metadata()
         context = {
             "token": token,
             "input": token.get("input_envelope", {}),

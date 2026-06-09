@@ -730,14 +730,54 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert all(item.input_payload["runtime_context"]["latest_snapshot_seq"] >= 0 for item in runner_runs)
     assert all("latest_run_event" in item.input_payload["runtime_context"] for item in runner_runs)
     assert all(
-        {"agent.run.created", "runtime.node.started", "runtime.agent.model_call.completed", "runtime.agent.observation.returned"}
+        {
+            "agent.run.created",
+            "agent.input_guardrail.checked",
+            "agent.skills.hydrated",
+            "runtime.node.started",
+            "runtime.agent.model_call.completed",
+            "runtime.agent.observation.returned",
+        }
         <= {event.event_type for event in runner_events_by_run[item.id]}
         for item in runner_runs
     )
+    assert all(
+        next(event for event in runner_events_by_run[item.id] if event.event_type == "agent.input_guardrail.checked").payload[
+            "passed"
+        ]
+        is True
+        for item in runner_runs
+    )
+    assert all(
+        "pskill-runner-field-assistant"
+        in next(event for event in runner_events_by_run[item.id] if event.event_type == "agent.skills.hydrated").payload[
+            "package_names"
+        ]
+        for item in runner_runs
+    )
     assert all(calls and calls[0].provider == "llm_inference_gateway" for calls in runner_model_calls_by_run.values())
+    assert all(
+        calls[0].request_payload["agent_prompt"]["definition_key"] == "runtime_execution.llm_node_fallback"
+        for calls in runner_model_calls_by_run.values()
+    )
+    assert all(
+        "pskill-runner-field-assistant"
+        in {item["package_name"] for item in calls[0].request_payload["skill_context"]}
+        for calls in runner_model_calls_by_run.values()
+    )
+    assert all(
+        run.input_payload["agent_prompt"]["definition_key"] == "runtime_execution.llm_node_fallback"
+        for run in runner_runs
+    )
+    assert all(
+        "pskill-runner-field-assistant" in {item["package_name"] for item in run.input_payload["skill_context"]}
+        for run in runner_runs
+    )
     assert all("平台级输出语言要求" in call["system_prompt"] for call in runtime_llm_calls)
     assert all("JSON 字段名和 decision/next_phase 等协议枚举值保持英文协议值" in call["system_prompt"] for call in runtime_llm_calls)
     assert all("reason、terminal_message、final_response、summary" in call["system_prompt"] for call in runtime_llm_calls)
+    assert all("PSOP Runner Skill Package Context" in call["user_prompt"] for call in runtime_llm_calls)
+    assert all("正式运行状态只能来自 Session Token、RunEvent 和 RunTrace" in call["user_prompt"] for call in runtime_llm_calls)
     assert all("legacy-user-prompt" not in call["user_prompt"] for call in inference_gateway.calls[1:])
     llm_trace_payloads = [
         event.payload for event in run_traces if event.event_type == "gateway.inference.completed"
@@ -1135,6 +1175,10 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
     assert failed_model_call.status == "failed"
     assert failed_model_call.error_message == "LLM provider unavailable"
     assert failed_model_call.request_payload["node"]["id"] == "instruct_collect_context"
+    assert failed_model_call.request_payload["agent_prompt"]["definition_key"] == "runtime_execution.llm_node_fallback"
+    assert "pskill-runner-field-assistant" in {
+        item["package_name"] for item in failed_model_call.request_payload["skill_context"]
+    }
     assert failed_model_call.response_payload["error"] == "LLM provider unavailable"
     assert any(
         item.event_type == "runtime.agent.failed"
