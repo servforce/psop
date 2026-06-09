@@ -130,7 +130,8 @@ test("observability methods load global metrics with the selected window", async
       finding_category_counts: { runner_issue: 1 }
     },
     governance: {
-      status_counts: { canary: 1 },
+      activated_proposal_count: 1,
+      status_counts: { activated: 1, canary: 1 },
       proposal_type_counts: { agent_skill_update: 1 }
     },
     open_telemetry: { configured: true }
@@ -180,6 +181,9 @@ test("observability methods load global metrics with the selected window", async
   expect(methods.observabilityGovernanceProposalsPath({ status: "canary" })).toBe(
     "/admin/governance/proposals?status=canary"
   );
+  expect(methods.observabilityGovernanceProposalsPath({ status: "activated" })).toBe(
+    "/admin/governance/proposals?status=activated"
+  );
   expect(methods.observabilityGovernanceExperimentsPath()).toBe("/admin/governance/experiments");
   expect(methods.observabilityGovernanceExperimentsPath({ status: "running" })).toBe(
     "/admin/governance/experiments?status=running"
@@ -187,7 +191,7 @@ test("observability methods load global metrics with the selected window", async
   expect(methods.observabilityEvaluationOutcomeOptions.call(context)).toEqual(["failed"]);
   expect(methods.observabilityFindingStatusOptions.call(context)).toEqual(["open"]);
   expect(methods.observabilityFindingCategoryOptions.call(context)).toEqual(["runner_issue"]);
-  expect(methods.observabilityGovernanceStatusOptions.call(context)).toEqual(["canary"]);
+  expect(methods.observabilityGovernanceStatusOptions.call(context)).toEqual(["activated", "canary"]);
   expect(methods.observabilityGovernanceTypeOptions.call(context)).toEqual(["agent_skill_update"]);
 });
 
@@ -988,6 +992,7 @@ test("observability page exposes linked distribution filters", () => {
   expect(html).toContain("observabilityEvaluationFindingsPath({ category: item.key })");
   expect(html).toContain("observabilityGovernanceProposalsPath({ status: item.key })");
   expect(html).toContain("observabilityGovernanceExperimentsPath({ status: item.key })");
+  expect(html).toContain("activated_proposal_count");
   expect(html).toContain("selectObservabilityTraceEventType(item.key)");
   expect(html).toContain("observabilityRunReplayPath(trace)");
   expect(html).toContain("trace.trace_id");

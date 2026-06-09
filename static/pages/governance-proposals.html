@@ -133,6 +133,10 @@
                   <span class="material-symbols-outlined text-[18px]">rocket_launch</span>
                   <span>灰度</span>
                 </button>
+                <button type="button" class="button-secondary h-9 px-3" :disabled="busy.governanceProposalAction || !governanceCanActivate(currentGovernanceProposal)" @click="activateGovernanceProposal(currentGovernanceProposal)">
+                  <span class="material-symbols-outlined text-[18px]">published_with_changes</span>
+                  <span>激活</span>
+                </button>
                 <button type="button" class="button-danger h-9 px-3" :disabled="busy.governanceProposalAction || !governanceCanRollback(currentGovernanceProposal)" @click="rollbackGovernanceProposal(currentGovernanceProposal)">
                   <span class="material-symbols-outlined text-[18px]">settings_backup_restore</span>
                   <span>回滚</span>

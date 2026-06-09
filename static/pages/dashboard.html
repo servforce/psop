@@ -157,7 +157,7 @@
                   </button>
                 </div>
               </div>
-              <div class="mt-4 grid grid-cols-4 gap-3 text-xs">
+              <div class="mt-4 grid grid-cols-2 gap-3 text-xs lg:grid-cols-5">
                 <button type="button" class="min-w-0 rounded-md px-2 py-1 text-left transition hover:bg-slate-950/40" @click="navigate(dashboardGovernanceProposalsPath())">
                   <p class="text-slate-500">Open</p>
                   <p class="mt-1 font-mono text-2xl font-semibold text-slate-100 tabular-nums" x-text="dashboardNumber(dashboardMetrics.governance.open_proposal_count)"></p>
@@ -169,6 +169,10 @@
                 <button type="button" class="min-w-0 rounded-md px-2 py-1 text-left transition hover:bg-slate-950/40" @click="navigate(dashboardGovernanceProposalsPath({ status: 'canary' }))">
                   <p class="text-slate-500">Canary</p>
                   <p class="mt-1 font-mono text-2xl font-semibold text-amber-200 tabular-nums" x-text="dashboardNumber(dashboardMetrics.governance.canary_proposal_count)"></p>
+                </button>
+                <button type="button" class="min-w-0 rounded-md px-2 py-1 text-left transition hover:bg-slate-950/40" @click="navigate(dashboardGovernanceProposalsPath({ status: 'activated' }))">
+                  <p class="text-slate-500">Activated</p>
+                  <p class="mt-1 font-mono text-2xl font-semibold text-emerald-200 tabular-nums" x-text="dashboardNumber(dashboardMetrics.governance.activated_proposal_count)"></p>
                 </button>
                 <button type="button" class="min-w-0 rounded-md px-2 py-1 text-left transition hover:bg-slate-950/40" @click="navigate(dashboardGovernanceProposalsPath({ status: 'rolled_back' }))">
                   <p class="text-slate-500">Rollback</p>

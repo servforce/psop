@@ -526,6 +526,84 @@ class GovernanceService:
         session.commit()
         return self.get_proposal(session, proposal.id)
 
+    def activate(self, session: Session, proposal_id: str) -> GovernanceProposalResponse:
+        proposal = self._get_proposal(session, proposal_id)
+        self._require_status(proposal, {"canary"}, action="activate")
+        now = now_utc()
+        for experiment in self.repository.list_experiments_for_proposal(session, proposal.id):
+            if experiment.experiment_type == "canary" and experiment.status == "running":
+                experiment.status = "succeeded"
+                experiment.finished_at = now
+                experiment.result_json = {
+                    **(experiment.result_json or {}),
+                    "outcome": "canary_succeeded",
+                    "activated_at": now.isoformat(),
+                    "direct_activation_performed": False,
+                }
+
+        proposal.status = "activated"
+        proposal.updated_at = now
+        proposal.activation_plan = {
+            **(proposal.activation_plan or {}),
+            "activation": {
+                "status": "activated",
+                "activated_at": now.isoformat(),
+                "direct_activation_performed": False,
+                "tool_authorization_required_for_side_effects": True,
+            },
+        }
+        session.add(
+            PsopImprovementExperiment(
+                proposal_id=proposal.id,
+                experiment_type="activation",
+                status="succeeded",
+                summary="Governance activation recorded; production side effects remain gated by tool authorization.",
+                before_metrics={"proposal_status": "canary"},
+                after_metrics={"proposal_status": "activated"},
+                result_json={
+                    "schema": "GovernanceExperimentResult",
+                    "outcome": "activated",
+                    "activated_at": now.isoformat(),
+                    "direct_activation_performed": False,
+                    "tool_authorization_created": False,
+                    "rollback_available": True,
+                },
+                started_at=now,
+                finished_at=now,
+            )
+        )
+        session.flush()
+        self._append_governance_agent_event(
+            session,
+            proposal=proposal,
+            event_type="governance.proposal.activated",
+            phase="governance_activation",
+            payload={
+                "proposal_id": proposal.id,
+                "status": proposal.status,
+                "activated_at": now.isoformat(),
+                "direct_activation_performed": False,
+                "tool_authorization_created": False,
+                "rollback_available": True,
+            },
+        )
+        self._write_governance_memory_candidates(
+            session,
+            proposal=proposal,
+            candidates=[
+                self._governance_status_memory_candidate(
+                    proposal=proposal,
+                    status="activated",
+                    content_summary=(
+                        "Governance proposal activation recorded after canary; production side effects remain "
+                        "bounded by AgentRun tool authorization."
+                    ),
+                )
+            ],
+        )
+        session.commit()
+        return self.get_proposal(session, proposal.id)
+
     def rollback(self, session: Session, proposal_id: str) -> GovernanceProposalResponse:
         proposal = self._get_proposal(session, proposal_id)
         self._require_status(proposal, {"canary", "activated"}, action="rollback")

@@ -68,6 +68,7 @@
   const EXPERIMENT_TYPE_OPTIONS = [
     { value: "regression", label: "Regression" },
     { value: "canary", label: "Canary" },
+    { value: "activation", label: "Activation" },
     { value: "rollback", label: "Rollback" }
   ];
 
@@ -433,6 +434,18 @@
       );
     },
 
+    async activateGovernanceProposal(proposal) {
+      if (!proposal?.id) {
+        return;
+      }
+      await this.performGovernanceProposalAction(
+        proposal,
+        "activate",
+        { method: "POST" },
+        "治理提案已激活。"
+      );
+    },
+
     async rollbackGovernanceProposal(proposal) {
       if (!proposal?.id) {
         return;
@@ -724,6 +737,10 @@
 
     async activateCanaryFromGovernanceExperiment(experiment = this.governanceExperimentDetail) {
       await this.performGovernanceExperimentProposalAction(experiment, "activate-canary", "灰度已激活。");
+    },
+
+    async activateFromGovernanceExperiment(experiment = this.governanceExperimentDetail) {
+      await this.performGovernanceExperimentProposalAction(experiment, "activate", "治理提案已激活。");
     },
 
     async rollbackFromGovernanceExperiment(experiment = this.governanceExperimentDetail) {
@@ -1809,6 +1826,10 @@
 
     governanceCanActivateCanary(proposal) {
       return String(proposal?.status || "") === "approved";
+    },
+
+    governanceCanActivate(proposal) {
+      return String(proposal?.status || "") === "canary";
     },
 
     governanceCanRollback(proposal) {

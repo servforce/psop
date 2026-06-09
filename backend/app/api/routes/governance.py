@@ -88,6 +88,15 @@ def activate_proposal_canary(
     return service.activate_canary(session, proposal_id)
 
 
+@router.post("/proposals/{proposal_id}/activate", response_model=GovernanceProposalResponse)
+def activate_proposal(
+    proposal_id: str,
+    session: Session = Depends(get_db_session),
+    service: GovernanceService = Depends(get_governance_service),
+) -> GovernanceProposalResponse:
+    return service.activate(session, proposal_id)
+
+
 @router.post("/proposals/{proposal_id}/rollback", response_model=GovernanceProposalResponse)
 def rollback_proposal(
     proposal_id: str,

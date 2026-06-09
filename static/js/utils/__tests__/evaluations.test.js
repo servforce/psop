@@ -112,6 +112,11 @@ function loadEvaluationHarness(locationSearch = "") {
           filters,
           ["experiment_id", "proposal_id", "status", "experiment_type"]
         ),
+        buildTasksPath: (filters = {}) => buildFilteredPath(
+          "/admin/tasks",
+          filters,
+          ["job_type", "status", "q", "created_from", "created_to"]
+        ),
         buildToolAuthorizationsPath: (filters = {}) => buildFilteredPath(
           "/admin/platform/tool-authorizations",
           filters,
@@ -496,6 +501,79 @@ test("evaluation report links evaluator AgentRun details", () => {
   const htmlReport = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-reports.html"), "utf8");
   expect(htmlReport).toContain("openEvaluationAgentRun(currentEvaluation)");
   expect(htmlReport).toContain("currentEvaluation.agent_run_id");
+});
+
+test("evaluation report exposes queued governance proposal jobs from evaluator events", () => {
+  const methods = loadEvaluationMethods();
+  const context = {
+    ...methods,
+    currentEvaluation: {
+      id: "evaluation-1",
+      findings: [
+        { id: "finding-1", category: "runner_issue", severity: "high" },
+        { id: "finding-2", category: "test_gap", severity: "medium" }
+      ]
+    },
+    evaluationAgentEvents: [
+      {
+        id: "event-1",
+        event_type: "evaluation.governance_proposals.queued",
+        payload: {
+          queued_by: "run_evaluation_worker",
+          source_finding_ids: ["finding-1", "finding-2"],
+          governance_proposal_job_ids: ["job-governance-1", "job-governance-2"],
+          queued_items: [
+            {
+              finding_id: "finding-1",
+              job_id: "job-governance-1",
+              category: "runner_issue",
+              severity: "high"
+            },
+            {
+              finding_id: "finding-2",
+              job_id: "job-governance-2",
+              category: "test_gap",
+              severity: "medium"
+            },
+            {
+              finding_id: "finding-1",
+              job_id: "job-governance-1",
+              category: "runner_issue",
+              severity: "high"
+            }
+          ],
+          non_hitl_business_state: true,
+          tool_authorization_created: false
+        }
+      }
+    ],
+    navigate: jest.fn()
+  };
+
+  const items = methods.evaluationGovernanceQueueItems.call(context);
+
+  expect(items).toHaveLength(2);
+  expect(items[0]).toMatchObject({
+    job_id: "job-governance-1",
+    finding_id: "finding-1",
+    category: "runner_issue",
+    severity: "high",
+    non_hitl_business_state: true,
+    tool_authorization_created: false,
+    path: "/admin/tasks?job_type=governance_proposal&q=job-governance-1"
+  });
+  expect(methods.evaluationGovernanceQueueJobPath.call(context, "job-governance-2")).toBe(
+    "/admin/tasks?job_type=governance_proposal&q=job-governance-2"
+  );
+
+  methods.openEvaluationGovernanceQueueJob.call(context, items[0]);
+
+  expect(context.navigate).toHaveBeenCalledWith("/admin/tasks?job_type=governance_proposal&q=job-governance-1");
+
+  const htmlReport = fs.readFileSync(path.join(__dirname, "../../../pages/evaluation-reports.html"), "utf8");
+  expect(htmlReport).toContain("Governance Queue");
+  expect(htmlReport).toContain("evaluationGovernanceQueueItems(currentEvaluation)");
+  expect(htmlReport).toContain("openEvaluationGovernanceQueueJob(item)");
 });
 
 test("evaluation methods update finding status in list and current report", async () => {

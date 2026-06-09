@@ -250,6 +250,67 @@ def test_governance_api_creates_manual_proposal_with_agent_run() -> None:
     assert "governance.proposal.updated" in {item["event_type"] for item in agent_events}
 
 
+def test_governance_api_activates_canary_without_direct_side_effects_and_keeps_rollback() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        proposal = client.post(
+            "/api/v1/governance/proposals",
+            json={
+                "proposal_type": "test_suite_update",
+                "target": {"kind": "regression_suite", "name": "activation-flow"},
+                "problem_statement": "Record activation after review and canary.",
+            },
+        ).json()
+        client.post(f"/api/v1/governance/proposals/{proposal['id']}/run-tests")
+        client.post(
+            f"/api/v1/governance/proposals/{proposal['id']}/submit-review",
+            json={"decision": "approved", "review_notes": "ready for canary"},
+        )
+        canary = client.post(f"/api/v1/governance/proposals/{proposal['id']}/activate-canary").json()
+        activated_response = client.post(f"/api/v1/governance/proposals/{proposal['id']}/activate")
+        activated = activated_response.json()
+        canary_experiments = client.get(
+            "/api/v1/governance/experiments",
+            params={"proposal_id": proposal["id"], "experiment_type": "canary"},
+        ).json()
+        activation_experiments = client.get(
+            "/api/v1/governance/experiments",
+            params={"proposal_id": proposal["id"], "experiment_type": "activation"},
+        ).json()
+        agent_authorizations = client.get(f"/api/v1/agent-runs/{proposal['agent_run_id']}/tool-authorizations").json()
+        agent_events = client.get(f"/api/v1/agent-runs/{proposal['agent_run_id']}/events").json()
+        memory_entries = client.get(f"/api/v1/agent-runs/{proposal['agent_run_id']}/memory-entries").json()
+        rolled_back = client.post(f"/api/v1/governance/proposals/{proposal['id']}/rollback").json()
+
+    assert activated_response.status_code == 200
+    assert canary["status"] == "canary"
+    assert activated["status"] == "activated"
+    assert activated["activation_plan"]["activation"]["status"] == "activated"
+    assert activated["activation_plan"]["activation"]["direct_activation_performed"] is False
+    assert activated["activation_plan"]["activation"]["tool_authorization_required_for_side_effects"] is True
+    assert activation_experiments[0]["proposal_status"] == "activated"
+    assert activation_experiments[0]["experiment_type"] == "activation"
+    assert activation_experiments[0]["status"] == "succeeded"
+    assert activation_experiments[0]["result"]["direct_activation_performed"] is False
+    assert activation_experiments[0]["result"]["tool_authorization_created"] is False
+    assert activation_experiments[0]["result"]["rollback_available"] is True
+    assert canary_experiments[0]["status"] == "succeeded"
+    assert canary_experiments[0]["result"]["outcome"] == "canary_succeeded"
+    assert agent_authorizations == []
+    activation_event = next(item for item in agent_events if item["event_type"] == "governance.proposal.activated")
+    assert activation_event["payload"]["direct_activation_performed"] is False
+    assert activation_event["payload"]["tool_authorization_created"] is False
+    assert any(
+        item["memory_type"] == "episodic"
+        and item["metadata"]["proposal_status"] == "activated"
+        and item["metadata"]["schema"] == "psop-governance-memory/v1"
+        for item in memory_entries
+    )
+    assert rolled_back["status"] == "rolled_back"
+    assert rolled_back["experiments"][-1]["experiment_type"] == "rollback"
+
+
 def test_governance_api_creates_manual_proposal_from_source_findings() -> None:
     client, _, original_inference = create_test_client()
 

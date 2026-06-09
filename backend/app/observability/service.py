@@ -449,6 +449,7 @@ class ObservabilityService:
             open_proposal_count=sum(status_counts.get(status, 0) for status in OPEN_PROPOSAL_STATUSES),
             testing_proposal_count=status_counts.get("testing", 0),
             canary_proposal_count=status_counts.get("canary", 0),
+            activated_proposal_count=status_counts.get("activated", 0),
             rollback_proposal_count=status_counts.get("rolled_back", 0),
             experiment_count=self._count(session, PsopImprovementExperiment),
             status_counts=status_counts,
@@ -629,6 +630,7 @@ class ObservabilityService:
             open_proposal_count=sum(status_counts.get(status, 0) for status in OPEN_PROPOSAL_STATUSES),
             testing_proposal_count=status_counts.get("testing", 0),
             canary_proposal_count=status_counts.get("canary", 0),
+            activated_proposal_count=status_counts.get("activated", 0),
             rollback_proposal_count=status_counts.get("rolled_back", 0),
             status_counts=status_counts,
             proposal_type_counts=self._count_by(

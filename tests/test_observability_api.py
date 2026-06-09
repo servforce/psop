@@ -102,6 +102,16 @@ def test_observability_dashboard_metrics_aggregate_system_health() -> None:
                         status="canary",
                         created_at=now - timedelta(minutes=1),
                     ),
+                    PsopImprovementProposal(
+                        id="proposal-dashboard-activated-1",
+                        agent_run_id=agent_run.id,
+                        proposal_type="test_suite_update",
+                        target_json={"kind": "activation"},
+                        problem_statement="record activation",
+                        status="activated",
+                        created_at=now - timedelta(minutes=1),
+                        updated_at=now - timedelta(minutes=1),
+                    ),
                     PsopImprovementExperiment(
                         id="experiment-dashboard-1",
                         proposal_id="proposal-dashboard-1",
@@ -111,6 +121,17 @@ def test_observability_dashboard_metrics_aggregate_system_health() -> None:
                         before_metrics={},
                         after_metrics={},
                         result_json={},
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    PsopImprovementExperiment(
+                        id="experiment-dashboard-activation-1",
+                        proposal_id="proposal-dashboard-activated-1",
+                        experiment_type="activation",
+                        status="succeeded",
+                        summary="dashboard activation recorded",
+                        before_metrics={},
+                        after_metrics={},
+                        result_json={"outcome": "activated"},
                         created_at=now - timedelta(minutes=1),
                     ),
                     agent_run,
@@ -180,8 +201,11 @@ def test_observability_dashboard_metrics_aggregate_system_health() -> None:
     assert payload["runtime"]["success_rate"] == 1.0
     assert payload["evaluations"]["average_quality_score"] == 94.0
     assert payload["evaluations"]["high_severity_finding_count"] == 1
+    assert payload["governance"]["open_proposal_count"] == 1
     assert payload["governance"]["canary_proposal_count"] == 1
-    assert payload["governance"]["experiment_count"] == 1
+    assert payload["governance"]["activated_proposal_count"] == 1
+    assert payload["governance"]["status_counts"]["activated"] == 1
+    assert payload["governance"]["experiment_count"] == 2
     runner_metrics = next(item for item in payload["agents"] if item["agent_key"] == "pskill.runner")
     assert runner_metrics["recent_run_count"] == 1
     assert runner_metrics["model_call_count"] == 1
@@ -418,6 +442,16 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
                         created_at=now - timedelta(minutes=1),
                         updated_at=now - timedelta(minutes=1),
                     ),
+                    PsopImprovementProposal(
+                        id="proposal-metrics-activated-1",
+                        agent_run_id=agent_run.id,
+                        proposal_type="activation_record",
+                        target_json={"kind": "activation"},
+                        problem_statement="activation is recorded for observability",
+                        status="activated",
+                        created_at=now - timedelta(minutes=1),
+                        updated_at=now - timedelta(minutes=1),
+                    ),
                     PsopImprovementExperiment(
                         id="experiment-metrics-1",
                         proposal_id="proposal-metrics-1",
@@ -427,6 +461,17 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
                         before_metrics={},
                         after_metrics={},
                         result_json={},
+                        created_at=now - timedelta(minutes=1),
+                    ),
+                    PsopImprovementExperiment(
+                        id="experiment-metrics-activation-1",
+                        proposal_id="proposal-metrics-activated-1",
+                        experiment_type="activation",
+                        status="succeeded",
+                        summary="activation recorded",
+                        before_metrics={},
+                        after_metrics={},
+                        result_json={"outcome": "activated"},
                         created_at=now - timedelta(minutes=1),
                     ),
                 ]
@@ -464,17 +509,21 @@ def test_observability_metrics_expose_runtime_agent_and_otel_status() -> None:
     assert payload["evaluations"]["finding_status_counts"]["open"] == 1
     assert payload["evaluations"]["finding_category_counts"]["runner_issue"] == 1
     assert payload["evaluations"]["finding_severity_counts"]["high"] == 1
-    assert payload["governance"]["proposal_count"] == 1
+    assert payload["governance"]["proposal_count"] == 2
     assert payload["governance"]["open_proposal_count"] == 1
     assert payload["governance"]["canary_proposal_count"] == 1
+    assert payload["governance"]["activated_proposal_count"] == 1
     assert payload["governance"]["status_counts"]["canary"] == 1
+    assert payload["governance"]["status_counts"]["activated"] == 1
     assert payload["governance"]["proposal_type_counts"]["agent_skill_update"] == 1
     assert payload["governance"]["source_run_linked_count"] == 1
     assert payload["governance"]["source_evaluation_linked_count"] == 1
     assert payload["governance"]["source_finding_linked_count"] == 1
-    assert payload["governance"]["experiment_count"] == 1
+    assert payload["governance"]["experiment_count"] == 2
     assert payload["governance"]["experiment_status_counts"]["running"] == 1
+    assert payload["governance"]["experiment_status_counts"]["succeeded"] == 1
     assert payload["governance"]["experiment_type_counts"]["canary"] == 1
+    assert payload["governance"]["experiment_type_counts"]["activation"] == 1
     assert payload["open_telemetry"]["enabled"] is True
     assert payload["open_telemetry"]["configured"] is True
     assert payload["open_telemetry"]["service_name"] == expected_otel_service_name

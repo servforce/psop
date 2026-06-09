@@ -183,6 +183,7 @@ test("governance methods build filters and labels", () => {
   expect(methods.governanceProposalTypeLabel.call(context, "tool_policy_update")).toBe("Tool Policy");
   expect(methods.governanceProposalStatusLabel.call(context, "rolled_back")).toBe("已回滚");
   expect(methods.governanceExperimentTypeLabel.call(context, "canary")).toBe("Canary");
+  expect(methods.governanceExperimentTypeLabel.call(context, "activation")).toBe("Activation");
   expect(methods.governanceExperimentStatusLabel.call(context, "rolled_back")).toBe("已回滚");
   expect(methods.toolAuthorizationStatusLabel.call(context, "approved")).toBe("已批准");
   expect(methods.toolAuthorizationStatusLabel.call(context, "expired")).toBe("已过期");
@@ -984,6 +985,23 @@ test("governance methods manage experiment proposal actions and metric compariso
       }
     ]
   };
+  const activatedProposal = {
+    ...proposal,
+    status: "activated",
+    experiments: [
+      ...updatedProposal.experiments,
+      {
+        ...experiment,
+        id: "experiment-activation",
+        proposal_status: "activated",
+        experiment_type: "activation",
+        status: "succeeded",
+        summary: "activation recorded",
+        result: { outcome: "activated", direct_activation_performed: false },
+        created_at: "2026-01-03T00:00:00Z"
+      }
+    ]
+  };
   const context = {
     ...methods,
     busy: { governanceProposalAction: false },
@@ -996,6 +1014,9 @@ test("governance methods manage experiment proposal actions and metric compariso
     apiRequest: jest.fn(async (url) => {
       if (url.endsWith("/activate-canary")) {
         return updatedProposal;
+      }
+      if (url.endsWith("/activate")) {
+        return activatedProposal;
       }
       return proposal;
     }),
@@ -1056,12 +1077,23 @@ test("governance methods manage experiment proposal actions and metric compariso
   expect(context.governanceExperimentRows[0].id).toBe("experiment-2");
   expect(context.showNotice).toHaveBeenCalledWith("success", "灰度已激活。");
 
+  await methods.activateFromGovernanceExperiment.call(context, context.governanceExperimentDetail);
+
+  expect(context.apiRequest).toHaveBeenCalledWith("/governance/proposals/proposal-1/activate", {
+    method: "POST"
+  });
+  expect(context.governanceExperimentProposal.status).toBe("activated");
+  expect(context.governanceExperimentDetail.id).toBe("experiment-activation");
+  expect(context.governanceExperimentRows[0].experiment_type).toBe("activation");
+  expect(context.showNotice).toHaveBeenCalledWith("success", "治理提案已激活。");
+
   const html = fs.readFileSync(path.join(__dirname, "../../../pages/governance-experiments.html"), "utf8");
   expect(html).toContain("selectGovernanceExperiment(experiment)");
   expect(html).toContain("governanceExperimentEvidenceLinks(governanceExperimentDetail)");
   expect(html).toContain("governanceExperimentMetricRows(governanceExperimentDetail)");
   expect(html).toContain("openGovernanceExperimentReplay(governanceExperimentDetail)");
   expect(html).toContain("activateCanaryFromGovernanceExperiment(governanceExperimentDetail)");
+  expect(html).toContain("activateFromGovernanceExperiment(governanceExperimentDetail)");
   expect(html).toContain("governanceExperimentRollbackConditions(governanceExperimentDetail)");
 });
 
@@ -1069,6 +1101,7 @@ test("governance methods create proposals and run state actions", async () => {
   const methods = loadGovernanceMethods();
   const created = { id: "proposal-1", status: "draft", experiments: [] };
   const updated = { id: "proposal-1", status: "testing", experiments: [] };
+  const activated = { id: "proposal-1", status: "activated", experiments: [] };
   const context = {
     ...methods,
     busy: { governanceProposalCreate: false, governanceProposalAction: false },
@@ -1079,7 +1112,15 @@ test("governance methods create proposals and run state actions", async () => {
     },
     governanceProposals: [],
     governanceReviewForm: { decision: "approved", review_notes: "" },
-    apiRequest: jest.fn(async (url) => (url.includes("run-tests") ? updated : created)),
+    apiRequest: jest.fn(async (url) => {
+      if (url.includes("run-tests")) {
+        return updated;
+      }
+      if (url.endsWith("/activate")) {
+        return activated;
+      }
+      return created;
+    }),
     loadGovernanceProposals: jest.fn(),
     navigate: jest.fn(),
     showNotice: jest.fn(),
@@ -1089,6 +1130,7 @@ test("governance methods create proposals and run state actions", async () => {
 
   await methods.createGovernanceProposal.call(context);
   await methods.runGovernanceProposalTests.call(context, created);
+  await methods.activateGovernanceProposal.call(context, { id: "proposal-1", status: "canary" });
 
   expect(context.apiRequest).toHaveBeenNthCalledWith(1, "/governance/proposals", {
     method: "POST",
@@ -1102,7 +1144,16 @@ test("governance methods create proposals and run state actions", async () => {
   expect(context.apiRequest).toHaveBeenNthCalledWith(2, "/governance/proposals/proposal-1/run-tests", {
     method: "POST"
   });
-  expect(context.currentGovernanceProposal.status).toBe("testing");
+  expect(context.apiRequest).toHaveBeenNthCalledWith(3, "/governance/proposals/proposal-1/activate", {
+    method: "POST"
+  });
+  expect(context.currentGovernanceProposal.status).toBe("activated");
+  expect(methods.governanceCanActivate({ status: "canary" })).toBe(true);
+  expect(methods.governanceCanActivate({ status: "approved" })).toBe(false);
+
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/governance-proposals.html"), "utf8");
+  expect(html).toContain("activateGovernanceProposal(currentGovernanceProposal)");
+  expect(html).toContain("governanceCanActivate(currentGovernanceProposal)");
 });
 
 test("governance methods stream proposal activity snapshots", async () => {

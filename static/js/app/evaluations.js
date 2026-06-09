@@ -8,6 +8,7 @@
     buildPlatformMemoryEntryPath,
     buildGovernanceProposalPath,
     buildGovernanceExperimentsPath,
+    buildTasksPath,
     buildToolAuthorizationsPath
   } = window.PSOPConsoleHelpers || {};
 
@@ -364,6 +365,100 @@
 
     openEvaluationMemoryEntry(memory) {
       const path = this.evaluationMemoryEntryPath(memory);
+      if (!path) {
+        return;
+      }
+      this.navigate(path);
+    },
+
+    evaluationGovernanceQueueItems(evaluation = this.currentEvaluation) {
+      const events = Array.isArray(this.evaluationAgentEvents) ? this.evaluationAgentEvents : [];
+      const queueEvents = events.filter((event) => event?.event_type === "evaluation.governance_proposals.queued");
+      const items = [];
+      const seen = new Set();
+      for (const event of queueEvents) {
+        const payload = event?.payload && typeof event.payload === "object" ? event.payload : {};
+        const queuedItems = Array.isArray(payload.queued_items) ? payload.queued_items : [];
+        if (queuedItems.length) {
+          for (const queued of queuedItems) {
+            const item = this.normalizeEvaluationGovernanceQueueItem(queued, payload, event, evaluation);
+            if (!item || seen.has(item.key)) {
+              continue;
+            }
+            seen.add(item.key);
+            items.push(item);
+          }
+          continue;
+        }
+
+        const jobIds = Array.isArray(payload.governance_proposal_job_ids)
+          ? payload.governance_proposal_job_ids
+          : [];
+        const findingIds = Array.isArray(payload.source_finding_ids) ? payload.source_finding_ids : [];
+        jobIds.forEach((jobId, index) => {
+          const item = this.normalizeEvaluationGovernanceQueueItem(
+            {
+              job_id: jobId,
+              finding_id: findingIds[index] || findingIds[0] || ""
+            },
+            payload,
+            event,
+            evaluation
+          );
+          if (!item || seen.has(item.key)) {
+            return;
+          }
+          seen.add(item.key);
+          items.push(item);
+        });
+      }
+      return items;
+    },
+
+    normalizeEvaluationGovernanceQueueItem(queued, payload = {}, event = {}, evaluation = this.currentEvaluation) {
+      const jobId = String(queued?.job_id || queued?.governance_proposal_job_id || "").trim();
+      if (!jobId) {
+        return null;
+      }
+      const findingId = String(queued?.finding_id || queued?.source_finding_id || "").trim();
+      const finding = this.evaluationFindingById(findingId, evaluation);
+      return {
+        key: `${jobId}:${findingId || "finding"}`,
+        job_id: jobId,
+        finding_id: findingId,
+        category: queued?.category || finding?.category || "",
+        severity: queued?.severity || finding?.severity || "",
+        event_id: event?.id || "",
+        queued_by: payload.queued_by || "",
+        non_hitl_business_state: payload.non_hitl_business_state === true,
+        tool_authorization_created: payload.tool_authorization_created === true,
+        path: this.evaluationGovernanceQueueJobPath(jobId)
+      };
+    },
+
+    evaluationFindingById(findingId, evaluation = this.currentEvaluation) {
+      const id = String(findingId || "").trim();
+      if (!id) {
+        return null;
+      }
+      const findings = Array.isArray(evaluation?.findings)
+        ? evaluation.findings
+        : Array.isArray(this.evaluationFindings)
+          ? this.evaluationFindings
+          : [];
+      return findings.find((finding) => finding?.id === id) || null;
+    },
+
+    evaluationGovernanceQueueJobPath(jobId) {
+      const id = String(jobId || "").trim();
+      if (!id || typeof buildTasksPath !== "function") {
+        return "";
+      }
+      return buildTasksPath({ job_type: "governance_proposal", q: id });
+    },
+
+    openEvaluationGovernanceQueueJob(item) {
+      const path = item?.path || this.evaluationGovernanceQueueJobPath(item?.job_id || item);
       if (!path) {
         return;
       }

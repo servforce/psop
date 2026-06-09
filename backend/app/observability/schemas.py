@@ -40,6 +40,7 @@ class GovernanceDashboardMetrics(BaseModel):
     open_proposal_count: int = 0
     testing_proposal_count: int = 0
     canary_proposal_count: int = 0
+    activated_proposal_count: int = 0
     rollback_proposal_count: int = 0
     experiment_count: int = 0
     status_counts: dict[str, int] = Field(default_factory=dict)
@@ -118,6 +119,7 @@ class GovernanceObservabilityMetrics(BaseModel):
     open_proposal_count: int = 0
     testing_proposal_count: int = 0
     canary_proposal_count: int = 0
+    activated_proposal_count: int = 0
     rollback_proposal_count: int = 0
     status_counts: dict[str, int] = Field(default_factory=dict)
     proposal_type_counts: dict[str, int] = Field(default_factory=dict)
