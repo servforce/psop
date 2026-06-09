@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "required": ["scenarios"],
+  "properties": {
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "description", "duration_ms", "timeline"],
+        "properties": {
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "duration_ms": {"type": "integer", "minimum": 1},
+          "timeline": {"type": "object"},
+          "judge_policy": {"type": "object"}
+        }
+      }
+    }
+  }
+}

@@ -577,7 +577,8 @@ test("platform methods sync, load, create, validate, and activate skill packages
     status: "active",
     version_count: 1,
     active_version_id: "ver-1",
-    active_version_label: "sync-123"
+    active_version_label: "sync-123",
+    used_by_agents: [{ key: "pskill.builder", name: "PSkill Builder", role: "builder" }]
   };
   const detail = {
     ...summary,
@@ -702,7 +703,7 @@ test("platform methods sync, load, create, validate, and activate skill packages
   expect(context.skillPackageSyncJob.id).toBe("job-skill-sync-1");
   expect(context.currentSkillPackage.name).toBe("pskill-builder");
   expect(context.currentSkillPackage.versions.find((version) => version.id === "ver-1").validation_diagnostics).toHaveLength(1);
-  expect(methods.skillPackageUsedByAgents.call(context, context.currentSkillPackage).map((agent) => agent.key)).toEqual(["pskill.builder"]);
+  expect(methods.skillPackageUsedByAgents.call({ platformAgentDefinitions: [] }, context.currentSkillPackage).map((agent) => agent.key)).toEqual(["pskill.builder"]);
   expect(methods.skillPackageAgentRunsPath("pskill.builder")).toBe(
     "/admin/platform/agent-runs?agent_key=pskill.builder"
   );

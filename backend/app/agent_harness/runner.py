@@ -36,7 +36,6 @@ from app.runtime.websocket import (
     tool_authorization_ws_hub,
     tool_authorization_ws_message,
 )
-from app.skills.models import SkillActivation
 from app.skills.repository import SkillPackageRepository
 from app.skills.service import SkillPackageService
 from app.testing.service import SkillTestService
@@ -45,8 +44,12 @@ from app.testing.service import SkillTestService
 DEFAULT_AGENT_SKILLS: dict[str, list[str]] = {
     "pskill.builder": ["pskill-builder", "ffmpeg-video-processing", "document-ocr-processing"],
     "pskill.compiler": ["pskill-compiler-formal-v5"],
-    "pskill.tester": ["pskill-tester"],
-    "pskill.runner": ["pskill-runner-field-assistant"],
+    "pskill.tester": ["pskill-tester", "ffmpeg-video-processing"],
+    "pskill.runner": [
+        "pskill-runner-field-assistant",
+        "pskill-runner-evidence-evaluator",
+        "ffmpeg-video-processing",
+    ],
     "pskill.evaluator": ["pskill-run-evaluator"],
     "psop.governance": ["psop-governance-manager"],
 }
@@ -71,8 +74,8 @@ class AgentRunner:
         planner: AgentPlanner | None = None,
     ) -> None:
         self.agent_service = agent_service or AgentService()
-        self.skill_service = skill_service or SkillPackageService()
-        self.skill_repository = skill_repository or SkillPackageRepository()
+        self.skill_service = skill_service or SkillPackageService(repository=skill_repository)
+        self.skill_repository = self.skill_service.repository
         self.tool_policy = tool_policy or ToolPolicy()
         self.memory_service = memory_service or MemoryService()
         self.pskills_service = pskills_service
@@ -915,51 +918,33 @@ class AgentRunner:
         return document_from_manifest_snapshot(manifest)
 
     def _activate_skills(self, session: Session, *, agent_run: AgentRun, spec: dict[str, Any]) -> tuple[set[str], list[str]]:
-        self.skill_service.sync_packages(session)
         selected_names = list(spec.get("allowed_skill_names") or DEFAULT_AGENT_SKILLS.get(agent_run.agent_key, []))
-        active_tools: set[str] = set()
-        active_skill_names: list[str] = []
-        for package_name in selected_names:
-            package = self.skill_repository.get_package_by_name(session, package_name)
-            if not package or not package.active_version_id:
-                continue
-            version = self.skill_repository.get_version(session, package.active_version_id)
-            if not version:
-                continue
-            active_skill_names.append(package.name)
-            active_tools.update(str(tool) for tool in version.allowed_tools)
-            activation = self.skill_repository.get_activation(
-                session,
-                agent_run_id=agent_run.id,
-                version_id=version.id,
-            )
-            if not activation:
-                session.add(
-                    SkillActivation(
-                        agent_run_id=agent_run.id,
-                        package_id=package.id,
-                        version_id=version.id,
-                        activation_context={
-                            "agent_key": agent_run.agent_key,
-                            "package_name": package.name,
-                            "content_hash": version.content_hash,
-                        },
-                    )
-                )
-        self.agent_service.append_event(
+        active_tools, active_skill_names = self.skill_service.activate_agent_run_skills(
             session,
-            agent_run.id,
-            AppendAgentEventRequest(
-                event_type="agent.skills.activated",
-                phase="skills",
-                payload={
-                    "skill_names": selected_names,
-                    "active_skill_names": active_skill_names,
-                    "allowed_tools": sorted(active_tools),
-                },
-            ),
-            commit=False,
+            agent_run_id=agent_run.id,
+            agent_key=agent_run.agent_key,
+            selected_names=selected_names,
+            sync=True,
         )
+        has_activation_event = any(
+            event.event_type == "agent.skills.activated"
+            for event in self.agent_service.repository.list_events(session, agent_run.id)
+        )
+        if not has_activation_event:
+            self.agent_service.append_event(
+                session,
+                agent_run.id,
+                AppendAgentEventRequest(
+                    event_type="agent.skills.activated",
+                    phase="skills",
+                    payload={
+                        "skill_names": selected_names,
+                        "active_skill_names": active_skill_names,
+                        "allowed_tools": sorted(active_tools),
+                    },
+                ),
+                commit=False,
+            )
         return active_tools, active_skill_names
 
     def _handle_tool_call(

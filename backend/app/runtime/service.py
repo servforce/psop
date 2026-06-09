@@ -2944,7 +2944,7 @@ class RuntimeService:
         else:
             prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
                 session,
-                usage_key="runtime.llm_node_fallback",
+                usage_key="pskill.run.node",
                 fallback_ref="runtime_execution/llm_node_fallback/v1",
             )
             system_template = str(projection.get("system_template") or prompt_pack.system_prompt)

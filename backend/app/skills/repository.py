@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.skills.models import SkillActivation, SkillPackage, SkillResource, SkillVersion
+from app.skills.models import SkillActivation, SkillBinding, SkillPackage, SkillResource, SkillVersion
 
 
 class SkillPackageRepository:
@@ -28,6 +28,34 @@ class SkillPackageRepository:
 
     def get_package(self, session: Session, package_id: str) -> SkillPackage | None:
         return session.get(SkillPackage, package_id)
+
+    def list_bindings(
+        self,
+        session: Session,
+        *,
+        agent_key: str | None = None,
+        package_id: str | None = None,
+    ) -> list[SkillBinding]:
+        query = select(SkillBinding).order_by(SkillBinding.agent_key.asc(), SkillBinding.usage_key.asc())
+        if agent_key:
+            query = query.where(SkillBinding.agent_key == agent_key)
+        if package_id:
+            query = query.where(SkillBinding.package_id == package_id)
+        return list(session.scalars(query).all())
+
+    def get_binding(
+        self,
+        session: Session,
+        *,
+        agent_key: str,
+        package_id: str,
+    ) -> SkillBinding | None:
+        return session.scalar(
+            select(SkillBinding).where(
+                SkillBinding.agent_key == agent_key,
+                SkillBinding.package_id == package_id,
+            )
+        )
 
     def get_version_by_hash(
         self,

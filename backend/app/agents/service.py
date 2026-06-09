@@ -44,6 +44,7 @@ from app.agents.tool_authorization_context import (
 from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
 from app.runtime.tool_authorization_events import RunToolAuthorizationEventWriter
+from app.skills.service import SkillPackageService
 
 
 DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
@@ -84,7 +85,7 @@ DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
         "goal": "发布前测试 PSkill、执行图、交互、安全和回归。",
         "usage_keys": ["pskill.test.pre_publish"],
         "allowed_tools": ["psop.pskills.read", "psop.testing.write_diagnostics"],
-        "allowed_skill_names": ["pskill-tester"],
+        "allowed_skill_names": ["pskill-tester", "ffmpeg-video-processing"],
         "output_schema": {"name": "PSkillTestResult"},
     },
     {
@@ -94,7 +95,11 @@ DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
         "goal": "在 RuntimeService 主权边界内为运行节点生成 observation。",
         "usage_keys": ["pskill.run.node"],
         "allowed_tools": ["psop.runtime.read"],
-        "allowed_skill_names": ["pskill-runner-field-assistant"],
+        "allowed_skill_names": [
+            "pskill-runner-field-assistant",
+            "pskill-runner-evidence-evaluator",
+            "ffmpeg-video-processing",
+        ],
         "output_schema": {"name": "RuntimeAgentObservation"},
     },
     {
@@ -130,9 +135,11 @@ class AgentService:
         self,
         repository: AgentRepository | None = None,
         run_tool_authorization_events: RunToolAuthorizationEventWriter | None = None,
+        skill_service: SkillPackageService | None = None,
     ) -> None:
         self.repository = repository or AgentRepository()
         self.run_tool_authorization_events = run_tool_authorization_events or RunToolAuthorizationEventWriter()
+        self.skill_service = skill_service or SkillPackageService()
 
     def ensure_seed_data(self, session: Session) -> bool:
         changed = False
@@ -298,6 +305,7 @@ class AgentService:
         definition = self._get_definition_by_key(session, agent_key)
         version = self._get_version_for_definition(session, definition, version_id)
         self._activate_version_model(session, definition=definition, version=version, update_bindings=payload.update_bindings)
+        self.skill_service.sync_agent_skill_bindings(session, sync_packages=True, commit=False)
         if commit:
             session.commit()
         return self.get_definition(session, agent_key)
@@ -313,6 +321,7 @@ class AgentService:
         definition = self._get_definition_by_key(session, agent_key)
         version = self._get_version_for_definition(session, definition, version_id)
         result = self._activate_version_model(session, definition=definition, version=version, update_bindings=True)
+        self.skill_service.sync_agent_skill_bindings(session, sync_packages=True, commit=False)
         if commit:
             session.commit()
         return result
@@ -351,6 +360,30 @@ class AgentService:
                 event_type="agent.run.created",
                 phase="created",
                 payload={"agent_key": definition.key, "owner_type": payload.owner_type, "owner_id": payload.owner_id},
+            ),
+            commit=False,
+        )
+        active_version = self.repository.get_version(session, definition.active_version_id)
+        spec = active_version.spec_json if active_version else {}
+        selected_skill_names = list(spec.get("allowed_skill_names") or []) if isinstance(spec, dict) else []
+        active_tools, active_skill_names = self.skill_service.activate_agent_run_skills(
+            session,
+            agent_run_id=agent_run.id,
+            agent_key=agent_run.agent_key,
+            selected_names=selected_skill_names,
+            sync=True,
+        )
+        self.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="agent.skills.activated",
+                phase="skills",
+                payload={
+                    "skill_names": selected_skill_names,
+                    "active_skill_names": active_skill_names,
+                    "allowed_tools": sorted(active_tools),
+                },
             ),
             commit=False,
         )

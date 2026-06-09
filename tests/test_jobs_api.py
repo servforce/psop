@@ -380,12 +380,12 @@ def test_runtime_job_worker_processes_skill_sync_job_and_exposes_progress() -> N
     assert job_state["status"] == "succeeded"
     assert job_state["lease_until"] is None
     assert job_state["last_error"] == ""
-    assert package_count == 8
-    assert job_state["metrics"]["scanned_count"] == 8
-    assert job_state["metrics"]["package_count"] == 8
-    assert job_state["metrics"]["version_count"] == 8
+    assert package_count == 9
+    assert job_state["metrics"]["scanned_count"] == 9
+    assert job_state["metrics"]["package_count"] == 9
+    assert job_state["metrics"]["version_count"] == 9
     assert job_state["metrics"]["changed"] is True
-    assert job_state["payload"]["sync_result"]["package_count"] == 8
+    assert job_state["payload"]["sync_result"]["package_count"] == 9
     assert job_state["payload"]["sync_result"]["changed"] is True
 
     assert jobs_response.status_code == 200
@@ -394,7 +394,7 @@ def test_runtime_job_worker_processes_skill_sync_job_and_exposes_progress() -> N
     assert synced_job["status"] == "succeeded"
     assert synced_job["progress"]["percent"] == 100
     assert synced_job["progress"]["label"] == "Skill 包同步完成"
-    assert synced_job["progress"]["detail"] == "scanned=8 / packages=8 / versions=8 / changed=True"
+    assert synced_job["progress"]["detail"] == "scanned=9 / packages=9 / versions=9 / changed=True"
 
 
 def test_runtime_job_worker_processes_run_evaluation_job_and_exposes_progress() -> None:

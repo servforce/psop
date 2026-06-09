@@ -25,6 +25,16 @@ class SkillActivationResponse(BaseModel):
     created_at: datetime
 
 
+class SkillPackageAgentUsageResponse(BaseModel):
+    key: str
+    name: str
+    role: str
+    skill_binding_id: str | None = None
+    usage_key: str | None = None
+    active_version_id: str | None = None
+    active_version_label: str | None = None
+
+
 class CreateSkillVersionRequest(BaseModel):
     version_label: str | None = Field(default=None, max_length=80)
     parent_version_id: str | None = None
@@ -67,6 +77,7 @@ class SkillPackageSummaryResponse(BaseModel):
     active_version_id: str | None = None
     active_version_label: str | None = None
     active_content_hash: str | None = None
+    used_by_agents: list[SkillPackageAgentUsageResponse] = Field(default_factory=list)
     version_count: int
     created_at: datetime
     updated_at: datetime

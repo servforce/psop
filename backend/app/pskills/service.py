@@ -1452,7 +1452,7 @@ class SkillsService:
 
         prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
             session,
-            usage_key="default.skill_creation_agent",
+            usage_key="pskill.build.default",
             fallback_ref="skill_creation/conversational_draft/v1",
         )
         prompt_payload = self._build_skill_generation_prompt_payload(

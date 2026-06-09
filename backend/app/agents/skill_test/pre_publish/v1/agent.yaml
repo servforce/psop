@@ -1,0 +1,15 @@
+agent_id: psop.skill_test.pre_publish
+version: v1
+scenario: skill_test
+route_key: text
+description: Generate pre-publish black-box timeline test scenarios for PSkill source and formal-v5 EG artifacts.
+inputs:
+  - PSkill metadata
+  - PSkill version id
+  - optional compile artifact id
+  - scenario count and focus
+outputs:
+  - JSON scenarios array with timeline contracts and judge policies
+constraints:
+  json_only: true
+  timeline_schema: psop-skill-test-timeline/v1

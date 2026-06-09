@@ -201,7 +201,11 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert agent_run["agent_key"] == "pskill.runner"
     assert agent_run["status"] == "queued"
     assert event_response.status_code == 201
-    assert [event["event_type"] for event in events_response.json()] == ["agent.run.created", "agent.test.event"]
+    assert [event["event_type"] for event in events_response.json()] == [
+        "agent.run.created",
+        "agent.skills.activated",
+        "agent.test.event",
+    ]
 
     assert authorization_response.status_code == 201
     assert authorization["status"] == "pending"
@@ -330,7 +334,10 @@ def test_agent_run_activity_websocket_streams_observability_snapshot() -> None:
     assert initial_payload["agent_run"]["id"] == agent_run["id"]
     assert initial_payload["active"] is True
     assert initial_payload["terminal"] is False
-    assert [event["event_type"] for event in initial_payload["events"]] == ["agent.run.created"]
+    assert [event["event_type"] for event in initial_payload["events"]] == [
+        "agent.run.created",
+        "agent.skills.activated",
+    ]
 
     assert event_response.status_code == 201
     assert authorization_response.status_code == 201
@@ -338,6 +345,7 @@ def test_agent_run_activity_websocket_streams_observability_snapshot() -> None:
     assert updated_payload["agent_run"]["status"] == "waiting_tool_authorization"
     assert [event["event_type"] for event in updated_payload["events"]] == [
         "agent.run.created",
+        "agent.skills.activated",
         "agent.test.progress",
         "tool.authorization_requested",
         "agent.waiting_tool_authorization",
@@ -747,6 +755,7 @@ def test_agent_runner_cannot_write_run_events_directly() -> None:
         tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
         authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
         agent_events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        skill_activations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/skill-activations")
 
     assert invocation_response.status_code == 201
     assert before_events_response.status_code == 200
@@ -768,6 +777,14 @@ def test_agent_runner_cannot_write_run_events_directly() -> None:
 
     assert authorizations_response.status_code == 200
     assert authorizations_response.json() == []
+
+    assert skill_activations_response.status_code == 200
+    activation_names = {item["activation_context"]["package_name"] for item in skill_activations_response.json()}
+    assert activation_names == {
+        "pskill-runner-field-assistant",
+        "pskill-runner-evidence-evaluator",
+        "ffmpeg-video-processing",
+    }
 
     event_types = [item["event_type"] for item in agent_events_response.json()]
     assert "agent.skills.activated" in event_types

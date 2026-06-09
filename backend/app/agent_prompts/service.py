@@ -31,13 +31,19 @@ DEFAULT_AGENT_PROMPT_SEEDS = [
         "definition_key": "skill_compilation.formal_v5_compile",
         "ref": DEFAULT_COMPILE_AGENT_REF,
         "name": "SKILL 编译智能体",
-        "usage_keys": ["default.compile_agent"],
+        "usage_keys": ["pskill.compile.formal_v5", "default.compile_agent"],
     },
     {
         "definition_key": "skill_creation.conversational_draft",
         "ref": "skill_creation/conversational_draft/v1",
         "name": "Skill 构建智能体",
-        "usage_keys": ["default.skill_creation_agent"],
+        "usage_keys": ["pskill.build.default", "default.skill_creation_agent"],
+    },
+    {
+        "definition_key": "skill_test.pre_publish",
+        "ref": "skill_test/pre_publish/v1",
+        "name": "PSkill 发布前测试智能体",
+        "usage_keys": ["pskill.test.pre_publish"],
     },
     {
         "definition_key": "skill_test.semantic_judge",
@@ -49,7 +55,7 @@ DEFAULT_AGENT_PROMPT_SEEDS = [
         "definition_key": "runtime_execution.llm_node_fallback",
         "ref": "runtime_execution/llm_node_fallback/v1",
         "name": "Runtime LLM 节点兜底提示词",
-        "usage_keys": ["runtime.llm_node_fallback"],
+        "usage_keys": ["pskill.run.node", "runtime.llm_node_fallback"],
     },
 ]
 
@@ -122,14 +128,31 @@ class AgentPromptService:
                 definition.active_version_id = version.id
                 changed = True
 
+            existing_seed_binding = next(
+                (
+                    item
+                    for item in (
+                        self.repository.get_binding(session, str(existing_usage_key))
+                        for existing_usage_key in seed["usage_keys"]
+                    )
+                    if item is not None
+                ),
+                None,
+            )
             for usage_key in seed["usage_keys"]:
                 binding = self.repository.get_binding(session, str(usage_key))
                 if not binding:
+                    if existing_seed_binding and existing_seed_binding.active_version_id:
+                        target_definition_id = existing_seed_binding.definition_id
+                        target_version_id = existing_seed_binding.active_version_id
+                    else:
+                        target_definition_id = definition.id
+                        target_version_id = version.id
                     session.add(
                         AgentPromptBinding(
                             usage_key=str(usage_key),
-                            definition_id=definition.id,
-                            active_version_id=version.id,
+                            definition_id=target_definition_id,
+                            active_version_id=target_version_id,
                         )
                     )
                     changed = True

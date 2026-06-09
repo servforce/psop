@@ -1355,6 +1355,9 @@
       if (!packageName) {
         return [];
       }
+      if (Array.isArray(skillPackage.used_by_agents)) {
+        return skillPackage.used_by_agents;
+      }
       return (this.platformAgentDefinitions || []).filter((agent) => {
         const allowed = agent?.active_version?.spec_json?.allowed_skill_names || [];
         return Array.isArray(allowed) && allowed.includes(packageName);

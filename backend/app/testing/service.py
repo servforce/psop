@@ -11,6 +11,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agents.registry import AgentPromptPack
 from app.agents.schemas import AgentEventResponse, AppendAgentEventRequest, CreateAgentRunRequest
 from app.agents.service import AgentService
 from app.core.config import Settings
@@ -260,11 +261,17 @@ class SkillTestService:
             artifact_id=artifact.id if artifact else None,
             payload=payload,
         )
+        prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
+            session,
+            usage_key="pskill.test.pre_publish",
+            fallback_ref="skill_test/pre_publish/v1",
+        )
         request_snapshot = self._scenario_generation_request_snapshot(
             skill=skill,
             version_id=version.id,
             artifact_id=artifact.id if artifact else None,
             payload=payload,
+            prompt_pack=prompt_pack,
         )
         raw_generation_result, diagnostics, provider, model = self._call_scenario_generation_model(request_snapshot)
         scenario_payloads = self._scenario_payloads_from_generation(
@@ -1656,6 +1663,7 @@ class SkillTestService:
         version_id: str,
         artifact_id: str | None,
         payload: GenerateSkillTestScenariosRequest,
+        prompt_pack: AgentPromptPack,
     ) -> dict[str, Any]:
         prompt_payload = {
             "operation": "generate_psop_test_scenarios",
@@ -1681,13 +1689,11 @@ class SkillTestService:
                 },
             },
         }
-        system_prompt = (
-            "你是 PSOP 的 PSkill 测试场景生成智能体 pskill.tester。"
-            "只输出 JSON，对发布前黑盒时序测试生成 scenarios 数组。"
-        )
+        system_prompt = prompt_pack.system_prompt
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True)
         return {
-            "route_key": payload.route_key or TEXT_ROUTE_KEY,
+            "route_key": payload.route_key or prompt_pack.route_key or TEXT_ROUTE_KEY,
+            "agent_prompt": prompt_pack.metadata(),
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
             "prompt_payload": prompt_payload,

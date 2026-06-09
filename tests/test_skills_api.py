@@ -1414,6 +1414,7 @@ def test_generate_skill_draft_from_materials_commits_standard_files_without_publ
         agent_run_id = generated_payload["agent_run"]["id"]
         agent_run_response = client.get(f"/api/v1/agent-runs/{agent_run_id}")
         agent_events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        skill_activations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/skill-activations")
         model_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/model-calls")
         detail_response = client.get(f"/api/v1/pskills/{skill_id}")
         source_response = client.get(f"/api/v1/pskills/{skill_id}/source")
@@ -1470,11 +1471,18 @@ def test_generate_skill_draft_from_materials_commits_standard_files_without_publ
     assert agent_run_response.json()["status"] == "succeeded"
     event_types = {item["event_type"] for item in agent_events_response.json()}
     assert {
+        "agent.skills.activated",
         "pskill.builder.generation.linked",
         "pskill.builder.generation.started",
         "pskill.builder.model_call.completed",
         "pskill.builder.generation.succeeded",
     }.issubset(event_types)
+    assert skill_activations_response.status_code == 200
+    assert {item["activation_context"]["package_name"] for item in skill_activations_response.json()} == {
+        "pskill-builder",
+        "ffmpeg-video-processing",
+        "document-ocr-processing",
+    }
     assert model_calls_response.status_code == 200
     model_call = model_calls_response.json()[0]
     assert model_call["provider"] == "fake-openai-compatible"
@@ -1928,6 +1936,7 @@ def test_tester_agent_generates_test_scenarios() -> None:
         scenarios_response = client.get(f"/api/v1/pskills/{skill_id}/test-scenarios")
         agent_events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
         model_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/model-calls")
+        skill_activations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/skill-activations")
 
     assert publish_response.status_code == 202
     assert compile_response.status_code == 200
@@ -1953,12 +1962,19 @@ def test_tester_agent_generates_test_scenarios() -> None:
 
     event_types = [item["event_type"] for item in agent_events_response.json()]
     assert "testing.scenario_generation.started" in event_types
+    assert "agent.skills.activated" in event_types
     assert "testing.scenario_generation.model_call.completed" in event_types
     assert "testing.scenario_generation.completed" in event_types
+    assert skill_activations_response.status_code == 200
+    assert {item["activation_context"]["package_name"] for item in skill_activations_response.json()} == {
+        "pskill-tester",
+        "ffmpeg-video-processing",
+    }
 
     model_call = model_calls_response.json()[0]
     assert model_call["provider"] == "fake-openai-compatible"
     assert model_call["route_key"] == "text"
+    assert model_call["request_payload"]["agent_prompt"]["definition_key"] == "skill_test.pre_publish"
     assert model_call["request_payload"]["prompt_payload"]["operation"] == "generate_psop_test_scenarios"
     assert model_call["response_payload"]["parsed"]["scenarios"][0]["name"] == "自动生成发布前冒烟场景"
 
@@ -3512,6 +3528,7 @@ def test_skill_test_run_activity_websocket_streams_review_snapshot() -> None:
     assert initial_payload["review"]["scenario_run"]["driver_status"] == "waiting_time"
     assert [event["event_type"] for event in initial_payload["agent_events"]] == [
         "agent.run.created",
+        "agent.skills.activated",
         "testing.run.linked",
     ]
 

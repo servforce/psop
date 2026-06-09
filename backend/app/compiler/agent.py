@@ -59,7 +59,7 @@ class SkillCompileAgent:
     ) -> CompileAgentCandidate:
         prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
             session,
-            usage_key="default.compile_agent",
+            usage_key="pskill.compile.formal_v5",
             fallback_ref="skill_compilation/formal_v5_compile/v1",
         )
         domain_resolution = self.domain_pack_registry.resolve(_domain_pack_ref(document))

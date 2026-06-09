@@ -137,6 +137,53 @@ def test_tools_api_reports_recent_tool_call_failure_stats() -> None:
     assert calls[0]["status"] == "blocked"
 
 
+def test_tools_api_uses_skill_bindings_for_agent_allowed_tools() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        sync_response = client.post("/api/v1/skills/sync")
+        before_agent_response = client.get("/api/v1/agents/pskill.builder")
+        spec = {
+            **before_agent_response.json()["active_version"]["spec_json"],
+            "allowed_tools": ["psop.media.compute"],
+            "allowed_skill_names": ["ffmpeg-video-processing"],
+        }
+        draft_response = client.post(
+            "/api/v1/agents/pskill.builder/versions",
+            json={"version_label": "builder-tool-policy-ffmpeg-only", "spec_json": spec},
+        )
+        draft = next(
+            item for item in draft_response.json()["versions"] if item["version_label"] == "builder-tool-policy-ffmpeg-only"
+        )
+        publish_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft['id']}/publish")
+        activate_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft['id']}/activate")
+        media_detail_response = client.get("/api/v1/tools/psop.media.compute")
+        propose_patch_detail_response = client.get("/api/v1/tools/psop.repository.propose_patch")
+        media_test_response = client.post(
+            "/api/v1/tools/psop.media.compute/test",
+            json={"agent_key": "pskill.builder", "arguments_summary": {"operation": "extract_keyframes"}},
+        )
+        read_test_response = client.post(
+            "/api/v1/tools/psop.pskills.get/test",
+            json={"agent_key": "pskill.builder", "arguments_summary": {"pskill_id": "pskill-1"}},
+        )
+
+    assert sync_response.status_code == 200
+    assert draft_response.status_code == 201
+    assert publish_response.status_code == 200
+    assert activate_response.status_code == 200
+
+    assert media_detail_response.status_code == 200
+    assert media_detail_response.json()["allowed_agent_keys"] == ["pskill.builder"]
+    assert media_test_response.status_code == 200
+    assert media_test_response.json()["policy_reason"] == "native_tool_not_implemented"
+
+    assert propose_patch_detail_response.status_code == 200
+    assert propose_patch_detail_response.json()["allowed_agent_keys"] == []
+    assert read_test_response.status_code == 200
+    assert read_test_response.json()["policy_reason"] == "tool_not_allowed_by_agent_or_skill"
+
+
 def test_tools_api_dry_runs_read_compute_and_explains_authorization_policy() -> None:
     client, _, _ = create_test_client()
 

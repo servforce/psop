@@ -7,18 +7,21 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.models import AgentDefinition, AgentVersion
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.types import SKILL_SYNC_JOB_TYPE
 from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import generate_uuid, now_utc
-from app.skills.models import SkillPackage, SkillResource, SkillVersion
+from app.skills.models import SkillActivation, SkillBinding, SkillPackage, SkillResource, SkillVersion
 from app.skills.repository import SkillPackageRepository
 from app.skills.schemas import (
     CreateSkillVersionRequest,
     QueueSkillSyncRequest,
+    SkillPackageAgentUsageResponse,
     SkillPackageDetailResponse,
     SkillPackageSummaryResponse,
     SkillPackageSyncResponse,
@@ -102,7 +105,7 @@ class SkillPackageService:
         session.commit()
         return result
 
-    def sync_packages(self, session: Session) -> SkillPackageSyncResponse:
+    def sync_packages(self, session: Session, *, commit: bool = True) -> SkillPackageSyncResponse:
         scanned = self._scan_packages()
         changed = False
         for item in scanned:
@@ -169,8 +172,12 @@ class SkillPackageService:
             if not active_version:
                 package.active_version_id = version.id
                 changed = True
-        if changed:
+        bindings_changed = self.sync_agent_skill_bindings(session, sync_packages=False, commit=False)
+        changed = changed or bindings_changed
+        if changed and commit:
             session.commit()
+        elif changed:
+            session.flush()
         packages = self.list_packages(session)
         version_count = sum(item.version_count for item in packages)
         return SkillPackageSyncResponse(
@@ -180,6 +187,64 @@ class SkillPackageService:
             version_count=version_count,
             packages=packages,
         )
+
+    def sync_agent_skill_bindings(
+        self,
+        session: Session,
+        *,
+        sync_packages: bool = False,
+        commit: bool = True,
+    ) -> bool:
+        if sync_packages:
+            self.sync_packages(session, commit=False)
+        specs = self._agent_skill_specs(session)
+        package_by_name = {package.name: package for package in self.repository.list_packages(session, status="active")}
+        desired: dict[tuple[str, str], tuple[str, str | None]] = {}
+        managed_agent_keys = {str(spec["key"]) for spec in specs}
+        for spec in specs:
+            agent_key = str(spec["key"])
+            for package_name in _normalize_string_list(spec.get("allowed_skill_names") or []):
+                package = package_by_name.get(package_name)
+                if not package or not package.active_version_id:
+                    continue
+                desired[(agent_key, package.id)] = (package.name, package.active_version_id)
+
+        changed = False
+        existing = [
+            binding
+            for binding in self.repository.list_bindings(session)
+            if binding.agent_key in managed_agent_keys
+        ]
+        existing_by_key = {(binding.agent_key, binding.package_id): binding for binding in existing}
+        for key, (usage_key, active_version_id) in desired.items():
+            binding = existing_by_key.get(key)
+            if not binding:
+                session.add(
+                    SkillBinding(
+                        agent_key=key[0],
+                        usage_key=usage_key,
+                        package_id=key[1],
+                        active_version_id=active_version_id,
+                    )
+                )
+                changed = True
+                continue
+            if binding.usage_key != usage_key:
+                binding.usage_key = usage_key
+                changed = True
+            if binding.active_version_id != active_version_id:
+                binding.active_version_id = active_version_id
+                changed = True
+
+        for key, binding in existing_by_key.items():
+            if key not in desired:
+                session.delete(binding)
+                changed = True
+        if changed and commit:
+            session.commit()
+        elif changed:
+            session.flush()
+        return changed
 
     def list_packages(
         self,
@@ -380,6 +445,90 @@ class SkillPackageService:
             )
             for item in self.repository.list_activations(session, agent_run_id)
         ]
+
+    def activate_agent_run_skills(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        agent_key: str,
+        selected_names: list[Any],
+        sync: bool = True,
+    ) -> tuple[set[str], list[str]]:
+        if sync:
+            self.sync_agent_skill_bindings(session, sync_packages=True, commit=False)
+        active_tools, active_skill_names = self.active_skill_allowed_tools_for_agent(
+            session,
+            agent_key=agent_key,
+            sync=False,
+        )
+        if not active_skill_names:
+            active_tools, active_skill_names = self._active_tools_from_skill_names(
+                session,
+                _normalize_string_list(selected_names),
+            )
+        for package_name in active_skill_names:
+            package = self.repository.get_package_by_name(session, package_name)
+            if not package or not package.active_version_id:
+                continue
+            version = self.repository.get_version(session, package.active_version_id)
+            if not version:
+                continue
+            activation = self.repository.get_activation(
+                session,
+                agent_run_id=agent_run_id,
+                version_id=version.id,
+            )
+            if activation:
+                continue
+            session.add(
+                SkillActivation(
+                    agent_run_id=agent_run_id,
+                    package_id=package.id,
+                    version_id=version.id,
+                    activation_context={
+                        "agent_key": agent_key,
+                        "package_name": package.name,
+                        "content_hash": version.content_hash,
+                    },
+                )
+            )
+        session.flush()
+        return active_tools, active_skill_names
+
+    def active_skill_allowed_tools_for_agent(
+        self,
+        session: Session,
+        *,
+        agent_key: str,
+        sync: bool = True,
+    ) -> tuple[set[str], list[str]]:
+        if sync:
+            self.sync_agent_skill_bindings(session, sync_packages=True, commit=False)
+        allowed_tools: set[str] = set()
+        active_skill_names: list[str] = []
+        for binding in self.repository.list_bindings(session, agent_key=agent_key):
+            package = self.repository.get_package(session, binding.package_id)
+            version = self.repository.get_version(session, binding.active_version_id)
+            if not package or not version:
+                continue
+            active_skill_names.append(package.name)
+            allowed_tools.update(str(tool) for tool in version.allowed_tools)
+        return allowed_tools, active_skill_names
+
+    def _active_tools_from_skill_names(self, session: Session, skill_names: list[str]) -> tuple[set[str], list[str]]:
+        allowed_tools: set[str] = set()
+        active_skill_names: list[str] = []
+        for package_name in skill_names:
+            package = self.repository.get_package_by_name(session, package_name)
+            if not package or not package.active_version_id:
+                continue
+            version = self.repository.get_version(session, package.active_version_id)
+            if not version:
+                continue
+            active_skill_names.append(package.name)
+            allowed_tools.update(str(tool) for tool in version.allowed_tools)
+        return allowed_tools, active_skill_names
 
     def _get_package_version(self, session: Session, package_name: str, version_id: str) -> tuple[SkillPackage, SkillVersion]:
         package = self.repository.get_package_by_name(session, package_name)
@@ -663,10 +812,87 @@ class SkillPackageService:
             active_version_id=package.active_version_id,
             active_version_label=active_version.version_label if active_version else None,
             active_content_hash=active_version.content_hash if active_version else None,
+            used_by_agents=self._skill_package_agent_usages(session, package),
             version_count=len(versions),
             created_at=package.created_at,
             updated_at=package.updated_at,
         )
+
+    def _skill_package_agent_usages(self, session: Session, package: SkillPackage) -> list[SkillPackageAgentUsageResponse]:
+        usages: list[SkillPackageAgentUsageResponse] = []
+        specs = {str(spec["key"]): spec for spec in self._agent_skill_specs(session)}
+        for binding in self.repository.list_bindings(session, package_id=package.id):
+            spec = specs.get(binding.agent_key)
+            usages.append(
+                SkillPackageAgentUsageResponse(
+                    key=binding.agent_key,
+                    name=str(spec.get("name") if spec else binding.agent_key),
+                    role=str(spec.get("role") if spec else ""),
+                    skill_binding_id=binding.id,
+                    usage_key=binding.usage_key,
+                    active_version_id=str(spec.get("active_version_id") or "") or None,
+                    active_version_label=str(spec.get("active_version_label") or "") or None,
+                )
+            )
+        if usages:
+            return sorted(usages, key=lambda item: item.key)
+        for spec in specs.values():
+            allowed_skill_names = spec.get("allowed_skill_names") if isinstance(spec, dict) else []
+            if not isinstance(allowed_skill_names, list) or package.name not in allowed_skill_names:
+                continue
+            usages.append(
+                SkillPackageAgentUsageResponse(
+                    key=str(spec["key"]),
+                    name=str(spec["name"]),
+                    role=str(spec["role"]),
+                    active_version_id=str(spec.get("active_version_id") or "") or None,
+                    active_version_label=str(spec.get("active_version_label") or "") or None,
+                )
+            )
+        return sorted(usages, key=lambda item: item.key)
+
+    @staticmethod
+    def _agent_skill_specs(session: Session) -> list[dict[str, Any]]:
+        specs: list[dict[str, Any]] = []
+        existing_keys: set[str] = set()
+        definitions = session.scalars(
+            select(AgentDefinition)
+            .where(AgentDefinition.status != "archived")
+            .order_by(AgentDefinition.key.asc())
+        ).all()
+        for definition in definitions:
+            existing_keys.add(definition.key)
+            version = session.get(AgentVersion, definition.active_version_id)
+            if not version:
+                continue
+            spec = dict(version.spec_json or {})
+            specs.append(
+                {
+                    "key": definition.key,
+                    "name": definition.name,
+                    "role": definition.role,
+                    "allowed_skill_names": spec.get("allowed_skill_names") if isinstance(spec, dict) else [],
+                    "active_version_id": version.id,
+                    "active_version_label": version.version_label,
+                }
+            )
+        from app.agents.service import DEFAULT_AGENT_SPECS
+
+        for seed in DEFAULT_AGENT_SPECS:
+            agent_key = str(seed["key"])
+            if agent_key in existing_keys:
+                continue
+            specs.append(
+                {
+                    "key": agent_key,
+                    "name": str(seed["name"]),
+                    "role": str(seed["role"]),
+                    "allowed_skill_names": seed.get("allowed_skill_names") if isinstance(seed, dict) else [],
+                    "active_version_id": None,
+                    "active_version_label": "seed",
+                }
+            )
+        return specs
 
     def _build_version_response(self, session: Session, version: SkillVersion) -> SkillVersionResponse:
         resources = self.repository.list_resources(session, version.id)

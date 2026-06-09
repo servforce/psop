@@ -56,8 +56,8 @@ class ToolService:
     ) -> None:
         self.repository = repository or ToolRepository()
         self.agent_service = agent_service or AgentService()
-        self.skill_service = skill_service or SkillPackageService()
-        self.skill_repository = skill_repository or SkillPackageRepository()
+        self.skill_service = skill_service or SkillPackageService(repository=skill_repository)
+        self.skill_repository = self.skill_service.repository
         self.tool_policy = ToolPolicy()
 
     def ensure_seed_data(self, session: Session) -> bool:
@@ -278,7 +278,11 @@ class ToolService:
             return set()
         spec = version.spec_json if isinstance(version.spec_json, dict) else {}
         agent_allowed_tools = set(str(item) for item in spec.get("allowed_tools") or [])
-        skill_allowed_tools = self._active_skill_allowed_tools(session, spec.get("allowed_skill_names") or [])
+        skill_allowed_tools, _ = self.skill_service.active_skill_allowed_tools_for_agent(
+            session,
+            agent_key=agent_key,
+            sync=False,
+        )
         return agent_allowed_tools & skill_allowed_tools
 
     @staticmethod
@@ -343,7 +347,11 @@ class ToolService:
                 continue
             spec = version.spec_json if isinstance(version.spec_json, dict) else {}
             agent_allowed_tools = set(str(item) for item in spec.get("allowed_tools") or [])
-            skill_allowed_tools = self._active_skill_allowed_tools(session, spec.get("allowed_skill_names") or [])
+            skill_allowed_tools, _ = self.skill_service.active_skill_allowed_tools_for_agent(
+                session,
+                agent_key=definition.key,
+                sync=False,
+            )
             if tool_name in agent_allowed_tools and tool_name in skill_allowed_tools:
                 keys.append(definition.key)
         return keys
@@ -363,18 +371,6 @@ class ToolService:
             created_at=tool_call.created_at,
             updated_at=tool_call.updated_at,
         )
-
-    def _active_skill_allowed_tools(self, session: Session, skill_names: list[Any]) -> set[str]:
-        allowed_tools: set[str] = set()
-        for package_name in [str(item) for item in skill_names]:
-            package = self.skill_repository.get_package_by_name(session, package_name)
-            if not package or not package.active_version_id:
-                continue
-            version = self.skill_repository.get_version(session, package.active_version_id)
-            if not version:
-                continue
-            allowed_tools.update(str(tool) for tool in version.allowed_tools)
-        return allowed_tools
 
     @staticmethod
     def _validate_optional_filter(name: str, value: str | None, allowed: set[str]) -> None:

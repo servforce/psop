@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from app.jobs.types import SKILL_SYNC_JOB_TYPE
 from app.jobs.worker import RuntimeJobWorker
-from app.skills.models import SkillPackage, SkillVersion
+from app.skills.models import SkillBinding, SkillPackage, SkillVersion
 from tests.test_skills_api import create_test_client
 
 
@@ -35,10 +35,12 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
         validate_response = client.post(f"/api/v1/skills/pskill-builder/versions/{version_id}/validate")
         activate_response = client.post(f"/api/v1/skills/pskill-builder/versions/{version_id}/activate")
         pskills_list_response = client.get("/api/v1/pskills")
+        with client.app.state.db_manager.session() as session:
+            skill_bindings = list(session.scalars(select(SkillBinding)).all())
 
     assert sync_response.status_code == 200
-    assert sync_response.json()["scanned_count"] == 8
-    assert sync_response.json()["package_count"] == 8
+    assert sync_response.json()["scanned_count"] == 9
+    assert sync_response.json()["package_count"] == 9
 
     package_names = {item["name"] for item in list_response.json()}
     assert list_response.status_code == 200
@@ -47,6 +49,7 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
         "pskill-compiler-formal-v5",
         "pskill-tester",
         "pskill-runner-field-assistant",
+        "pskill-runner-evidence-evaluator",
         "pskill-run-evaluator",
         "psop-governance-manager",
         "ffmpeg-video-processing",
@@ -60,6 +63,9 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
     assert detail_response.status_code == 200
     assert detail["name"] == "pskill-builder"
     assert detail["scope"] == "psop"
+    assert [item["key"] for item in detail["used_by_agents"]] == ["pskill.builder"]
+    assert detail["used_by_agents"][0]["usage_key"] == "pskill-builder"
+    assert detail["used_by_agents"][0]["skill_binding_id"]
     assert detail["active_version"]["allowed_tools"] == BUILDER_ALLOWED_TOOLS
     assert detail["active_version"]["resource_count"] >= 1
     assert detail["resources"][0]["resource_kind"] == "skill"
@@ -67,6 +73,19 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
     runner_detail = runner_detail_response.json()
     assert runner_detail_response.status_code == 200
     assert runner_detail["active_version"]["allowed_tools"] == ["psop.runtime.read"]
+    assert [item["key"] for item in runner_detail["used_by_agents"]] == ["pskill.runner"]
+    assert runner_detail["used_by_agents"][0]["usage_key"] == "pskill-runner-field-assistant"
+
+    assert len(skill_bindings) == 11
+    assert {(item.agent_key, item.usage_key) for item in skill_bindings} >= {
+        ("pskill.builder", "pskill-builder"),
+        ("pskill.builder", "ffmpeg-video-processing"),
+        ("pskill.builder", "document-ocr-processing"),
+        ("pskill.tester", "ffmpeg-video-processing"),
+        ("pskill.runner", "pskill-runner-field-assistant"),
+        ("pskill.runner", "pskill-runner-evidence-evaluator"),
+        ("pskill.runner", "ffmpeg-video-processing"),
+    }
 
     assert versions_response.status_code == 200
     assert versions_response.json()[0]["content_hash"] == detail["active_content_hash"]
@@ -77,6 +96,62 @@ def test_skill_packages_sync_and_detail_use_skills_namespace() -> None:
     assert activate_response.json()["active_version_id"] == version_id
     assert pskills_list_response.status_code == 200
     assert pskills_list_response.json() == []
+
+
+def test_skill_bindings_refresh_when_agent_version_activates() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        sync_response = client.post("/api/v1/skills/sync")
+        initial_builder_response = client.get("/api/v1/skills/pskill-builder")
+        before_agent_response = client.get("/api/v1/agents/pskill.builder")
+        spec = {
+            **before_agent_response.json()["active_version"]["spec_json"],
+            "allowed_skill_names": ["ffmpeg-video-processing"],
+        }
+        draft_response = client.post(
+            "/api/v1/agents/pskill.builder/versions",
+            json={"version_label": "builder-ffmpeg-only", "spec_json": spec},
+        )
+        draft = next(item for item in draft_response.json()["versions"] if item["version_label"] == "builder-ffmpeg-only")
+        publish_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft['id']}/publish")
+        activate_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft['id']}/activate")
+        builder_response = client.get("/api/v1/skills/pskill-builder")
+        ffmpeg_response = client.get("/api/v1/skills/ffmpeg-video-processing")
+        with client.app.state.db_manager.session() as session:
+            builder_bindings = list(
+                session.scalars(
+                    select(SkillBinding)
+                    .join(SkillPackage, SkillPackage.id == SkillBinding.package_id)
+                    .where(SkillPackage.name == "pskill-builder")
+                ).all()
+            )
+            ffmpeg_bindings = list(
+                session.scalars(
+                    select(SkillBinding)
+                    .join(SkillPackage, SkillPackage.id == SkillBinding.package_id)
+                    .where(SkillPackage.name == "ffmpeg-video-processing")
+                ).all()
+            )
+
+    assert sync_response.status_code == 200
+    assert initial_builder_response.status_code == 200
+    assert [item["key"] for item in initial_builder_response.json()["used_by_agents"]] == ["pskill.builder"]
+    assert draft_response.status_code == 201
+    assert publish_response.status_code == 200
+    assert activate_response.status_code == 200
+
+    assert builder_response.status_code == 200
+    assert builder_response.json()["used_by_agents"] == []
+    assert builder_bindings == []
+
+    assert ffmpeg_response.status_code == 200
+    assert {item["key"] for item in ffmpeg_response.json()["used_by_agents"]} == {
+        "pskill.builder",
+        "pskill.tester",
+        "pskill.runner",
+    }
+    assert {item.agent_key for item in ffmpeg_bindings} == {"pskill.builder", "pskill.tester", "pskill.runner"}
 
 
 def test_skill_packages_api_queues_sync_job_for_worker_processing() -> None:
@@ -112,11 +187,11 @@ def test_skill_packages_api_queues_sync_job_for_worker_processing() -> None:
     assert processed is True
     job = job_response.json()[0]
     assert job["status"] == "succeeded"
-    assert job["metrics"]["scanned_count"] == 8
-    assert job["metrics"]["package_count"] == 8
-    assert job["metrics"]["version_count"] == 8
+    assert job["metrics"]["scanned_count"] == 9
+    assert job["metrics"]["package_count"] == 9
+    assert job["metrics"]["version_count"] == 9
     assert job["progress"]["percent"] == 100
-    assert "packages=8" in job["progress"]["detail"]
+    assert "packages=9" in job["progress"]["detail"]
 
 
 def test_skill_package_version_create_validate_and_activate_lifecycle() -> None:

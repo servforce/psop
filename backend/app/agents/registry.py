@@ -105,7 +105,7 @@ class PromptRegistry:
 
     def load_default_compile_agent_for_session(self, session: Session | None = None) -> AgentPromptPack:
         return self.load_agent_for_usage(
-            "default.compile_agent",
+            "pskill.compile.formal_v5",
             fallback_ref=DEFAULT_COMPILE_AGENT_REF,
             session=session,
         )

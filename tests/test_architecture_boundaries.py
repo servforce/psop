@@ -75,7 +75,12 @@ def test_default_agents_keep_closed_loop_keys_and_runner_boundary() -> None:
     ]
     assert specs["pskill.runner"]["output_schema"]["name"] == "RuntimeAgentObservation"
     assert specs["pskill.runner"]["allowed_tools"] == ["psop.runtime.read"]
-    assert specs["pskill.runner"]["allowed_skill_names"] == ["pskill-runner-field-assistant"]
+    assert specs["pskill.runner"]["allowed_skill_names"] == [
+        "pskill-runner-field-assistant",
+        "pskill-runner-evidence-evaluator",
+        "ffmpeg-video-processing",
+    ]
+    assert specs["pskill.tester"]["allowed_skill_names"] == ["pskill-tester", "ffmpeg-video-processing"]
     assert specs["psop.governance"]["output_schema"]["name"] == "GovernanceProposalResult"
 
 

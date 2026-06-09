@@ -24,11 +24,16 @@ def test_agent_prompt_seed_creates_default_bindings_and_db_registry_priority() -
             session.commit()
 
             bindings = {item.usage_key: item for item in repository.list_bindings(session)}
+            assert "pskill.build.default" in bindings
+            assert "pskill.compile.formal_v5" in bindings
+            assert "pskill.test.pre_publish" in bindings
+            assert "pskill.run.node" in bindings
             assert "default.compile_agent" in bindings
+            assert "default.skill_creation_agent" in bindings
             assert "skill_test.semantic_judge" in bindings
             assert "runtime.llm_node_fallback" in bindings
 
-            binding = bindings["default.compile_agent"]
+            binding = bindings["pskill.compile.formal_v5"]
             version = session.get(AgentPromptVersion, binding.active_version_id)
             assert version is not None
             files = dict(version.files)
@@ -38,7 +43,7 @@ def test_agent_prompt_seed_creates_default_bindings_and_db_registry_priority() -
             session.commit()
 
             pack = PromptRegistry().load_agent_for_usage(
-                "default.compile_agent",
+                "pskill.compile.formal_v5",
                 fallback_ref="skill_compilation/formal_v5_compile/v1",
                 session=session,
             )
@@ -121,4 +126,3 @@ def test_agent_prompt_api_validates_publishes_and_activates_versions() -> None:
         assert bindings_response.status_code == 200
         binding = next(item for item in bindings_response.json() if item["usage_key"] == "skill_test.semantic_judge")
         assert binding["active_version_id"] == draft["id"]
-
