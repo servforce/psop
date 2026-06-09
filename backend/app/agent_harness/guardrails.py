@@ -11,6 +11,25 @@ BUSINESS_WAIT_STATE_KEYS = (
     "proposal_review_required",
     "require_human_review",
 )
+PROMPT_INJECTION_MARKERS = (
+    "ignore previous instructions",
+    "ignore all previous instructions",
+    "disregard previous instructions",
+    "bypass tool authorization",
+    "skip tool authorization",
+    "disable guardrails",
+    "override system prompt",
+)
+RUNTIME_STATE_MUTATION_MARKERS = (
+    "session_token_snapshot",
+    "session token snapshot",
+    "run_event",
+    "run event",
+    "run_trace",
+    "run trace",
+    "runtime kernel",
+    "token_payload",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +61,66 @@ class OutputGuardrailResult:
             "business_wait_state": self.business_wait_state,
             "non_hitl_business_state": bool(self.business_wait_state),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class InputGuardrailResult:
+    passed: bool
+    findings: list[GuardrailFinding] = field(default_factory=list)
+
+    def as_event_payload(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "findings": [item.as_dict() for item in self.findings],
+            "warning_count": sum(1 for item in self.findings if item.severity == "warning"),
+            "error_count": sum(1 for item in self.findings if item.severity == "error"),
+        }
+
+
+class InputGuardrail:
+    """Inspect Agent input for prompt-injection and state-sovereignty risk signals."""
+
+    def check(self, *, agent_key: str, input_payload: dict[str, Any]) -> InputGuardrailResult:
+        findings: list[GuardrailFinding] = []
+        for path, text in self._iter_strings(input_payload):
+            normalized = text.lower()
+            if any(marker in normalized for marker in PROMPT_INJECTION_MARKERS):
+                findings.append(
+                    GuardrailFinding(
+                        code="input_prompt_injection_signal",
+                        message="Input contains prompt-injection style instructions; keep system and tool policies authoritative.",
+                        path=path,
+                        severity="warning",
+                    )
+                )
+            if agent_key == "pskill.runner" and any(marker in normalized for marker in RUNTIME_STATE_MUTATION_MARKERS):
+                findings.append(
+                    GuardrailFinding(
+                        code="input_runtime_state_sovereignty_signal",
+                        message="Runner input references Runtime state mutation concepts; Runtime Kernel remains the only formal state writer.",
+                        path=path,
+                        severity="warning",
+                    )
+                )
+        return InputGuardrailResult(
+            passed=not any(item.severity == "error" for item in findings),
+            findings=findings,
+        )
+
+    def _iter_strings(self, value: Any, *, path: str = "input_payload") -> list[tuple[str, str]]:
+        if isinstance(value, str):
+            return [(path, value)]
+        if isinstance(value, dict):
+            results: list[tuple[str, str]] = []
+            for key, item in value.items():
+                results.extend(self._iter_strings(item, path=f"{path}.{key}"))
+            return results
+        if isinstance(value, list):
+            results = []
+            for index, item in enumerate(value):
+                results.extend(self._iter_strings(item, path=f"{path}[{index}]"))
+            return results
+        return []
 
 
 class OutputGuardrail:

@@ -32,6 +32,8 @@ from app.skills.schemas import (
 
 
 SKILLS_ROOT = Path(__file__).resolve().parents[3] / "skills"
+DEFAULT_SKILL_CONTEXT_MAX_CHARS = 4000
+DEFAULT_SKILL_CONTEXT_REFERENCE_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -446,6 +448,47 @@ class SkillPackageService:
             for item in self.repository.list_activations(session, agent_run_id)
         ]
 
+    def hydrate_agent_run_skill_context(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        max_chars: int = DEFAULT_SKILL_CONTEXT_MAX_CHARS,
+        reference_limit: int = DEFAULT_SKILL_CONTEXT_REFERENCE_LIMIT,
+    ) -> list[dict[str, Any]]:
+        context: list[dict[str, Any]] = []
+        resolved_max_chars = max(400, min(12000, int(max_chars or DEFAULT_SKILL_CONTEXT_MAX_CHARS)))
+        resolved_reference_limit = max(0, min(10, int(reference_limit or DEFAULT_SKILL_CONTEXT_REFERENCE_LIMIT)))
+        for activation in self.repository.list_activations(session, agent_run_id):
+            package = self.repository.get_package(session, activation.package_id)
+            version = self.repository.get_version(session, activation.version_id)
+            if not package or not version:
+                continue
+            resources = version.resource_index if isinstance(version.resource_index, list) else []
+            references: list[dict[str, Any]] = []
+            for resource in resources:
+                if len(references) >= resolved_reference_limit or not isinstance(resource, dict):
+                    continue
+                resource_path = str(resource.get("path") or "").strip()
+                if not resource_path.startswith("references/"):
+                    continue
+                content = self._read_local_package_file(package, resource_path, max_chars=resolved_max_chars)
+                if content:
+                    references.append({"path": resource_path, "content": content})
+            context.append(
+                {
+                    "package_name": package.name,
+                    "scope": package.scope,
+                    "version_id": version.id,
+                    "version_label": version.version_label,
+                    "content_hash": version.content_hash,
+                    "allowed_tools": [str(tool) for tool in version.allowed_tools],
+                    "skill_md": self._read_local_package_file(package, "SKILL.md", max_chars=resolved_max_chars),
+                    "references": references,
+                }
+            )
+        return context
+
     def activate_agent_run_skills(
         self,
         session: Session,
@@ -495,6 +538,28 @@ class SkillPackageService:
             )
         session.flush()
         return active_tools, active_skill_names
+
+    def _read_local_package_file(self, package: SkillPackage, relative_path: str, *, max_chars: int) -> str:
+        source_uri = str(package.source_uri or "").strip()
+        if not source_uri.startswith("skills/"):
+            return ""
+        try:
+            base_path = (self.skills_root.parent / source_uri).resolve()
+            root_path = self.skills_root.parent.resolve()
+            base_path.relative_to(root_path)
+            file_path = (base_path / relative_path).resolve()
+            file_path.relative_to(base_path)
+        except (OSError, ValueError):
+            return ""
+        if not file_path.is_file():
+            return ""
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        if len(content) <= max_chars:
+            return content
+        return f"{content[:max_chars]}\n...[truncated]"
 
     def active_skill_allowed_tools_for_agent(
         self,

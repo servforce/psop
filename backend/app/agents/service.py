@@ -889,6 +889,9 @@ class AgentService:
             value = spec.get(field)
             if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
                 errors.append({"field": field, "message": "must be a list of strings"})
+        prompt_usage_key = spec.get("prompt_usage_key")
+        if prompt_usage_key is not None and (not isinstance(prompt_usage_key, str) or not prompt_usage_key.strip()):
+            errors.append({"field": "prompt_usage_key", "message": "must be a non-empty string"})
         output_schema = spec.get("output_schema")
         if not isinstance(output_schema, dict) or not str(output_schema.get("name") or "").strip():
             errors.append({"field": "output_schema.name", "message": "required"})
@@ -1182,6 +1185,7 @@ class AgentService:
             "goal": seed["goal"],
             "instructions": {},
             "model_policy": {"route_key": "text"},
+            "prompt_usage_key": str(seed["usage_keys"][0]),
             "runtime_policy": {},
             "allowed_tools": seed.get("allowed_tools", []),
             "allowed_skill_names": seed.get("allowed_skill_names", []),

@@ -73,6 +73,8 @@ def get_agent_runner(request: Request) -> AgentRunner:
         runtime_service=get_runtime_service(request),
         evaluation_service=get_evaluation_service(request),
         testing_service=get_skill_test_service(request),
+        inference_gateway=get_inference_gateway(request),
+        agent_prompt_service=get_agent_prompt_service(request),
     )
 
 
@@ -95,7 +97,11 @@ def get_pskill_draft_service(request: Request) -> PSkillDraftService:
     return PSkillDraftService(
         skills_service=skills_service,
         agent_service=get_agent_service(request),
-        agent_runner=AgentRunner(pskills_service=skills_service),
+        agent_runner=AgentRunner(
+            pskills_service=skills_service,
+            inference_gateway=get_inference_gateway(request),
+            agent_prompt_service=get_agent_prompt_service(request),
+        ),
     )
 
 

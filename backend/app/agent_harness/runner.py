@@ -7,8 +7,10 @@ from typing import Any
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from app.agent_prompts.service import AgentPromptService
 from app.agent_harness.agent_decision import AgentDecision
-from app.agent_harness.guardrails import OutputGuardrail
+from app.agent_harness.guardrails import InputGuardrail, OutputGuardrail
+from app.agent_harness.model import AgentModelClient, AgentModelDecisionResult
 from app.agent_harness.planning import AgentPlanner
 from app.agent_harness.tools import ToolPolicy
 from app.agents.models import AgentRun, AgentToolAuthorization
@@ -18,15 +20,17 @@ from app.agents.schemas import (
     CreateToolAuthorizationRequest,
     AgentRunResponse,
 )
+from app.agents.registry import DEFAULT_COMPILE_AGENT_REF
 from app.agents.service import AgentService
 from app.compiler.formal_v5 import validate_and_normalize_artifact
 from app.compiler.service import CompilerService
 from app.evaluations.service import EvaluationService
+from app.gateway.inference import LlmInferenceGateway
 from app.governance.schemas import GovernanceProposalCreateRequest
 from app.governance.service import GovernanceService
 from app.memory.schemas import MemorySearchRequest
 from app.memory.service import MemoryService
-from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
+from app.pskills.exceptions import SkillNotFoundError, SkillValidationError, SkillsConfigurationError, SkillsGatewayError
 from app.pskills.manifest import SkillDocument, document_from_manifest_snapshot, parse_skill_yaml, render_skill_yaml
 from app.pskills.models import now_utc
 from app.pskills.service import SkillsService
@@ -54,6 +58,15 @@ DEFAULT_AGENT_SKILLS: dict[str, list[str]] = {
     "psop.governance": ["psop-governance-manager"],
 }
 
+AGENT_PROMPT_FALLBACKS: dict[str, tuple[str, str]] = {
+    "pskill.builder": ("pskill.build.default", "skill_creation/conversational_draft/v1"),
+    "pskill.compiler": ("pskill.compile.formal_v5", DEFAULT_COMPILE_AGENT_REF),
+    "pskill.tester": ("pskill.test.pre_publish", "skill_test/pre_publish/v1"),
+    "pskill.runner": ("pskill.run.node", "runtime_execution/llm_node_fallback/v1"),
+    "pskill.evaluator": ("pskill.evaluate.run", "run_evaluation/default/v1"),
+    "psop.governance": ("psop.governance.proposal", "governance/proposal/v1"),
+}
+
 
 class AgentRunner:
     def __init__(
@@ -70,8 +83,12 @@ class AgentRunner:
         evaluation_service: EvaluationService | None = None,
         testing_service: SkillTestService | None = None,
         governance_service: GovernanceService | None = None,
+        input_guardrail: InputGuardrail | None = None,
         output_guardrail: OutputGuardrail | None = None,
         planner: AgentPlanner | None = None,
+        inference_gateway: LlmInferenceGateway | None = None,
+        model_client: AgentModelClient | None = None,
+        agent_prompt_service: AgentPromptService | None = None,
     ) -> None:
         self.agent_service = agent_service or AgentService()
         self.skill_service = skill_service or SkillPackageService(repository=skill_repository)
@@ -84,8 +101,11 @@ class AgentRunner:
         self.evaluation_service = evaluation_service or EvaluationService()
         self.testing_service = testing_service
         self.governance_service = governance_service or GovernanceService()
+        self.input_guardrail = input_guardrail or InputGuardrail()
         self.output_guardrail = output_guardrail or OutputGuardrail()
         self.planner = planner or AgentPlanner()
+        self.model_client = model_client or AgentModelClient(inference_gateway)
+        self.agent_prompt_service = agent_prompt_service or AgentPromptService()
 
     def run_once(self, session: Session, agent_run_id: str) -> AgentRunResponse:
         agent_run = self.agent_service.get_run_model(session, agent_run_id)
@@ -111,7 +131,62 @@ class AgentRunner:
             commit=False,
         )
 
+        input_guardrail_result = self.input_guardrail.check(
+            agent_key=agent_run.agent_key,
+            input_payload=agent_run.input_payload,
+        )
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="agent.input_guardrail.checked",
+                phase="guardrails",
+                payload=input_guardrail_result.as_event_payload(),
+            ),
+            commit=False,
+        )
+        if not input_guardrail_result.passed:
+            agent_run.status = "failed"
+            agent_run.error_message = "input_guardrail_failed"
+            agent_run.ended_at = now_utc()
+            self.agent_service.append_event(
+                session,
+                agent_run.id,
+                AppendAgentEventRequest(
+                    event_type="agent.input_guardrail.failed",
+                    phase="guardrails",
+                    payload={"findings": [item.as_dict() for item in input_guardrail_result.findings]},
+                ),
+                commit=False,
+            )
+            session.commit()
+            return self.agent_service._build_run_response(agent_run)
+
         active_tools, active_skill_names = self._activate_skills(session, agent_run=agent_run, spec=spec)
+        skill_context = self.skill_service.hydrate_agent_run_skill_context(session, agent_run_id=agent_run.id)
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="agent.skills.hydrated",
+                phase="skills",
+                payload={
+                    "skill_context_count": len(skill_context),
+                    "package_names": [str(item.get("package_name") or "") for item in skill_context],
+                    "content_hashes": {
+                        str(item.get("package_name") or ""): str(item.get("content_hash") or "")
+                        for item in skill_context
+                        if item.get("package_name")
+                    },
+                    "reference_counts": {
+                        str(item.get("package_name") or ""): len(item.get("references") or [])
+                        for item in skill_context
+                        if item.get("package_name")
+                    },
+                },
+            ),
+            commit=False,
+        )
         memory_context = self.memory_service.retrieve_context_for_agent(
             session,
             agent_key=agent_run.agent_key,
@@ -150,22 +225,40 @@ class AgentRunner:
             ),
             commit=False,
         )
-        decision = self._decision_from_input(agent_run.input_payload)
+        llm_model_mode = self._uses_llm_model_decision(agent_run=agent_run, spec=spec)
+        try:
+            model_result = self._resolve_model_decision(
+                session=session,
+                agent_run=agent_run,
+                spec=spec,
+                active_skill_names=active_skill_names,
+                skill_context=skill_context,
+                memory_context=memory_context,
+                plan_payload=plan_payload,
+            )
+        except (SkillValidationError, SkillsConfigurationError, SkillsGatewayError, ValidationError) as error:
+            if not llm_model_mode:
+                raise
+            return self._fail_llm_model_decision(
+                session,
+                agent_run=agent_run,
+                spec=spec,
+                skill_context=skill_context,
+                memory_context=memory_context,
+                plan_payload=plan_payload,
+                error=error,
+            )
+        decision = model_result.decision
         self.agent_service.record_model_call(
             session,
             agent_run_id=agent_run.id,
-            provider="deterministic",
-            route_key=str(spec.get("model_policy", {}).get("route_key") or "json"),
-            model_name="agent-harness-deterministic",
+            provider=model_result.provider,
+            route_key=model_result.route_key,
+            model_name=model_result.model_name,
             status="succeeded",
-            request_payload={
-                "input_payload": agent_run.input_payload,
-                "agent_key": agent_run.agent_key,
-                "memory_context": memory_context,
-                "plan": plan_payload,
-            },
-            response_payload=decision.model_dump(mode="json"),
-            usage_json={"input_tokens": 0, "output_tokens": 0},
+            request_payload=model_result.request_payload,
+            response_payload=model_result.response_payload,
+            usage_json=model_result.usage_json,
             commit=False,
         )
         self.agent_service.append_event(
@@ -1158,6 +1251,141 @@ class AgentRunner:
             return max(1, min(20, int(policy.get("context_limit") or 5)))
         except (TypeError, ValueError):
             return 5
+
+    def _resolve_model_decision(
+        self,
+        *,
+        session: Session,
+        agent_run: AgentRun,
+        spec: dict[str, Any],
+        active_skill_names: list[str],
+        skill_context: list[dict[str, Any]],
+        memory_context: list[dict[str, Any]],
+        plan_payload: dict[str, Any],
+    ) -> AgentModelDecisionResult:
+        if self._uses_deterministic_input(agent_run.input_payload) or not AgentModelClient.uses_llm_model(spec):
+            decision = self._decision_from_input(agent_run.input_payload)
+            return AgentModelDecisionResult(
+                decision=decision,
+                provider="deterministic",
+                route_key=str(spec.get("model_policy", {}).get("route_key") or "json"),
+                model_name="agent-harness-deterministic",
+                request_payload={
+                    "mode": "deterministic",
+                    "input_payload": agent_run.input_payload,
+                    "agent_key": agent_run.agent_key,
+                    "skill_context": skill_context,
+                    "memory_context": memory_context,
+                    "plan": plan_payload,
+                },
+                response_payload=decision.model_dump(mode="json"),
+                usage_json={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            )
+        prompt_pack = self._resolve_agent_prompt_pack(session, agent_key=agent_run.agent_key, spec=spec)
+        return self.model_client.complete_decision(
+            agent_key=agent_run.agent_key,
+            spec=spec,
+            input_payload=agent_run.input_payload,
+            active_skill_names=active_skill_names,
+            skill_context=skill_context,
+            memory_context=memory_context,
+            plan_payload=plan_payload,
+            system_prompt=prompt_pack.system_prompt if prompt_pack else None,
+            agent_prompt=prompt_pack.metadata() if prompt_pack else {},
+            route_key=self._model_route_key(spec, default=prompt_pack.route_key if prompt_pack else "text"),
+        )
+
+    def _fail_llm_model_decision(
+        self,
+        session: Session,
+        *,
+        agent_run: AgentRun,
+        spec: dict[str, Any],
+        skill_context: list[dict[str, Any]],
+        memory_context: list[dict[str, Any]],
+        plan_payload: dict[str, Any],
+        error: Exception,
+    ) -> AgentRunResponse:
+        message = str(getattr(error, "message", "") or error)
+        details = getattr(error, "details", {})
+        prompt_metadata, route_key = self._safe_agent_prompt_failure_context(session, agent_run=agent_run, spec=spec)
+        self.agent_service.record_model_call(
+            session,
+            agent_run_id=agent_run.id,
+            provider="llm_inference_gateway",
+            route_key=route_key,
+            model_name="",
+            status="failed",
+            request_payload={
+                "mode": "llm",
+                "agent_key": agent_run.agent_key,
+                "agent_prompt": prompt_metadata,
+                "input_payload": agent_run.input_payload,
+                "skill_context": skill_context,
+                "memory_context": memory_context,
+                "plan": plan_payload,
+            },
+            response_payload={"error": message, "details": details},
+            usage_json={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            error_message=message,
+            commit=False,
+        )
+        agent_run.status = "failed"
+        agent_run.error_message = message
+        agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="agent.model_call.failed",
+                phase="model",
+                payload={"error": message, "details": details},
+            ),
+            commit=False,
+        )
+        session.commit()
+        return self.agent_service._build_run_response(agent_run)
+
+    def _uses_llm_model_decision(self, *, agent_run: AgentRun, spec: dict[str, Any]) -> bool:
+        return not self._uses_deterministic_input(agent_run.input_payload) and AgentModelClient.uses_llm_model(spec)
+
+    def _safe_agent_prompt_failure_context(
+        self,
+        session: Session,
+        *,
+        agent_run: AgentRun,
+        spec: dict[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        try:
+            prompt_pack = self._resolve_agent_prompt_pack(session, agent_key=agent_run.agent_key, spec=spec)
+        except Exception:
+            return {}, self._model_route_key(spec)
+        if not prompt_pack:
+            return {}, self._model_route_key(spec)
+        return prompt_pack.metadata(), self._model_route_key(spec, default=prompt_pack.route_key)
+
+    @staticmethod
+    def _model_route_key(spec: dict[str, Any], *, default: str = "json") -> str:
+        policy = spec.get("model_policy")
+        if not isinstance(policy, dict):
+            return default
+        return str(policy.get("route_key") or default)
+
+    def _resolve_agent_prompt_pack(self, session: Session, *, agent_key: str, spec: dict[str, Any]) -> Any | None:
+        fallback = AGENT_PROMPT_FALLBACKS.get(agent_key)
+        usage_key = str(spec.get("prompt_usage_key") or "").strip()
+        if not fallback and not usage_key:
+            return None
+        fallback_usage_key, fallback_ref = fallback or (usage_key, "")
+        return self.agent_prompt_service.resolve_prompt_pack(
+            session,
+            usage_key=usage_key or fallback_usage_key,
+            fallback_ref=str(spec.get("prompt_fallback_ref") or fallback_ref),
+        )
+
+    @staticmethod
+    def _uses_deterministic_input(input_payload: dict[str, Any]) -> bool:
+        return "agent_decision" in input_payload or "expected_output" in input_payload
 
     @staticmethod
     def _decision_from_input(input_payload: dict[str, Any]) -> AgentDecision:
