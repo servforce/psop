@@ -80,6 +80,10 @@ def test_memory_api_lists_searches_and_reviews_agent_memory_candidates() -> None
     assert entry["agent_key"] == "pskill.evaluator"
     assert entry["created_by_agent_run_id"] == agent_run_id
     assert entry["source_refs"] == [{"kind": "run_trace", "id": "trace-1"}]
+    assert entry["metadata"]["quality_score"] == 40
+    assert entry["metadata"]["used_as_runtime_state"] is False
+    assert entry["metadata"]["authoritative_source"] is False
+    assert entry["metadata"]["formal_source_refs"] == [{"kind": "run_trace", "id": "trace-1"}]
 
     assert detail_response.status_code == 200
     assert detail_response.json()["id"] == entry["id"]
@@ -203,3 +207,53 @@ def test_memory_api_queues_compaction_job_for_worker_processing() -> None:
 
     assert archived_sources_response.status_code == 200
     assert len(archived_sources_response.json()) == 2
+
+
+def test_memory_candidate_cannot_replace_formal_runtime_sources() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.evaluator",
+                "owner_type": "run_evaluation",
+                "owner_id": "memory-boundary-runtime-source",
+                "input_payload": {
+                    "expected_output": {
+                        "schema": "RunEvaluationResult",
+                        "summary": "Invalid memory candidate tries to replace Runtime facts.",
+                        "memory_candidates": [
+                            {
+                                "namespace": "evaluation",
+                                "memory_type": "episodic",
+                                "title": "Invalid runtime state replacement",
+                                "content": "This memory should not become the authoritative run_trace.",
+                                "confidence": 82,
+                                "source_refs": [{"kind": "run_trace", "id": "trace-boundary-1"}],
+                                "metadata": {
+                                    "used_as_runtime_state": True,
+                                    "authoritative_source_kind": "run_trace",
+                                },
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        memory_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/memory-entries")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "failed"
+    assert run_once_response.json()["error_message"] == "output_guardrail_failed"
+    assert memory_response.status_code == 200
+    assert memory_response.json() == []
+
+    guardrail_event = next(
+        item for item in events_response.json() if item["event_type"] == "agent.output_guardrail.failed"
+    )
+    assert guardrail_event["payload"]["findings"][0]["code"] == "memory_candidate_replaces_formal_source"

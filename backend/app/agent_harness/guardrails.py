@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.memory.policy import formal_source_replacement_flags
+
 
 EVIDENCE_BACKED_MEMORY_TYPES = {"semantic", "episodic", "procedural", "artifact"}
 BUSINESS_WAIT_STATE_KEYS = (
@@ -231,6 +233,17 @@ class OutputGuardrail:
                         path=f"memory_candidates[{index}].source_refs",
                     )
                 )
+            metadata = item.get("metadata")
+            if isinstance(metadata, dict):
+                replacement_flags = formal_source_replacement_flags(metadata)
+                if replacement_flags:
+                    findings.append(
+                        GuardrailFinding(
+                            code="memory_candidate_replaces_formal_source",
+                            message="memory candidate must not replace Runtime, Git, or EG formal sources.",
+                            path=f"memory_candidates[{index}].metadata",
+                        )
+                    )
         return findings
 
     @staticmethod

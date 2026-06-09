@@ -88,7 +88,22 @@ class ToolPolicy:
         requested_side_effect_level: str | None,
         effective_allowed_tools: set[str],
     ) -> ToolPolicyDecision:
+        is_mcp_tool = tool_provider.strip().lower() == "mcp"
         if tool_name not in self.allowed_tools:
+            if is_mcp_tool and tool_name in effective_allowed_tools:
+                return ToolPolicyDecision(
+                    allowed=True,
+                    side_effect_level="external_action",
+                    requires_authorization=True,
+                    reason="mcp_requires_authorization",
+                )
+            if is_mcp_tool:
+                return ToolPolicyDecision(
+                    allowed=False,
+                    side_effect_level="external_action",
+                    requires_authorization=False,
+                    reason="tool_not_allowed_by_agent_or_skill",
+                )
             return ToolPolicyDecision(
                 allowed=False,
                 side_effect_level=requested_side_effect_level or "unknown",
@@ -135,7 +150,11 @@ class AgentToolHarness:
     ) -> AgentToolCallPlan:
         if not decision.tool_name:
             raise SkillValidationError("tool_call decision 缺少 tool_name。", details={"agent_run_id": agent_run.id})
-        effective_allowed_tools = self.effective_allowed_tools(spec=spec, active_tools=active_tools)
+        effective_allowed_tools = self.policy_scope_for_decision(
+            spec=spec,
+            active_tools=active_tools,
+            tool_provider=decision.tool_provider,
+        )
         policy_decision = self.tool_policy.check(
             tool_name=decision.tool_name,
             tool_provider=decision.tool_provider,
@@ -160,6 +179,22 @@ class AgentToolHarness:
             effective_allowed_tools=effective_allowed_tools,
         )
 
+    def policy_scope_for_decision(
+        self,
+        *,
+        spec: dict[str, Any],
+        active_tools: set[str],
+        tool_provider: str,
+    ) -> set[str]:
+        agent_skill_allowed_tools = self.agent_skill_allowed_tools(spec=spec, active_tools=active_tools)
+        if tool_provider.strip().lower() == "mcp":
+            return agent_skill_allowed_tools
+        return agent_skill_allowed_tools & self.tool_policy.allowed_tools
+
     def effective_allowed_tools(self, *, spec: dict[str, Any], active_tools: set[str]) -> set[str]:
+        return self.agent_skill_allowed_tools(spec=spec, active_tools=active_tools) & self.tool_policy.allowed_tools
+
+    @staticmethod
+    def agent_skill_allowed_tools(*, spec: dict[str, Any], active_tools: set[str]) -> set[str]:
         agent_allowed_tools = {str(tool) for tool in spec.get("allowed_tools") or []}
-        return agent_allowed_tools & active_tools & self.tool_policy.allowed_tools
+        return agent_allowed_tools & active_tools

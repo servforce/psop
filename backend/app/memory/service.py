@@ -6,6 +6,14 @@ from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.types import MEMORY_COMPACTION_JOB_TYPE
 from app.memory.models import AgentMemoryEntry
+from app.memory.policy import (
+    VALID_MEMORY_STATUSES,
+    VALID_MEMORY_TYPES,
+    memory_boundary_metadata,
+    normalize_memory_status,
+    normalize_memory_type,
+    normalize_source_refs,
+)
 from app.memory.repository import MemoryRepository
 from app.memory.schemas import (
     MemoryCandidate,
@@ -16,10 +24,6 @@ from app.memory.schemas import (
 )
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError
 from app.pskills.models import generate_uuid, now_utc
-
-
-VALID_MEMORY_TYPES = {"short_term", "semantic", "episodic", "procedural", "artifact"}
-VALID_MEMORY_STATUSES = {"pending_review", "active", "rejected", "archived"}
 
 
 class MemoryService:
@@ -99,6 +103,8 @@ class MemoryService:
                 "confidence": item.confidence,
                 "source_refs": list(item.source_refs or []),
                 "tags": list(item.tags or []),
+                "used_as_runtime_state": False,
+                "formal_source_refs": list((item.metadata_json or {}).get("formal_source_refs") or []),
             }
             for item in entries
         ]
@@ -124,9 +130,7 @@ class MemoryService:
     ) -> MemoryEntryResponse:
         entry = self._get_entry(session, memory_id)
         if payload.status is not None:
-            status = payload.status.strip()
-            if status not in VALID_MEMORY_STATUSES:
-                raise SkillValidationError("memory status 无效。", details={"status": status})
+            status = normalize_memory_status(payload.status)
             entry.status = status
             if status in {"active", "rejected", "archived"}:
                 entry.reviewed_at = now_utc()
@@ -141,11 +145,12 @@ class MemoryService:
         if payload.confidence is not None:
             entry.confidence = int(payload.confidence)
         if payload.source_refs is not None:
-            entry.source_refs = list(payload.source_refs)
+            entry.source_refs = normalize_source_refs(list(payload.source_refs))
+            entry.metadata_json = memory_boundary_metadata(entry.source_refs, dict(entry.metadata_json or {}))
         if payload.tags is not None:
             entry.tags = [str(item).strip() for item in payload.tags if str(item).strip()]
         if payload.metadata is not None:
-            entry.metadata_json = dict(payload.metadata)
+            entry.metadata_json = memory_boundary_metadata(list(entry.source_refs or []), dict(payload.metadata))
         entry.updated_at = now_utc()
         session.commit()
         return self._build_entry_response(entry)
@@ -162,21 +167,23 @@ class MemoryService:
         entries: list[AgentMemoryEntry] = []
         for item in candidates:
             candidate = item if isinstance(item, MemoryCandidate) else MemoryCandidate(**item)
-            self._validate_memory_type(candidate.memory_type)
+            memory_type = normalize_memory_type(candidate.memory_type)
             content = candidate.content.strip()
             if not content:
                 continue
+            source_refs = normalize_source_refs(list(candidate.source_refs))
+            metadata = memory_boundary_metadata(source_refs, dict(candidate.metadata))
             entry = AgentMemoryEntry(
                 namespace=candidate.namespace.strip() or "default",
-                memory_type=candidate.memory_type.strip(),
+                memory_type=memory_type,
                 agent_key=agent_key,
                 status="pending_review",
                 confidence=candidate.confidence,
                 title=candidate.title.strip() or content[:120],
                 content=content,
-                source_refs=list(candidate.source_refs),
+                source_refs=source_refs,
                 tags=[str(tag).strip() for tag in candidate.tags if str(tag).strip()],
-                metadata_json=dict(candidate.metadata),
+                metadata_json=metadata,
                 created_by_agent_run_id=created_by_agent_run_id,
             )
             session.add(entry)
@@ -189,11 +196,8 @@ class MemoryService:
     def enqueue_memory_compaction_job(self, session: Session, payload: QueueMemoryCompactionRequest) -> str:
         self._validate_optional_filter("memory_type", payload.memory_type, VALID_MEMORY_TYPES)
         self._validate_optional_filter("status", payload.status, VALID_MEMORY_STATUSES)
-        target_memory_type = payload.target_memory_type.strip() or "artifact"
-        self._validate_memory_type(target_memory_type)
-        target_status = payload.target_status.strip() or "pending_review"
-        if target_status not in VALID_MEMORY_STATUSES:
-            raise SkillValidationError("target_status 无效。", details={"target_status": target_status})
+        target_memory_type = normalize_memory_type(payload.target_memory_type.strip() or "artifact")
+        target_status = normalize_memory_status(payload.target_status.strip() or "pending_review")
 
         idempotency_key = self._normalize_optional(payload.idempotency_key) or generate_uuid()
         dedupe_key = f"job:memory-compaction:{idempotency_key}"
@@ -290,11 +294,8 @@ class MemoryService:
         payload: dict,
     ) -> AgentMemoryEntry:
         target_namespace = str(payload.get("target_namespace") or payload.get("namespace") or sources[0].namespace).strip()
-        target_memory_type = str(payload.get("target_memory_type") or "artifact").strip()
-        self._validate_memory_type(target_memory_type)
-        target_status = str(payload.get("target_status") or "pending_review").strip()
-        if target_status not in VALID_MEMORY_STATUSES:
-            raise SkillValidationError("target_status 无效。", details={"target_status": target_status})
+        target_memory_type = normalize_memory_type(str(payload.get("target_memory_type") or "artifact").strip())
+        target_status = normalize_memory_status(str(payload.get("target_status") or "pending_review").strip())
         title = str(payload.get("title") or "").strip() or f"Compacted memory: {target_namespace}/{target_memory_type}"
         source_refs = [
             {
@@ -349,8 +350,7 @@ class MemoryService:
 
     @staticmethod
     def _validate_memory_type(memory_type: str) -> None:
-        if memory_type not in VALID_MEMORY_TYPES:
-            raise SkillValidationError("memory_type 无效。", details={"memory_type": memory_type})
+        normalize_memory_type(memory_type)
 
     @staticmethod
     def _validate_optional_filter(name: str, value: str | None, allowed: set[str]) -> None:

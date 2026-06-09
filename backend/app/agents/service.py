@@ -4,6 +4,7 @@ import hashlib
 import json
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.agents.models import (
@@ -43,6 +44,7 @@ from app.agents.tool_authorization_context import (
 )
 from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
+from app.agent_harness.agent_spec import agent_spec_validation_errors, normalize_agent_spec
 from app.agent_harness.definitions import BUILTIN_AGENT_SPECS
 from app.agent_harness.sandbox import default_sandbox_policy
 from app.agent_harness.tools import ToolPolicy
@@ -180,12 +182,11 @@ class AgentService:
                 versions = self.repository.list_versions(session, definition.id)
                 parent = versions[0] if versions else None
         if payload.spec_json is not None:
-            spec = payload.spec_json
+            spec = self._normalize_agent_spec(payload.spec_json, agent_key=agent_key)
         elif parent:
-            spec = json.loads(json.dumps(parent.spec_json))
+            spec = self._normalize_agent_spec(json.loads(json.dumps(parent.spec_json)), agent_key=agent_key)
         else:
             raise SkillValidationError("创建 AgentVersion draft 必须提供 spec_json。", details={"agent_key": agent_key})
-        self._validate_agent_spec(spec, agent_key=agent_key)
         version_no = self.repository.next_version_no(session, definition.id)
         version = AgentVersion(
             definition_id=definition.id,
@@ -209,7 +210,7 @@ class AgentService:
         version = self._get_version_for_definition(session, definition, version_id)
         if version.status == "archived":
             raise SkillConflictError("已归档 AgentVersion 不可发布。", details={"version_id": version.id})
-        self._validate_agent_spec(version.spec_json, agent_key=agent_key)
+        version.spec_json = self._normalize_agent_spec(version.spec_json, agent_key=agent_key)
         version.status = "published"
         version.content_hash = self._hash_spec(version.spec_json)
         version.published_at = version.published_at or now_utc()
@@ -287,7 +288,13 @@ class AgentService:
             commit=False,
         )
         active_version = self.repository.get_version(session, definition.active_version_id)
-        spec = active_version.spec_json if active_version else {}
+        spec: dict[str, Any] = {}
+        if active_version:
+            spec = self._normalize_agent_spec(active_version.spec_json, agent_key=definition.key)
+            if spec != active_version.spec_json:
+                active_version.spec_json = spec
+                active_version.content_hash = self._hash_spec(spec)
+                session.flush()
         selected_skill_names = list(spec.get("allowed_skill_names") or []) if isinstance(spec, dict) else []
         active_tools, active_skill_names = self.skill_service.activate_agent_run_skills(
             session,
@@ -787,7 +794,10 @@ class AgentService:
     ) -> dict[str, Any]:
         if version.status != "published":
             raise SkillValidationError("只有 published AgentVersion 可以激活。", details={"version_id": version.id})
-        self._validate_agent_spec(version.spec_json, agent_key=definition.key)
+        normalized_spec = self._normalize_agent_spec(version.spec_json, agent_key=definition.key)
+        if normalized_spec != version.spec_json:
+            version.spec_json = normalized_spec
+            version.content_hash = self._hash_spec(normalized_spec)
         previous_version_id = definition.active_version_id
         definition.active_version_id = version.id
         updated_binding_ids: list[str] = []
@@ -805,27 +815,26 @@ class AgentService:
         }
 
     @staticmethod
-    def _validate_agent_spec(spec: dict[str, Any], *, agent_key: str) -> None:
+    def _normalize_agent_spec(spec: dict[str, Any], *, agent_key: str) -> dict[str, Any]:
         if not isinstance(spec, dict):
             raise SkillValidationError("AgentSpec 必须是对象。", details={"agent_key": agent_key})
+        try:
+            normalized = normalize_agent_spec(spec)
+        except ValidationError as error:
+            raise SkillValidationError(
+                "AgentSpec 校验失败。",
+                details={"agent_key": agent_key, "errors": agent_spec_validation_errors(error)},
+            ) from error
         errors: list[dict[str, str]] = []
-        for field in ("key", "name", "role", "goal"):
-            if not str(spec.get(field) or "").strip():
-                errors.append({"field": field, "message": "required"})
-        if spec.get("key") and str(spec["key"]) != agent_key:
+        if normalized.get("key") and str(normalized["key"]) != agent_key:
             errors.append({"field": "key", "message": "must match agent_key"})
-        for field in ("allowed_tools", "allowed_skill_names"):
-            value = spec.get(field)
-            if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
-                errors.append({"field": field, "message": "must be a list of strings"})
-        prompt_usage_key = spec.get("prompt_usage_key")
-        if prompt_usage_key is not None and (not isinstance(prompt_usage_key, str) or not prompt_usage_key.strip()):
-            errors.append({"field": "prompt_usage_key", "message": "must be a non-empty string"})
-        output_schema = spec.get("output_schema")
-        if not isinstance(output_schema, dict) or not str(output_schema.get("name") or "").strip():
-            errors.append({"field": "output_schema.name", "message": "required"})
         if errors:
             raise SkillValidationError("AgentSpec 校验失败。", details={"agent_key": agent_key, "errors": errors})
+        return normalized
+
+    @staticmethod
+    def _validate_agent_spec(spec: dict[str, Any], *, agent_key: str) -> None:
+        AgentService._normalize_agent_spec(spec, agent_key=agent_key)
 
     def _get_run(self, session: Session, agent_run_id: str) -> AgentRun:
         agent_run = self.repository.get_run(session, agent_run_id)
@@ -1107,23 +1116,26 @@ class AgentService:
 
     @staticmethod
     def _seed_spec(seed: dict[str, Any]) -> dict[str, Any]:
-        return {
+        spec = {
             "key": seed["key"],
             "name": seed["name"],
             "role": seed["role"],
             "goal": seed["goal"],
-            "instructions": {},
-            "model_policy": {"route_key": "text"},
+            "instructions": seed.get("instructions", {}),
+            "model_policy": seed.get("model_policy", {"route_key": "text"}),
             "prompt_usage_key": str(seed["usage_keys"][0]),
-            "runtime_policy": {},
+            "runtime_policy": seed.get("runtime_policy", {}),
             "allowed_tools": seed.get("allowed_tools", []),
             "allowed_skill_names": seed.get("allowed_skill_names", []),
-            "memory_policy": {},
-            "planner_policy": {},
+            "memory_policy": seed.get("memory_policy", {}),
+            "planner_policy": seed.get("planner_policy", {}),
             "sandbox_policy": seed.get("sandbox_policy") or default_sandbox_policy(str(seed["key"])),
-            "guardrail_policy": {},
+            "guardrail_policy": seed.get("guardrail_policy", {}),
             "output_schema": seed["output_schema"],
         }
+        if seed.get("prompt_fallback_ref"):
+            spec["prompt_fallback_ref"] = seed["prompt_fallback_ref"]
+        return AgentService._normalize_agent_spec(spec, agent_key=str(seed["key"]))
 
     @staticmethod
     def _hash_spec(spec: dict[str, Any]) -> str:

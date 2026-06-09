@@ -20,6 +20,7 @@ from app.compiler.models import ArtifactObject
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.types import PSKILL_TEST_JOB_TYPE
+from app.memory.service import MemoryService
 from app.runtime.models import Run
 from app.runtime.schemas import (
     AppendRunEventRequest,
@@ -122,6 +123,7 @@ class SkillTestService:
         job_repository: JobRepository | None = None,
         agent_prompt_service: AgentPromptService | None = None,
         agent_service: AgentService | None = None,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
@@ -135,6 +137,7 @@ class SkillTestService:
         self.job_repository = job_repository or JobRepository()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
         self.agent_service = agent_service or AgentService()
+        self.memory_service = memory_service or MemoryService()
 
     def list_suites(
         self,
@@ -2037,10 +2040,12 @@ class SkillTestService:
         if not scenario_run.agent_run_id:
             return
         agent_run = self.agent_service.get_run_model(session, scenario_run.agent_run_id)
+        memory_candidate_count = self._write_test_run_memory_candidate(session, scenario_run)
         agent_run.status = "succeeded"
         agent_run.output_payload = {
             "scenario_run_id": scenario_run.id,
             "pskill_definition_id": scenario_run.pskill_definition_id,
+            "memory_candidates": {"written_count": memory_candidate_count},
             **output_payload,
         }
         agent_run.error_message = ""
@@ -2055,6 +2060,87 @@ class SkillTestService:
             ),
             commit=False,
         )
+
+    def _write_test_run_memory_candidate(self, session: Session, scenario_run: SkillTestScenarioRun) -> int:
+        if not scenario_run.agent_run_id:
+            return 0
+        existing_entries = self.memory_service.list_entries_for_agent_run(session, scenario_run.agent_run_id, limit=50)
+        existing_test_run_entries = [
+            entry for entry in existing_entries if (entry.metadata or {}).get("schema") == "psop-test-run-memory/v1"
+        ]
+        if existing_test_run_entries:
+            return len(existing_test_run_entries)
+        scenario = self.repository.get_scenario(session, scenario_run.scenario_id)
+        title = f"Test run artifact: {scenario.name if scenario else scenario_run.id}"
+        expectation_count = len(self._timeline_expectation_events(scenario_run.timeline))
+        input_count = len(self._timeline_input_events(scenario_run.timeline))
+        result_summary = dict(scenario_run.result_summary or {})
+        source_refs: list[dict[str, Any]] = [
+            {"kind": "pskill_test_run", "id": scenario_run.id},
+            {"kind": "agent_run", "id": scenario_run.agent_run_id, "agent_key": "pskill.tester"},
+        ]
+        if scenario_run.run_id:
+            source_refs.extend(
+                [
+                    {"kind": "run", "id": scenario_run.run_id},
+                    {"kind": "runtime_replay", "run_id": scenario_run.run_id, "test_run_id": scenario_run.id},
+                ]
+            )
+        if scenario_run.artifact_id:
+            source_refs.append({"kind": "eg_compile_artifact", "id": scenario_run.artifact_id})
+        entries = self.memory_service.write_candidates(
+            session,
+            agent_key="pskill.tester",
+            created_by_agent_run_id=scenario_run.agent_run_id,
+            candidates=[
+                {
+                    "namespace": "testing",
+                    "memory_type": "artifact",
+                    "title": title,
+                    "content": (
+                        f"PSkill test run {scenario_run.id} finished with status {scenario_run.status}. "
+                        f"driver_status={scenario_run.driver_status}; inputs={input_count}; "
+                        f"expectations={expectation_count}; result_summary="
+                        f"{json.dumps(result_summary, ensure_ascii=False, sort_keys=True)}"
+                    ),
+                    "confidence": 90 if scenario_run.status == "passed" else 65,
+                    "source_refs": source_refs,
+                    "tags": ["testing", "artifact", scenario_run.status, scenario_run.driver_status],
+                    "metadata": {
+                        "schema": "psop-test-run-memory/v1",
+                        "pskill_definition_id": scenario_run.pskill_definition_id,
+                        "pskill_version_id": scenario_run.pskill_version_id,
+                        "scenario_id": scenario_run.scenario_id,
+                        "suite_id": scenario_run.suite_id,
+                        "test_run_id": scenario_run.id,
+                        "runtime_run_id": scenario_run.run_id,
+                        "artifact_id": scenario_run.artifact_id,
+                        "status": scenario_run.status,
+                        "driver_status": scenario_run.driver_status,
+                        "result_summary": result_summary,
+                        "input_event_count": input_count,
+                        "expectation_count": expectation_count,
+                    },
+                }
+            ],
+            commit=False,
+        )
+        self.agent_service.append_event(
+            session,
+            scenario_run.agent_run_id,
+            AppendAgentEventRequest(
+                event_type="agent.memory_candidates.written",
+                phase="memory",
+                payload={
+                    "scenario_run_id": scenario_run.id,
+                    "memory_entry_ids": [item.id for item in entries],
+                    "memory_entry_count": len(entries),
+                    "used_as_runtime_state": False,
+                },
+            ),
+            commit=False,
+        )
+        return len(entries)
 
     def _record_test_agent_model_call(
         self,

@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 from app.app import create_app
+from app.agent_harness.agent_spec import AGENT_SPEC_FIELDS, normalize_agent_spec
 from app.agent_harness.definitions import (
     AGENT_PROMPT_FALLBACKS,
     DEFAULT_AGENT_SKILLS,
@@ -64,6 +65,7 @@ def test_agent_harness_definitions_keep_builtin_agent_modules() -> None:
     skills_dir = PROJECT_ROOT / "backend" / "app" / "agent_harness" / "skills"
     expected_skills_files = {"skill_harness.py"}
 
+    assert (PROJECT_ROOT / "backend" / "app" / "agent_harness" / "agent_spec.py").exists()
     assert expected_files <= {path.name for path in definitions_dir.glob("*.py")}
     assert expected_sandbox_files <= {path.name for path in sandbox_dir.glob("*.py")}
     assert expected_events_files <= {path.name for path in events_dir.glob("*.py")}
@@ -104,6 +106,30 @@ def test_agent_harness_tool_effective_permissions_are_intersection_only() -> Non
         spec={"allowed_tools": ["psop.repository.propose_patch", "psop.media.compute", "psop.missing_policy"]},
         active_tools={"psop.media.compute", "psop.unregistered_in_agent"},
     ) == {"psop.media.compute"}
+
+
+def test_agent_spec_normalization_matches_closed_loop_schema() -> None:
+    normalized = normalize_agent_spec(
+        {
+            "key": "pskill.runner",
+            "name": "PSkill Runner",
+            "role": "runner",
+            "goal": "在 RuntimeService 主权边界内为运行节点生成 observation。",
+            "allowed_tools": [" psop.runtime.read "],
+            "allowed_skill_names": [],
+            "output_schema": {"name": "RuntimeAgentObservation"},
+        }
+    )
+
+    assert set(AGENT_SPEC_FIELDS) <= set(normalized)
+    assert normalized["allowed_tools"] == ["psop.runtime.read"]
+    assert normalized["instructions"] == {}
+    assert normalized["model_policy"] == {}
+    assert normalized["runtime_policy"] == {}
+    assert normalized["memory_policy"] == {}
+    assert normalized["planner_policy"] == {}
+    assert normalized["sandbox_policy"] == {}
+    assert normalized["guardrail_policy"] == {}
 
 
 def test_api_routes_use_pskill_and_materials_naming() -> None:
@@ -176,10 +202,47 @@ def test_default_agents_keep_closed_loop_keys_and_runner_boundary() -> None:
         "pskill-runner-evidence-evaluator",
         "ffmpeg-video-processing",
     ]
+    assert specs["pskill.runner"]["runtime_policy"]["state_sovereign"] == "RuntimeService"
+    assert specs["pskill.runner"]["runtime_policy"]["observation_schema"] == "RuntimeAgentObservation"
+    assert specs["pskill.runner"]["runtime_policy"]["allowed_decisions"] == [
+        "proceed",
+        "retry",
+        "need_more_evidence",
+        "abort",
+        "complete",
+    ]
+    assert specs["pskill.runner"]["memory_policy"]["artifact_namespace"] == "run"
+    assert specs["pskill.runner"]["memory_policy"]["used_as_runtime_state"] is False
+    assert specs["pskill.runner"]["guardrail_policy"]["deny_runtime_state_mutation"] is True
+    assert "evidence_refs" in specs["pskill.runner"]["output_schema"]["required"]
+    assert specs["pskill.compiler"]["runtime_policy"]["formal_revision"] == "psop-eg-formal/v5"
+    assert specs["pskill.compiler"]["runtime_policy"]["repair_attempt_limit"] == 1
+    assert specs["pskill.compiler"]["memory_policy"]["artifact_namespace"] == "compile"
+    assert specs["pskill.compiler"]["memory_policy"]["used_as_runtime_state"] is False
+    assert "artifact" in specs["pskill.compiler"]["output_schema"]["required"]
     assert specs["pskill.tester"]["allowed_skill_names"] == ["pskill-tester", "ffmpeg-video-processing"]
+    assert specs["pskill.tester"]["runtime_policy"]["simulation_mode"] == "runtime_replay"
+    assert specs["pskill.tester"]["runtime_policy"]["publish_gate_required"] is True
+    assert specs["pskill.tester"]["memory_policy"]["artifact_namespace"] == "testing"
+    assert specs["pskill.tester"]["memory_policy"]["used_as_runtime_state"] is False
+    assert "publish_gate_summary" in specs["pskill.tester"]["output_schema"]["required"]
     assert specs["psop.governance"]["output_schema"]["name"] == "GovernanceProposalResult"
     assert set(specs) == set(DEFAULT_AGENT_SKILLS) == set(AGENT_PROMPT_FALLBACKS)
     assert {key: spec["allowed_skill_names"] for key, spec in specs.items()} == DEFAULT_AGENT_SKILLS
+    for spec in DEFAULT_AGENT_SPECS:
+        normalized = normalize_agent_spec(
+            {
+                **spec,
+                "instructions": spec.get("instructions", {}),
+                "model_policy": spec.get("model_policy", {}),
+                "runtime_policy": spec.get("runtime_policy", {}),
+                "memory_policy": spec.get("memory_policy", {}),
+                "planner_policy": spec.get("planner_policy", {}),
+                "sandbox_policy": spec.get("sandbox_policy", {}),
+                "guardrail_policy": spec.get("guardrail_policy", {}),
+            }
+        )
+        assert set(AGENT_SPEC_FIELDS) <= set(normalized)
     for agent_key, (usage_key, _prompt_ref) in AGENT_PROMPT_FALLBACKS.items():
         assert PROMPT_USAGE_AGENT_KEYS[usage_key] == agent_key
     assert PROMPT_USAGE_AGENT_KEYS["default.skill_creation_agent"] == "pskill.builder"

@@ -2050,6 +2050,9 @@ def test_testing_suite_api_creates_and_runs_suite() -> None:
         test_run_id = suite_run_payload["runs"][0]["id"]
         get_run_response = client.get(f"/api/v1/testing/runs/{test_run_id}")
         run_events_response = client.get(f"/api/v1/testing/runs/{test_run_id}/events")
+        tester_memory_response = client.get(
+            f"/api/v1/agent-runs/{suite_run_payload['runs'][0]['agent_run_id']}/memory-entries"
+        )
         publish_gate_response = client.post(f"/api/v1/pskills/{skill_id}/publish-gate", json={})
 
     assert publish_response.status_code == 202
@@ -2084,7 +2087,17 @@ def test_testing_suite_api_creates_and_runs_suite() -> None:
     assert run_events_response.status_code == 200
     event_types = [item["event_type"] for item in run_events_response.json()]
     assert "testing.run.linked" in event_types
+    assert "agent.memory_candidates.written" in event_types
     assert "testing.run.evaluation_completed" in event_types
+    tester_memory = tester_memory_response.json()[0]
+    assert tester_memory_response.status_code == 200
+    assert tester_memory["namespace"] == "testing"
+    assert tester_memory["memory_type"] == "artifact"
+    assert tester_memory["agent_key"] == "pskill.tester"
+    assert tester_memory["metadata"]["schema"] == "psop-test-run-memory/v1"
+    assert tester_memory["metadata"]["test_run_id"] == test_run_id
+    assert tester_memory["metadata"]["used_as_runtime_state"] is False
+    assert {"kind": "eg_compile_artifact", "id": compile_payload["artifact_id"]} in tester_memory["source_refs"]
 
     assert publish_gate_response.status_code == 201
     gate_payload = publish_gate_response.json()
@@ -2141,6 +2154,7 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
         compile_agent_events_response = client.get(f"/api/v1/compiler/requests/{compile_request_id}/agent-events")
         compile_agent_run_response = client.get(f"/api/v1/agent-runs/{compile_agent_run_id}")
         compile_agent_model_calls_response = client.get(f"/api/v1/agent-runs/{compile_agent_run_id}/model-calls")
+        compile_agent_memory_response = client.get(f"/api/v1/agent-runs/{compile_agent_run_id}/memory-entries")
         artifact_response = client.get(f"/api/v1/compiler/artifacts/{compiled_payload['artifact_id']}")
         list_response = client.get("/api/v1/compiler/requests")
         filtered_list_response = client.get("/api/v1/compiler/requests", params={"pskill_id": skill_id})
@@ -2168,13 +2182,25 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
     assert compile_agent_run_response.json()["agent_key"] == "pskill.compiler"
     assert compile_agent_run_response.json()["status"] == "succeeded"
     assert compile_agent_run_response.json()["output_payload"]["compile_request_id"] == compile_request_id
+    assert compile_agent_run_response.json()["output_payload"]["memory_candidates"]["written_count"] == 1
     assert compile_agent_model_calls_response.status_code == 200
     assert compile_agent_model_calls_response.json()[0]["provider"] == "llm_inference_gateway"
+    assert compile_agent_memory_response.status_code == 200
+    compiler_memory = compile_agent_memory_response.json()[0]
+    assert compiler_memory["namespace"] == "compile"
+    assert compiler_memory["memory_type"] == "artifact"
+    assert compiler_memory["agent_key"] == "pskill.compiler"
+    assert compiler_memory["metadata"]["schema"] == "psop-compile-memory/v1"
+    assert compiler_memory["metadata"]["artifact_id"] == compiled_payload["artifact_id"]
+    assert compiler_memory["metadata"]["used_as_runtime_state"] is False
+    assert {"kind": "eg_compile_artifact", "id": compiled_payload["artifact_id"]} in compiler_memory["source_refs"]
+    assert {"kind": "git_source", "id": compile_payload["source_commit_sha"]} in compiler_memory["metadata"]["formal_source_refs"]
     assert compile_agent_events_response.status_code == 200
     event_types = [item["event_type"] for item in compile_agent_events_response.json()]
     assert "compile.request.linked" in event_types
     assert "compile.request.started" in event_types
     assert "compile.agent.model_call.completed" in event_types
+    assert "agent.memory_candidates.written" in event_types
     assert "compile.request.succeeded" in event_types
     assert list_response.json()[0]["agent_run_id"] == compile_agent_run_id
     assert list_response.json()[0]["progress"]["terminal_status"] == "succeeded"

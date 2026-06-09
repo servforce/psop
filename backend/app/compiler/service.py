@@ -41,6 +41,7 @@ from app.jobs.progress import (
 )
 from app.jobs.repository import JobRepository
 from app.jobs.types import PSKILL_COMPILE_JOB_TYPE, is_pskill_compile_job_type
+from app.memory.service import MemoryService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError, SkillsError
 from app.pskills.manifest import SkillDocument, document_from_manifest_snapshot
 from app.pskills.models import PSkillDefinition, PSkillPublishRecord, PSkillVersion, now_utc
@@ -92,6 +93,7 @@ class CompilerService:
         repository: CompilerRepository | None = None,
         job_repository: JobRepository | None = None,
         agent_service: AgentService | None = None,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self.settings = settings
         self.gitlab_gateway = gitlab_gateway
@@ -100,6 +102,7 @@ class CompilerService:
         self.repository = repository or CompilerRepository()
         self.job_repository = job_repository or JobRepository()
         self.agent_service = agent_service or AgentService()
+        self.memory_service = memory_service or MemoryService()
 
     def _compiler_span_attributes(
         self,
@@ -553,6 +556,15 @@ class CompilerService:
             compile_request.status = "succeeded"
             compile_request.error_message = ""
             compile_request.finished_at = now_utc()
+            memory_candidate_count = self._write_compile_memory_candidate(
+                session,
+                compile_request=compile_request,
+                pskill_definition=pskill_definition,
+                pskill_version=pskill_version,
+                source=source,
+                artifact=eg_artifact,
+                artifact_object=artifact_object,
+            )
             self._mark_compile_agent_succeeded(
                 session,
                 compile_request,
@@ -560,6 +572,7 @@ class CompilerService:
                     "artifact_id": eg_artifact.id,
                     "graph_summary": eg_artifact.graph_summary,
                     "capability_summary": eg_artifact.capability_summary,
+                    "memory_candidates": {"written_count": memory_candidate_count},
                 },
             )
             if mark_job_terminal:
@@ -915,6 +928,85 @@ class CompilerService:
             ),
             commit=False,
         )
+
+    def _write_compile_memory_candidate(
+        self,
+        session: Session,
+        *,
+        compile_request: PSkillCompileRequest,
+        pskill_definition: PSkillDefinition,
+        pskill_version: PSkillVersion,
+        source,
+        artifact: EgCompileArtifact,
+        artifact_object: ArtifactObject,
+    ) -> int:
+        if not compile_request.agent_run_id:
+            return 0
+        skill_md_length = len(str(getattr(source, "skill_md_content", "") or ""))
+        yaml_length = len(str(getattr(source, "skill_yaml_content", "") or ""))
+        readme_length = len(str(getattr(source, "readme_content", "") or ""))
+        entries = self.memory_service.write_candidates(
+            session,
+            agent_key="pskill.compiler",
+            created_by_agent_run_id=compile_request.agent_run_id,
+            candidates=[
+                {
+                    "namespace": "compile",
+                    "memory_type": "artifact",
+                    "title": f"Compiled EG artifact for {pskill_definition.key}",
+                    "content": (
+                        f"PSkill {pskill_definition.key} version {pskill_version.version_no} compiled into "
+                        f"formal-v5 EG artifact {artifact.id}. "
+                        f"source_commit_sha={compile_request.source_commit_sha}; "
+                        f"graph_summary={json.dumps(artifact.graph_summary, ensure_ascii=False, sort_keys=True)}"
+                    ),
+                    "confidence": 90,
+                    "source_refs": [
+                        {"kind": "pskill_definition", "id": pskill_definition.id},
+                        {"kind": "pskill_version", "id": pskill_version.id},
+                        {"kind": "git_source", "id": compile_request.source_commit_sha},
+                        {"kind": "eg_compile_artifact", "id": artifact.id},
+                    ],
+                    "tags": ["compiler", "formal-v5", "artifact", pskill_definition.key],
+                    "metadata": {
+                        "schema": "psop-compile-memory/v1",
+                        "compile_request_id": compile_request.id,
+                        "pskill_definition_id": pskill_definition.id,
+                        "pskill_version_id": pskill_version.id,
+                        "source_commit_sha": compile_request.source_commit_sha,
+                        "artifact_id": artifact.id,
+                        "artifact_object_id": artifact_object.id,
+                        "artifact_checksum": artifact_object.checksum,
+                        "formal_revision": artifact.formal_revision,
+                        "graph_summary": artifact.graph_summary,
+                        "capability_summary": artifact.capability_summary,
+                        "source_summary": {
+                            "skill_md_length": skill_md_length,
+                            "skill_yaml_length": yaml_length,
+                            "readme_length": readme_length,
+                        },
+                    },
+                }
+            ],
+            commit=False,
+        )
+        self.agent_service.append_event(
+            session,
+            compile_request.agent_run_id,
+            AppendAgentEventRequest(
+                event_type="agent.memory_candidates.written",
+                phase="memory",
+                payload={
+                    "compile_request_id": compile_request.id,
+                    "artifact_id": artifact.id,
+                    "memory_entry_ids": [item.id for item in entries],
+                    "memory_entry_count": len(entries),
+                    "used_as_runtime_state": False,
+                },
+            ),
+            commit=False,
+        )
+        return len(entries)
 
     def _record_compile_agent_model_call(
         self,

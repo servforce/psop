@@ -1069,7 +1069,7 @@ class AgentRunner:
         decision: AgentDecision,
         active_tools: set[str],
     ) -> AgentRunResponse:
-        if decision.tool_name in self.tool_policy.allowed_tools:
+        if decision.tool_name in self.tool_policy.allowed_tools or decision.tool_provider.strip().lower() == "mcp":
             tool_guardrail_result = self.tool_guardrail.check(
                 agent_key=agent_run.agent_key,
                 tool_name=decision.tool_name,

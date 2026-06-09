@@ -4,6 +4,7 @@ import json
 
 from sqlalchemy import select
 
+from app.agent_harness.agent_spec import AGENT_SPEC_FIELDS
 from app.gateway.inference import LlmCompletion
 from app.memory.models import AgentMemoryEntry
 from app.skills.models import SkillPackage, SkillVersion
@@ -250,6 +251,11 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     runner_spec = agent_detail_response.json()["active_version"]["spec_json"]
     assert runner_spec["prompt_usage_key"] == "pskill.run.node"
     assert runner_spec["sandbox_policy"]["network"] == "disabled"
+    assert runner_spec["runtime_policy"]["state_sovereign"] == "RuntimeService"
+    assert runner_spec["runtime_policy"]["observation_schema"] == "RuntimeAgentObservation"
+    assert runner_spec["memory_policy"]["used_as_runtime_state"] is False
+    assert runner_spec["guardrail_policy"]["deny_runtime_state_mutation"] is True
+    assert "terminal_message" in runner_spec["output_schema"]["required"]
     assert versions_response.status_code == 200
     assert versions_response.json()[0]["status"] == "published"
 
@@ -1135,6 +1141,112 @@ def test_tool_authorization_cannot_expand_agent_or_skill_tool_permissions() -> N
     assert "agent.waiting_tool_authorization" not in event_types
 
 
+def test_unknown_mcp_tool_with_agent_and_skill_permission_requires_authorization() -> None:
+    client, _, _ = create_test_client()
+    mcp_tool_name = "mcp.ticketing.create_ticket"
+    package_name = "mcp-ticketing"
+
+    with client:
+        with client.app.state.db_manager.session() as session:
+            package = SkillPackage(
+                name=package_name,
+                scope="public",
+                description="MCP ticketing fixture for authorization tests.",
+                source_uri="test://skills/public/mcp-ticketing",
+                status="active",
+            )
+            session.add(package)
+            session.flush()
+            version = SkillVersion(
+                package_id=package.id,
+                version_label="active",
+                status="active",
+                content_hash="mcp-ticketing-active-hash",
+                manifest_json={
+                    "name": package_name,
+                    "description": "MCP ticketing fixture for authorization tests.",
+                    "allowed-tools": [mcp_tool_name],
+                },
+                body_object_key="test/mcp-ticketing/SKILL.md",
+                resource_index=[],
+                allowed_tools=[mcp_tool_name],
+                validation_status="valid",
+                validation_diagnostics=[],
+            )
+            session.add(version)
+            session.flush()
+            package.active_version_id = version.id
+            session.commit()
+
+        before_response = client.get("/api/v1/agents/pskill.builder")
+        before_spec = before_response.json()["active_version"]["spec_json"]
+        spec = {
+            **before_spec,
+            "allowed_tools": [*before_spec["allowed_tools"], mcp_tool_name],
+            "allowed_skill_names": [package_name],
+        }
+        draft_response = client.post(
+            "/api/v1/agents/pskill.builder/versions",
+            json={"version_label": "builder-mcp-ticketing", "spec_json": spec},
+        )
+        draft = next(item for item in draft_response.json()["versions"] if item["version_label"] == "builder-mcp-ticketing")
+        publish_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft['id']}/publish")
+        activate_response = client.post(
+            f"/api/v1/agents/pskill.builder/versions/{draft['id']}/activate",
+            json={"update_bindings": True},
+        )
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.builder",
+                "owner_type": "pskill_builder",
+                "owner_id": "mcp-ticketing-run",
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": mcp_tool_name,
+                        "tool_provider": "mcp",
+                        "arguments_summary": {"title": "Review generated PSkill draft"},
+                        "authorization_reason": "Creating an external ticket must be approved.",
+                        "expected_effect_summary": "Create a ticket in an external MCP-backed tracker.",
+                        "idempotency_key": "mcp-ticketing-create-ticket-1",
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert before_response.status_code == 200
+    assert draft_response.status_code == 201
+    assert publish_response.status_code == 200
+    assert activate_response.status_code == 200
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "waiting_tool_authorization"
+
+    tool_call = tool_calls_response.json()[0]
+    assert tool_call["tool_name"] == mcp_tool_name
+    assert tool_call["tool_provider"] == "mcp"
+    assert tool_call["status"] == "waiting_authorization"
+    assert tool_call["side_effect_level"] == "external_action"
+
+    authorizations = authorizations_response.json()
+    assert len(authorizations) == 1
+    assert authorizations[0]["status"] == "pending"
+    assert authorizations[0]["tool_name"] == mcp_tool_name
+    assert authorizations[0]["tool_provider"] == "mcp"
+    assert authorizations[0]["side_effect_level"] == "external_action"
+
+    event_types = [item["event_type"] for item in events_response.json()]
+    assert "agent.tool_guardrail.checked" in event_types
+    assert "tool.authorization_requested" in event_types
+    assert "agent.waiting_tool_authorization" in event_types
+
+
 def test_agent_runner_executes_runtime_read_tool_from_persisted_facts() -> None:
     client, _, _ = create_test_client()
 
@@ -1540,6 +1652,37 @@ def test_agent_version_api_creates_publishes_and_activates_draft() -> None:
     assert activate_response.json()["active_version_id"] == draft["id"]
     assert activate_response.json()["active_version"]["spec_json"]["runtime_policy"] == {"rollout": "canary"}
     assert {item["active_version_id"] for item in activate_response.json()["bindings"]} == {draft["id"]}
+
+
+def test_agent_version_api_normalizes_minimal_spec_to_closed_loop_agent_spec() -> None:
+    client, _, _ = create_test_client()
+
+    spec = {
+        "key": "pskill.runner",
+        "name": "PSkill Runner",
+        "role": "runner",
+        "goal": "在 RuntimeService 主权边界内为运行节点生成 observation。",
+        "allowed_tools": ["psop.runtime.read"],
+        "allowed_skill_names": [],
+        "output_schema": {"name": "RuntimeAgentObservation"},
+    }
+    with client:
+        draft_response = client.post(
+            "/api/v1/agents/pskill.runner/versions",
+            json={"version_label": "runner-minimal-spec", "spec_json": spec},
+        )
+
+    assert draft_response.status_code == 201
+    draft = next(item for item in draft_response.json()["versions"] if item["version_label"] == "runner-minimal-spec")
+    draft_spec = draft["spec_json"]
+    assert set(AGENT_SPEC_FIELDS) <= set(draft_spec)
+    assert draft_spec["instructions"] == {}
+    assert draft_spec["model_policy"] == {}
+    assert draft_spec["runtime_policy"] == {}
+    assert draft_spec["memory_policy"] == {}
+    assert draft_spec["planner_policy"] == {}
+    assert draft_spec["sandbox_policy"] == {}
+    assert draft_spec["guardrail_policy"] == {}
 
 
 def test_agent_runner_memory_harness_applies_agent_memory_policy_limit() -> None:
