@@ -1,4 +1,5 @@
 agent_id: psop.governance.proposal
+agent_key: psop.governance
 version: v1
 scenario: governance
 route_key: text

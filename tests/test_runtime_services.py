@@ -142,6 +142,8 @@ def test_compiler_emits_mvp_formal_v5_artifact(runtime_stack) -> None:
         "final_verify",
     ]
     assert artifact.artifact["compiler_metadata"]["agent_prompt"]["prompt_hash"]
+    assert artifact.artifact["compiler_metadata"]["agent_prompt"]["agent_key"] == "pskill.compiler"
+    assert artifact.artifact["compiler_metadata"]["agent_prompt"]["prompt_ref"] == "skill_compilation.formal_v5_compile/v1"
     assert artifact.artifact["compiler_metadata"]["domain_pack"]["domain_pack_id"] == "generic"
     assert artifact.artifact["schema"]["input_name"] == "user_input"
     assert artifact.capability_summary["tools"] == []
@@ -807,6 +809,10 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         for calls in runner_model_calls_by_run.values()
     )
     assert all(
+        calls[0].request_payload["agent_prompt"]["agent_key"] == "pskill.runner"
+        for calls in runner_model_calls_by_run.values()
+    )
+    assert all(
         "pskill-runner-field-assistant"
         in {item["package_name"] for item in calls[0].request_payload["skill_context"]}
         for calls in runner_model_calls_by_run.values()
@@ -824,6 +830,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         run.input_payload["agent_prompt"]["definition_key"] == "runtime_execution.llm_node_fallback"
         for run in runner_runs
     )
+    assert all(run.input_payload["agent_prompt"]["agent_key"] == "pskill.runner" for run in runner_runs)
     assert all(
         "pskill-runner-field-assistant" in {item["package_name"] for item in run.input_payload["skill_context"]}
         for run in runner_runs
@@ -1290,6 +1297,7 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
     assert failed_model_call.error_message == "LLM provider unavailable"
     assert failed_model_call.request_payload["node"]["id"] == "instruct_collect_context"
     assert failed_model_call.request_payload["agent_prompt"]["definition_key"] == "runtime_execution.llm_node_fallback"
+    assert failed_model_call.request_payload["agent_prompt"]["agent_key"] == "pskill.runner"
     assert "pskill-runner-field-assistant" in {
         item["package_name"] for item in failed_model_call.request_payload["skill_context"]
     }

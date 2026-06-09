@@ -1,4 +1,5 @@
 agent_id: psop.skill_creation.conversational_draft
+agent_key: pskill.builder
 version: v1
 scenario: skill_creation
 route_key: text

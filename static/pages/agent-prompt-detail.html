@@ -70,6 +70,14 @@
 
           <section class="grid shrink-0 grid-cols-2 border-b border-slate-800 text-xs" data-info-panel-basic>
             <div class="border-b border-r border-slate-800 px-3 py-2">
+              <p class="field-label">Agent Key</p>
+              <p class="mono-field mt-0.5 truncate" x-text="agentPromptAgentKeyLabel(agentPromptDetail)"></p>
+            </div>
+            <div class="border-b border-slate-800 px-3 py-2">
+              <p class="field-label">Agent ID</p>
+              <p class="mono-field mt-0.5 truncate" x-text="agentPromptDetail.agent_id"></p>
+            </div>
+            <div class="border-b border-r border-slate-800 px-3 py-2">
               <p class="field-label">Scenario</p>
               <p class="mt-0.5 truncate text-xs font-semibold text-slate-100" x-text="agentPromptDetail.scenario"></p>
             </div>

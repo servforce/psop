@@ -481,12 +481,16 @@ test("agent prompt management routes and pages are exposed", () => {
   expect(coreJs).toContain("loadAgentPromptDetail(this.route.params.definitionId)");
   expect(agentPromptsJs).toContain("/agent-prompts");
   expect(agentPromptsJs).toContain("agentPromptBindingsFromPrompts");
+  expect(agentPromptsJs).toContain("agentPromptAgentKeyLabel");
   expect(agentPromptsJs).toContain("publishAgentPromptVersion");
   expect(agentPromptsJs).toContain("activateAgentPromptVersion");
   expect(listHtml).toContain("Prompt Packs");
   expect(listHtml).toContain("agentPromptActiveBindingLabels(prompt)");
+  expect(listHtml).toContain("Agent Key");
+  expect(listHtml).toContain("agentPromptAgentKeyLabel(prompt)");
   expect(detailHtml).toContain("新建 Draft");
   expect(detailHtml).toContain("Usage Bindings");
+  expect(detailHtml).toContain("agentPromptAgentKeyLabel(agentPromptDetail)");
   expect(detailHtml).toContain("selectedAgentPromptVersion()?.status !== 'draft'");
   expect(detailHtml).toContain("grid-cols-[12rem_minmax(0,1fr)_22rem]");
   expect(detailHtml).toContain('main class="flex min-h-0 min-w-0 flex-col overflow-hidden"');

@@ -36,6 +36,7 @@ class AgentPromptDefinitionSummaryResponse(BaseModel):
     id: str
     key: str
     agent_id: str
+    agent_key: str = ""
     scenario: str
     name: str
     description: str

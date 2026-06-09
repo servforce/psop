@@ -934,8 +934,8 @@
   .grid-cols-\[minmax\(0\,1\.2fr\)_8rem_7rem_8rem_8rem\] {
     grid-template-columns: minmax(0,1.2fr) 8rem 7rem 8rem 8rem;
   }
-  .grid-cols-\[minmax\(0\,1\.4fr\)_minmax\(0\,1fr\)_minmax\(0\,1fr\)_10rem\] {
-    grid-template-columns: minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) 10rem;
+  .grid-cols-\[minmax\(0\,1\.4fr\)_minmax\(0\,0\.9fr\)_minmax\(0\,0\.8fr\)_minmax\(0\,1fr\)_10rem\] {
+    grid-template-columns: minmax(0,1.4fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,1fr) 10rem;
   }
   .grid-cols-\[minmax\(0\,1\.4fr\)_minmax\(12rem\,0\.9fr\)_10rem\] {
     grid-template-columns: minmax(0,1.4fr) minmax(12rem,0.9fr) 10rem;

@@ -1,4 +1,5 @@
 agent_id: psop.skill_compilation.formal_v5_compile
+agent_key: pskill.compiler
 version: v1
 scenario: skill_compilation
 route_key: text

@@ -15,6 +15,9 @@ def test_prompt_registry_loads_agent_prompt_packs() -> None:
     governance_pack = registry.load_agent("governance/proposal/v1")
 
     assert compile_pack.agent_id == "psop.skill_compilation.formal_v5_compile"
+    assert compile_pack.agent_key == "pskill.compiler"
+    assert compile_pack.metadata()["agent_key"] == "pskill.compiler"
+    assert compile_pack.metadata()["prompt_ref"] == "skill_compilation/formal_v5_compile/v1"
     assert "PSkill 编译智能体" in compile_pack.system_prompt
     assert "SKILL 编译智能体" in compile_pack.system_prompt
     assert "RunEvent transcript" in compile_pack.system_prompt
@@ -22,15 +25,18 @@ def test_prompt_registry_loads_agent_prompt_packs() -> None:
     assert "token.terminal.events" in compile_pack.system_prompt
     assert compile_pack.prompt_hash
     assert creation_pack.agent_id == "psop.skill_creation.conversational_draft"
+    assert creation_pack.agent_key == "pskill.builder"
     assert creation_pack.route_key == "text"
     assert "Skill 构建智能体" in creation_pack.system_prompt
     assert "AI 协助人类完成现实任务" in creation_pack.system_prompt
     assert "物理世界 Skill" in creation_pack.system_prompt
     assert evaluator_pack.agent_id == "psop.run_evaluation.default"
+    assert evaluator_pack.agent_key == "pskill.evaluator"
     assert evaluator_pack.scenario == "run_evaluation"
     assert "pskill.evaluator" in evaluator_pack.system_prompt
     assert "Memory 只能作为参考线索" in evaluator_pack.system_prompt
     assert governance_pack.agent_id == "psop.governance.proposal"
+    assert governance_pack.agent_key == "psop.governance"
     assert governance_pack.scenario == "governance"
     assert "psop.governance" in governance_pack.system_prompt
     assert "agent_tool_authorization" in governance_pack.system_prompt

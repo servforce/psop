@@ -5,7 +5,13 @@ from typing import Any
 import yaml
 from sqlalchemy.orm import Session
 
-from app.agents.registry import DEFAULT_COMPILE_AGENT_REF, AgentPromptPack, PromptRegistry, content_hash
+from app.agents.registry import (
+    DEFAULT_COMPILE_AGENT_REF,
+    PROMPT_USAGE_AGENT_KEYS,
+    AgentPromptPack,
+    PromptRegistry,
+    content_hash,
+)
 from app.agent_prompts.models import AgentPromptBinding, AgentPromptDefinition, AgentPromptVersion
 from app.agent_prompts.repository import AgentPromptRepository
 from app.agent_prompts.schemas import (
@@ -468,6 +474,7 @@ class AgentPromptService:
         if not errors:
             metadata = {
                 "agent_id": str(spec["agent_id"]),
+                "agent_key": str(spec.get("agent_key") or ""),
                 "scenario": str(spec["scenario"]),
                 "version": str(spec.get("version") or ""),
                 "route_key": str(spec["route_key"]),
@@ -483,10 +490,12 @@ class AgentPromptService:
     ) -> AgentPromptDefinitionSummaryResponse:
         versions = self.repository.list_versions(session, definition.id)
         active_version = session.get(AgentPromptVersion, definition.active_version_id) if definition.active_version_id else None
+        bindings = self.repository.list_bindings_for_definition(session, definition.id)
         return AgentPromptDefinitionSummaryResponse(
             id=definition.id,
             key=definition.key,
             agent_id=definition.agent_id,
+            agent_key=self._definition_agent_key(active_version=active_version, bindings=bindings),
             scenario=definition.scenario,
             name=definition.name,
             description=definition.description,
@@ -495,10 +504,39 @@ class AgentPromptService:
             active_version_label=active_version.version_label if active_version else None,
             active_content_hash=active_version.content_hash if active_version else None,
             version_count=len(versions),
-            bindings=[self._build_binding_response(session, item) for item in self.repository.list_bindings_for_definition(session, definition.id)],
+            bindings=[self._build_binding_response(session, item) for item in bindings],
             created_at=definition.created_at,
             updated_at=definition.updated_at,
         )
+
+    @classmethod
+    def _definition_agent_key(
+        cls,
+        *,
+        active_version: AgentPromptVersion | None,
+        bindings: list[AgentPromptBinding],
+    ) -> str:
+        if active_version:
+            agent_key = cls._agent_key_from_files(active_version.files)
+            if agent_key:
+                return agent_key
+        for binding in bindings:
+            agent_key = PROMPT_USAGE_AGENT_KEYS.get(str(binding.usage_key or ""))
+            if agent_key:
+                return agent_key
+        return ""
+
+    @staticmethod
+    def _agent_key_from_files(files: dict[str, Any] | None) -> str:
+        if not isinstance(files, dict):
+            return ""
+        try:
+            spec = yaml.safe_load(str(files.get("agent.yaml") or "")) or {}
+        except yaml.YAMLError:
+            return ""
+        if not isinstance(spec, dict):
+            return ""
+        return str(spec.get("agent_key") or "").strip()
 
     def _build_binding_response(self, session: Session, binding: AgentPromptBinding) -> AgentPromptBindingResponse:
         definition = session.get(AgentPromptDefinition, binding.definition_id)

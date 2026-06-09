@@ -205,6 +205,10 @@
         return bindings.map((item) => item.usage_key).join(" / ");
       },
 
+      agentPromptAgentKeyLabel(prompt) {
+        return String(prompt?.agent_key || "").trim() || "N/A";
+      },
+
       agentPromptSelectedFileLanguage() {
         const file = this.agentPromptSelectedFile || "";
         if (file.endsWith(".json")) {

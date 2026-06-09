@@ -1,4 +1,5 @@
 agent_id: psop.run_evaluation.default
+agent_key: pskill.evaluator
 version: v1
 scenario: run_evaluation
 route_key: text

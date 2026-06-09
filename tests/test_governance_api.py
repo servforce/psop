@@ -127,9 +127,12 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
     governance_prompt = agent_run["input_payload"]["agent_prompt"]
     assert governance_prompt["definition_key"] == "governance.proposal"
     assert governance_prompt["agent_id"] == "psop.governance.proposal"
+    assert governance_prompt["agent_key"] == "psop.governance"
+    assert governance_prompt["prompt_ref"] == "governance.proposal/v1"
     assert agent_model_calls[0]["provider"] == "deterministic"
     assert agent_model_calls[0]["route_key"] == "text"
     assert agent_model_calls[0]["request_payload"]["agent_prompt"]["definition_key"] == "governance.proposal"
+    assert agent_model_calls[0]["request_payload"]["agent_prompt"]["agent_key"] == "psop.governance"
     assert agent_authorizations == []
     assert {
         "agent.run.created",

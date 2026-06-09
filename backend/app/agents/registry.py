@@ -16,12 +16,25 @@ AGENTS_ROOT = Path(__file__).resolve().parent
 DEFAULT_COMPILE_AGENT_REF = "skill_compilation/formal_v5_compile/v1"
 DEFAULT_DOMAIN_PACK_ID = "generic"
 DEFAULT_DOMAIN_PACK_VERSION = "v1"
+PROMPT_USAGE_AGENT_KEYS = {
+    "pskill.build.default": "pskill.builder",
+    "default.skill_creation_agent": "pskill.builder",
+    "pskill.compile.formal_v5": "pskill.compiler",
+    "default.compile_agent": "pskill.compiler",
+    "pskill.test.pre_publish": "pskill.tester",
+    "skill_test.semantic_judge": "pskill.tester",
+    "pskill.run.node": "pskill.runner",
+    "runtime.llm_node_fallback": "pskill.runner",
+    "pskill.evaluate.run": "pskill.evaluator",
+    "psop.governance.proposal": "psop.governance",
+}
 
 
 @dataclass(frozen=True, slots=True)
 class AgentPromptPack:
     key: str
     agent_id: str
+    agent_key: str
     version: str
     scenario: str
     route_key: str
@@ -39,7 +52,8 @@ class AgentPromptPack:
     def metadata(self) -> dict[str, Any]:
         metadata = {
             "agent_id": self.agent_id,
-            "agent_key": self.key,
+            "agent_key": self.agent_key,
+            "prompt_ref": self.key,
             "version": self.version,
             "scenario": self.scenario,
             "route_key": self.route_key,
@@ -121,15 +135,16 @@ class PromptRegistry:
             db_pack = self._load_agent_for_usage_from_db(session, usage_key)
             if db_pack:
                 return db_pack
-        return self.load_agent(fallback_ref)
+        return self.load_agent(fallback_ref, usage_key=usage_key)
 
-    def load_agent(self, ref: str) -> AgentPromptPack:
+    def load_agent(self, ref: str, *, usage_key: str | None = None) -> AgentPromptPack:
         root_path = self.root / ref
         files = _read_asset_files(root_path)
         return _build_agent_prompt_pack(
             key=ref,
             root_path=root_path,
             files=files,
+            usage_key=usage_key,
             source="repo",
         )
 
@@ -151,6 +166,7 @@ class PromptRegistry:
             definition_key=definition.key,
             version_id=version.id,
             version_label=version.version_label,
+            usage_key=usage_key,
             source="db",
         )
 
@@ -163,34 +179,45 @@ def _build_agent_prompt_pack(
     definition_key: str | None = None,
     version_id: str | None = None,
     version_label: str | None = None,
+    usage_key: str | None = None,
     source: str = "repo",
 ) -> AgentPromptPack:
-        spec = _load_yaml_asset(files, root_path, "agent.yaml")
-        system_prompt = _required_text(files, root_path, "system.md").strip()
+    spec = _load_yaml_asset(files, root_path, "agent.yaml")
+    system_prompt = _required_text(files, root_path, "system.md").strip()
 
-        agent_id = _required_string(spec, "agent_id", root_path / "agent.yaml")
-        version = str(spec.get("version") or version_label or root_path.name)
-        scenario = str(spec.get("scenario") or key.split("/", 1)[0])
-        route_key = str(spec.get("route_key") or "text")
-        description = str(spec.get("description") or "")
+    agent_id = _required_string(spec, "agent_id", root_path / "agent.yaml")
+    agent_key = _agent_key_from_prompt_spec(spec, usage_key=usage_key, fallback=agent_id)
+    version = str(spec.get("version") or version_label or root_path.name)
+    scenario = str(spec.get("scenario") or key.split("/", 1)[0])
+    route_key = str(spec.get("route_key") or "text")
+    description = str(spec.get("description") or "")
 
-        return AgentPromptPack(
-            key=key,
-            agent_id=agent_id,
-            version=version,
-            scenario=scenario,
-            route_key=route_key,
-            description=description,
-            root_path=root_path,
-            spec=spec,
-            files=files,
-            system_prompt=system_prompt,
-            prompt_hash=content_hash(files),
-            definition_key=definition_key,
-            version_id=version_id,
-            version_label=version_label,
-            source=source,
-        )
+    return AgentPromptPack(
+        key=key,
+        agent_id=agent_id,
+        agent_key=agent_key,
+        version=version,
+        scenario=scenario,
+        route_key=route_key,
+        description=description,
+        root_path=root_path,
+        spec=spec,
+        files=files,
+        system_prompt=system_prompt,
+        prompt_hash=content_hash(files),
+        definition_key=definition_key,
+        version_id=version_id,
+        version_label=version_label,
+        source=source,
+    )
+
+
+def _agent_key_from_prompt_spec(spec: dict[str, Any], *, usage_key: str | None, fallback: str) -> str:
+    explicit = str(spec.get("agent_key") or "").strip()
+    if explicit:
+        return explicit
+    mapped = PROMPT_USAGE_AGENT_KEYS.get(str(usage_key or "").strip())
+    return mapped or fallback
 
 
 class DomainPackRegistry:

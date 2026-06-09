@@ -1,4 +1,5 @@
 agent_id: psop.skill_test.pre_publish
+agent_key: pskill.tester
 version: v1
 scenario: skill_test
 route_key: text

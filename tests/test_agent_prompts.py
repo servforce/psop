@@ -52,6 +52,8 @@ def test_agent_prompt_seed_creates_default_bindings_and_db_registry_priority() -
 
             assert pack.source == "db"
             assert pack.system_prompt == "DB managed compile prompt"
+            assert pack.metadata()["agent_key"] == "pskill.compiler"
+            assert pack.metadata()["prompt_ref"] == "skill_compilation.formal_v5_compile/v1"
             assert pack.metadata()["definition_key"] == "skill_compilation.formal_v5_compile"
     finally:
         database_manager.dispose()
@@ -71,10 +73,12 @@ def test_agent_prompt_api_validates_publishes_and_activates_versions() -> None:
         assert list_response.status_code == 200
         prompts = list_response.json()
         judge_prompt = next(item for item in prompts if item["key"] == "skill_test.semantic_judge")
+        assert judge_prompt["agent_key"] == "pskill.tester"
 
         detail_response = client.get(f"/api/v1/agent-prompts/{judge_prompt['id']}")
         assert detail_response.status_code == 200
         detail = detail_response.json()
+        assert detail["agent_key"] == "pskill.tester"
         parent_version = detail["selected_version"]
 
         draft_response = client.post(
@@ -110,6 +114,7 @@ def test_agent_prompt_api_validates_publishes_and_activates_versions() -> None:
         )
         assert publish_response.status_code == 200
         assert publish_response.json()["status"] == "published"
+        assert publish_response.json()["files"]["agent.yaml"]
 
         edit_published_response = client.put(
             f"/api/v1/agent-prompts/{judge_prompt['id']}/versions/{draft['id']}/files",
@@ -123,6 +128,7 @@ def test_agent_prompt_api_validates_publishes_and_activates_versions() -> None:
         )
         assert activate_response.status_code == 200
         assert activate_response.json()["active_version_id"] == draft["id"]
+        assert activate_response.json()["agent_key"] == "pskill.tester"
 
         bindings_response = client.get("/api/v1/agent-prompt-bindings")
         assert bindings_response.status_code == 200

@@ -38,7 +38,7 @@
         <div class="px-4 py-10 text-sm text-slate-400">暂无 Agent Prompt Pack。</div>
       </template>
       <template x-for="prompt in agentPrompts" :key="prompt.id">
-        <button type="button" class="grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-4 px-4 py-3 text-left transition hover:bg-slate-900/60" @click="navigate(agentPromptPath(prompt.id))">
+        <button type="button" class="grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,1fr)_10rem] items-center gap-4 px-4 py-3 text-left transition hover:bg-slate-900/60" @click="navigate(agentPromptPath(prompt.id))">
           <div class="min-w-0">
             <div class="flex min-w-0 items-center gap-2">
               <span class="material-symbols-outlined rounded-md border border-orange-500/30 bg-orange-500/10 p-1 text-[18px] text-orange-200">smart_toy</span>
@@ -47,6 +47,10 @@
                 <p class="mono-field mt-1 truncate" x-text="prompt.key"></p>
               </div>
             </div>
+          </div>
+          <div class="min-w-0">
+            <p class="text-xs text-slate-400">Agent Key</p>
+            <p class="mono-field mt-1 truncate" x-text="agentPromptAgentKeyLabel(prompt)"></p>
           </div>
           <div class="min-w-0">
             <p class="text-xs text-slate-400">场景</p>

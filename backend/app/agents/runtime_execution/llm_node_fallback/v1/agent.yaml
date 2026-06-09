@@ -1,4 +1,5 @@
 agent_id: psop.runtime_execution.llm_node_fallback
+agent_key: pskill.runner
 version: v1
 scenario: runtime_execution
 route_key: text

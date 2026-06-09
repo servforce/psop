@@ -51,9 +51,12 @@ def test_evaluation_api_creates_report_for_completed_run_and_records_evaluator_a
     evaluator_prompt = agent_run_response.json()["input_payload"]["agent_prompt"]
     assert evaluator_prompt["definition_key"] == "run_evaluation.default"
     assert evaluator_prompt["agent_id"] == "psop.run_evaluation.default"
+    assert evaluator_prompt["agent_key"] == "pskill.evaluator"
+    assert evaluator_prompt["prompt_ref"] == "run_evaluation.default/v1"
     assert agent_model_calls_response.json()[0]["provider"] == "deterministic"
     assert agent_model_calls_response.json()[0]["route_key"] == "text"
     assert agent_model_calls_response.json()[0]["request_payload"]["agent_prompt"]["definition_key"] == "run_evaluation.default"
+    assert agent_model_calls_response.json()[0]["request_payload"]["agent_prompt"]["agent_key"] == "pskill.evaluator"
     assert {
         "agent.run.created",
         "evaluation.run.started",
