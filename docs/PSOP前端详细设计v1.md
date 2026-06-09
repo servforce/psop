@@ -251,7 +251,7 @@ static/
 | Artifact Detail | `GET/PUT /api/v1/compiler/artifacts/{id}`；详情响应带 `compile_request` 摘要，用于回跳编译任务与 AgentRun |
 | Agent Prompts | `/api/v1/agent-prompts*`、`/api/v1/agent-prompt-bindings*` |
 | Tasks | `GET /api/v1/runtime/jobs`、`GET /api/v1/runtime/jobs/stats` |
-| Invocations | `GET/POST /api/v1/gateway/invocations`；列表显示 `compile_request_id` 与 `compile_artifact_id` 回链 |
+| Invocations | `GET/POST /api/v1/runtime/invocations`；列表显示 `compile_request_id` 与 `compile_artifact_id` 回链；`/gateway/invocations` 仅作 deprecated 兼容入口 |
 | Run Live | `GET /api/v1/runs/{run_id}`、`POST /api/v1/runs/{run_id}/cancel`、`/snapshots`、`/traces`、`/bindings`、`/events`；侧栏展示 `compile_request_id` 与 Artifact 入口，Replay 证据区可跳转 `pskill.runner` AgentRun |
 | Terminal WS | `/ws/runs/{run_id}` |
 | Replay | `GET /api/v1/replay/runs`、`GET /api/v1/replay/runs/{run_id}`、`GET /api/v1/replay/traces/{trace_id}` |
@@ -280,8 +280,8 @@ static/
 | 场景 | 当前方式 |
 | --- | --- |
 | Publish progress | SSE：`/api/v1/compiler/requests/{id}/events`，断线可读 `/progress` |
-| Run Live run event | WebSocket `/ws/runs/{run_id}` 接收 `terminal.event.appended`，增量更新 transcript、Run Events 和 Replay timeline，REST 补齐 |
-| Run Live run trace | WebSocket `/ws/runs/{run_id}` 接收 `trace.event.appended`，增量更新 Replay timeline、EG Node Path 和 trace 列表，REST 补齐 |
+| Run Live run event | WebSocket `/ws/runs/{run_id}` 接收 `run.event.appended`，增量更新 transcript、Run Events 和 Replay timeline，REST 补齐 |
+| Run Live run trace | WebSocket `/ws/runs/{run_id}` 接收 `run.trace.appended`，增量更新 Replay timeline、EG Node Path 和 trace 列表，REST 补齐 |
 | Run Live snapshot | WebSocket `/ws/runs/{run_id}` 接收 `session_token.snapshot.appended`，增量更新 Replay snapshot 比较视图，REST 补齐 |
 | Run Live 状态 | WebSocket `/ws/runs/{run_id}` 接收 `run.updated` 增量更新状态栏、compile provenance 和 Replay run metadata；REST 刷新 run、run events、run traces、bindings 补齐 |
 | Run Live binding | WebSocket `/ws/runs/{run_id}` 接收 `binding.updated`，增量更新 Binding 列表和 Replay binding evidence，REST 补齐 |

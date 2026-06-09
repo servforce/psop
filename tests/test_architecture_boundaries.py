@@ -55,6 +55,8 @@ def test_api_routes_use_pskill_and_materials_naming() -> None:
     assert violations == []
     assert "/api/v1/compiler/pskills/{pskill_id}/compile" in route_paths
     assert "/api/v1/pskills/{skill_id}/materials" in route_paths
+    assert "/api/v1/runtime/invocations" in route_paths
+    assert "/api/v1/runtime/invocations/{invocation_id}" in route_paths
     assert "/api/v1/runs/{run_id}/events" in route_paths
     assert "/api/v1/runs/{run_id}/terminal-session" in route_paths
     assert "/api/v1/runs/{run_id}/traces" in route_paths
@@ -71,6 +73,18 @@ def test_runtime_openapi_hides_legacy_terminal_compat_routes() -> None:
     assert "/api/v1/runs/{run_id}/events" in openapi_paths
     assert "/api/v1/runs/{run_id}/events/{event_id}/parts/{part_id}/content" in openapi_paths
     assert not any("/terminal/sessions" in path for path in openapi_paths)
+
+
+def test_runtime_invocation_openapi_marks_gateway_entrypoints_deprecated() -> None:
+    app = create_app(create_test_settings())
+    paths = app.openapi()["paths"]
+
+    assert paths["/api/v1/runtime/invocations"]["post"].get("deprecated") is not True
+    assert paths["/api/v1/runtime/invocations"]["get"].get("deprecated") is not True
+    assert paths["/api/v1/runtime/invocations/{invocation_id}"]["get"].get("deprecated") is not True
+    assert paths["/api/v1/gateway/invocations"]["post"]["deprecated"] is True
+    assert paths["/api/v1/gateway/invocations"]["get"]["deprecated"] is True
+    assert paths["/api/v1/gateway/invocations/{invocation_id}"]["get"]["deprecated"] is True
 
 
 def test_default_agents_keep_closed_loop_keys_and_runner_boundary() -> None:
@@ -124,7 +138,17 @@ def test_server_design_keeps_pskill_api_paths_distinct_from_skill_packages() -> 
     assert "RunTrace" in design
     assert "`POST` | `/api/v1/runs/{run_id}/cancel`" in design
     assert "`GET` | `/api/v1/runs/{run_id}/terminal-session` | terminal session 摘要" in design
+    assert "`POST` | `/api/v1/runtime/invocations`" in design
+    assert "`GET/POST` | `/api/v1/gateway/invocations*` | deprecated 兼容入口" in design
+    assert "`GET` | `/api/v1/runs` | run 列表；支持 `status`、`pskill_id`" in design
     assert "无 `/api/v1/runs/{run_id}/cancel`" not in design
+
+
+def test_static_runtime_uses_runtime_invocation_api_for_new_code() -> None:
+    runtime_js = (PROJECT_ROOT / "static" / "js" / "app" / "runtime.js").read_text(encoding="utf-8")
+
+    assert "/runtime/invocations" in runtime_js
+    assert "/gateway/invocations" not in runtime_js
 
 
 def test_overview_design_uses_current_closed_loop_job_and_runtime_names() -> None:
@@ -148,6 +172,8 @@ def test_overview_design_uses_current_closed_loop_job_and_runtime_names() -> Non
     assert violations == []
     assert "当前代码中必须区分四层对象" in design
     assert "用户定义的是 `PSkills`" in design
+    assert "`POST /api/v1/runtime/invocations`" in design
+    assert "/api/v1/gateway/invocations` 仅作为兼容入口保留" in design
     assert "Agent 使用的是 `Skills` 能力包" in design
     assert "backend/app/* domains" in design
     assert "`material_analysis`" in design
@@ -190,3 +216,24 @@ def test_frontend_design_uses_pskill_materials_and_run_trace_paths() -> None:
     assert "`/ws/tool-authorizations`" in design
     assert "`/api/v1/observability/*`" in design
     assert "- `/api/v1/runs/{run_id}/cancel`" not in design
+
+
+def test_terminal_access_guide_uses_run_event_api_paths() -> None:
+    guide = (PROJECT_ROOT / "docs" / "PSOP终端接入说明v1.md").read_text(encoding="utf-8")
+
+    forbidden_fragments = {
+        "/terminal/sessions",
+        "terminal.event.appended",
+        "TerminalEvent",
+        "terminal_event",
+        "latest_terminal_seq",
+    }
+    violations = sorted(fragment for fragment in forbidden_fragments if fragment in guide)
+
+    assert violations == []
+    assert "POST /api/v1/runtime/invocations" in guide
+    assert "GET /api/v1/runs/{run_id}/terminal-session" in guide
+    assert "GET /api/v1/runs/{run_id}/events" in guide
+    assert "POST /api/v1/runs/{run_id}/events" in guide
+    assert "GET /api/v1/runs/{run_id}/events/{event_id}/parts/{part_id}/content" in guide
+    assert "run.event.appended" in guide

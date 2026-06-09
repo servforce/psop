@@ -68,7 +68,7 @@ def test_materials_to_governance_closed_loop(monkeypatch) -> None:
         client.app.state.inference_gateway = FailingRuntimeInferenceGateway()
         try:
             invocation_response = client.post(
-                "/api/v1/gateway/invocations",
+                "/api/v1/runtime/invocations",
                 json={
                     "skill_key": "closed-loop-materials",
                     "input_envelope": {"user_input": "触发一次失败运行以生成改进闭环。"},

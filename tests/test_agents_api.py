@@ -1811,7 +1811,7 @@ def test_agent_runner_executes_governance_evaluations_read_tool() -> None:
         client.app.state.inference_gateway = FailingRuntimeInferenceGateway()
         try:
             invocation_response = client.post(
-                "/api/v1/gateway/invocations",
+                "/api/v1/runtime/invocations",
                 json={
                     "skill_key": "governance-evaluation-read-tool",
                     "input_envelope": {"user_input": "触发 evaluation finding"},
@@ -1896,7 +1896,7 @@ def test_agent_runner_executes_evaluator_write_diagnostics_tool() -> None:
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         invocation_response = client.post(
-            "/api/v1/gateway/invocations",
+            "/api/v1/runtime/invocations",
             json={
                 "skill_key": "evaluator-write-diagnostics-tool",
                 "input_envelope": {"user_input": "请处理现场任务"},

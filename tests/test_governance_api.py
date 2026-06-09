@@ -29,7 +29,7 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
 
         client.app.state.inference_gateway = FailingRuntimeInferenceGateway()
         invocation_response = client.post(
-            "/api/v1/gateway/invocations",
+            "/api/v1/runtime/invocations",
             json={
                 "skill_key": "governance-failed",
                 "input_envelope": {"user_input": "触发治理提案"},
@@ -334,7 +334,7 @@ def test_governance_api_creates_manual_proposal_from_source_findings() -> None:
 
         client.app.state.inference_gateway = FailingRuntimeInferenceGateway()
         invocation_response = client.post(
-            "/api/v1/gateway/invocations",
+            "/api/v1/runtime/invocations",
             json={
                 "skill_key": "governance-manual-source",
                 "input_envelope": {"user_input": "触发手工治理提案"},

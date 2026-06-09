@@ -2269,6 +2269,11 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         invocation_payload = invocation_response.json()
         run_id = invocation_payload["run_id"]
 
+        invocation_list_response = client.get(
+            "/api/v1/runtime/invocations",
+            params={"skill_key": "issue-one-demo"},
+        )
+        invocation_detail_response = client.get(f"/api/v1/runtime/invocations/{invocation_payload['id']}")
         initial_run_response = client.get(f"/api/v1/runs/{run_id}")
         binding_requirements_response = client.get(f"/api/v1/runs/{run_id}/binding-requirements")
         bindings_response = client.get(f"/api/v1/runs/{run_id}/bindings")
@@ -2285,6 +2290,8 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
             },
         )
         run_response = client.get(f"/api/v1/runs/{run_id}")
+        runs_list_response = client.get("/api/v1/runs", params={"pskill_id": created["id"]})
+        legacy_runs_list_response = client.get("/api/v1/runs", params={"skill_id": created["id"]})
         trace_response = client.get(f"/api/v1/runs/{run_id}/traces")
         trace_payload = trace_response.json()
         replay_trace_id = next(
@@ -2294,6 +2301,8 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         )
         run_events_after_append_response = client.get(f"/api/v1/runs/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+        replay_runs_list_response = client.get("/api/v1/replay/runs", params={"pskill_id": created["id"]})
+        legacy_replay_runs_list_response = client.get("/api/v1/replay/runs", params={"skill_id": created["id"]})
         replay_trace_response = client.get(f"/api/v1/replay/traces/{replay_trace_id}")
         missing_replay_trace_response = client.get("/api/v1/replay/traces/not-a-trace")
         jobs_response = client.get("/api/v1/runtime/jobs")
@@ -2345,6 +2354,12 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert invocation_payload["compile_artifact_id"] == artifact_id
     assert invocation_payload["compile_request_id"] == compile_request_id
     assert invocation_payload["terminal_session_id"]
+    assert invocation_list_response.status_code == 200
+    assert invocation_list_response.json()[0]["id"] == invocation_payload["id"]
+    assert invocation_list_response.json()[0]["compile_request_id"] == compile_request_id
+    assert invocation_detail_response.status_code == 200
+    assert invocation_detail_response.json()["id"] == invocation_payload["id"]
+    assert invocation_detail_response.json()["compile_request_id"] == compile_request_id
     initial_run_payload = initial_run_response.json()
     assert initial_run_payload["status"] == "waiting_input"
     assert initial_run_payload["compile_artifact_id"] == artifact_id
@@ -2361,6 +2376,10 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert len(run_payload["binding_summary"]) == 2
     assert "测试任务已完成" in run_payload["final_output"]
     assert "final_verify" in fake_inference.calls[-1]["system_prompt"]
+    assert runs_list_response.status_code == 200
+    assert runs_list_response.json()[0]["id"] == run_id
+    assert legacy_runs_list_response.status_code == 200
+    assert legacy_runs_list_response.json()[0]["id"] == run_id
 
     event_types = [event["event_type"] for event in trace_payload]
     assert event_types == [
@@ -2404,6 +2423,10 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert "trace_events" not in replay_payload
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
+    assert replay_runs_list_response.status_code == 200
+    assert replay_runs_list_response.json()[0]["id"] == run_id
+    assert legacy_replay_runs_list_response.status_code == 200
+    assert legacy_replay_runs_list_response.json()[0]["id"] == run_id
     assert replay_payload["provenance"]["invocation_id"] == invocation_payload["id"]
     assert replay_payload["provenance"]["run_id"] == run_id
     assert replay_payload["provenance"]["pskill_version_id"] == publish_payload["published_version"]["id"]
@@ -2494,7 +2517,7 @@ def test_runtime_run_can_be_cancelled_through_runs_api() -> None:
         cancel_response = client.post(f"/api/v1/runs/{run_id}/cancel", json={"reason": "用户取消本次运行"})
         second_cancel_response = client.post(f"/api/v1/runs/{run_id}/cancel", json={"reason": "不应覆盖原始原因"})
         run_response = client.get(f"/api/v1/runs/{run_id}")
-        invocation_detail_response = client.get(f"/api/v1/gateway/invocations/{invocation_payload['id']}")
+        invocation_detail_response = client.get(f"/api/v1/runtime/invocations/{invocation_payload['id']}")
         terminal_session_response = client.get(f"/api/v1/runs/{run_id}/terminal-session")
         snapshots_response = client.get(f"/api/v1/runs/{run_id}/snapshots")
         traces_response = client.get(f"/api/v1/runs/{run_id}/traces")
@@ -2552,6 +2575,54 @@ def test_runtime_run_can_be_cancelled_through_runs_api() -> None:
     assert replay_response.json()["run"]["status"] == "cancelled"
 
 
+def test_gateway_invocation_routes_remain_deprecated_compatibility_entrypoints() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/pskills",
+            json={
+                "key": "gateway-invocation-compat",
+                "name": "Gateway Invocation Compat",
+                "description": "Validate deprecated gateway invocation routes remain compatible.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/pskills/{created['id']}/publish",
+            json={"publish_reason": "Gateway compatibility publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        compile_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+
+        invocation_response = client.post(
+            "/api/v1/gateway/invocations",
+            json={
+                "skill_key": "gateway-invocation-compat",
+                "input_envelope": {"user_input": "验证兼容入口"},
+                "gateway_type": "web",
+            },
+        )
+        invocation_payload = invocation_response.json()
+        list_response = client.get(
+            "/api/v1/gateway/invocations",
+            params={"skill_key": "gateway-invocation-compat"},
+        )
+        detail_response = client.get(f"/api/v1/gateway/invocations/{invocation_payload['id']}")
+        runtime_detail_response = client.get(f"/api/v1/runtime/invocations/{invocation_payload['id']}")
+
+    assert publish_response.status_code == 202
+    assert compile_response.status_code == 200
+    assert invocation_response.status_code == 201
+    assert invocation_payload["compile_request_id"] == compile_request_id
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["id"] == invocation_payload["id"]
+    assert detail_response.status_code == 200
+    assert detail_response.json()["id"] == invocation_payload["id"]
+    assert detail_response.json()["compile_request_id"] == compile_request_id
+    assert runtime_detail_response.status_code == 200
+    assert runtime_detail_response.json()["id"] == invocation_payload["id"]
+
+
 def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     client, _, _ = create_test_client()
 
@@ -2572,7 +2643,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
 
         invocation_response = client.post(
-            "/api/v1/gateway/invocations",
+            "/api/v1/runtime/invocations",
             json={
                 "skill_key": "skill-debug-terminal",
                 "version_selector": "latest",
@@ -2590,7 +2661,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         )
         invocation = invocation_response.json()
         run_id = invocation["run_id"]
-        persisted_invocation_response = client.get(f"/api/v1/gateway/invocations/{invocation['id']}")
+        persisted_invocation_response = client.get(f"/api/v1/runtime/invocations/{invocation['id']}")
         initial_run_response = client.get(f"/api/v1/runs/{run_id}")
         upload_response = client.post(
             f"/api/v1/runs/{run_id}/events",
@@ -2679,7 +2750,7 @@ def test_run_events_accept_multipart_multimodal_parts_and_feed_llm() -> None:
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         invocation_response = client.post(
-            "/api/v1/gateway/invocations",
+            "/api/v1/runtime/invocations",
             json={
                 "skill_key": "run-multipart-event",
                 "gateway_type": "terminal",
@@ -2791,7 +2862,7 @@ def test_terminal_file_upload_returns_json_error_when_object_store_unavailable()
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         invocation_response = client.post(
-            "/api/v1/gateway/invocations",
+            "/api/v1/runtime/invocations",
             json={
                 "skill_key": "terminal-upload-object-store-failure",
                 "gateway_type": "terminal",
@@ -2832,7 +2903,7 @@ def test_run_websocket_broadcasts_run_event_append() -> None:
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         invocation_response = client.post(
-            "/api/v1/gateway/invocations",
+            "/api/v1/runtime/invocations",
             json={
                 "skill_key": "ws-terminal-demo",
                 "input_envelope": {"user_input": "启动 WS 验证"},
@@ -2930,7 +3001,7 @@ def test_run_websocket_broadcasts_binding_updates() -> None:
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         invocation_response = client.post(
-            "/api/v1/gateway/invocations",
+            "/api/v1/runtime/invocations",
             json={
                 "skill_key": "ws-binding-demo",
                 "input_envelope": {"user_input": "启动 binding WS 验证"},

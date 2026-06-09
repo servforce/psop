@@ -396,10 +396,11 @@ Claim 规则：
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| `POST` | `/api/v1/gateway/invocations` | 创建 invocation/run/terminal session；响应包含派生 `compile_request_id` |
-| `GET` | `/api/v1/gateway/invocations` | invocation 列表；支持 `skill_key`、`status`；响应包含派生 `compile_request_id` |
-| `GET` | `/api/v1/gateway/invocations/{invocation_id}` | invocation 详情；响应包含派生 `compile_request_id` |
-| `GET` | `/api/v1/runs` | run 列表；支持 `status`、`skill_id`；响应包含派生 `compile_request_id` |
+| `POST` | `/api/v1/runtime/invocations` | 创建 invocation/run/terminal session；响应包含派生 `compile_request_id` |
+| `GET` | `/api/v1/runtime/invocations` | invocation 列表；支持 `skill_key`、`status`；响应包含派生 `compile_request_id` |
+| `GET` | `/api/v1/runtime/invocations/{invocation_id}` | invocation 详情；响应包含派生 `compile_request_id` |
+| `GET/POST` | `/api/v1/gateway/invocations*` | deprecated 兼容入口；新代码使用 `/runtime/invocations*` |
+| `GET` | `/api/v1/runs` | run 列表；支持 `status`、`pskill_id`；兼容 deprecated `skill_id`；响应包含派生 `compile_request_id` |
 | `GET` | `/api/v1/runs/{run_id}` | run 详情；响应包含派生 `compile_request_id` |
 | `POST` | `/api/v1/runs/{run_id}/cancel` | 取消 run；同时取消该 run 下未决工具授权 |
 | `GET` | `/api/v1/runs/{run_id}/snapshots` | Session Token snapshots |
@@ -505,8 +506,8 @@ Claim 规则：
 
 - 连接后发送 `ws.connected`。
 - 服务端不接收业务输入；循环中只等待客户端消息以维持连接。
-- REST 成功追加 run event 后，当前进程内 hub 广播 `terminal.event.appended`。
-- REST 触发 Runtime Kernel 推进并新增 run trace 后，当前进程内 hub 广播 `trace.event.appended`。
+- REST 成功追加 run event 后，当前进程内 hub 广播 `run.event.appended`。
+- REST 触发 Runtime Kernel 推进并新增 run trace 后，当前进程内 hub 广播 `run.trace.appended`。
 - REST 触发 Runtime Kernel 推进并新增 session token snapshot 后，当前进程内 hub 广播 `session_token.snapshot.appended`。
 - REST 触发 Runtime Kernel 改变 run 元数据后，当前进程内 hub 广播 `run.updated`。
 - REST 解析或更新 run capability binding 后，当前进程内 hub 广播 `binding.updated`。

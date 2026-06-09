@@ -69,7 +69,7 @@ runtime_router = APIRouter(prefix="/runtime", tags=["runtime"])
 ws_router = APIRouter(prefix="/ws", tags=["ws"])
 
 
-@gateway_router.post("", response_model=InvocationResponse, status_code=201)
+@gateway_router.post("", response_model=InvocationResponse, status_code=201, deprecated=True)
 def create_invocation(
     payload: CreateInvocationRequest,
     session: Session = Depends(get_db_session),
@@ -87,7 +87,26 @@ def create_runtime_invocation(
     return service.create_invocation(session, payload)
 
 
-@gateway_router.get("", response_model=list[InvocationResponse])
+@runtime_router.get("/invocations", response_model=list[InvocationResponse])
+def list_runtime_invocations(
+    skill_key: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    service: RuntimeService = Depends(get_runtime_service),
+) -> list[InvocationResponse]:
+    return service.list_invocations(session, skill_key=skill_key, status=status)
+
+
+@runtime_router.get("/invocations/{invocation_id}", response_model=InvocationResponse)
+def get_runtime_invocation(
+    invocation_id: str,
+    session: Session = Depends(get_db_session),
+    service: RuntimeService = Depends(get_runtime_service),
+) -> InvocationResponse:
+    return service.get_invocation(session, invocation_id)
+
+
+@gateway_router.get("", response_model=list[InvocationResponse], deprecated=True)
 def list_invocations(
     skill_key: str | None = Query(default=None),
     status: str | None = Query(default=None),
@@ -97,7 +116,7 @@ def list_invocations(
     return service.list_invocations(session, skill_key=skill_key, status=status)
 
 
-@gateway_router.get("/{invocation_id}", response_model=InvocationResponse)
+@gateway_router.get("/{invocation_id}", response_model=InvocationResponse, deprecated=True)
 def get_invocation(
     invocation_id: str,
     session: Session = Depends(get_db_session),
@@ -109,11 +128,12 @@ def get_invocation(
 @runs_router.get("", response_model=list[RunResponse])
 def list_runs(
     status: str | None = Query(default=None),
-    skill_id: str | None = Query(default=None),
+    pskill_id: str | None = Query(default=None),
+    skill_id: str | None = Query(default=None, deprecated=True),
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
 ) -> list[RunResponse]:
-    return service.list_runs(session, status=status, skill_id=skill_id)
+    return service.list_runs(session, status=status, skill_id=pskill_id or skill_id)
 
 
 @runs_router.get("/{run_id}", response_model=RunResponse)
@@ -807,12 +827,13 @@ def _parse_single_byte_range(range_header: str, size: int) -> tuple[int, int] | 
 
 @replay_router.get("/runs", response_model=list[RunResponse])
 def list_replay_runs(
-    skill_id: str | None = Query(default=None),
+    pskill_id: str | None = Query(default=None),
+    skill_id: str | None = Query(default=None, deprecated=True),
     status: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
 ) -> list[RunResponse]:
-    return service.list_runs(session, skill_id=skill_id, status=status)
+    return service.list_runs(session, skill_id=pskill_id or skill_id, status=status)
 
 
 @replay_router.get("/runs/{run_id}", response_model=ReplayDetailResponse)

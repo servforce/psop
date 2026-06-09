@@ -48,7 +48,7 @@
 
 ### 3.2 运行时
 
-- Gateway 通过 `POST /api/v1/gateway/invocations` 按 `skill_key` 解析已发布版本和 ready artifact。
+- Runtime invocation API 通过 `POST /api/v1/runtime/invocations` 按 `skill_key` 受控解析已发布版本和 ready artifact；`/api/v1/gateway/invocations` 仅作为兼容入口保留。
 - Runtime 创建 `skill_invocation`、`run`、`terminal_session`、默认 `run_capability_binding`、初始 `session_token_snapshot` 和 `runtime_job(job_type=runtime_step)`。
 - 当前实现会在创建 invocation 后同步调用一次 `RuntimeService.process_run()`，同时仍保留 runtime job 作为后续推进和 worker 接管入口。
 - Terminal 输入输出统一为 append-only `run_event`；多模态输入由服务端生成 `run_event_part`，二进制内容经对象存储并由 `artifact_object` 索引。

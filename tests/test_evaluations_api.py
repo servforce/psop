@@ -462,7 +462,7 @@ def _publish_and_complete_successful_run(client, *, key: str) -> str:
     compile_request_id = publish_payload["compile_request"]["id"]
     client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
     invocation_payload = client.post(
-        "/api/v1/gateway/invocations",
+        "/api/v1/runtime/invocations",
         json={
             "skill_key": key,
             "input_envelope": {"user_input": "请处理现场任务"},
@@ -502,7 +502,7 @@ def _publish_and_complete_failed_run(client, *, key: str, restore_gateway) -> tu
     client.app.state.inference_gateway = FailingRuntimeInferenceGateway()
     try:
         invocation_response = client.post(
-            "/api/v1/gateway/invocations",
+            "/api/v1/runtime/invocations",
             json={
                 "skill_key": key,
                 "input_envelope": {"user_input": "触发运行失败"},

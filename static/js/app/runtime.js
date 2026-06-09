@@ -37,7 +37,7 @@
         this.busy.invocations = true;
         try {
           const suffix = skillKey ? `?skill_key=${encodeURIComponent(skillKey)}` : "";
-          this.invocations = await this.apiRequest(`/gateway/invocations${suffix}`);
+          this.invocations = await this.apiRequest(`/runtime/invocations${suffix}`);
         } finally {
           this.busy.invocations = false;
         }
@@ -54,7 +54,7 @@
         this.clearNotice();
         try {
           const userInput = this.invocationForm.user_input.trim();
-          const invocation = await this.apiRequest("/gateway/invocations", {
+          const invocation = await this.apiRequest("/runtime/invocations", {
             method: "POST",
             body: JSON.stringify({
               skill_key: this.invocationForm.skill_key,
@@ -91,7 +91,7 @@
         this.clearNotice();
         try {
           const userInput = this.skillDebugForm.user_input.trim();
-          const invocation = await this.apiRequest("/gateway/invocations", {
+          const invocation = await this.apiRequest("/runtime/invocations", {
             method: "POST",
             body: JSON.stringify({
               skill_key: this.currentSkill.key,
