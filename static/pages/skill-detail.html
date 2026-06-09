@@ -113,6 +113,12 @@
                     <p class="text-sm font-medium text-slate-950">版本 <span x-text="currentSkill.current_draft_version.version_no"></span></p>
                     <p class="mono-field text-[11px]" x-text="currentSkill.current_draft_version.source_ref"></p>
                     <p class="mono-field text-[11px]" x-text="formatShortId(currentSkill.current_draft_version.source_commit_sha)"></p>
+                    <template x-if="skillVersionBuilderAgentRunPath(currentSkill.current_draft_version)">
+                      <button type="button" class="button-secondary h-7 px-2 text-xs" title="查看 Builder AgentRun" aria-label="查看 Builder AgentRun" @click="openSkillVersionBuilderAgentRun(currentSkill.current_draft_version)">
+                        <span class="material-symbols-outlined text-[15px]">account_tree</span>
+                        <span class="font-mono" x-text="formatShortId(skillVersionBuilderAgentRunId(currentSkill.current_draft_version))"></span>
+                      </button>
+                    </template>
                   </div>
                 </template>
               </div>
@@ -990,7 +996,14 @@
                             </p>
                             <p class="mt-1 truncate font-mono text-[11px] text-slate-500" x-text="formatShortId(version.source_commit_sha)"></p>
                           </div>
-                          <time class="hidden whitespace-nowrap font-mono text-[11px] text-slate-500 sm:block" x-text="formatDateTime(version.created_at)"></time>
+                          <div class="flex items-center justify-end gap-1">
+                            <template x-if="skillVersionBuilderAgentRunPath(version)">
+                              <button type="button" class="topbar-icon-button h-7 w-7 shrink-0" title="查看 Builder AgentRun" aria-label="查看 Builder AgentRun" @click="openSkillVersionBuilderAgentRun(version)">
+                                <span class="material-symbols-outlined text-[16px]">account_tree</span>
+                              </button>
+                            </template>
+                            <time class="hidden whitespace-nowrap font-mono text-[11px] text-slate-500 sm:block" x-text="formatDateTime(version.created_at)"></time>
+                          </div>
                         </div>
                       </template>
                     </div>

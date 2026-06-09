@@ -158,6 +158,7 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(skillDetailJs).not.toContain("await this.navigate(buildTasksPath(taskFilters))");
   expect(skillDetailJs).toContain('this.showCenterToast("success", "PSkill 草稿 patch 已生成。")');
   expect(skillDetailJs).toContain("pskill.builder 已生成可审查 patch，请确认后应用到 GitLab draft。");
+  expect(skillDetailJs).toContain("builder_agent_run_id: this.rawMaterialGenerationResult.agent_run?.id || null");
   expect(skillDetailJs).toContain('commit_message: "Apply pskill.builder material draft"');
   expect(skillDetailJs).toContain('kind === "document"');
   expect(skillDetailJs).toContain("this.sourceLoadedSkillId = null");

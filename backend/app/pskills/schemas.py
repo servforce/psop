@@ -17,6 +17,7 @@ class PSkillVersionSummaryResponse(BaseModel):
     source_commit_sha: str | None = None
     manifest_snapshot: dict[str, Any] | None = None
     runtime_policy_snapshot: dict[str, Any] | None = None
+    builder_agent_run_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -214,6 +215,7 @@ class ApplyPSkillDraftPatchRequest(BaseModel):
     base_commit_sha: str = Field(min_length=1)
     files: dict[str, str] = Field(default_factory=dict)
     commit_message: str = Field(default="Apply PSkill draft patch via PSOP WEB IDE", max_length=500)
+    builder_agent_run_id: str | None = Field(default=None, min_length=1)
 
 
 class PSkillDraftApplyPatchResponse(BaseModel):
@@ -226,6 +228,7 @@ class PSkillDraftApplyPatchResponse(BaseModel):
 class PSkillMaterialGenerationResponse(BaseModel):
     id: str
     job_id: str | None = None
+    agent_run: AgentRunResponse | None = None
     pskill_definition_id: str
     material_ids: list[str]
     user_description: str

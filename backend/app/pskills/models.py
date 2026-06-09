@@ -57,6 +57,7 @@ class PSkillVersion(Base):
     __tablename__ = "pskill_version"
     __table_args__ = (
         Index("idx_pskill_version_definition_status", "pskill_definition_id", "status"),
+        Index("idx_pskill_version_builder_agent_run", "builder_agent_run_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
@@ -70,6 +71,10 @@ class PSkillVersion(Base):
     source_commit_sha: Mapped[str | None] = mapped_column(String(255), nullable=True)
     manifest_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     runtime_policy_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    builder_agent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_run.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -145,12 +150,17 @@ class PSkillMaterialGeneration(Base):
     __tablename__ = "pskill_material_generation"
     __table_args__ = (
         Index("idx_pskill_material_generation_definition_created_at", "pskill_definition_id", "created_at"),
+        Index("idx_pskill_material_generation_agent_run", "agent_run_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     pskill_definition_id: Mapped[str] = mapped_column(
         ForeignKey("pskill_definition.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    agent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_run.id", ondelete="SET NULL"),
+        nullable=True,
     )
     material_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     user_description: Mapped[str] = mapped_column(Text, default="", nullable=False)

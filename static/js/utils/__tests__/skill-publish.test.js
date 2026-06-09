@@ -69,6 +69,9 @@ test("skill publish tab exposes versions and publish gate controls", () => {
   expect(html).toContain("openPublishGateReplay()");
   expect(html).toContain("publishGateCompileArtifactId()");
   expect(html).toContain("openCompilerArtifact(publishGateCompileArtifactId())");
+  expect(html).toContain("skillVersionBuilderAgentRunPath(currentSkill.current_draft_version)");
+  expect(html).toContain("openSkillVersionBuilderAgentRun(currentSkill.current_draft_version)");
+  expect(html).toContain("skillVersionBuilderAgentRunPath(version)");
   expect(appJs).toContain("pskillVersionsLoadedSkillId");
   expect(appJs).toContain("publishGateResult");
   expect(appJs).toContain("publishGate: false");
@@ -113,6 +116,7 @@ test("skill publish methods load versions and run publish gate", async () => {
     publishGateResult: null,
     currentSkill: {
       id: "skill-1",
+      current_draft_version: { id: "draft-version-1", builder_agent_run_id: "builder-agent-run-1" },
       latest_published_version: { id: "version-1", version_no: 1 }
     },
     apiRequest: jest.fn(async (url, options) => {
@@ -150,12 +154,21 @@ test("skill publish methods load versions and run publish gate", async () => {
   expect(methods.publishGateTesterAgentRunPath.call(context)).toBe(
     "/admin/platform/agent-runs/agent-run-1?tab=events"
   );
+  expect(methods.skillVersionBuilderAgentRunId.call(context)).toBe("builder-agent-run-1");
+  expect(methods.skillVersionBuilderAgentRunPath.call(context)).toBe(
+    "/admin/platform/agent-runs/builder-agent-run-1?tab=events"
+  );
+  expect(methods.skillVersionBuilderAgentRunPath.call(context, { builder_agent_run_id: "builder-agent-run-2" })).toBe(
+    "/admin/platform/agent-runs/builder-agent-run-2?tab=events"
+  );
   expect(methods.publishGateReplayPath.call(context)).toBe("/admin/skills/skill-1/runs/run-1/live/replay");
   expect(methods.publishGateCompileArtifactId.call(context)).toBe("artifact-1");
   methods.openPublishGateTestRunReview.call(context);
   expect(context.navigate).toHaveBeenCalledWith("/admin/skills/skill-1/tests/scenario-1/runs/test-run-1/review");
   methods.openPublishGateTesterAgentRun.call(context);
   expect(context.navigate).toHaveBeenCalledWith("/admin/platform/agent-runs/agent-run-1?tab=events");
+  methods.openSkillVersionBuilderAgentRun.call(context);
+  expect(context.navigate).toHaveBeenCalledWith("/admin/platform/agent-runs/builder-agent-run-1?tab=events");
   methods.openPublishGateReplay.call(context);
   expect(context.navigate).toHaveBeenCalledWith("/admin/skills/skill-1/runs/run-1/live/replay");
   expect(context.apiRequest).toHaveBeenCalledWith("/pskills/skill-1/publishes");

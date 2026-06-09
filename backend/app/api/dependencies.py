@@ -86,6 +86,7 @@ def get_skills_service(request: Request) -> SkillsService:
         asr_gateway=get_asr_gateway(request),
         object_store=get_object_store(request),
         agent_prompt_service=get_agent_prompt_service(request),
+        agent_service=get_agent_service(request),
     )
 
 

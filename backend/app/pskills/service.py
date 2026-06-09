@@ -4,9 +4,12 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
+from app.agents.service import AgentService
 from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
@@ -113,6 +116,7 @@ class SkillsService:
         agent_prompt_service: AgentPromptService | None = None,
         repository: SkillsRepository | None = None,
         job_repository: JobRepository | None = None,
+        agent_service: AgentService | None = None,
     ) -> None:
         self.settings = settings
         self.gitlab_gateway = gitlab_gateway
@@ -123,6 +127,7 @@ class SkillsService:
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
         self.repository = repository or SkillsRepository()
         self.job_repository = job_repository or JobRepository()
+        self.agent_service = agent_service or AgentService()
 
     def list_skills(
         self,
@@ -634,6 +639,7 @@ class SkillsService:
                 source_commit_sha=source_bundle.head_commit_sha,
                 manifest_snapshot=manifest_snapshot(document),
                 runtime_policy_snapshot=runtime_policy_snapshot(document),
+                builder_agent_run_id=draft_version.builder_agent_run_id,
             )
             session.add(published_version)
             session.flush()
@@ -1039,19 +1045,28 @@ class SkillsService:
         )
         session.add(job)
         session.flush()
+        agent_run_id = self._ensure_material_generation_agent_run(
+            session,
+            generation=generation,
+            definition=definition,
+            job=job,
+            material_ids=material_ids,
+            base_commit_sha=payload.base_commit_sha,
+        )
         generation.prompt_metadata = {
             **(generation.prompt_metadata or {}),
             "job_id": job.id,
             "job_type": PSKILL_BUILD_JOB_TYPE,
+            "agent_run_id": agent_run_id,
         }
         session.commit()
 
         if not self.settings.runtime_worker_enabled:
             self.process_pskill_build_job(session, job.id)
             refreshed = self.repository.get_material_generation(session, generation.id)
-            return self._build_material_generation_response(refreshed or generation)
+            return self._build_material_generation_response(session, refreshed or generation)
 
-        return self._build_material_generation_response(generation)
+        return self._build_material_generation_response(session, generation)
 
     def apply_draft_patch(
         self,
@@ -1099,6 +1114,13 @@ class SkillsService:
             readme_content=readme_content,
             skill_md_content=skill_md_content,
         )
+        if payload.builder_agent_run_id:
+            self._validate_builder_agent_run(
+                session,
+                payload.builder_agent_run_id,
+                allowed_owner_ids={definition.id},
+            )
+            draft_version.builder_agent_run_id = payload.builder_agent_run_id
         session.commit()
         return PSkillDraftApplyPatchResponse(
             applied=True,
@@ -1127,11 +1149,21 @@ class SkillsService:
             session.commit()
             return generation
 
+        definition = self._require_definition(session, generation.pskill_definition_id)
+        material_ids = [str(item) for item in generation.material_ids]
+        agent_run_id = self._ensure_material_generation_agent_run(
+            session,
+            generation=generation,
+            definition=definition,
+            job=job,
+            material_ids=material_ids,
+            base_commit_sha=str((job.payload or {}).get("base_commit_sha") or "") or None,
+        )
         job.status = "running"
         job.payload = self._skill_generation_job_payload(
             pskill_definition_id=generation.pskill_definition_id,
             generation_id=generation.id,
-            material_ids=[str(item) for item in generation.material_ids],
+            material_ids=material_ids,
             base_commit_sha=str((job.payload or {}).get("base_commit_sha") or "") or None,
             current_stage="loading_source",
         )
@@ -1141,7 +1173,9 @@ class SkillsService:
             **(generation.prompt_metadata or {}),
             "job_id": job.id,
             "job_type": PSKILL_BUILD_JOB_TYPE,
+            "agent_run_id": agent_run_id,
         }
+        self._mark_material_generation_agent_started(session, generation=generation, job=job)
         session.commit()
 
         try:
@@ -1164,12 +1198,221 @@ class SkillsService:
             job.last_error = str(exc)
             job.lease_until = None
             job.payload = self._set_skill_generation_job_stage(job.payload, "failed", "failed", str(exc))
+            self._mark_material_generation_agent_failed(session, generation=generation, error_message=str(exc))
             session.commit()
             LOGGER.exception(
                 "skill raw material generation failed",
                 extra={"generation_id": generation.id, "job_id": job_id},
             )
             return generation
+
+    def _ensure_material_generation_agent_run(
+        self,
+        session: Session,
+        *,
+        generation: PSkillMaterialGeneration,
+        definition: PSkillDefinition,
+        job: RuntimeJob,
+        material_ids: list[str],
+        base_commit_sha: str | None,
+    ) -> str:
+        if generation.agent_run_id:
+            return generation.agent_run_id
+        agent_run = self.agent_service.create_run(
+            session,
+            CreateAgentRunRequest(
+                agent_key="pskill.builder",
+                owner_type="pskill_material_generation",
+                owner_id=generation.id,
+                input_payload={
+                    "schema": "PSkillBuilderInput",
+                    "source": "pskills.materials.generate_skill_draft",
+                    "generation_id": generation.id,
+                    "job_id": job.id,
+                    "job_type": job.job_type,
+                    "pskill_definition_id": definition.id,
+                    "pskill": {
+                        "id": definition.id,
+                        "key": definition.key,
+                        "name": definition.name,
+                    },
+                    "material_ids": material_ids,
+                    "base_commit_sha": base_commit_sha,
+                    "user_description": generation.user_description,
+                },
+            ),
+            commit=False,
+        )
+        generation.agent_run_id = agent_run.id
+        generation.prompt_metadata = {
+            **(generation.prompt_metadata or {}),
+            "agent_run_id": agent_run.id,
+        }
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="pskill.builder.generation.linked",
+                phase="builder",
+                payload={"generation_id": generation.id, "job_id": job.id, "material_count": len(material_ids)},
+            ),
+            commit=False,
+        )
+        return agent_run.id
+
+    def _mark_material_generation_agent_started(
+        self,
+        session: Session,
+        *,
+        generation: PSkillMaterialGeneration,
+        job: RuntimeJob,
+    ) -> None:
+        if not generation.agent_run_id:
+            return
+        agent_run = self.agent_service.get_run_model(session, generation.agent_run_id)
+        agent_run.status = "running"
+        agent_run.started_at = agent_run.started_at or now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="pskill.builder.generation.started",
+                phase="builder",
+                payload={"generation_id": generation.id, "job_id": job.id},
+            ),
+            commit=False,
+        )
+
+    def _record_material_generation_model_call(
+        self,
+        session: Session,
+        *,
+        generation: PSkillMaterialGeneration,
+        prompt_payload: dict[str, Any],
+        prompt_metadata: dict[str, Any],
+        completion: Any,
+    ) -> None:
+        if not generation.agent_run_id:
+            return
+        self.agent_service.record_model_call(
+            session,
+            agent_run_id=generation.agent_run_id,
+            provider=str(getattr(completion, "provider", "") or "llm_inference_gateway"),
+            route_key=str(prompt_metadata.get("route_key") or "text"),
+            model_name=str(getattr(completion, "model", "") or ""),
+            status="succeeded",
+            request_payload={
+                "generation_id": generation.id,
+                "prompt_payload": prompt_payload,
+                "agent_prompt": prompt_metadata,
+                "llm_request": getattr(completion, "request", {}) or {},
+            },
+            response_payload={
+                "content": getattr(completion, "content", ""),
+                "raw": getattr(completion, "raw_response", {}) or {},
+            },
+            usage_json=dict(getattr(completion, "usage", {}) or {}),
+            commit=False,
+        )
+        self.agent_service.append_event(
+            session,
+            generation.agent_run_id,
+            AppendAgentEventRequest(
+                event_type="pskill.builder.model_call.completed",
+                phase="builder",
+                payload={"generation_id": generation.id, "status": "succeeded"},
+            ),
+            commit=False,
+        )
+
+    def _mark_material_generation_agent_succeeded(
+        self,
+        session: Session,
+        *,
+        generation: PSkillMaterialGeneration,
+        draft_version: PSkillVersion,
+        committed_commit_sha: str,
+        generated: GeneratedSkillDraft,
+        reference_files: list[str],
+    ) -> None:
+        if not generation.agent_run_id:
+            return
+        output_payload = {
+            "schema": "PSkillBuilderResult",
+            "generation_id": generation.id,
+            "pskill_definition_id": generation.pskill_definition_id,
+            "pskill_version_id": draft_version.id,
+            "committed_commit_sha": committed_commit_sha,
+            "material_ids": [str(item) for item in generation.material_ids],
+            "generated_files": sorted(generated.files),
+            "reference_files": reference_files,
+            "generation_reason": generated.generation_reason,
+            "review_notes": generated.review_notes,
+            "material_usage": generated.material_usage,
+        }
+        agent_run = self.agent_service.get_run_model(session, generation.agent_run_id)
+        agent_run.status = "succeeded"
+        agent_run.output_payload = output_payload
+        agent_run.error_message = ""
+        agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="pskill.builder.generation.succeeded",
+                phase="builder",
+                payload=output_payload,
+            ),
+            commit=False,
+        )
+
+    def _mark_material_generation_agent_failed(
+        self,
+        session: Session,
+        *,
+        generation: PSkillMaterialGeneration,
+        error_message: str,
+    ) -> None:
+        if not generation.agent_run_id:
+            return
+        agent_run = self.agent_service.get_run_model(session, generation.agent_run_id)
+        agent_run.status = "failed"
+        agent_run.error_message = error_message
+        agent_run.ended_at = now_utc()
+        self.agent_service.append_event(
+            session,
+            agent_run.id,
+            AppendAgentEventRequest(
+                event_type="pskill.builder.generation.failed",
+                phase="builder",
+                payload={"generation_id": generation.id, "error_message": error_message},
+            ),
+            commit=False,
+        )
+
+    def _validate_builder_agent_run(
+        self,
+        session: Session,
+        agent_run_id: str,
+        *,
+        allowed_owner_ids: set[str] | None = None,
+    ) -> None:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        if agent_run.agent_key != "pskill.builder":
+            raise SkillValidationError(
+                "builder_agent_run_id 必须指向 pskill.builder AgentRun。",
+                details={"agent_run_id": agent_run_id, "agent_key": agent_run.agent_key},
+            )
+        if agent_run.status != "succeeded":
+            raise SkillValidationError(
+                "builder_agent_run_id 必须指向已成功的 pskill.builder AgentRun。",
+                details={"agent_run_id": agent_run_id, "status": agent_run.status},
+            )
+        if allowed_owner_ids and agent_run.owner_id and agent_run.owner_id not in allowed_owner_ids:
+            raise SkillValidationError(
+                "builder_agent_run_id 不属于当前 PSkill draft。",
+                details={"agent_run_id": agent_run_id, "owner_id": agent_run.owner_id},
+            )
 
     def _run_pskill_build(
         self,
@@ -1227,6 +1470,7 @@ class SkillsService:
             **prompt_pack.metadata(),
             "job_id": job.id,
             "job_type": PSKILL_BUILD_JOB_TYPE,
+            "agent_run_id": generation.agent_run_id,
             "candidate_reference_asset_count": len(material_generation_context["candidate_reference_assets"]),
             "reference_files": [],
         }
@@ -1243,6 +1487,13 @@ class SkillsService:
         )
         self.job_repository.accumulate_llm_usage(job, completion.usage)
         job.payload = self._set_skill_generation_job_stage(job.payload, "resolving_references", "running")
+        self._record_material_generation_model_call(
+            session,
+            generation=generation,
+            prompt_payload=prompt_payload,
+            prompt_metadata=prompt_metadata,
+            completion=completion,
+        )
         session.commit()
 
         generated = parse_generated_skill_draft(completion.content)
@@ -1288,10 +1539,19 @@ class SkillsService:
         generation.material_usage = generated.material_usage
         generation.committed_commit_sha = committed_commit_sha
         generation.error_message = ""
+        draft_version.builder_agent_run_id = generation.agent_run_id
         job.status = "succeeded"
         job.last_error = ""
         job.lease_until = None
         job.payload = self._set_skill_generation_job_stage(job.payload, "succeeded", "succeeded")
+        self._mark_material_generation_agent_succeeded(
+            session,
+            generation=generation,
+            draft_version=draft_version,
+            committed_commit_sha=committed_commit_sha,
+            generated=generated,
+            reference_files=reference_files,
+        )
         session.commit()
 
     def _commit_generated_skill_files(
@@ -2057,6 +2317,7 @@ class SkillsService:
             source_commit_sha=version.source_commit_sha,
             manifest_snapshot=version.manifest_snapshot,
             runtime_policy_snapshot=version.runtime_policy_snapshot,
+            builder_agent_run_id=version.builder_agent_run_id,
             created_at=version.created_at,
             updated_at=version.updated_at,
         )
@@ -2117,13 +2378,18 @@ class SkillsService:
             derived_assets=[self._build_derived_asset_response(item) for item in derived_assets],
         )
 
-    @staticmethod
     def _build_material_generation_response(
+        self,
+        session: Session,
         generation: PSkillMaterialGeneration,
     ) -> PSkillMaterialGenerationResponse:
+        agent_run = None
+        if generation.agent_run_id:
+            agent_run = self.agent_service.get_run(session, generation.agent_run_id)
         return PSkillMaterialGenerationResponse(
             id=generation.id,
             job_id=str((generation.prompt_metadata or {}).get("job_id") or "") or None,
+            agent_run=agent_run,
             pskill_definition_id=generation.pskill_definition_id,
             material_ids=[str(item) for item in generation.material_ids],
             user_description=generation.user_description,

@@ -1013,6 +1013,7 @@ def test_pskill_draft_generate_invokes_builder_and_apply_patch_updates_source() 
             json={
                 "base_commit_sha": source_payload["head_commit_sha"],
                 "files": {item["path"]: item["proposed_content"] for item in file_changes},
+                "builder_agent_run_id": agent_run_id,
                 "commit_message": "Apply builder draft API patch",
             },
         )
@@ -1058,6 +1059,7 @@ def test_pskill_draft_generate_invokes_builder_and_apply_patch_updates_source() 
     after_apply_detail = after_apply_detail_response.json()
     assert after_apply_detail_response.status_code == 200
     assert after_apply_detail["latest_draft_head_sha"] == applied_payload["committed_commit_sha"]
+    assert after_apply_detail["current_draft_version"]["builder_agent_run_id"] == agent_run_id
     assert "## Builder Draft Proposal" in after_apply_detail["current_draft_version"]["manifest_snapshot"][
         "prompt_material"
     ]["skill_md"]
@@ -1408,13 +1410,26 @@ def test_generate_skill_draft_from_materials_commits_standard_files_without_publ
                 "base_commit_sha": created["latest_draft_head_sha"],
             },
         )
+        generated_payload = generate_response.json()
+        agent_run_id = generated_payload["agent_run"]["id"]
+        agent_run_response = client.get(f"/api/v1/agent-runs/{agent_run_id}")
+        agent_events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        model_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/model-calls")
         detail_response = client.get(f"/api/v1/pskills/{skill_id}")
         source_response = client.get(f"/api/v1/pskills/{skill_id}/source")
         publishes_response = client.get(f"/api/v1/pskills/{skill_id}/publishes")
+        versions_response = client.get(f"/api/v1/pskills/{skill_id}/versions")
 
     assert generate_response.status_code == 200
-    payload = generate_response.json()
+    payload = generated_payload
     assert payload["status"] == "succeeded"
+    assert payload["agent_run"]["agent_key"] == "pskill.builder"
+    assert payload["agent_run"]["owner_type"] == "pskill_material_generation"
+    assert payload["agent_run"]["owner_id"] == payload["id"]
+    assert payload["agent_run"]["status"] == "succeeded"
+    assert payload["agent_run"]["output_payload"]["schema"] == "PSkillBuilderResult"
+    assert payload["agent_run"]["output_payload"]["committed_commit_sha"] == payload["committed_commit_sha"]
+    assert payload["prompt_metadata"]["agent_run_id"] == agent_run_id
     assert payload["material_ids"] == [video_material_id, material_id]
     assert payload["committed_commit_sha"].startswith("commit-")
     assert payload["prompt_metadata"]["reference_files"] == [
@@ -1442,12 +1457,29 @@ def test_generate_skill_draft_from_materials_commits_standard_files_without_publ
     ] == b"fake-keyframe-0"
     assert "should-be-ignored" not in fake_gateway.projects[created["gitlab_project_id"]].files["skill.yaml"]
     assert detail_response.json()["latest_draft_head_sha"] == payload["committed_commit_sha"]
+    assert detail_response.json()["current_draft_version"]["builder_agent_run_id"] == agent_run_id
     assert detail_response.json()["updated_at"] != created["updated_at"]
     prompt_material = detail_response.json()["current_draft_version"]["manifest_snapshot"]["prompt_material"]
     assert prompt_material["readme"].startswith("# Generated Skill")
     assert prompt_material["skill_md"].startswith("# Generated Skill")
     assert source_response.json()["head_commit_sha"] == payload["committed_commit_sha"]
     assert publishes_response.json() == []
+    assert versions_response.json()[0]["builder_agent_run_id"] == agent_run_id
+    assert agent_run_response.status_code == 200
+    assert agent_run_response.json()["agent_key"] == "pskill.builder"
+    assert agent_run_response.json()["status"] == "succeeded"
+    event_types = {item["event_type"] for item in agent_events_response.json()}
+    assert {
+        "pskill.builder.generation.linked",
+        "pskill.builder.generation.started",
+        "pskill.builder.model_call.completed",
+        "pskill.builder.generation.succeeded",
+    }.issubset(event_types)
+    assert model_calls_response.status_code == 200
+    model_call = model_calls_response.json()[0]
+    assert model_call["provider"] == "fake-openai-compatible"
+    assert model_call["route_key"] == "text"
+    assert model_call["request_payload"]["prompt_payload"]["task"] == "generate_psop_skill_source_from_materials"
     generation_call = next(
         call for call in fake_inference.calls if "generate_psop_skill_source_from_materials" in call["user_prompt"]
     )

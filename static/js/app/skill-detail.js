@@ -772,6 +772,7 @@
             body: JSON.stringify({
               base_commit_sha: this.rawMaterialGenerationResult.base_commit_sha,
               files,
+              builder_agent_run_id: this.rawMaterialGenerationResult.agent_run?.id || null,
               commit_message: "Apply pskill.builder material draft"
             })
           });
@@ -1869,6 +1870,26 @@
 
       openPublishGateTesterAgentRun(gate = this.publishGateResult) {
         const path = this.publishGateTesterAgentRunPath(gate);
+        if (!path) {
+          return;
+        }
+        this.navigate(path);
+      },
+
+      skillVersionBuilderAgentRunId(version = this.currentSkill?.current_draft_version) {
+        return String(version?.builder_agent_run_id || version?.builderAgentRunId || "").trim();
+      },
+
+      skillVersionBuilderAgentRunPath(version = this.currentSkill?.current_draft_version, focus = { tab: "events" }) {
+        const agentRunId = this.skillVersionBuilderAgentRunId(version);
+        if (!agentRunId) {
+          return "";
+        }
+        return buildPlatformAgentRunPath(agentRunId, focus);
+      },
+
+      openSkillVersionBuilderAgentRun(version = this.currentSkill?.current_draft_version, focus = { tab: "events" }) {
+        const path = this.skillVersionBuilderAgentRunPath(version, focus);
         if (!path) {
           return;
         }
