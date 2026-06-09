@@ -15,6 +15,7 @@ from app.evaluations.schemas import (
     RunEvaluationResponse,
     UpdateRunEvaluationFindingRequest,
 )
+from app.governance.service import GovernanceService
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.types import RUN_EVALUATION_JOB_TYPE
@@ -52,12 +53,14 @@ class EvaluationService:
         job_repository: JobRepository | None = None,
         memory_service: MemoryService | None = None,
         agent_prompt_service: AgentPromptService | None = None,
+        governance_service: GovernanceService | None = None,
     ) -> None:
         self.repository = repository or EvaluationRepository()
         self.agent_service = agent_service or AgentService()
         self.job_repository = job_repository or JobRepository()
         self.memory_service = memory_service or MemoryService()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
+        self.governance_service = governance_service or GovernanceService()
 
     def create_run_evaluation(self, session: Session, run_id: str) -> RunEvaluationResponse:
         run = self._get_terminal_run(session, run_id)
@@ -160,6 +163,7 @@ class EvaluationService:
             evaluation = self.create_run_evaluation(session, run_id)
 
         finding_count = len(evaluation.findings)
+        governance_job_ids = self._enqueue_governance_jobs_for_open_findings(session, evaluation)
         metrics = dict(job.metrics or {})
         metrics.update(
             {
@@ -167,6 +171,7 @@ class EvaluationService:
                 "finding_count": finding_count,
                 "quality_score": evaluation.quality_score,
                 "overall_outcome": evaluation.overall_outcome,
+                "governance_proposal_job_count": len(governance_job_ids),
             }
         )
         job.payload = {
@@ -177,6 +182,7 @@ class EvaluationService:
             "overall_outcome": evaluation.overall_outcome,
             "quality_score": evaluation.quality_score,
             "finding_count": finding_count,
+            "governance_proposal_job_ids": governance_job_ids,
         }
         job.run_id = evaluation.run_id
         job.metrics = metrics
@@ -185,6 +191,52 @@ class EvaluationService:
         job.lease_until = None
         session.commit()
         return evaluation
+
+    def _enqueue_governance_jobs_for_open_findings(
+        self,
+        session: Session,
+        evaluation: RunEvaluationResponse,
+    ) -> list[str]:
+        job_ids: list[str] = []
+        queued_items: list[dict[str, Any]] = []
+        for finding in evaluation.findings:
+            if finding.status != "open":
+                continue
+            job_id = self.governance_service.enqueue_proposal_from_finding_job(
+                session,
+                finding.id,
+                commit=False,
+            )
+            job_ids.append(job_id)
+            queued_items.append(
+                {
+                    "finding_id": finding.id,
+                    "job_id": job_id,
+                    "category": finding.category,
+                    "severity": finding.severity,
+                }
+            )
+        if queued_items:
+            self.agent_service.append_event(
+                session,
+                evaluation.agent_run_id,
+                AppendAgentEventRequest(
+                    event_type="evaluation.governance_proposals.queued",
+                    phase="governance",
+                    payload={
+                        "evaluation_id": evaluation.id,
+                        "run_id": evaluation.run_id,
+                        "queued_by": "run_evaluation_worker",
+                        "source_finding_ids": [item["finding_id"] for item in queued_items],
+                        "governance_proposal_job_ids": job_ids,
+                        "queued_items": queued_items,
+                        "non_hitl_business_state": True,
+                        "tool_authorization_created": False,
+                    },
+                ),
+                commit=False,
+            )
+        return job_ids
 
     def get_evaluation(self, session: Session, evaluation_id: str) -> RunEvaluationResponse:
         evaluation = self.repository.get_evaluation(session, evaluation_id)

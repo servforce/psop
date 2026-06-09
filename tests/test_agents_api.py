@@ -867,6 +867,7 @@ def test_runtime_cancel_cancels_open_tool_authorizations_and_agent_run() -> None
                 tool_authorization_ws_connected = tool_authorization_ws.receive_json()
                 cancel_response = client.post(f"/api/v1/runs/{run_id}/cancel", json={"reason": "用户取消运行"})
                 cancelled_trace_ws_message = run_ws.receive_json()
+                evaluation_queued_trace_ws_message = run_ws.receive_json()
                 cancelled_snapshot_ws_message = run_ws.receive_json()
                 cancelled_run_updated_ws_message = run_ws.receive_json()
                 cancelled_run_ws_message = run_ws.receive_json()
@@ -900,6 +901,10 @@ def test_runtime_cancel_cancels_open_tool_authorizations_and_agent_run() -> None
 
     assert cancelled_trace_ws_message["event_type"] == "run.trace.appended"
     assert cancelled_trace_ws_message["payload"]["event_type"] == "runtime.cancelled"
+    assert evaluation_queued_trace_ws_message["event_type"] == "run.trace.appended"
+    assert evaluation_queued_trace_ws_message["payload"]["event_type"] == "runtime.evaluation.queued"
+    assert evaluation_queued_trace_ws_message["payload"]["payload"]["job_type"] == "run_evaluation"
+    assert evaluation_queued_trace_ws_message["payload"]["payload"]["run_status"] == "cancelled"
     assert cancelled_snapshot_ws_message["event_type"] == "session_token.snapshot.appended"
     assert cancelled_snapshot_ws_message["payload"]["selection_summary"]["reason"] == "cancelled"
     assert cancelled_run_updated_ws_message["event_type"] == "run.updated"

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agent_harness.guardrails import InputGuardrail
+from app.agent_harness.planning import AgentPlanner
 from app.agents.models import AgentEvent, AgentModelCall, AgentRun, AgentToolAuthorization, AgentToolCall
 from app.agents.schemas import (
     AgentEventResponse,
@@ -35,7 +36,7 @@ from app.governance.schemas import GovernanceExperimentResponse, GovernancePropo
 from app.jobs.models import RuntimeJob
 from app.jobs.repository import JobRepository
 from app.jobs.schemas import RuntimeJobResponse
-from app.jobs.types import RUNTIME_STEP_JOB_TYPE
+from app.jobs.types import RUNTIME_STEP_JOB_TYPE, RUN_EVALUATION_JOB_TYPE
 from app.runtime.models import (
     RunCapabilityBinding,
     Run,
@@ -74,6 +75,7 @@ from app.pskills.exceptions import SkillsError, SkillNotFoundError, SkillValidat
 from app.pskills.models import now_utc
 from app.gateway.inference import LlmAttachment, LlmInferenceGateway, MULTIMODAL_ROUTE_KEY, TEXT_ROUTE_KEY
 from app.infra.object_store import ObjectStoreService
+from app.memory.service import MemoryService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -98,6 +100,8 @@ class RuntimeService:
         agent_prompt_service: AgentPromptService | None = None,
         agent_service: AgentService | None = None,
         input_guardrail: InputGuardrail | None = None,
+        memory_service: MemoryService | None = None,
+        planner: AgentPlanner | None = None,
         object_store: ObjectStoreService | None = None,
     ) -> None:
         self.settings = settings
@@ -107,6 +111,8 @@ class RuntimeService:
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
         self.agent_service = agent_service or AgentService()
         self.input_guardrail = input_guardrail or InputGuardrail()
+        self.memory_service = memory_service or MemoryService()
+        self.planner = planner or AgentPlanner()
         self.object_store = object_store
 
     def create_invocation(self, session: Session, payload: CreateInvocationRequest) -> InvocationResponse:
@@ -575,6 +581,7 @@ class RuntimeService:
                     job.status = "succeeded"
                     job.last_error = ""
                 self._sync_runtime_job_metrics(job, token)
+                self._enqueue_run_evaluation_job(session, run=run, trigger="runtime.aborted")
                 session.commit()
                 LOGGER.info("runtime loop aborted", extra={"final_output_length": len(run.final_output or "")})
                 return run
@@ -593,6 +600,7 @@ class RuntimeService:
                 job.status = "succeeded"
                 job.last_error = ""
             self._sync_runtime_job_metrics(job, token)
+            self._enqueue_run_evaluation_job(session, run=run, trigger="runtime.succeeded")
             session.commit()
             LOGGER.info("runtime loop succeeded", extra={"final_output_length": len(run.final_output or "")})
             return run
@@ -635,6 +643,7 @@ class RuntimeService:
                 run_trace=failure_trace,
             )
             self._close_terminal_session(session, run)
+            self._enqueue_run_evaluation_job(session, run=run, trigger="runtime.failed")
             session.commit()
             LOGGER.exception("runtime loop failed", extra={"error": str(exc)})
             return run
@@ -698,6 +707,7 @@ class RuntimeService:
         if job and job.status not in {"succeeded", "failed", "cancelled"}:
             job.status = "cancelled"
             job.last_error = reason
+        self._enqueue_run_evaluation_job(session, run=run, trigger="runtime.cancelled")
         session.commit()
         return self._build_run_response(session, run)
 
@@ -1120,6 +1130,8 @@ class RuntimeService:
 
     @staticmethod
     def _eg_node_id_from_trace(trace: RunTraceResponse) -> str:
+        if trace.event_type in {"runtime.evaluation.queued"}:
+            return ""
         payload = trace.payload if isinstance(trace.payload, dict) else {}
         node_id = payload.get("node_id")
         if isinstance(node_id, str) and node_id:
@@ -2287,6 +2299,43 @@ class RuntimeService:
         session.add(job)
         return job
 
+    def _enqueue_run_evaluation_job(self, session: Session, *, run: Run, trigger: str) -> RuntimeJob | None:
+        if run.status not in {"succeeded", "failed", "aborted", "cancelled"}:
+            return None
+        dedupe_key = f"job:run-evaluation:{run.id}"
+        existing = self.job_repository.get_runtime_job_by_dedupe_key(session, dedupe_key)
+        if existing:
+            return existing
+        job = RuntimeJob(
+            job_type=RUN_EVALUATION_JOB_TYPE,
+            status="pending",
+            payload={
+                "operation": "run_evaluation",
+                "run_id": run.id,
+                "queued_by": "runtime",
+                "trigger": trigger,
+                "trigger_status": run.status,
+            },
+            run_id=run.id,
+            dedupe_key=dedupe_key,
+        )
+        session.add(job)
+        session.flush()
+        self._append_run_trace(
+            session,
+            run=run,
+            phase=run.runtime_phase,
+            event_type="runtime.evaluation.queued",
+            payload={
+                "job_id": job.id,
+                "job_type": RUN_EVALUATION_JOB_TYPE,
+                "dedupe_key": dedupe_key,
+                "run_status": run.status,
+                "trigger": trigger,
+            },
+        )
+        return job
+
     @staticmethod
     def _extract_initial_terminal_input(input_envelope: dict[str, Any]) -> Any | None:
         if "user_input" in input_envelope:
@@ -2545,10 +2594,29 @@ class RuntimeService:
                 session,
                 agent_run_id=agent_run_id,
             )
+            agent_spec = self._runtime_agent_spec(session, agent_run_id=agent_run_id)
+            memory_context = self._retrieve_runtime_agent_memory_context(
+                session,
+                agent_run_id=agent_run_id,
+                spec=agent_spec,
+            )
+            plan_payload = self._create_runtime_agent_plan(
+                session,
+                agent_run_id=agent_run_id,
+                spec=agent_spec,
+                skill_context=skill_context,
+                memory_context=memory_context,
+            )
             system_prompt, user_prompt = self._append_runtime_agent_skill_context_to_prompts(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 skill_context=skill_context,
+            )
+            system_prompt, user_prompt = self._append_runtime_agent_memory_and_plan_to_prompts(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                memory_context=memory_context,
+                plan_payload=plan_payload,
             )
             input_summary = self._llm_prompt_summary(
                 system_prompt=system_prompt,
@@ -2563,6 +2631,8 @@ class RuntimeService:
                 input_parts=input_parts,
                 agent_prompt=prompt_metadata,
                 skill_context=skill_context,
+                memory_context=memory_context,
+                plan_payload=plan_payload,
             )
             try:
                 with start_span(
@@ -2599,6 +2669,8 @@ class RuntimeService:
                     input_parts=input_parts,
                     agent_prompt=prompt_metadata,
                     skill_context=skill_context,
+                    memory_context=memory_context,
+                    plan_payload=plan_payload,
                     error_payload=error_payload,
                 )
                 self._mark_runtime_agent_failed(
@@ -2650,6 +2722,8 @@ class RuntimeService:
                 observation=observation,
                 agent_prompt=prompt_metadata,
                 skill_context=skill_context,
+                memory_context=memory_context,
+                plan_payload=plan_payload,
             )
             self._mark_runtime_agent_succeeded(
                 session,
@@ -2800,6 +2874,88 @@ class RuntimeService:
         )
         return skill_context
 
+    def _runtime_agent_spec(self, session: Session, *, agent_run_id: str) -> dict[str, Any]:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        version = self.agent_service.repository.get_version(session, agent_run.agent_version_id)
+        if not version or not isinstance(version.spec_json, dict):
+            return {}
+        return dict(version.spec_json)
+
+    def _retrieve_runtime_agent_memory_context(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        spec: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        memory_context = self.memory_service.retrieve_context_for_agent(
+            session,
+            agent_key=agent_run.agent_key,
+            limit=self._runtime_agent_memory_context_limit(spec),
+        )
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="agent.memory.retrieved",
+                phase="memory",
+                payload={
+                    "memory_entry_ids": [str(item.get("id")) for item in memory_context],
+                    "memory_entry_count": len(memory_context),
+                    "status": "active",
+                    "used_as_runtime_state": False,
+                },
+            ),
+            commit=False,
+        )
+        return memory_context
+
+    def _create_runtime_agent_plan(
+        self,
+        session: Session,
+        *,
+        agent_run_id: str,
+        spec: dict[str, Any],
+        skill_context: list[dict[str, Any]],
+        memory_context: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        active_skill_names = [
+            str(item.get("package_name") or "")
+            for item in skill_context
+            if item.get("package_name")
+        ]
+        plan = self.planner.create_plan(
+            agent_key=agent_run.agent_key,
+            spec=spec,
+            input_payload=agent_run.input_payload,
+            active_skill_names=active_skill_names,
+            memory_context=memory_context,
+        )
+        plan_payload = plan.as_dict()
+        self.agent_service.append_event(
+            session,
+            agent_run_id,
+            AppendAgentEventRequest(
+                event_type="agent.plan.created",
+                phase="planning",
+                payload=plan_payload,
+            ),
+            commit=False,
+        )
+        return plan_payload
+
+    @staticmethod
+    def _runtime_agent_memory_context_limit(spec: dict[str, Any]) -> int:
+        policy = spec.get("memory_policy")
+        if not isinstance(policy, dict):
+            return 5
+        try:
+            return max(1, min(20, int(policy.get("context_limit") or 5)))
+        except (TypeError, ValueError):
+            return 5
+
     @staticmethod
     def _append_runtime_agent_skill_context_to_prompts(
         *,
@@ -2819,6 +2975,41 @@ class RuntimeService:
         )
         return system_prompt, f"{user_prompt}\n\n{context_prompt}"
 
+    @staticmethod
+    def _append_runtime_agent_memory_and_plan_to_prompts(
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        memory_context: list[dict[str, Any]],
+        plan_payload: dict[str, Any],
+    ) -> tuple[str, str]:
+        prompt_blocks: list[str] = []
+        if memory_context:
+            memory_json = json.dumps(memory_context, ensure_ascii=False, sort_keys=True)
+            prompt_blocks.append(
+                "\n".join(
+                    [
+                        "PSOP Runner Memory Context:",
+                        memory_json,
+                        "以上 memory context 只能作为 pskill.runner 的非正式参考；正式运行状态只能来自 Session Token、RunEvent 和 RunTrace。",
+                    ]
+                )
+            )
+        if plan_payload:
+            plan_json = json.dumps(plan_payload, ensure_ascii=False, sort_keys=True)
+            prompt_blocks.append(
+                "\n".join(
+                    [
+                        "PSOP Runner Execution Plan:",
+                        plan_json,
+                        "以上 plan 只描述本次 AgentRun 的过程安排，不是 Runtime 状态，也不能直接修改 Session Token。",
+                    ]
+                )
+            )
+        if not prompt_blocks:
+            return system_prompt, user_prompt
+        return system_prompt, f"{user_prompt}\n\n" + "\n\n".join(prompt_blocks)
+
     def _update_runtime_agent_run_prompt_context(
         self,
         session: Session,
@@ -2828,6 +3019,8 @@ class RuntimeService:
         input_parts: list[dict[str, Any]],
         agent_prompt: dict[str, Any] | None,
         skill_context: list[dict[str, Any]],
+        memory_context: list[dict[str, Any]],
+        plan_payload: dict[str, Any],
     ) -> None:
         agent_run = self.agent_service.get_run_model(session, agent_run_id)
         payload = dict(agent_run.input_payload or {})
@@ -2835,6 +3028,8 @@ class RuntimeService:
         payload["input_parts"] = input_parts
         payload["agent_prompt"] = dict(agent_prompt or {})
         payload["skill_context"] = skill_context
+        payload["memory_context"] = memory_context
+        payload["plan"] = plan_payload
         agent_run.input_payload = payload
 
     def _mark_runtime_agent_succeeded(
@@ -2905,6 +3100,8 @@ class RuntimeService:
         input_parts: list[dict[str, Any]],
         agent_prompt: dict[str, Any] | None,
         skill_context: list[dict[str, Any]],
+        memory_context: list[dict[str, Any]],
+        plan_payload: dict[str, Any],
         error_payload: dict[str, Any],
     ) -> AgentModelCallResponse:
         error_details = error_payload.get("error_details") if isinstance(error_payload.get("error_details"), dict) else {}
@@ -2921,6 +3118,8 @@ class RuntimeService:
                 "input_parts": input_parts,
                 "agent_prompt": dict(agent_prompt or {}),
                 "skill_context": skill_context,
+                "memory_context": memory_context,
+                "plan": plan_payload,
             },
             response_payload={
                 "schema": "RuntimeAgentObservation",
@@ -2942,6 +3141,8 @@ class RuntimeService:
         observation: dict[str, Any],
         agent_prompt: dict[str, Any] | None,
         skill_context: list[dict[str, Any]],
+        memory_context: list[dict[str, Any]],
+        plan_payload: dict[str, Any],
     ) -> None:
         self.agent_service.record_model_call(
             session,
@@ -2956,6 +3157,8 @@ class RuntimeService:
                 "input_parts": observation.get("input_parts") if isinstance(observation.get("input_parts"), list) else [],
                 "agent_prompt": dict(agent_prompt or {}),
                 "skill_context": skill_context,
+                "memory_context": memory_context,
+                "plan": plan_payload,
             },
             response_payload=self._runtime_agent_observation_payload(node=node, observation=observation),
             usage_json=dict(observation.get("usage") or {}),
@@ -3787,6 +3990,7 @@ class RuntimeService:
             "gateway.tool.completed": "工具调用",
             "runtime.final.completed": "最终结果",
             "runtime.aborted": "已中止",
+            "runtime.evaluation.queued": "评估已入队",
             "runtime.message_processing.failed": "消息处理失败",
             "runtime.failed": "运行失败",
         }

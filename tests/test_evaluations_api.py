@@ -294,6 +294,7 @@ def test_evaluation_api_queues_evaluation_and_governance_jobs_for_worker_process
         evaluation_job = evaluation_job_response.json()[0]
         evaluation_response = client.get(f"/api/v1/evaluations/{evaluation_job['payload']['evaluation_id']}")
         finding = evaluation_response.json()["findings"][0]
+        auto_governance_job_ids = evaluation_job["payload"]["governance_proposal_job_ids"]
 
         queue_proposal_response = client.post(f"/api/v1/evaluations/findings/{finding['id']}/queue-proposal")
         duplicate_proposal_queue_response = client.post(
@@ -320,6 +321,8 @@ def test_evaluation_api_queues_evaluation_and_governance_jobs_for_worker_process
     assert evaluation_job["status"] == "succeeded"
     assert evaluation_job["payload"]["operation"] == "run_evaluation"
     assert evaluation_job["payload"]["run_id"] == run_id
+    assert auto_governance_job_ids == [proposal_job_id]
+    assert evaluation_job["metrics"]["governance_proposal_job_count"] == 1
     assert evaluation_response.status_code == 200
     assert evaluation_response.json()["overall_outcome"] == "failed"
     assert finding["status"] == "open"
@@ -327,6 +330,7 @@ def test_evaluation_api_queues_evaluation_and_governance_jobs_for_worker_process
     assert queue_proposal_response.status_code == 202
     assert queue_proposal_response.json()["job_type"] == GOVERNANCE_PROPOSAL_JOB_TYPE
     assert queue_proposal_response.json()["status"] == "pending"
+    assert queue_proposal_response.json()["id"] == auto_governance_job_ids[0]
     assert duplicate_proposal_queue_response.status_code == 202
     assert duplicate_proposal_queue_response.json()["id"] == proposal_job_id
 
@@ -339,6 +343,104 @@ def test_evaluation_api_queues_evaluation_and_governance_jobs_for_worker_process
     assert proposal_response.json()["status"] == "draft"
     assert proposal_response.json()["source_run_id"] == run_id
     assert proposal_response.json()["source_finding_ids"] == [finding["id"]]
+
+
+def test_runtime_worker_drives_evaluation_and_governance_without_manual_queue() -> None:
+    client, _, failing_inference = create_test_client()
+
+    with client:
+        run_id, _, _ = _publish_and_complete_failed_run(
+            client,
+            key="evaluation-auto-governance",
+            restore_gateway=failing_inference,
+        )
+        queued_evaluation_jobs_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": RUN_EVALUATION_JOB_TYPE, "q": run_id},
+        )
+        queued_evaluation_job = queued_evaluation_jobs_response.json()[0]
+
+        worker = RuntimeJobWorker(
+            settings=client.app.state.settings,
+            database_manager=client.app.state.db_manager,
+            gitlab_gateway=client.app.state.gitlab_gateway,
+            inference_gateway=client.app.state.inference_gateway,
+            asr_gateway=client.app.state.asr_gateway,
+            object_store=client.app.state.object_store,
+        )
+        processed_evaluation = worker.run_once()
+        evaluation_job_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": RUN_EVALUATION_JOB_TYPE, "q": queued_evaluation_job["id"]},
+        )
+        evaluation_job = evaluation_job_response.json()[0]
+        evaluation_response = client.get(f"/api/v1/evaluations/{evaluation_job['payload']['evaluation_id']}")
+        finding = evaluation_response.json()["findings"][0]
+        evaluator_agent_events_response = client.get(
+            f"/api/v1/agent-runs/{evaluation_response.json()['agent_run_id']}/events"
+        )
+        replay_after_evaluation_response = client.get(f"/api/v1/replay/runs/{run_id}")
+        queued_governance_jobs_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": GOVERNANCE_PROPOSAL_JOB_TYPE, "q": run_id},
+        )
+        queued_governance_job = queued_governance_jobs_response.json()[0]
+
+        processed_proposal = worker.run_once()
+        proposal_job_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": GOVERNANCE_PROPOSAL_JOB_TYPE, "q": queued_governance_job["id"]},
+        )
+        proposal_job = proposal_job_response.json()[0]
+        proposal_response = client.get(f"/api/v1/governance/proposals/{proposal_job['payload']['proposal_id']}")
+        agent_run_response = client.get(f"/api/v1/agent-runs/{proposal_response.json()['agent_run_id']}")
+        authorizations_response = client.get(
+            f"/api/v1/agent-runs/{proposal_response.json()['agent_run_id']}/tool-authorizations"
+        )
+
+    assert queued_evaluation_jobs_response.status_code == 200
+    assert queued_evaluation_job["status"] == "pending"
+    assert queued_evaluation_job["payload"]["queued_by"] == "runtime"
+    assert queued_evaluation_job["payload"]["trigger_status"] == "failed"
+
+    assert processed_evaluation is True
+    assert evaluation_job["status"] == "succeeded"
+    assert evaluation_job["payload"]["run_id"] == run_id
+    assert evaluation_job["payload"]["governance_proposal_job_ids"] == [queued_governance_job["id"]]
+    assert evaluation_response.status_code == 200
+    assert evaluation_response.json()["overall_outcome"] == "failed"
+    assert finding["status"] == "open"
+    queue_event = next(
+        item
+        for item in evaluator_agent_events_response.json()
+        if item["event_type"] == "evaluation.governance_proposals.queued"
+    )
+    assert queue_event["payload"]["source_finding_ids"] == [finding["id"]]
+    assert queue_event["payload"]["governance_proposal_job_ids"] == [queued_governance_job["id"]]
+    assert queue_event["payload"]["non_hitl_business_state"] is True
+    assert queue_event["payload"]["tool_authorization_created"] is False
+    replay_agent_events = replay_after_evaluation_response.json()["agent_events"]
+    assert any(
+        item["event_type"] == "evaluation.governance_proposals.queued"
+        and item["payload"]["governance_proposal_job_ids"] == [queued_governance_job["id"]]
+        for item in replay_agent_events
+    )
+
+    assert queued_governance_jobs_response.status_code == 200
+    assert queued_governance_job["status"] == "pending"
+    assert queued_governance_job["payload"]["finding_id"] == finding["id"]
+    assert queued_governance_job["payload"]["source_run_id"] == run_id
+
+    assert processed_proposal is True
+    assert proposal_job["status"] == "succeeded"
+    assert proposal_job["payload"]["source_finding_ids"] == [finding["id"]]
+    assert proposal_response.status_code == 200
+    assert proposal_response.json()["status"] == "draft"
+    assert proposal_response.json()["source_run_id"] == run_id
+    assert proposal_response.json()["source_finding_ids"] == [finding["id"]]
+    assert agent_run_response.json()["agent_key"] == "psop.governance"
+    assert agent_run_response.json()["status"] == "succeeded"
+    assert authorizations_response.json() == []
 
 
 def _publish_and_complete_successful_run(client, *, key: str) -> str:

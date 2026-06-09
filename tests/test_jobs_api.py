@@ -511,6 +511,10 @@ def test_runtime_job_worker_processes_run_evaluation_job_and_exposes_progress() 
         evaluation_response = client.get(f"/api/v1/evaluations/{evaluation_id}")
         agent_run_response = client.get(f"/api/v1/agent-runs/{agent_run_id}")
         jobs_response = client.get("/api/v1/runtime/jobs", params={"job_type": RUN_EVALUATION_JOB_TYPE})
+        governance_jobs_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": GOVERNANCE_PROPOSAL_JOB_TYPE, "status": "pending"},
+        )
 
     assert processed is True
     assert job_state["status"] == "succeeded"
@@ -520,9 +524,11 @@ def test_runtime_job_worker_processes_run_evaluation_job_and_exposes_progress() 
     assert job_state["payload"]["evaluation_id"] == evaluation_id
     assert job_state["payload"]["overall_outcome"] == "failed"
     assert job_state["payload"]["finding_count"] == 2
+    assert len(job_state["payload"]["governance_proposal_job_ids"]) == 2
     assert job_state["metrics"]["evaluation_id"] == evaluation_id
     assert job_state["metrics"]["finding_count"] == 2
     assert job_state["metrics"]["quality_score"] == 13
+    assert job_state["metrics"]["governance_proposal_job_count"] == 2
 
     assert evaluation_response.status_code == 200
     evaluation_payload = evaluation_response.json()
@@ -544,6 +550,12 @@ def test_runtime_job_worker_processes_run_evaluation_job_and_exposes_progress() 
     assert "outcome=failed" in evaluation_job["progress"]["detail"]
     assert "score=13" in evaluation_job["progress"]["detail"]
     assert "findings=2" in evaluation_job["progress"]["detail"]
+    governance_jobs = governance_jobs_response.json()
+    assert {job["id"] for job in governance_jobs} == set(job_state["payload"]["governance_proposal_job_ids"])
+    assert {job["payload"]["finding_id"] for job in governance_jobs} == {
+        finding["id"] for finding in evaluation_payload["findings"]
+    }
+    assert all(job["payload"]["operation"] == "governance_proposal" for job in governance_jobs)
 
 
 def test_runtime_job_worker_processes_governance_proposal_job_and_exposes_progress() -> None:

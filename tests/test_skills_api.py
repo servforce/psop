@@ -15,6 +15,7 @@ from app.jobs.types import (
     LEGACY_SKILL_TEST_TIMELINE_DRIVER_JOB_TYPE,
     PSKILL_COMPILE_JOB_TYPE,
     PSKILL_TEST_JOB_TYPE,
+    RUN_EVALUATION_JOB_TYPE,
     RUNTIME_STEP_JOB_TYPE,
 )
 from app.pskills import materials
@@ -2351,7 +2352,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert run_payload["compile_request_id"] == compile_request_id
     assert run_payload["latest_run_event_seq"] == 6
     assert run_payload["latest_terminal_seq"] == 6
-    assert run_payload["latest_trace_seq"] == 7
+    assert run_payload["latest_trace_seq"] == 8
     assert len(run_payload["binding_summary"]) == 2
     assert "测试任务已完成" in run_payload["final_output"]
     assert "final_verify" in fake_inference.calls[-1]["system_prompt"]
@@ -2365,6 +2366,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         "gateway.inference.completed",
         "gateway.inference.completed",
         "runtime.final.completed",
+        "runtime.evaluation.queued",
     ]
 
     assert binding_requirements_response.status_code == 200
@@ -2429,10 +2431,17 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert missing_replay_trace_response.status_code == 404
 
     jobs = jobs_response.json()
-    assert {job["job_type"] for job in jobs} >= {PSKILL_COMPILE_JOB_TYPE, RUNTIME_STEP_JOB_TYPE}
-    assert all(job["status"] == "succeeded" for job in jobs)
+    assert {job["job_type"] for job in jobs} >= {PSKILL_COMPILE_JOB_TYPE, RUNTIME_STEP_JOB_TYPE, RUN_EVALUATION_JOB_TYPE}
     compile_job = next(job for job in jobs if job["job_type"] == PSKILL_COMPILE_JOB_TYPE)
     runtime_job = next(job for job in jobs if job["job_type"] == RUNTIME_STEP_JOB_TYPE)
+    evaluation_job = next(job for job in jobs if job["job_type"] == RUN_EVALUATION_JOB_TYPE)
+    assert compile_job["status"] == "succeeded"
+    assert runtime_job["status"] == "succeeded"
+    assert evaluation_job["status"] == "pending"
+    assert evaluation_job["run_id"] == run_id
+    assert evaluation_job["dedupe_key"] == f"job:run-evaluation:{run_id}"
+    assert evaluation_job["payload"]["queued_by"] == "runtime"
+    assert evaluation_job["payload"]["trigger_status"] == "succeeded"
     assert compile_job["started_at"]
     assert compile_job["finished_at"]
     assert compile_job["duration_ms"] is not None
@@ -2485,6 +2494,10 @@ def test_runtime_run_can_be_cancelled_through_runs_api() -> None:
         snapshots_response = client.get(f"/api/v1/runs/{run_id}/snapshots")
         traces_response = client.get(f"/api/v1/runs/{run_id}/traces")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+        evaluation_jobs_response = client.get(
+            "/api/v1/runtime/jobs",
+            params={"job_type": RUN_EVALUATION_JOB_TYPE, "q": run_id},
+        )
 
     assert publish_response.status_code == 202
     assert compile_response.status_code == 200
@@ -2499,7 +2512,7 @@ def test_runtime_run_can_be_cancelled_through_runs_api() -> None:
     assert cancelled["exit_reason"] == "用户取消本次运行"
     assert cancelled["ended_at"]
     assert cancelled["latest_snapshot_seq"] == initial_run_payload["latest_snapshot_seq"] + 1
-    assert cancelled["latest_trace_seq"] == initial_run_payload["latest_trace_seq"] + 1
+    assert cancelled["latest_trace_seq"] == initial_run_payload["latest_trace_seq"] + 2
 
     assert second_cancel_response.status_code == 200
     assert second_cancel_response.json()["exit_reason"] == "用户取消本次运行"
@@ -2517,8 +2530,20 @@ def test_runtime_run_can_be_cancelled_through_runs_api() -> None:
     assert snapshots[-1]["selection_summary"] == {"selected": None, "reason": "cancelled"}
 
     traces = traces_response.json()
-    assert traces[-1]["event_type"] == "runtime.cancelled"
-    assert traces[-1]["payload"] == {"reason": "用户取消本次运行"}
+    cancelled_trace = next(item for item in traces if item["event_type"] == "runtime.cancelled")
+    assert cancelled_trace["payload"] == {"reason": "用户取消本次运行"}
+    assert traces[-1]["event_type"] == "runtime.evaluation.queued"
+    assert traces[-1]["payload"]["job_type"] == RUN_EVALUATION_JOB_TYPE
+    assert traces[-1]["payload"]["run_status"] == "cancelled"
+    assert traces[-1]["payload"]["trigger"] == "runtime.cancelled"
+    evaluation_jobs = evaluation_jobs_response.json()
+    assert len(evaluation_jobs) == 1
+    assert evaluation_jobs[0]["job_type"] == RUN_EVALUATION_JOB_TYPE
+    assert evaluation_jobs[0]["status"] == "pending"
+    assert evaluation_jobs[0]["run_id"] == run_id
+    assert evaluation_jobs[0]["dedupe_key"] == f"job:run-evaluation:{run_id}"
+    assert evaluation_jobs[0]["payload"]["queued_by"] == "runtime"
+    assert evaluation_jobs[0]["payload"]["trigger_status"] == "cancelled"
     assert replay_response.json()["run"]["status"] == "cancelled"
 
 

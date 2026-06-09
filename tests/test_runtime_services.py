@@ -9,6 +9,7 @@ from app.agents.registry import PromptRegistry
 from app.compiler.service import CompilerService
 from app.compiler.formal_v5 import validate_and_normalize_artifact
 from app.jobs.repository import JobRepository
+from app.jobs.types import RUN_EVALUATION_JOB_TYPE
 from app.memory.models import AgentMemoryEntry
 from app.runtime.schemas import AppendRunEventRequest, CreateInvocationRequest
 from app.runtime.service import RuntimeService
@@ -662,6 +663,18 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         replay = runtime_service.build_replay(session, invocation.run_id or "")
         snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
         run_traces = runtime_service.list_run_traces(session, invocation.run_id or "")
+        evaluation_job = JobRepository().get_runtime_job_by_dedupe_key(
+            session,
+            f"job:run-evaluation:{invocation.run_id}",
+        )
+        evaluation_job_state = {
+            "id": evaluation_job.id if evaluation_job else "",
+            "job_type": evaluation_job.job_type if evaluation_job else "",
+            "status": evaluation_job.status if evaluation_job else "",
+            "payload": dict(evaluation_job.payload or {}) if evaluation_job else {},
+            "run_id": evaluation_job.run_id if evaluation_job else "",
+            "dedupe_key": evaluation_job.dedupe_key if evaluation_job else "",
+        }
         terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
         run_events = runtime_service.list_run_events(session, invocation.run_id or "")
         bindings = runtime_service.list_run_bindings(session, invocation.run_id or "")
@@ -691,7 +704,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert run.status == "succeeded"
     assert run.latest_snapshot_seq == 5
     assert run.latest_terminal_seq == 5
-    assert run.latest_trace_seq == 7
+    assert run.latest_trace_seq == 8
     assert run.terminal_session_id == invocation.terminal_session_id
     assert len(run.binding_summary) == 2
     assert run.latest_evaluation["decision"] == "complete"
@@ -734,6 +747,8 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
             "agent.run.created",
             "agent.input_guardrail.checked",
             "agent.skills.hydrated",
+            "agent.memory.retrieved",
+            "agent.plan.created",
             "runtime.node.started",
             "runtime.agent.model_call.completed",
             "runtime.agent.observation.returned",
@@ -746,6 +761,37 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
             "passed"
         ]
         is True
+        for item in runner_runs
+    )
+    assert all(
+        next(event for event in runner_events_by_run[item.id] if event.event_type == "agent.memory.retrieved").payload[
+            "used_as_runtime_state"
+        ]
+        is False
+        for item in runner_runs
+    )
+    assert all(
+        next(event for event in runner_events_by_run[item.id] if event.event_type == "agent.memory.retrieved").payload[
+            "memory_entry_count"
+        ]
+        >= 1
+        for item in runner_runs
+    )
+    assert all(
+        next(event for event in runner_events_by_run[item.id] if event.event_type == "agent.plan.created").payload[
+            "objective"
+        ]
+        == "在 RuntimeService 主权边界内为运行节点生成 observation。"
+        for item in runner_runs
+    )
+    assert all(
+        "retrieve_memory"
+        in {
+            step["id"]
+            for step in next(event for event in runner_events_by_run[item.id] if event.event_type == "agent.plan.created").payload[
+                "steps"
+            ]
+        }
         for item in runner_runs
     )
     assert all(
@@ -766,6 +812,15 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         for calls in runner_model_calls_by_run.values()
     )
     assert all(
+        "runtime-memory-boundary-sentinel"
+        in {item["title"] for item in calls[0].request_payload["memory_context"]}
+        for calls in runner_model_calls_by_run.values()
+    )
+    assert all(
+        calls[0].request_payload["plan"]["memory_entry_ids"]
+        for calls in runner_model_calls_by_run.values()
+    )
+    assert all(
         run.input_payload["agent_prompt"]["definition_key"] == "runtime_execution.llm_node_fallback"
         for run in runner_runs
     )
@@ -773,12 +828,32 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         "pskill-runner-field-assistant" in {item["package_name"] for item in run.input_payload["skill_context"]}
         for run in runner_runs
     )
+    assert all(
+        "runtime-memory-boundary-sentinel" in {item["title"] for item in run.input_payload["memory_context"]}
+        for run in runner_runs
+    )
+    assert all(run.input_payload["plan"]["memory_entry_ids"] for run in runner_runs)
     assert all("平台级输出语言要求" in call["system_prompt"] for call in runtime_llm_calls)
     assert all("JSON 字段名和 decision/next_phase 等协议枚举值保持英文协议值" in call["system_prompt"] for call in runtime_llm_calls)
     assert all("reason、terminal_message、final_response、summary" in call["system_prompt"] for call in runtime_llm_calls)
     assert all("PSOP Runner Skill Package Context" in call["user_prompt"] for call in runtime_llm_calls)
+    assert all("PSOP Runner Memory Context" in call["user_prompt"] for call in runtime_llm_calls)
+    assert all("runtime-memory-boundary-sentinel" in call["user_prompt"] for call in runtime_llm_calls)
+    assert all("PSOP Runner Execution Plan" in call["user_prompt"] for call in runtime_llm_calls)
     assert all("正式运行状态只能来自 Session Token、RunEvent 和 RunTrace" in call["user_prompt"] for call in runtime_llm_calls)
+    assert all("不是 Runtime 状态，也不能直接修改 Session Token" in call["user_prompt"] for call in runtime_llm_calls)
     assert all("legacy-user-prompt" not in call["user_prompt"] for call in inference_gateway.calls[1:])
+    assert evaluation_job_state["job_type"] == RUN_EVALUATION_JOB_TYPE
+    assert evaluation_job_state["status"] == "pending"
+    assert evaluation_job_state["run_id"] == invocation.run_id
+    assert evaluation_job_state["dedupe_key"] == f"job:run-evaluation:{invocation.run_id}"
+    assert evaluation_job_state["payload"] == {
+        "operation": "run_evaluation",
+        "run_id": invocation.run_id,
+        "queued_by": "runtime",
+        "trigger": "runtime.succeeded",
+        "trigger_status": "succeeded",
+    }
     llm_trace_payloads = [
         event.payload for event in run_traces if event.event_type == "gateway.inference.completed"
     ]
@@ -792,6 +867,11 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert llm_trace_payloads[0]["observation"]["input_summary"]["route_key"] == "text"
     assert llm_trace_payloads[0]["observation"]["output"]["content"]
     assert llm_trace_payloads[0]["observation"]["usage"]["total_tokens"] == 15
+    queued_evaluation_trace = next(event for event in run_traces if event.event_type == "runtime.evaluation.queued")
+    assert queued_evaluation_trace.payload["job_id"] == evaluation_job_state["id"]
+    assert queued_evaluation_trace.payload["job_type"] == RUN_EVALUATION_JOB_TYPE
+    assert queued_evaluation_trace.payload["run_status"] == "succeeded"
+    assert queued_evaluation_trace.payload["trigger"] == "runtime.succeeded"
     trace_request = llm_trace_payloads[0]["observation"]["request"]
     assert trace_request["headers"]["Authorization"] == "Bearer [redacted]"
     assert trace_request["body"]["messages"][0]["role"] == "system"
@@ -1018,6 +1098,18 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
             run_events = runtime_service.list_run_events(session, invocation.run_id or "")
             run_traces = runtime_service.list_run_traces(session, invocation.run_id or "")
             snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
+            evaluation_job = JobRepository().get_runtime_job_by_dedupe_key(
+                session,
+                f"job:run-evaluation:{invocation.run_id}",
+            )
+            evaluation_job_state = {
+                "id": evaluation_job.id if evaluation_job else "",
+                "job_type": evaluation_job.job_type if evaluation_job else "",
+                "status": evaluation_job.status if evaluation_job else "",
+                "payload": dict(evaluation_job.payload or {}) if evaluation_job else {},
+                "run_id": evaluation_job.run_id if evaluation_job else "",
+                "dedupe_key": evaluation_job.dedupe_key if evaluation_job else "",
+            }
             replay = runtime_service.build_replay(session, invocation.run_id or "")
 
             with pytest.raises(SkillValidationError):
@@ -1047,6 +1139,15 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
     assert snapshots[-1].token_payload["control"]["abort"]["next_phase"] == "terminal_abort"
     assert "runtime.aborted" in [item.event_type for item in run_traces]
     assert "runtime.failed" not in [item.event_type for item in run_traces]
+    assert evaluation_job_state["job_type"] == RUN_EVALUATION_JOB_TYPE
+    assert evaluation_job_state["status"] == "pending"
+    assert evaluation_job_state["run_id"] == invocation.run_id
+    assert evaluation_job_state["dedupe_key"] == f"job:run-evaluation:{invocation.run_id}"
+    assert evaluation_job_state["payload"]["trigger"] == "runtime.aborted"
+    assert evaluation_job_state["payload"]["trigger_status"] == "aborted"
+    queued_evaluation_trace = next(event for event in run_traces if event.event_type == "runtime.evaluation.queued")
+    assert queued_evaluation_trace.payload["job_id"] == evaluation_job_state["id"]
+    assert queued_evaluation_trace.payload["run_status"] == "aborted"
     assert "已中止" in [item.title for item in replay.timeline]
 
 
@@ -1152,12 +1253,25 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
         run = failing_runtime.get_run(session, invocation.run_id or "")
         run_traces = failing_runtime.list_run_traces(session, invocation.run_id or "")
         run_events = failing_runtime.list_run_events(session, invocation.run_id or "")
+        evaluation_job = JobRepository().get_runtime_job_by_dedupe_key(
+            session,
+            f"job:run-evaluation:{invocation.run_id}",
+        )
+        evaluation_job_state = {
+            "id": evaluation_job.id if evaluation_job else "",
+            "job_type": evaluation_job.job_type if evaluation_job else "",
+            "status": evaluation_job.status if evaluation_job else "",
+            "payload": dict(evaluation_job.payload or {}) if evaluation_job else {},
+            "run_id": evaluation_job.run_id if evaluation_job else "",
+            "dedupe_key": evaluation_job.dedupe_key if evaluation_job else "",
+        }
         replay = failing_runtime.build_replay(session, invocation.run_id or "")
 
     assert invocation.status == "failed"
     assert run.status == "failed"
     assert run.exit_reason == "LLM provider unavailable"
-    assert run_traces[-1].event_type == "runtime.failed"
+    assert run_traces[-1].event_type == "runtime.evaluation.queued"
+    runtime_failed_trace = next(item for item in run_traces if item.event_type == "runtime.failed")
     failed_gateway_trace = next(item for item in run_traces if item.event_type == "gateway.inference.failed")
     assert failed_gateway_trace.agent_run_id
     assert failed_gateway_trace.payload["node_id"] == "instruct_collect_context"
@@ -1179,11 +1293,27 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
     assert "pskill-runner-field-assistant" in {
         item["package_name"] for item in failed_model_call.request_payload["skill_context"]
     }
+    assert failed_model_call.request_payload["memory_context"] == []
+    assert failed_model_call.request_payload["plan"]["objective"] == "在 RuntimeService 主权边界内为运行节点生成 observation。"
+    assert {
+        step["id"] for step in failed_model_call.request_payload["plan"]["steps"]
+    } >= {"hydrate_skills", "retrieve_memory", "complete_model_decision", "apply_guardrails"}
     assert failed_model_call.response_payload["error"] == "LLM provider unavailable"
     assert any(
         item.event_type == "runtime.agent.failed"
         and item.agent_run_id == failed_gateway_trace.agent_run_id
         and item.payload["model_call_id"] == failed_model_call.id
+        for item in replay.agent_events
+    )
+    assert any(
+        item.event_type == "agent.memory.retrieved"
+        and item.agent_run_id == failed_gateway_trace.agent_run_id
+        and item.payload["used_as_runtime_state"] is False
+        for item in replay.agent_events
+    )
+    assert any(
+        item.event_type == "agent.plan.created"
+        and item.agent_run_id == failed_gateway_trace.agent_run_id
         for item in replay.agent_events
     )
     runner_runs = [item for item in replay.agent_runs if item.agent_key == "pskill.runner"]
@@ -1199,11 +1329,27 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
     assert run_events[-1].direction == "output"
     assert run_events[-1].event_kind == "terminal.text.output.v1"
     assert run_events[-1].external_event_id == f"runtime:{invocation.run_id}:failed"
-    assert run_events[-1].trace_event_id == run_traces[-1].id
+    assert run_events[-1].trace_event_id == runtime_failed_trace.id
     assert "Runtime 执行失败" in run_events[-1].payload_inline
     assert "当前运行已停止" in run_events[-1].payload_inline
     assert "调试运行" not in run_events[-1].payload_inline
     assert "LLM provider unavailable" in run_events[-1].payload_inline
+    assert evaluation_job_state["job_type"] == RUN_EVALUATION_JOB_TYPE
+    assert evaluation_job_state["status"] == "pending"
+    assert evaluation_job_state["run_id"] == invocation.run_id
+    assert evaluation_job_state["dedupe_key"] == f"job:run-evaluation:{invocation.run_id}"
+    assert evaluation_job_state["payload"] == {
+        "operation": "run_evaluation",
+        "run_id": invocation.run_id,
+        "queued_by": "runtime",
+        "trigger": "runtime.failed",
+        "trigger_status": "failed",
+    }
+    queued_evaluation_trace = next(event for event in run_traces if event.event_type == "runtime.evaluation.queued")
+    assert queued_evaluation_trace.payload["job_id"] == evaluation_job_state["id"]
+    assert queued_evaluation_trace.payload["job_type"] == RUN_EVALUATION_JOB_TYPE
+    assert queued_evaluation_trace.payload["run_status"] == "failed"
+    assert queued_evaluation_trace.payload["trigger"] == "runtime.failed"
 
 
 def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(runtime_stack) -> None:
@@ -1243,9 +1389,11 @@ def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(r
     assert failed_model_call.status == "failed"
     assert failed_model_call.model_name == "qwen3.7-plus"
     assert failed_model_call.response_payload["error_details"]["request_id"] == "request-test"
-    payload = run_traces[-1].payload
+    runtime_failed_trace = next(item for item in run_traces if item.event_type == "runtime.failed")
+    assert run_traces[-1].event_type == "runtime.evaluation.queued"
+    assert run_traces[-1].payload["run_status"] == "failed"
+    payload = runtime_failed_trace.payload
     details = payload["error_details"]
-    assert run_traces[-1].event_type == "runtime.failed"
     assert payload["error"] == "LLM Inference Gateway 返回错误响应。"
     assert payload["error_type"] == "SkillsGatewayError"
     assert payload["error_code"] == "skills_gateway_error"

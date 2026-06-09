@@ -168,7 +168,7 @@ class GovernanceService:
         session.commit()
         return self.get_proposal(session, proposal.id)
 
-    def enqueue_proposal_from_finding_job(self, session: Session, finding_id: str) -> str:
+    def enqueue_proposal_from_finding_job(self, session: Session, finding_id: str, *, commit: bool = True) -> str:
         finding = self.repository.get_finding(session, finding_id)
         if not finding:
             raise SkillNotFoundError("未找到 RunEvaluationFinding。", details={"finding_id": finding_id})
@@ -192,7 +192,9 @@ class GovernanceService:
             dedupe_key=dedupe_key,
         )
         session.add(job)
-        session.commit()
+        session.flush()
+        if commit:
+            session.commit()
         return job.id
 
     def create_proposal_from_agent_tool(
