@@ -241,10 +241,15 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert agent_detail_response.status_code == 200
     assert builder_detail_response.status_code == 200
     assert builder_detail_response.json()["active_version"]["spec_json"]["allowed_tools"] == BUILDER_ALLOWED_TOOLS
-    assert builder_detail_response.json()["active_version"]["spec_json"]["prompt_usage_key"] == "pskill.build.default"
+    builder_spec = builder_detail_response.json()["active_version"]["spec_json"]
+    assert builder_spec["prompt_usage_key"] == "pskill.build.default"
+    assert builder_spec["sandbox_policy"]["mode"] == "restricted_workspace"
+    assert "run_event" in builder_spec["sandbox_policy"]["filesystem"]["deny"]
     assert agent_detail_response.json()["active_version"]["spec_json"]["output_schema"]["name"] == "RuntimeAgentObservation"
     assert agent_detail_response.json()["active_version"]["spec_json"]["allowed_tools"] == ["psop.runtime.read"]
-    assert agent_detail_response.json()["active_version"]["spec_json"]["prompt_usage_key"] == "pskill.run.node"
+    runner_spec = agent_detail_response.json()["active_version"]["spec_json"]
+    assert runner_spec["prompt_usage_key"] == "pskill.run.node"
+    assert runner_spec["sandbox_policy"]["network"] == "disabled"
     assert versions_response.status_code == 200
     assert versions_response.json()[0]["status"] == "published"
 
@@ -383,6 +388,8 @@ def test_agent_runner_can_use_llm_gateway_for_agent_decision() -> None:
     assert prompt_payload["agent_key"] == "pskill.builder"
     assert prompt_payload["agent_prompt"]["definition_key"] == "skill_creation.conversational_draft"
     assert prompt_payload["input_payload"]["task"] == "build_draft_from_materials"
+    assert prompt_payload["sandbox_policy"]["mode"] == "restricted_workspace"
+    assert prompt_payload["sandbox_policy"]["network"] == "disabled"
     assert prompt_payload["active_skill_names"]
     builder_skill_context = next(
         item for item in prompt_payload["skill_context"] if item["package_name"] == "pskill-builder"
@@ -461,6 +468,7 @@ def test_agent_runner_llm_prompt_uses_effective_allowed_tools_intersection() -> 
     model_call = model_calls_response.json()[0]
     assert model_calls_response.status_code == 200
     assert model_call["request_payload"]["prompt_payload"]["allowed_tools"] == ["psop.media.compute"]
+    assert model_call["request_payload"]["prompt_payload"]["sandbox_policy"]["mode"] == "restricted_workspace"
 
     skill_event = next(item for item in events_response.json() if item["event_type"] == "agent.skills.activated")
     assert skill_event["payload"]["allowed_tools"] == ["psop.media.compute"]
@@ -1602,6 +1610,7 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
     assert "agent.skills.activated" in event_types
     assert "agent.memory.retrieved" in event_types
     assert "agent.plan.created" in event_types
+    assert "agent.sandbox.policy_selected" in event_types
     assert "agent.model_call.completed" in event_types
     assert "tool.authorization_requested" in event_types
     assert "agent.waiting_tool_authorization" in event_types

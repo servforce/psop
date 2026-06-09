@@ -43,92 +43,14 @@ from app.agents.tool_authorization_context import (
 )
 from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
-from app.runtime.tool_authorization_events import RunToolAuthorizationEventWriter
+from app.agent_harness.definitions import BUILTIN_AGENT_SPECS
+from app.agent_harness.sandbox import default_sandbox_policy
 from app.agent_harness.tools import ToolPolicy
+from app.runtime.tool_authorization_events import RunToolAuthorizationEventWriter
 from app.skills.service import SkillPackageService
 
 
-DEFAULT_AGENT_SPECS: list[dict[str, Any]] = [
-    {
-        "key": "pskill.builder",
-        "name": "PSkill Builder",
-        "role": "builder",
-        "goal": "将人类知识、多模态资料和专家经验构建为 PSkill draft。",
-        "usage_keys": ["pskill.build.default"],
-        "allowed_tools": [
-            "psop.pskills.get",
-            "psop.materials.list",
-            "psop.materials.read_analysis",
-            "psop.repository.read_file",
-            "psop.repository.propose_patch",
-            "psop.pskill_manifest.parse",
-            "psop.pskill_manifest.render",
-            "psop.memory.search",
-            "psop.memory.write_candidate",
-        ],
-        "allowed_skill_names": ["pskill-builder", "ffmpeg-video-processing", "document-ocr-processing"],
-        "output_schema": {"name": "PSkillBuilderResult"},
-    },
-    {
-        "key": "pskill.compiler",
-        "name": "PSkill Compiler",
-        "role": "compiler",
-        "goal": "将 PSkill 编译为 formal-v5 Execution Graph。",
-        "usage_keys": ["pskill.compile.formal_v5"],
-        "allowed_tools": ["psop.pskills.read", "psop.compiler.validate_formal_v5"],
-        "allowed_skill_names": ["pskill-compiler-formal-v5"],
-        "output_schema": {"name": "PSkillCompilerResult"},
-    },
-    {
-        "key": "pskill.tester",
-        "name": "PSkill Tester",
-        "role": "tester",
-        "goal": "发布前测试 PSkill、执行图、交互、安全和回归。",
-        "usage_keys": ["pskill.test.pre_publish"],
-        "allowed_tools": ["psop.pskills.read", "psop.testing.write_diagnostics"],
-        "allowed_skill_names": ["pskill-tester", "ffmpeg-video-processing"],
-        "output_schema": {"name": "PSkillTestResult"},
-    },
-    {
-        "key": "pskill.runner",
-        "name": "PSkill Runner",
-        "role": "runner",
-        "goal": "在 RuntimeService 主权边界内为运行节点生成 observation。",
-        "usage_keys": ["pskill.run.node"],
-        "allowed_tools": ["psop.runtime.read"],
-        "allowed_skill_names": [
-            "pskill-runner-field-assistant",
-            "pskill-runner-evidence-evaluator",
-            "ffmpeg-video-processing",
-        ],
-        "output_schema": {"name": "RuntimeAgentObservation"},
-    },
-    {
-        "key": "pskill.evaluator",
-        "name": "PSkill Evaluator",
-        "role": "evaluator",
-        "goal": "评估已完成 Run，进行质量归因并给出优化建议。",
-        "usage_keys": ["pskill.evaluate.run"],
-        "allowed_tools": ["psop.runtime.read", "psop.evaluations.write_diagnostics"],
-        "allowed_skill_names": ["pskill-run-evaluator"],
-        "output_schema": {"name": "RunEvaluationResult"},
-    },
-    {
-        "key": "psop.governance",
-        "name": "PSOP Governance",
-        "role": "governance",
-        "goal": "将评估结果转为可验证、可审批、可回滚的系统改进提案。",
-        "usage_keys": ["psop.governance.proposal"],
-        "allowed_tools": [
-            "psop.evaluations.read",
-            "psop.governance.write_proposal",
-            "psop.agent_version.activate",
-            "psop.skill_version.activate",
-        ],
-        "allowed_skill_names": ["psop-governance-manager"],
-        "output_schema": {"name": "GovernanceProposalResult"},
-    },
-]
+DEFAULT_AGENT_SPECS: list[dict[str, Any]] = BUILTIN_AGENT_SPECS
 
 
 class AgentService:
@@ -1198,7 +1120,7 @@ class AgentService:
             "allowed_skill_names": seed.get("allowed_skill_names", []),
             "memory_policy": {},
             "planner_policy": {},
-            "sandbox_policy": {},
+            "sandbox_policy": seed.get("sandbox_policy") or default_sandbox_policy(str(seed["key"])),
             "guardrail_policy": {},
             "output_schema": seed["output_schema"],
         }

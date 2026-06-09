@@ -4,6 +4,11 @@ import ast
 from pathlib import Path
 
 from app.app import create_app
+from app.agent_harness.definitions import (
+    AGENT_PROMPT_FALLBACKS,
+    DEFAULT_AGENT_SKILLS,
+    PROMPT_USAGE_AGENT_KEYS,
+)
 from app.agents.service import DEFAULT_AGENT_SPECS
 from tests.test_skills_api import create_test_settings
 
@@ -33,6 +38,28 @@ def test_runtime_domain_does_not_import_agent_memory_domain() -> None:
 
 def test_backend_does_not_restore_domain_package_layer() -> None:
     assert not (PROJECT_ROOT / "backend" / "app" / "domain").exists()
+
+
+def test_agent_harness_definitions_keep_builtin_agent_modules() -> None:
+    definitions_dir = PROJECT_ROOT / "backend" / "app" / "agent_harness" / "definitions"
+
+    expected_files = {
+        "builtin_agents.py",
+        "pskill_builder.py",
+        "pskill_compiler.py",
+        "pskill_tester.py",
+        "pskill_runner.py",
+        "pskill_evaluator.py",
+        "psop_governance.py",
+    }
+    sandbox_dir = PROJECT_ROOT / "backend" / "app" / "agent_harness" / "sandbox"
+    expected_sandbox_files = {"sandbox.py", "sandbox_workspace.py", "restricted_workspace.py", "docker_sandbox.py"}
+    events_dir = PROJECT_ROOT / "backend" / "app" / "agent_harness" / "events"
+    expected_events_files = {"agent_event_emitter.py", "event_types.py", "event_redaction.py"}
+
+    assert expected_files <= {path.name for path in definitions_dir.glob("*.py")}
+    assert expected_sandbox_files <= {path.name for path in sandbox_dir.glob("*.py")}
+    assert expected_events_files <= {path.name for path in events_dir.glob("*.py")}
 
 
 def test_api_routes_use_pskill_and_materials_naming() -> None:
@@ -107,6 +134,12 @@ def test_default_agents_keep_closed_loop_keys_and_runner_boundary() -> None:
     ]
     assert specs["pskill.tester"]["allowed_skill_names"] == ["pskill-tester", "ffmpeg-video-processing"]
     assert specs["psop.governance"]["output_schema"]["name"] == "GovernanceProposalResult"
+    assert set(specs) == set(DEFAULT_AGENT_SKILLS) == set(AGENT_PROMPT_FALLBACKS)
+    assert {key: spec["allowed_skill_names"] for key, spec in specs.items()} == DEFAULT_AGENT_SKILLS
+    for agent_key, (usage_key, _prompt_ref) in AGENT_PROMPT_FALLBACKS.items():
+        assert PROMPT_USAGE_AGENT_KEYS[usage_key] == agent_key
+    assert PROMPT_USAGE_AGENT_KEYS["default.skill_creation_agent"] == "pskill.builder"
+    assert PROMPT_USAGE_AGENT_KEYS["runtime.llm_node_fallback"] == "pskill.runner"
 
 
 def test_server_design_keeps_pskill_api_paths_distinct_from_skill_packages() -> None:

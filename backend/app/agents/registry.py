@@ -9,25 +9,13 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agent_harness.definitions import DEFAULT_COMPILE_AGENT_REF, PROMPT_USAGE_AGENT_KEYS
 from app.pskills.exceptions import SkillsConfigurationError
 
 
 AGENTS_ROOT = Path(__file__).resolve().parent
-DEFAULT_COMPILE_AGENT_REF = "skill_compilation/formal_v5_compile/v1"
 DEFAULT_DOMAIN_PACK_ID = "generic"
 DEFAULT_DOMAIN_PACK_VERSION = "v1"
-PROMPT_USAGE_AGENT_KEYS = {
-    "pskill.build.default": "pskill.builder",
-    "default.skill_creation_agent": "pskill.builder",
-    "pskill.compile.formal_v5": "pskill.compiler",
-    "default.compile_agent": "pskill.compiler",
-    "pskill.test.pre_publish": "pskill.tester",
-    "skill_test.semantic_judge": "pskill.tester",
-    "pskill.run.node": "pskill.runner",
-    "runtime.llm_node_fallback": "pskill.runner",
-    "pskill.evaluate.run": "pskill.evaluator",
-    "psop.governance.proposal": "psop.governance",
-}
 
 
 @dataclass(frozen=True, slots=True)

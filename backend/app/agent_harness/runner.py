@@ -9,9 +9,11 @@ from sqlalchemy.orm import Session
 
 from app.agent_prompts.service import AgentPromptService
 from app.agent_harness.agent_decision import AgentDecision
+from app.agent_harness.events import AgentEventEmitter, AgentHarnessEventTypes
 from app.agent_harness.guardrails import InputGuardrail, OutputGuardrail
 from app.agent_harness.model import AgentModelClient, AgentModelDecisionResult
 from app.agent_harness.planning import AgentPlanner
+from app.agent_harness.sandbox import normalize_sandbox_policy, sandbox_policy_summary
 from app.agent_harness.tools import ToolPolicy
 from app.agents.models import AgentRun, AgentToolAuthorization
 from app.agents.schemas import (
@@ -20,7 +22,7 @@ from app.agents.schemas import (
     CreateToolAuthorizationRequest,
     AgentRunResponse,
 )
-from app.agents.registry import DEFAULT_COMPILE_AGENT_REF
+from app.agent_harness.definitions import AGENT_PROMPT_FALLBACKS, DEFAULT_AGENT_SKILLS
 from app.agents.service import AgentService
 from app.compiler.formal_v5 import validate_and_normalize_artifact
 from app.compiler.service import CompilerService
@@ -47,29 +49,6 @@ from app.skills.service import SkillPackageService
 from app.testing.service import SkillTestService
 
 
-DEFAULT_AGENT_SKILLS: dict[str, list[str]] = {
-    "pskill.builder": ["pskill-builder", "ffmpeg-video-processing", "document-ocr-processing"],
-    "pskill.compiler": ["pskill-compiler-formal-v5"],
-    "pskill.tester": ["pskill-tester", "ffmpeg-video-processing"],
-    "pskill.runner": [
-        "pskill-runner-field-assistant",
-        "pskill-runner-evidence-evaluator",
-        "ffmpeg-video-processing",
-    ],
-    "pskill.evaluator": ["pskill-run-evaluator"],
-    "psop.governance": ["psop-governance-manager"],
-}
-
-AGENT_PROMPT_FALLBACKS: dict[str, tuple[str, str]] = {
-    "pskill.builder": ("pskill.build.default", "skill_creation/conversational_draft/v1"),
-    "pskill.compiler": ("pskill.compile.formal_v5", DEFAULT_COMPILE_AGENT_REF),
-    "pskill.tester": ("pskill.test.pre_publish", "skill_test/pre_publish/v1"),
-    "pskill.runner": ("pskill.run.node", "runtime_execution/llm_node_fallback/v1"),
-    "pskill.evaluator": ("pskill.evaluate.run", "run_evaluation/default/v1"),
-    "psop.governance": ("psop.governance.proposal", "governance/proposal/v1"),
-}
-
-
 class AgentRunner:
     def __init__(
         self,
@@ -93,6 +72,7 @@ class AgentRunner:
         agent_prompt_service: AgentPromptService | None = None,
     ) -> None:
         self.agent_service = agent_service or AgentService()
+        self.event_emitter = AgentEventEmitter(self.agent_service)
         self.skill_service = skill_service or SkillPackageService(repository=skill_repository)
         self.skill_repository = self.skill_service.repository
         self.tool_policy = tool_policy or ToolPolicy()
@@ -126,10 +106,12 @@ class AgentRunner:
         spec = version.spec_json
         agent_run.status = "running"
         agent_run.started_at = agent_run.started_at or now_utc()
-        self.agent_service.append_event(
+        self.event_emitter.emit(
             session,
             agent_run.id,
-            AppendAgentEventRequest(event_type="agent.runner.started", phase="runner", payload={"agent_key": agent_run.agent_key}),
+            event_type=AgentHarnessEventTypes.RUNNER_STARTED,
+            phase="runner",
+            payload={"agent_key": agent_run.agent_key},
             commit=False,
         )
 
@@ -167,27 +149,37 @@ class AgentRunner:
         active_tools, active_skill_names = self._activate_skills(session, agent_run=agent_run, spec=spec)
         effective_allowed_tools = self._effective_allowed_tools(spec=spec, active_tools=active_tools)
         skill_context = self.skill_service.hydrate_agent_run_skill_context(session, agent_run_id=agent_run.id)
-        self.agent_service.append_event(
+        self.event_emitter.emit(
             session,
             agent_run.id,
-            AppendAgentEventRequest(
-                event_type="agent.skills.hydrated",
-                phase="skills",
-                payload={
-                    "skill_context_count": len(skill_context),
-                    "package_names": [str(item.get("package_name") or "") for item in skill_context],
-                    "content_hashes": {
-                        str(item.get("package_name") or ""): str(item.get("content_hash") or "")
-                        for item in skill_context
-                        if item.get("package_name")
-                    },
-                    "reference_counts": {
-                        str(item.get("package_name") or ""): len(item.get("references") or [])
-                        for item in skill_context
-                        if item.get("package_name")
-                    },
+            event_type=AgentHarnessEventTypes.SKILLS_HYDRATED,
+            phase="skills",
+            payload={
+                "skill_context_count": len(skill_context),
+                "package_names": [str(item.get("package_name") or "") for item in skill_context],
+                "content_hashes": {
+                    str(item.get("package_name") or ""): str(item.get("content_hash") or "")
+                    for item in skill_context
+                    if item.get("package_name")
                 },
-            ),
+                "reference_counts": {
+                    str(item.get("package_name") or ""): len(item.get("references") or [])
+                    for item in skill_context
+                    if item.get("package_name")
+                },
+            },
+            commit=False,
+        )
+        sandbox_policy = normalize_sandbox_policy(
+            spec.get("sandbox_policy") if isinstance(spec.get("sandbox_policy"), dict) else None,
+            agent_key=agent_run.agent_key,
+        )
+        self.event_emitter.emit(
+            session,
+            agent_run.id,
+            event_type=AgentHarnessEventTypes.SANDBOX_POLICY_SELECTED,
+            phase="sandbox",
+            payload=sandbox_policy_summary(sandbox_policy, agent_key=agent_run.agent_key),
             commit=False,
         )
         memory_context = self.memory_service.retrieve_context_for_agent(
@@ -195,19 +187,17 @@ class AgentRunner:
             agent_key=agent_run.agent_key,
             limit=self._memory_context_limit(spec),
         )
-        self.agent_service.append_event(
+        self.event_emitter.emit(
             session,
             agent_run.id,
-            AppendAgentEventRequest(
-                event_type="agent.memory.retrieved",
-                phase="memory",
-                payload={
-                    "memory_entry_ids": [str(item.get("id")) for item in memory_context],
-                    "memory_entry_count": len(memory_context),
-                    "status": "active",
-                    "used_as_runtime_state": False,
-                },
-            ),
+            event_type=AgentHarnessEventTypes.MEMORY_RETRIEVED,
+            phase="memory",
+            payload={
+                "memory_entry_ids": [str(item.get("id")) for item in memory_context],
+                "memory_entry_count": len(memory_context),
+                "status": "active",
+                "used_as_runtime_state": False,
+            },
             commit=False,
         )
         plan = self.planner.create_plan(
@@ -218,14 +208,12 @@ class AgentRunner:
             memory_context=memory_context,
         )
         plan_payload = plan.as_dict()
-        self.agent_service.append_event(
+        self.event_emitter.emit(
             session,
             agent_run.id,
-            AppendAgentEventRequest(
-                event_type="agent.plan.created",
-                phase="planning",
-                payload=plan_payload,
-            ),
+            event_type=AgentHarnessEventTypes.PLAN_CREATED,
+            phase="planning",
+            payload=plan_payload,
             commit=False,
         )
         llm_model_mode = self._uses_llm_model_decision(agent_run=agent_run, spec=spec)

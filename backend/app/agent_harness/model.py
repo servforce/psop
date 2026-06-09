@@ -58,6 +58,7 @@ class AgentModelClient:
             "allowed_tools": list(allowed_tools if allowed_tools is not None else spec.get("allowed_tools") or []),
             "memory_context": memory_context,
             "plan": plan_payload,
+            "sandbox_policy": spec.get("sandbox_policy") or {},
             "output_schema": spec.get("output_schema") or {},
             "agent_prompt": prompt_metadata,
         }
