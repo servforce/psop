@@ -997,12 +997,6 @@
 
     evaluationNormalizeEvidenceKind(kind) {
       const value = String(kind || "").trim().toLowerCase();
-      if (value === "terminal_event") {
-        return "run_event";
-      }
-      if (value === "trace_event") {
-        return "run_trace";
-      }
       return value;
     },
 
@@ -1014,7 +1008,6 @@
       const traceId = String(
         ref.trace_id ||
         ref.run_trace_id ||
-        ref.trace_event_id ||
         ref.source_trace_id ||
         ref.source_run_trace_id ||
         ""

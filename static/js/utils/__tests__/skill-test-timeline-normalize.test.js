@@ -650,9 +650,9 @@ test("review fork cursor keeps the selected playhead time", () => {
   app.skillTestReview = {
     scenario_timeline: duplicateSemanticTimeline(),
     cursor_anchors: [
-      { time_ms: 0, terminal_seq: 1, snapshot_seq: 1 },
-      { time_ms: 190000, terminal_seq: 4, snapshot_seq: 3 },
-      { time_ms: 362000, terminal_seq: 9, snapshot_seq: 5 }
+      { time_ms: 0, run_event_seq: 1, snapshot_seq: 1 },
+      { time_ms: 190000, run_event_seq: 4, snapshot_seq: 3 },
+      { time_ms: 362000, run_event_seq: 9, snapshot_seq: 5 }
     ]
   };
 
@@ -660,7 +660,7 @@ test("review fork cursor keeps the selected playhead time", () => {
 
   expect(app.currentSkillTestForkCursor()).toEqual({
     time_ms: 300000,
-    terminal_seq: 4,
+    run_event_seq: 4,
     snapshot_seq: 3
   });
 
@@ -668,7 +668,7 @@ test("review fork cursor keeps the selected playhead time", () => {
 
   expect(app.currentSkillTestForkCursor()).toEqual({
     time_ms: 600000,
-    terminal_seq: 9,
+    run_event_seq: 9,
     snapshot_seq: 5
   });
 });
@@ -731,7 +731,7 @@ test("skill test review links judge evidence refs to runtime replay", () => {
         evidence_refs: [
           { kind: "run_event", id: "event-1", event_kind: "terminal.text.output.v1" },
           { kind: "run_trace", id: "trace-1", event_type: "runtime.failed" },
-          { kind: "terminal_event", seq_no: 4 }
+          { kind: "run_event", seq_no: 4 }
         ]
       }
     ],
@@ -777,7 +777,7 @@ test("review stage output drives expanded details and fork cursor", () => {
   const app = createTimelineHarness();
   app.skillTestReview = {
     scenario_timeline: duplicateSemanticTimeline(),
-    cursor_anchors: [{ time_ms: 190000, terminal_seq: 4, snapshot_seq: 3 }],
+    cursor_anchors: [{ time_ms: 190000, run_event_seq: 4, snapshot_seq: 3 }],
     stage_outputs: [
       {
         stage_id: "expected_9",
@@ -805,7 +805,7 @@ test("review stage output drives expanded details and fork cursor", () => {
           reason: "",
           updated_at: null
         },
-        cursor: { time_ms: 190000, terminal_seq: 4, snapshot_seq: 3 }
+        cursor: { time_ms: 190000, run_event_seq: 4, snapshot_seq: 3 }
       }
     ]
   };
@@ -815,10 +815,11 @@ test("review stage output drives expanded details and fork cursor", () => {
   app.openSkillTestReviewEvent(event);
 
   expect(app.skillTestReviewPlayheadMsValue()).toBe(50000);
-  expect(app.currentSkillTestForkCursor()).toEqual({ time_ms: 190000, terminal_seq: 4, snapshot_seq: 3 });
+  expect(app.currentSkillTestForkCursor()).toEqual({ time_ms: 190000, run_event_seq: 4, snapshot_seq: 3 });
   const stageRuntimeOutputs = app.skillTestReviewRuntimeOutputsForExpectation(event);
   expect(stageRuntimeOutputs).toHaveLength(1);
-  expect(stageRuntimeOutputs[0].run_event).toEqual(stageRuntimeOutputs[0].terminal_event);
+  expect(stageRuntimeOutputs[0].run_event).toBeDefined();
+  expect(stageRuntimeOutputs[0].terminal_event).toBeUndefined();
   expect(app.skillTestReviewEventContentSections(event).map((section) => section.title)).toEqual([
     "阶段期望",
     "阶段切面",
@@ -871,7 +872,7 @@ test("review timeline binds runtime outputs to the next semantic expectation", (
       time_origin: "2026-05-13T00:00:00Z"
     },
     replay: {
-      terminal_events: [
+      run_events: [
         {
           id: "input-1",
           seq_no: 1,
@@ -918,7 +919,8 @@ test("review timeline binds runtime outputs to the next semantic expectation", (
   expect(runtimeOutputs).toHaveLength(3);
   expect(runtimeOutputs[0].at_ms).toBe(45000);
   expect(runtimeOutputs[0].seq_no).toBe(2);
-  expect(runtimeOutputs[0].run_event).toEqual(runtimeOutputs[0].terminal_event);
+  expect(runtimeOutputs[0].run_event).toBeDefined();
+  expect(runtimeOutputs[0].terminal_event).toBeUndefined();
   expect(app.skillTestTimelineEventLabel(runtimeOutputs[0])).toContain("第一步");
   expect(app.skillTestTimelineEventLabel(runtimeOutputs[1])).toContain("第二步");
 
@@ -963,7 +965,7 @@ test("review lane header opens lane time details and event clicks replace it", (
     },
     driver_events: [{ event_id: "input_1", status: "sent" }],
     replay: {
-      terminal_events: [
+      run_events: [
         {
           id: "output-1",
           seq_no: 1,
@@ -1165,7 +1167,7 @@ test("review refresh replaces pending semantic judgement with saved judge output
     },
     scenario_timeline: timeline,
     replay: {
-      terminal_events: []
+      run_events: []
     },
     expectation_evaluations: []
   };
@@ -1345,7 +1347,7 @@ test("RunEvent transcript keeps all events visible at the end of a historical re
       time_origin: "2026-05-13T00:00:00Z"
     },
     replay: {
-      terminal_events: [
+      run_events: [
         {
           id: "early",
           occurred_at: "2026-05-13T00:00:10Z"

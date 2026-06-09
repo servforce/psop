@@ -10,7 +10,7 @@ BUSINESS_CONTEXT_ALIASES: dict[str, tuple[str, ...]] = {
     "source_finding_ids": ("source_finding_ids", "finding_ids", "run_evaluation_finding_ids"),
     "source_finding_id": ("source_finding_id", "finding_id", "run_evaluation_finding_id"),
     "source_run_id": ("source_run_id", "run_id"),
-    "run_trace_id": ("run_trace_id", "trace_id", "trace_event_id"),
+    "run_trace_id": ("run_trace_id", "trace_id"),
     "run_event_id": ("run_event_id", "event_id"),
     "snapshot_seq": ("snapshot_seq", "session_token_seq", "seq_no"),
     "pskill_definition_id": ("pskill_definition_id", "pskill_id", "skill_id"),

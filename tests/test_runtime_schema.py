@@ -39,3 +39,8 @@ def test_replay_detail_response_uses_run_event_and_run_trace_fields() -> None:
     assert {"governance_proposals", "governance_experiments"} <= fields
     assert "terminal_events" not in fields
     assert "trace_events" not in fields
+
+
+def test_runtime_event_response_models_do_not_expose_legacy_event_alias_fields() -> None:
+    assert "terminal_event_id" not in runtime_schemas.RunEventPartResponse.model_fields
+    assert "trace_event_id" not in runtime_schemas.RunEventResponse.model_fields

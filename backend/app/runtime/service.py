@@ -276,7 +276,7 @@ class RuntimeService:
         *,
         source_run_id: str,
         snapshot_seq: int,
-        terminal_seq: int,
+        run_event_seq: int,
         terminal_context: dict[str, Any],
         input_envelope: dict[str, Any] | None = None,
     ) -> InvocationResponse:
@@ -349,7 +349,7 @@ class RuntimeService:
         )
 
         copied_run_events: list[dict[str, Any]] = []
-        for source_event in self.repository.list_run_events(session, source_run_id, to_seq=terminal_seq):
+        for source_event in self.repository.list_run_events(session, source_run_id, to_seq=run_event_seq):
             source_parts = [
                 RunEventPartInput(
                     part_id=part.part_id,
@@ -382,18 +382,14 @@ class RuntimeService:
                         "seq_no": source_event.seq_no,
                     },
                 },
-                external_event_id=f"fork:{run.id}:terminal:{source_event.seq_no}",
+                external_event_id=f"fork:{run.id}:run-event:{source_event.seq_no}",
                 occurred_at=source_event.occurred_at,
             )
             copied_run_events.append(self._run_event_token_payload_with_parts(session, copied))
 
-        terminal = token.setdefault("terminal", {})
         token["run_events"] = list(copied_run_events)
-        terminal["events"] = list(copied_run_events)
-        terminal["latest_seq"] = run.latest_run_event_seq
         metadata = token.setdefault("metadata", {})
         metadata["run_event_cursor"] = run.latest_run_event_seq
-        metadata["terminal_cursor"] = run.latest_run_event_seq
         session.add(
             SessionTokenSnapshot(
                 run_id=run.id,
@@ -405,7 +401,7 @@ class RuntimeService:
                     "reason": "forked",
                     "source_run_id": source_run_id,
                     "source_snapshot_seq": snapshot_seq,
-                    "source_terminal_seq": terminal_seq,
+                    "source_run_event_seq": run_event_seq,
                 },
                 snapshot_hash=self._hash_payload(token),
             )
@@ -418,8 +414,8 @@ class RuntimeService:
             payload={
                 "source_run_id": source_run_id,
                 "source_snapshot_seq": snapshot_seq,
-                "source_terminal_seq": terminal_seq,
-                "terminal_prefix_count": len(copied_run_events),
+                "source_run_event_seq": run_event_seq,
+                "run_event_prefix_count": len(copied_run_events),
             },
         )
         if run.status != "waiting_input":
@@ -2216,7 +2212,7 @@ class RuntimeService:
         )
 
     def _sync_run_events(self, session: Session, *, run: Run, token: dict[str, Any]) -> dict[str, Any]:
-        cursor = int(_get_path(token, "metadata.run_event_cursor") or _get_path(token, "metadata.terminal_cursor") or 0)
+        cursor = int(_get_path(token, "metadata.run_event_cursor") or 0)
         next_token = json.loads(json.dumps(token, ensure_ascii=False, default=str))
         self._ensure_run_event_projection(next_token)
         events = self.repository.list_run_events(session, run.id, from_seq=cursor + 1)
@@ -2512,10 +2508,8 @@ class RuntimeService:
             "metadata": {
                 "artifact_version": artifact_payload.get("artifact_version"),
                 "run_event_cursor": 0,
-                "terminal_cursor": 0,
             },
             "run_events": [],
-            "terminal": {"events": [], "latest_seq": 0},
             "facts": {},
             "registers": {},
             "memory": {},
@@ -3219,7 +3213,6 @@ class RuntimeService:
             "latest_trace_seq": run.latest_trace_seq,
             "wait": wait,
             "latest_run_event": latest_event if isinstance(latest_event, dict) else {},
-            "latest_terminal_event": latest_event if isinstance(latest_event, dict) else {},
         }
 
     def _runtime_agent_observation_payload(self, *, node: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
@@ -3362,48 +3355,26 @@ class RuntimeService:
         run_events = token.get("run_events")
         if isinstance(run_events, list):
             return run_events
-        terminal = token.get("terminal") if isinstance(token.get("terminal"), dict) else {}
-        terminal_events = terminal.get("events") if isinstance(terminal, dict) else []
-        return terminal_events if isinstance(terminal_events, list) else []
+        return []
 
     @staticmethod
-    def _ensure_run_event_projection(token: dict[str, Any]) -> tuple[list[Any], list[Any], dict[str, Any]]:
-        terminal = token.setdefault("terminal", {})
-        terminal_events = terminal.get("events")
-        if not isinstance(terminal_events, list):
-            terminal_events = []
-            terminal["events"] = terminal_events
-
+    def _ensure_run_event_projection(token: dict[str, Any]) -> list[Any]:
         run_events = token.get("run_events")
         if not isinstance(run_events, list):
-            run_events = list(terminal_events)
+            run_events = []
             token["run_events"] = run_events
-        elif terminal_events and not run_events:
-            run_events.extend(terminal_events)
-        elif run_events and not terminal_events:
-            terminal_events.extend(run_events)
 
         metadata = token.setdefault("metadata", {})
-        run_event_cursor = metadata.get("run_event_cursor")
-        terminal_cursor = metadata.get("terminal_cursor")
-        latest_seq = terminal.get("latest_seq")
-        if run_event_cursor is None:
-            metadata["run_event_cursor"] = terminal_cursor if terminal_cursor is not None else latest_seq or 0
-        if terminal_cursor is None:
-            metadata["terminal_cursor"] = metadata.get("run_event_cursor") or latest_seq or 0
-
-        return run_events, terminal_events, terminal
+        if metadata.get("run_event_cursor") is None:
+            metadata["run_event_cursor"] = 0
+        return run_events
 
     @staticmethod
     def _append_run_event_payload_to_token(token: dict[str, Any], *, event_payload: dict[str, Any], seq_no: int) -> None:
-        run_events, terminal_events, terminal = RuntimeService._ensure_run_event_projection(token)
+        run_events = RuntimeService._ensure_run_event_projection(token)
         run_events.append(event_payload)
-        if terminal_events is not run_events:
-            terminal_events.append(event_payload)
-        terminal["latest_seq"] = seq_no
         metadata = token.setdefault("metadata", {})
         metadata["run_event_cursor"] = seq_no
-        metadata["terminal_cursor"] = seq_no
 
     @staticmethod
     def _llm_attachment_summary(attachments: list[LlmAttachment]) -> list[dict[str, Any]]:
@@ -3562,7 +3533,6 @@ class RuntimeService:
             runtime_phase=run.runtime_phase,
             latest_snapshot_seq=run.latest_snapshot_seq,
             latest_run_event_seq=run.latest_run_event_seq,
-            latest_terminal_seq=run.latest_run_event_seq,
             latest_trace_seq=run.latest_trace_seq,
             terminal_session_id=run.terminal_session_id,
             binding_summary=[self._binding_payload(item) for item in self.repository.list_run_bindings(session, run.id)],
@@ -3616,7 +3586,6 @@ class RuntimeService:
             terminal_session_id=event.terminal_session_id,
             run_id=event.run_id,
             run_trace_id=event.run_trace_id,
-            trace_event_id=event.run_trace_id,
             agent_run_id=event.agent_run_id,
             artifact_object_id=event.artifact_object_id,
             run_capability_binding_id=event.run_capability_binding_id,
@@ -3640,7 +3609,6 @@ class RuntimeService:
         return RunEventPartResponse(
             id=part.id,
             run_event_id=part.run_event_id,
-            terminal_event_id=part.run_event_id,
             run_id=part.run_id,
             artifact_object_id=part.artifact_object_id,
             part_id=part.part_id,

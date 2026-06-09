@@ -753,7 +753,6 @@
         tool_authorization_source_finding_id: "",
         run_id: "",
         run_trace_event_type: "",
-        trace_event_type: "",
         agent_run_id: ""
       },
       observabilityRunEvents: [],

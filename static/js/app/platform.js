@@ -962,8 +962,7 @@
       ]);
       const runTraceId = this.agentRunAuthorizationFirstNestedValue(authorization, [
         "run_trace_id",
-        "trace_id",
-        "trace_event_id"
+        "trace_id"
       ]);
       const snapshotSeq = this.agentRunAuthorizationFirstNestedValue(authorization, [
         "snapshot_seq",

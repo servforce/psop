@@ -56,10 +56,21 @@ def test_api_routes_use_pskill_and_materials_naming() -> None:
     assert "/api/v1/compiler/pskills/{skill_id}/compile" in route_paths
     assert "/api/v1/pskills/{skill_id}/materials" in route_paths
     assert "/api/v1/runs/{run_id}/events" in route_paths
+    assert "/api/v1/runs/{run_id}/terminal-session" in route_paths
     assert "/api/v1/runs/{run_id}/traces" in route_paths
     assert "/api/v1/memory/{memory_id}" in route_paths
     assert "/api/v1/evaluations" in route_paths
     assert "/api/v1/skills" in route_paths
+
+
+def test_runtime_openapi_hides_legacy_terminal_compat_routes() -> None:
+    app = create_app(create_test_settings())
+    openapi_paths = set(app.openapi()["paths"])
+
+    assert "/api/v1/runs/{run_id}/terminal-session" in openapi_paths
+    assert "/api/v1/runs/{run_id}/events" in openapi_paths
+    assert "/api/v1/runs/{run_id}/events/{event_id}/parts/{part_id}/content" in openapi_paths
+    assert not any("/terminal/sessions" in path for path in openapi_paths)
 
 
 def test_default_agents_keep_closed_loop_keys_and_runner_boundary() -> None:
@@ -108,6 +119,7 @@ def test_server_design_keeps_pskill_api_paths_distinct_from_skill_packages() -> 
     assert "RunEvent / RunEventPart" in design
     assert "RunTrace" in design
     assert "`POST` | `/api/v1/runs/{run_id}/cancel`" in design
+    assert "`GET` | `/api/v1/runs/{run_id}/terminal-session` | terminal session 摘要" in design
     assert "无 `/api/v1/runs/{run_id}/cancel`" not in design
 
 

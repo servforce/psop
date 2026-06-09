@@ -2113,8 +2113,8 @@
         this.skillTestRuns = window.PSOPRuntimeEvents.mergeById(this.skillTestRuns || [], [review.scenario_run]);
         if (review.replay?.run) {
           this.liveRun = review.replay.run;
-          this.liveRunEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_events || review.replay.terminal_events || []);
-          this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_traces || review.replay.trace_events || []);
+          this.liveRunEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_events || []);
+          this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_traces || []);
           this.liveRunBindings = window.PSOPRuntimeEvents.mergeById([], review.replay.bindings || []);
         }
         if (
@@ -2169,12 +2169,6 @@
 
       skillTestReviewNormalizeEvidenceKind(kind) {
         const value = String(kind || "").trim().toLowerCase();
-        if (value === "terminal_event") {
-          return "run_event";
-        }
-        if (value === "trace_event") {
-          return "run_trace";
-        }
         return value;
       },
 
@@ -2456,7 +2450,7 @@
         if (stageOutput?.cursor) {
           return {
             time_ms: Math.max(0, Number(stageOutput.cursor.time_ms || 0)),
-            terminal_seq: Math.max(0, Number(stageOutput.cursor.terminal_seq || 0)),
+            run_event_seq: Math.max(0, Number(stageOutput.cursor.run_event_seq || 0)),
             snapshot_seq: Math.max(0, Number(stageOutput.cursor.snapshot_seq || 0))
           };
         }
@@ -2468,7 +2462,7 @@
             .find((item) => Number(item.time_ms || 0) <= cutoffMs) || {};
         return {
           time_ms: Math.max(0, Number(cutoffMs || 0)),
-          terminal_seq: Math.max(0, Number(anchor.terminal_seq || 0)),
+          run_event_seq: Math.max(0, Number(anchor.run_event_seq || 0)),
           snapshot_seq: Math.max(0, Number(anchor.snapshot_seq || 0))
         };
       },
@@ -2696,7 +2690,7 @@
 
       skillTestReviewRuntimeOutputEvents() {
         const replay = this.skillTestReview?.replay || {};
-        return (replay.run_events || replay.terminal_events || [])
+        return (replay.run_events || [])
           .filter((event) => event?.direction === "output")
           .map((event, index) => this.skillTestReviewRuntimeOutputEvent(event, index))
           .sort((left, right) => Number(left.at_ms || 0) - Number(right.at_ms || 0));
@@ -2716,8 +2710,7 @@
           occurred_at: event?.occurred_at,
           direction: "output",
           required: false,
-          run_event: event,
-          terminal_event: event
+          run_event: event
         };
       },
 
@@ -2747,8 +2740,7 @@
             occurred_at: output.occurred_at,
             direction: "output",
             required: false,
-            run_event: output,
-            terminal_event: output
+            run_event: output
           }));
         }
         const expectations = this.skillTestReviewSemanticExpectationEvents();
@@ -2775,7 +2767,7 @@
 
 
       skillTestReviewRuntimeOutputLabel(event) {
-        const sourceEvent = event?.run_event || event?.terminal_event || event;
+        const sourceEvent = event?.run_event || event;
         const parts = [];
         if (sourceEvent?.artifact_object_id) {
           parts.push(`artifact_object_id: ${sourceEvent.artifact_object_id}`);
@@ -2831,7 +2823,7 @@
             values.push(value);
           }
         });
-        const replayRunEvents = review?.replay?.run_events || review?.replay?.terminal_events || [];
+        const replayRunEvents = review?.replay?.run_events || [];
         replayRunEvents.forEach((event) => {
           const occurredAt = new Date(event?.occurred_at).getTime();
           if (Number.isFinite(origin) && origin > 0 && Number.isFinite(occurredAt)) {
@@ -3045,7 +3037,7 @@
               meta: this.formatSkillTestTimelineMs(stageOutput.time_ms ?? event.at_ms ?? 0),
               content: [
                 `切面时间: ${this.formatSkillTestTimelineMs(stageOutput.time_ms ?? event.at_ms ?? 0)}`,
-                `Terminal Seq: ${cursor.terminal_seq === undefined || cursor.terminal_seq === null ? 0 : cursor.terminal_seq}`,
+                `RunEvent Seq: ${cursor.run_event_seq === undefined || cursor.run_event_seq === null ? 0 : cursor.run_event_seq}`,
                 `Snapshot Seq: ${cursor.snapshot_seq === undefined || cursor.snapshot_seq === null ? 0 : cursor.snapshot_seq}`
               ].join("\n")
             });
@@ -3153,7 +3145,7 @@
         if (!event) {
           return [];
         }
-        const runEvent = event.run_event || event.terminal_event || null;
+        const runEvent = event.run_event || null;
         const asset = event.asset_id ? this.skillTestAssetById(event.asset_id) : null;
         const assetLabel = asset ? this.skillTestAssetLabel(asset) : event.asset_id ? this.skillTestTimelineEventAssetLabel(event) : "";
         const stageOutput = this.skillTestReviewStageOutputForEvent(event);
@@ -3198,7 +3190,7 @@
         if (!event) {
           return "null";
         }
-        return this.formatSkillTestReviewDebugJson(event.run_event || event.terminal_event || event);
+        return this.formatSkillTestReviewDebugJson(event.run_event || event);
       },
 
 
@@ -3251,7 +3243,7 @@
         }
         const cutoff = this.skillTestReviewOriginTime() + Number(event.at_ms || 0);
         const replay = this.skillTestReview?.replay || {};
-        const outputs = (replay.run_events || replay.terminal_events || []).filter((item) => {
+        const outputs = (replay.run_events || []).filter((item) => {
           const occurredAt = new Date(item.occurred_at).getTime();
           return item.direction === "output" && (!Number.isFinite(occurredAt) || occurredAt <= cutoff);
         });
@@ -3374,7 +3366,7 @@
           "点击查看完整内容"
         ];
         if (this.isSkillTestRuntimeOutputLane(event?.lane_id)) {
-          const runEvent = event.run_event || event.terminal_event || {};
+          const runEvent = event.run_event || {};
           if (runEvent.seq_no !== undefined && runEvent.seq_no !== null) {
             parts.push(`run_event seq #${runEvent.seq_no}`);
           }
@@ -3461,7 +3453,7 @@
 
       filteredSkillTestReviewRunEvents() {
         const replay = this.skillTestReview?.replay || {};
-        const events = replay.run_events || replay.terminal_events || [];
+        const events = replay.run_events || [];
         if (this.skillTestReviewPlayheadMsValue() >= this.skillTestReviewDurationMs()) {
           return events;
         }

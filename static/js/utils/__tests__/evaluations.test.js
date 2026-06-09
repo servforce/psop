@@ -327,12 +327,12 @@ test("evaluation finding evidence refs build run replay deep links", () => {
     run_id: "run-3",
     evidence_refs: [{ kind: "run_event", id: "event-1", event_kind: "terminal.text.output.v1" }]
   };
-  const findingWithLegacyRefs = {
+  const findingWithRunRefs = {
     id: "finding-4",
     run_id: "run-4",
     evidence_refs: [
-      { kind: "terminal_event", seq_no: 5, event_kind: "terminal.text.output.v1" },
-      { kind: "trace_event", id: "trace-legacy", event_type: "runtime.failed" }
+      { kind: "run_event", seq_no: 5, event_kind: "terminal.text.output.v1" },
+      { kind: "run_trace", id: "trace-2", event_type: "runtime.failed" }
     ]
   };
   const findingWithAgentEvidence = {
@@ -384,11 +384,11 @@ test("evaluation finding evidence refs build run replay deep links", () => {
   expect(methods.findingRunReplayPath.call(context, findingWithRunEventId, findingWithRunEventId.evidence_refs[0])).toBe(
     "/admin/runs/run-3/live/replay?event_id=event-1"
   );
-  expect(methods.findingEvidenceLabel.call(context, findingWithLegacyRefs.evidence_refs[0])).toBe(
+  expect(methods.findingEvidenceLabel.call(context, findingWithRunRefs.evidence_refs[0])).toBe(
     "run_event #5 · terminal.text.output.v1"
   );
-  expect(methods.findingRunReplayPath.call(context, findingWithLegacyRefs, findingWithLegacyRefs.evidence_refs[1])).toBe(
-    "/admin/runs/run-4/live/replay?trace_id=trace-legacy"
+  expect(methods.findingRunReplayPath.call(context, findingWithRunRefs, findingWithRunRefs.evidence_refs[1])).toBe(
+    "/admin/runs/run-4/live/replay?trace_id=trace-2"
   );
   expect(methods.findingEvidencePath.call(context, findingWithAgentEvidence, findingWithAgentEvidence.evidence_refs[0])).toBe(
     "/admin/platform/agent-runs/agent-run-1?tab=events&event_id=agent-event-1"

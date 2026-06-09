@@ -797,8 +797,8 @@ test("governance methods edit proposal payloads and source finding links", async
         description: "runner issue",
         evidence_refs: [
           { kind: "run_trace", id: "trace-1" },
-          { kind: "trace_event", id: "trace-legacy" },
-          { kind: "terminal_event", seq_no: 7, event_kind: "terminal.text.output.v1" }
+          { kind: "run_trace", id: "trace-2" },
+          { kind: "run_event", seq_no: 7, event_kind: "terminal.text.output.v1" }
         ]
       }
     ],
@@ -827,7 +827,7 @@ test("governance methods edit proposal payloads and source finding links", async
     "/admin/runs/run-1/live/replay?event_id=event-1"
   );
   expect(methods.governanceSourceFindingReplayPath(proposal.source_findings[0], proposal.source_findings[0].evidence_refs[1])).toBe(
-    "/admin/runs/run-1/live/replay?trace_id=trace-legacy"
+    "/admin/runs/run-1/live/replay?trace_id=trace-2"
   );
   expect(methods.governanceFindingEvidenceLabel(proposal.source_findings[0].evidence_refs[2])).toBe(
     "run_event #7 · terminal.text.output.v1"

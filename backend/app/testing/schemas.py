@@ -174,14 +174,13 @@ class SkillTestExpectationEvaluationResponse(BaseModel):
 
 class SkillTestForkCursor(BaseModel):
     time_ms: int = Field(default=0, ge=0)
-    terminal_seq: int = Field(default=0, ge=0)
+    run_event_seq: int = Field(default=0, ge=0)
     snapshot_seq: int = Field(default=0, ge=0)
 
 
 class SkillTestStageActualOutputResponse(BaseModel):
     id: str
     run_event_id: str | None = None
-    terminal_event_id: str | None = None
     seq_no: int | None = None
     at_ms: int
     occurred_at: datetime | None = None

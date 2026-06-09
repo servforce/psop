@@ -710,7 +710,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert appended.seq_no == 2
     assert run.status == "succeeded"
     assert run.latest_snapshot_seq == 5
-    assert run.latest_terminal_seq == 5
+    assert run.latest_run_event_seq == 5
     assert run.latest_trace_seq == 8
     assert run.terminal_session_id == invocation.terminal_session_id
     assert len(run.binding_summary) == 2
@@ -720,9 +720,9 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert [snapshot.seq_no for snapshot in snapshots] == [0, 1, 2, 3, 4, 5]
     assert snapshots[-1].token_payload["budgets"]["llm_input_tokens"] == 30
     assert snapshots[-1].token_payload["budgets"]["llm_output_tokens"] == 15
-    assert snapshots[-1].token_payload["metadata"]["run_event_cursor"] == snapshots[-1].token_payload["metadata"]["terminal_cursor"]
-    assert snapshots[-1].token_payload["run_events"] == snapshots[-1].token_payload["terminal"]["events"]
     assert snapshots[-1].token_payload["run_events"][-1]["seq_no"] == snapshots[-1].token_payload["metadata"]["run_event_cursor"]
+    assert "terminal_cursor" not in snapshots[-1].token_payload["metadata"]
+    assert "terminal" not in snapshots[-1].token_payload
     assert run_events[-1].seq_no >= snapshots[-1].token_payload["metadata"]["run_event_cursor"]
     assert all(snapshot.token_payload.get("memory", {}) == {} for snapshot in snapshots)
     serialized_snapshots = json.dumps(
@@ -1350,7 +1350,7 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
     assert run_events[-1].direction == "output"
     assert run_events[-1].event_kind == "terminal.text.output.v1"
     assert run_events[-1].external_event_id == f"runtime:{invocation.run_id}:failed"
-    assert run_events[-1].trace_event_id == runtime_failed_trace.id
+    assert run_events[-1].run_trace_id == runtime_failed_trace.id
     assert "Runtime 执行失败" in run_events[-1].payload_inline
     assert "当前运行已停止" in run_events[-1].payload_inline
     assert "调试运行" not in run_events[-1].payload_inline
@@ -1508,11 +1508,11 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
     assert run_traces[-1].payload["error_details"]["request_id"] == "request-test"
     assert run_traces[-1].payload["error_details"]["provider_error_type"] == "ServiceUnavailable"
     assert run_events[-1].direction == "output"
-    assert run_events[-1].trace_event_id == run_traces[-1].id
+    assert run_events[-1].run_trace_id == run_traces[-1].id
     assert run_events[-1].payload_inline == "刚才服务器开小差了，请您重试！"
     assert snapshots[-1].token_payload["status"] == "waiting"
     assert snapshots[-1].token_payload["metadata"]["run_event_cursor"] == run_events[-1].seq_no
-    assert snapshots[-1].token_payload["metadata"]["terminal_cursor"] == run_events[-1].seq_no
-    assert snapshots[-1].token_payload["run_events"] == snapshots[-1].token_payload["terminal"]["events"]
+    assert "terminal_cursor" not in snapshots[-1].token_payload["metadata"]
+    assert "terminal" not in snapshots[-1].token_payload
     assert retry.seq_no > run_events[-1].seq_no
     assert final_run.status == "succeeded"

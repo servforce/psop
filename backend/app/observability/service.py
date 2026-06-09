@@ -680,7 +680,6 @@ class ObservabilityService:
             terminal_session_id=event.terminal_session_id,
             run_id=event.run_id,
             run_trace_id=event.run_trace_id,
-            trace_event_id=event.run_trace_id,
             agent_run_id=event.agent_run_id,
             artifact_object_id=event.artifact_object_id,
             run_capability_binding_id=event.run_capability_binding_id,
@@ -708,7 +707,6 @@ class ObservabilityService:
         return RunEventPartResponse(
             id=part.id,
             run_event_id=part.run_event_id,
-            terminal_event_id=part.run_event_id,
             run_id=part.run_id,
             artifact_object_id=part.artifact_object_id,
             part_id=part.part_id,

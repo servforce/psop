@@ -55,7 +55,6 @@ class RunResponse(BaseModel):
     runtime_phase: str
     latest_snapshot_seq: int
     latest_run_event_seq: int
-    latest_terminal_seq: int = 0
     latest_trace_seq: int
     terminal_session_id: str | None = None
     binding_summary: list[dict[str, Any]] = Field(default_factory=list)
@@ -156,7 +155,6 @@ class RunEventPartInput(BaseModel):
 class RunEventPartResponse(BaseModel):
     id: str
     run_event_id: str
-    terminal_event_id: str | None = None
     run_id: str
     artifact_object_id: str | None = None
     part_id: str
@@ -175,7 +173,6 @@ class RunEventResponse(BaseModel):
     terminal_session_id: str
     run_id: str
     run_trace_id: str | None = None
-    trace_event_id: str | None = None
     agent_run_id: str | None = None
     artifact_object_id: str | None = None
     run_capability_binding_id: str | None = None

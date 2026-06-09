@@ -233,7 +233,8 @@ def get_run_binding(
     return service.get_run_binding(session, run_id, binding_id)
 
 
-@terminal_router.get("/sessions/{run_id}", response_model=TerminalSessionDetailResponse)
+@runs_router.get("/{run_id}/terminal-session", response_model=TerminalSessionDetailResponse)
+@terminal_router.get("/sessions/{run_id}", response_model=TerminalSessionDetailResponse, include_in_schema=False)
 def get_terminal_session(
     run_id: str,
     session: Session = Depends(get_db_session),
@@ -243,7 +244,7 @@ def get_terminal_session(
 
 
 @runs_router.get("/{run_id}/events", response_model=list[RunEventResponse])
-@terminal_router.get("/sessions/{run_id}/events", response_model=list[RunEventResponse])
+@terminal_router.get("/sessions/{run_id}/events", response_model=list[RunEventResponse], include_in_schema=False)
 def list_run_events(
     run_id: str,
     from_seq: int | None = Query(default=None),
@@ -264,7 +265,7 @@ def list_run_event_parts(
 
 
 @runs_router.get("/{run_id}/events/{event_id}/content")
-@terminal_router.get("/sessions/{run_id}/events/{event_id}/content")
+@terminal_router.get("/sessions/{run_id}/events/{event_id}/content", include_in_schema=False)
 def get_run_event_content(
     run_id: str,
     event_id: str,
@@ -298,7 +299,7 @@ def get_run_event_content(
 
 
 @runs_router.get("/{run_id}/events/{event_id}/parts/{part_id}/content")
-@terminal_router.get("/sessions/{run_id}/events/{event_id}/parts/{part_id}/content")
+@terminal_router.get("/sessions/{run_id}/events/{event_id}/parts/{part_id}/content", include_in_schema=False)
 def get_run_event_part_content(
     run_id: str,
     event_id: str,
@@ -336,7 +337,7 @@ def get_run_event_part_content(
 
 
 @runs_router.post("/{run_id}/events", response_model=RunEventAppendResponse, status_code=202)
-@terminal_router.post("/sessions/{run_id}/events", response_model=RunEventAppendResponse, status_code=202)
+@terminal_router.post("/sessions/{run_id}/events", response_model=RunEventAppendResponse, status_code=202, include_in_schema=False)
 async def append_run_event(
     run_id: str,
     request: Request,

@@ -42,7 +42,7 @@
   }
 
   function runTraceEventTypeFilter(filters = {}) {
-    return String(filters.run_trace_event_type || filters.trace_event_type || "").trim();
+    return String(filters.run_trace_event_type || "").trim();
   }
 
   window.PSOPConsoleObservabilityMethods = {
@@ -460,7 +460,6 @@
     resetObservabilityTraceQuery() {
       this.observabilityFilters.run_id = "";
       this.observabilityFilters.run_trace_event_type = "";
-      this.observabilityFilters.trace_event_type = "";
       this.observabilityRunTraces = [];
       this.observabilityTraceLookupRunId = "";
     },
@@ -468,7 +467,6 @@
     async selectObservabilityTraceEventType(eventType) {
       this.observabilityFilters.run_id = "";
       this.observabilityFilters.run_trace_event_type = eventType || "";
-      this.observabilityFilters.trace_event_type = "";
       await this.loadObservabilityRunTraces();
     },
 
@@ -636,8 +634,7 @@
       ]);
       const runTraceId = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
         "run_trace_id",
-        "trace_id",
-        "trace_event_id"
+        "trace_id"
       ]);
       const snapshotSeq = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
         "snapshot_seq",

@@ -366,7 +366,7 @@ class FakeInferenceGateway:
                     "status": "passed",
                     "confidence": 0.93,
                     "reason": "实际输出满足预期语义。",
-                    "evidence_refs": [{"kind": "terminal_event", "seq_no": 4}],
+                    "evidence_refs": [{"kind": "run_event", "seq_no": 4}],
                     "missing_evidence": "",
                 },
                 ensure_ascii=False,
@@ -2266,7 +2266,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         initial_run_response = client.get(f"/api/v1/runs/{run_id}")
         binding_requirements_response = client.get(f"/api/v1/runs/{run_id}/binding-requirements")
         bindings_response = client.get(f"/api/v1/runs/{run_id}/bindings")
-        terminal_session_response = client.get(f"/api/v1/terminal/sessions/{run_id}")
+        terminal_session_response = client.get(f"/api/v1/runs/{run_id}/terminal-session")
         run_events_response = client.get(f"/api/v1/runs/{run_id}/events")
         run_event_append_response = client.post(
             f"/api/v1/runs/{run_id}/events",
@@ -2351,7 +2351,6 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert run_payload["compile_artifact_id"] == artifact_id
     assert run_payload["compile_request_id"] == compile_request_id
     assert run_payload["latest_run_event_seq"] == 6
-    assert run_payload["latest_terminal_seq"] == 6
     assert run_payload["latest_trace_seq"] == 8
     assert len(run_payload["binding_summary"]) == 2
     assert "测试任务已完成" in run_payload["final_output"]
@@ -2490,7 +2489,7 @@ def test_runtime_run_can_be_cancelled_through_runs_api() -> None:
         second_cancel_response = client.post(f"/api/v1/runs/{run_id}/cancel", json={"reason": "不应覆盖原始原因"})
         run_response = client.get(f"/api/v1/runs/{run_id}")
         invocation_detail_response = client.get(f"/api/v1/gateway/invocations/{invocation_payload['id']}")
-        terminal_session_response = client.get(f"/api/v1/terminal/sessions/{run_id}")
+        terminal_session_response = client.get(f"/api/v1/runs/{run_id}/terminal-session")
         snapshots_response = client.get(f"/api/v1/runs/{run_id}/snapshots")
         traces_response = client.get(f"/api/v1/runs/{run_id}/traces")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
@@ -2588,7 +2587,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         persisted_invocation_response = client.get(f"/api/v1/gateway/invocations/{invocation['id']}")
         initial_run_response = client.get(f"/api/v1/runs/{run_id}")
         upload_response = client.post(
-            f"/api/v1/terminal/sessions/{run_id}/events",
+            f"/api/v1/runs/{run_id}/events",
             data={
                 "event": json.dumps(
                     {
@@ -2604,14 +2603,14 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         uploaded_event = upload_response.json()["event"]
         uploaded_image_part = next(part for part in uploaded_event["parts"] if part["kind"] == "image")
         uploaded_content_response = client.get(
-            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content"
+            f"/api/v1/runs/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content"
         )
         uploaded_content_range_response = client.get(
-            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content",
+            f"/api/v1/runs/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content",
             headers={"Range": "bytes=0-4"},
         )
         final_run_response = client.get(f"/api/v1/runs/{run_id}")
-        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+        run_events_response = client.get(f"/api/v1/runs/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
         old_cases_response = client.get(f"/api/v1/pskills/{created['id']}/test-cases", params={"mode": "debug"})
         test_jobs_response = client.get(
@@ -2644,7 +2643,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert uploaded_content_range_response.status_code == 206
     assert uploaded_content_range_response.content == b"debug"
     assert final_run_response.json()["status"] == "succeeded"
-    assert any(event["event_kind"] == "terminal.multimodal.input.v1" for event in terminal_events_response.json())
+    assert any(event["event_kind"] == "terminal.multimodal.input.v1" for event in run_events_response.json())
     assert replay_response.status_code == 200
     assert replay_response.json()["run"]["id"] == run_id
     assert len(replay_response.json()["run_events"]) >= 3
@@ -2655,7 +2654,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert test_jobs_response.json() == []
 
 
-def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> None:
+def test_run_events_accept_multipart_multimodal_parts_and_feed_llm() -> None:
     client, _, fake_inference = create_test_client()
 
     with client:
@@ -2688,7 +2687,7 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
             "text": "请结合现场图像、视频和音频判断故障。",
         }
         append_response = client.post(
-            f"/api/v1/terminal/sessions/{run_id}/events",
+            f"/api/v1/runs/{run_id}/events",
             data={"event": json.dumps(event_payload, ensure_ascii=False)},
             files=[
                 ("files", ("fault.png", b"image-bytes", "image/png")),
@@ -2699,11 +2698,11 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
         appended_event = append_response.json()["event"]
         image_part = next(part for part in appended_event["parts"] if part["kind"] == "image")
         image_part_content_response = client.get(
-            f"/api/v1/terminal/sessions/{run_id}/events/{appended_event['id']}/parts/{image_part['part_id']}/content"
+            f"/api/v1/runs/{run_id}/events/{appended_event['id']}/parts/{image_part['part_id']}/content"
         )
         final_run_response = client.get(f"/api/v1/runs/{run_id}")
         snapshots_response = client.get(f"/api/v1/runs/{run_id}/snapshots")
-        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+        run_events_response = client.get(f"/api/v1/runs/{run_id}/events")
         event_parts_response = client.get(f"/api/v1/runs/{run_id}/event-parts")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
         with client.app.state.db_manager.session() as session:
@@ -2748,8 +2747,8 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
     assert multimodal_calls
     assert any(call["attachments"] == "fault.png,clip.mp4,note.wav" for call in multimodal_calls)
 
-    terminal_events = terminal_events_response.json()
-    persisted_event = next(event for event in terminal_events if event["id"] == appended_event["id"])
+    run_events = run_events_response.json()
+    persisted_event = next(event for event in run_events if event["id"] == appended_event["id"])
     assert [part["kind"] for part in persisted_event["parts"]] == ["text", "image", "video", "audio"]
     assert event_parts_response.status_code == 200
     event_parts = [part for part in event_parts_response.json() if part["run_event_id"] == appended_event["id"]]
@@ -2796,7 +2795,7 @@ def test_terminal_file_upload_returns_json_error_when_object_store_unavailable()
         )
         run_id = invocation_response.json()["run_id"]
         upload_response = client.post(
-            f"/api/v1/terminal/sessions/{run_id}/events",
+            f"/api/v1/runs/{run_id}/events",
             data={"event": json.dumps({"direction": "input", "text": "图片证据"}, ensure_ascii=False)},
             files=[("files", ("fault.jpg", b"image-bytes", "image/jpeg"))],
         )
@@ -2808,7 +2807,7 @@ def test_terminal_file_upload_returns_json_error_when_object_store_unavailable()
     assert payload["details"]["filename"] == "fault.jpg"
 
 
-def test_run_websocket_broadcasts_terminal_event_append() -> None:
+def test_run_websocket_broadcasts_run_event_append() -> None:
     client, _, _ = create_test_client()
 
     with client:
@@ -2843,7 +2842,7 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
             previous_trace_seq = previous_run["latest_trace_seq"]
             previous_snapshot_seq = previous_run["latest_snapshot_seq"]
             append_response = client.post(
-                f"/api/v1/terminal/sessions/{run_id}/events",
+                f"/api/v1/runs/{run_id}/events",
                 json={
                     "direction": "input",
                     "event_kind": "terminal.text.input.v1",
@@ -2852,10 +2851,10 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
                     "external_event_id": "ws-terminal-demo-input",
                 },
             )
-            terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+            run_events_response = client.get(f"/api/v1/runs/{run_id}/events")
             appended_events = [
                 event
-                for event in terminal_events_response.json()
+                for event in run_events_response.json()
                 if event["seq_no"] >= append_response.json()["seq_no"]
             ]
             run_traces_response = client.get(f"/api/v1/runs/{run_id}/traces")
@@ -2878,28 +2877,28 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
     assert invocation_response.status_code == 201
     assert connected["event_type"] == "ws.connected"
     assert append_response.status_code == 202
-    assert terminal_events_response.status_code == 200
+    assert run_events_response.status_code == 200
     assert run_traces_response.status_code == 200
     assert snapshots_response.status_code == 200
-    terminal_messages = [message for message in messages if message["event_type"] == "run.event.appended"]
+    run_event_messages = [message for message in messages if message["event_type"] == "run.event.appended"]
     trace_messages = [message for message in messages if message["event_type"] == "run.trace.appended"]
     snapshot_messages = [
         message for message in messages if message["event_type"] == "session_token.snapshot.appended"
     ]
     run_updated_messages = [message for message in messages if message["event_type"] == "run.updated"]
-    assert len(terminal_messages) == len(appended_events)
+    assert len(run_event_messages) == len(appended_events)
     assert len(trace_messages) == len(appended_traces)
     assert len(snapshot_messages) == len(appended_snapshots)
     assert len(run_updated_messages) == 1
-    assert [message["seq_no"] for message in terminal_messages] == [event["seq_no"] for event in appended_events]
+    assert [message["seq_no"] for message in run_event_messages] == [event["seq_no"] for event in appended_events]
     assert [message["seq_no"] for message in trace_messages] == [trace["seq_no"] for trace in appended_traces]
     assert [message["seq_no"] for message in snapshot_messages] == [
         snapshot["seq_no"] for snapshot in appended_snapshots
     ]
-    assert terminal_messages[0]["payload"]["payload_inline"] == "WS 输入"
-    assert terminal_messages[0]["seq_no"] == append_response.json()["seq_no"]
-    assert [message["payload"]["direction"] for message in terminal_messages] == ["input", "output", "output", "output"]
-    assert any("测试任务已完成" in str(message["payload"]["payload_inline"]) for message in terminal_messages)
+    assert run_event_messages[0]["payload"]["payload_inline"] == "WS 输入"
+    assert run_event_messages[0]["seq_no"] == append_response.json()["seq_no"]
+    assert [message["payload"]["direction"] for message in run_event_messages] == ["input", "output", "output", "output"]
+    assert any("测试任务已完成" in str(message["payload"]["payload_inline"]) for message in run_event_messages)
     assert "runtime.final.completed" in {message["payload"]["event_type"] for message in trace_messages}
     assert snapshot_messages[-1]["payload"]["snapshot_hash"]
     assert run_updated_messages[0]["payload"]["status"] == "succeeded"
@@ -3060,7 +3059,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
 
         start_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
         scenario_run = start_response.json()
-        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}/events")
+        run_events_response = client.get(f"/api/v1/runs/{scenario_run['run_id']}/events")
         jobs_response = client.get("/api/v1/runtime/jobs")
         evaluate_response = client.post(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/evaluate")
         review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
@@ -3114,10 +3113,11 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert scenario_run["result_summary"]["passed"] == 1
     assert scenario_run["status"] == "passed"
     assert sorted(event["event_id"] for event in scenario_run["driver_events"]) == ["fault_photo", "initial_fault_context"]
-    assert all(event["run_event_id"] == event["terminal_event_id"] for event in scenario_run["driver_events"])
+    assert all(event["run_event_id"] for event in scenario_run["driver_events"])
+    assert all("terminal_event_id" not in event for event in scenario_run["driver_events"])
 
-    terminal_events = terminal_events_response.json()
-    scripted_inputs = [event for event in terminal_events if event["direction"] == "input"]
+    run_events = run_events_response.json()
+    scripted_inputs = [event for event in run_events if event["direction"] == "input"]
     text_inputs = [event for event in scripted_inputs if event["event_kind"] == "terminal.text.input.v1"]
     image_inputs = [event for event in scripted_inputs if event["event_kind"] == "terminal.image.input.v1"]
     assert [event["payload_inline"] for event in text_inputs] == ["请检查这把伞如何修复"]
@@ -3127,7 +3127,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert image_inputs[0]["payload_inline"]["asset_id"] == upload_response.json()["id"]
     assert image_inputs[0]["payload_inline"]["name"] == "伞骨图片"
     assert image_inputs[0]["payload_inline"]["description"] == "伞骨近照"
-    assert any(event["direction"] == "output" and "测试任务已完成" in str(event["payload_inline"]) for event in terminal_events)
+    assert any(event["direction"] == "output" and "测试任务已完成" in str(event["payload_inline"]) for event in run_events)
     assert any(job["job_type"] == PSKILL_TEST_JOB_TYPE and job["status"] == "succeeded" for job in jobs_response.json())
     assert any(
         job["job_type"] == PSKILL_TEST_JOB_TYPE
@@ -3179,7 +3179,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
 
     assert fork_response.status_code == 201
     assert forked["fork_seed"]["source_scenario_run_id"] == scenario_run["id"]
-    assert forked["fork_seed"]["terminal_seq"] == cursor["terminal_seq"]
+    assert forked["fork_seed"]["run_event_seq"] == cursor["run_event_seq"]
     forked_image_event = next(event for event in forked["timeline"]["events"] if event["id"] == "fork_fault_photo")
     forked_assets = fork_assets_response.json()
     assert fork_assets_response.status_code == 200
@@ -3267,7 +3267,7 @@ def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> No
         scenario = patch_response.json()
         start_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
         scenario_run = start_response.json()
-        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}/events")
+        run_events_response = client.get(f"/api/v1/runs/{scenario_run['run_id']}/events")
         review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
         cursor = review_response.json()["cursor_anchors"][-1]
         fork_response = client.post(
@@ -3291,7 +3291,7 @@ def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> No
             "at_ms": 0,
         }
     ]
-    terminal_inputs = [event for event in terminal_events_response.json() if event["direction"] == "input"]
+    terminal_inputs = [event for event in run_events_response.json() if event["direction"] == "input"]
     bundled_inputs = [event for event in terminal_inputs if event["external_event_id"].endswith(":site_bundle")]
     assert len(bundled_inputs) == 1
     bundled_event = bundled_inputs[0]
@@ -3302,10 +3302,10 @@ def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> No
     assert any(call.get("attachments") == "panel.png,startup.mp4" for call in fake_inference.calls)
 
     assert review_response.status_code == 200
-    review_terminal_event = next(
+    review_run_event = next(
         event for event in review_response.json()["replay"]["run_events"] if event["id"] == bundled_event["id"]
     )
-    assert [part["part_id"] for part in review_terminal_event["parts"]] == ["text_1", "image_1", "video_1"]
+    assert [part["part_id"] for part in review_run_event["parts"]] == ["text_1", "image_1", "video_1"]
 
     assert fork_response.status_code == 201
     forked_parts = next(event for event in fork_response.json()["timeline"]["events"] if event["id"] == "fork_site_bundle")["parts"]
@@ -3379,7 +3379,7 @@ def test_skill_test_scenario_fork_uses_selected_timeline_time() -> None:
         scenario_run = start_response.json()
         fork_response = client.post(
             f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-scenario",
-            json={"cursor": {"time_ms": 4000, "terminal_seq": 7, "snapshot_seq": 3}, "name": "从 4s 继续"},
+            json={"cursor": {"time_ms": 4000, "run_event_seq": 7, "snapshot_seq": 3}, "name": "从 4s 继续"},
         )
 
     assert scenario_response.status_code == 201
@@ -3393,7 +3393,7 @@ def test_skill_test_scenario_fork_uses_selected_timeline_time() -> None:
     assert forked["duration_ms"] == 10000
     assert forked["timeline"]["duration_ms"] == 10000
     assert forked["fork_seed"]["time_ms"] == 4000
-    assert forked["fork_seed"]["terminal_seq"] == 7
+    assert forked["fork_seed"]["run_event_seq"] == 7
     assert [(event["id"], event["at_ms"]) for event in forked["timeline"]["events"]] == [
         ("fork_early_input", 1000),
         ("fork_middle_input", 3000),
@@ -3454,7 +3454,7 @@ def test_skill_test_scenario_run_can_be_cancelled() -> None:
             json={"reason": "用户终止测试"},
         )
         runtime_run_response = client.get(f"/api/v1/runs/{scenario_run['run_id']}")
-        terminal_session_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}")
+        terminal_session_response = client.get(f"/api/v1/runs/{scenario_run['run_id']}/terminal-session")
         jobs_response = client.get(
             "/api/v1/runtime/jobs",
             params={"job_type": LEGACY_SKILL_TEST_TIMELINE_DRIVER_JOB_TYPE},
@@ -3630,7 +3630,7 @@ def test_skill_test_scenario_sensor_timeline_review_stage_outputs_and_fork() -> 
 
         start_response = client.post(f"/api/v1/pskills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
         scenario_run = start_response.json()
-        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}/events")
+        run_events_response = client.get(f"/api/v1/runs/{scenario_run['run_id']}/events")
         review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
         stage_output = review_response.json()["stage_outputs"][0]
         fork_response = client.post(
@@ -3653,8 +3653,8 @@ def test_skill_test_scenario_sensor_timeline_review_stage_outputs_and_fork() -> 
     assert reloaded_response.json()["timeline"]["events"][0]["payload_inline"]["accuracy_m"] == 2.5
 
     assert start_response.status_code == 202
-    terminal_events = terminal_events_response.json()
-    sensor_events = [event for event in terminal_events if event["event_kind"].startswith("sensor.")]
+    run_events = run_events_response.json()
+    sensor_events = [event for event in run_events if event["event_kind"].startswith("sensor.")]
     assert [event["event_kind"] for event in sensor_events] == ["sensor.gps.reading.v1", "sensor.pose3d.reading.v1"]
     assert sensor_events[0]["payload_inline"]["accuracy_m"] == 2.5
     assert sensor_events[1]["payload_inline"]["yaw"] == 90.0
@@ -3665,15 +3665,15 @@ def test_skill_test_scenario_sensor_timeline_review_stage_outputs_and_fork() -> 
     assert stage_output["expectation"] == "系统应基于定位和现场输入确认到达目标设备。"
     assert stage_output["actual_outputs"]
     assert stage_output["actual_outputs"][0]["run_event_id"]
-    assert stage_output["actual_outputs"][0]["run_event_id"] == stage_output["actual_outputs"][0]["terminal_event_id"]
+    assert "terminal_event_id" not in stage_output["actual_outputs"][0]
     assert stage_output["judge_result"]["status"] == "passed"
     assert stage_output["human_review"] == {"status": "pending", "reviewer": None, "reason": "", "updated_at": None}
     assert stage_output["cursor"]["time_ms"] == 5000
-    assert stage_output["cursor"]["terminal_seq"] >= 3
+    assert stage_output["cursor"]["run_event_seq"] >= 3
 
     assert fork_response.status_code == 201
     assert fork_response.json()["fork_seed"]["time_ms"] == 5000
-    assert fork_response.json()["fork_seed"]["terminal_seq"] == stage_output["cursor"]["terminal_seq"]
+    assert fork_response.json()["fork_seed"]["run_event_seq"] == stage_output["cursor"]["run_event_seq"]
 
 
 def test_skill_test_judge_prompt_compacts_large_outputs() -> None:
@@ -3726,8 +3726,8 @@ def test_skill_test_judge_prompt_compacts_large_outputs() -> None:
 def test_skill_test_judge_evidence_refs_use_runtime_names() -> None:
     assert SkillTestService._normalize_judge_evidence_refs(
         [
-            {"kind": "terminal_event", "seq_no": 1},
-            {"kind": "trace_event", "id": "trace-1"},
+            {"kind": "run_event", "seq_no": 1},
+            {"kind": "run_trace", "id": "trace-1"},
             {"kind": "artifact", "id": "artifact-1"},
             "invalid",
         ]

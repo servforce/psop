@@ -1283,8 +1283,7 @@
       ]) || "").trim();
       const runTraceId = this.toolAuthorizationFirstNestedValue(authorization, [
         "run_trace_id",
-        "trace_id",
-        "trace_event_id"
+        "trace_id"
       ]);
       const snapshotSeq = this.toolAuthorizationFirstNestedValue(authorization, [
         "snapshot_seq",
@@ -1717,12 +1716,6 @@
 
     governanceNormalizeEvidenceKind(kind) {
       const value = String(kind || "").trim().toLowerCase();
-      if (value === "terminal_event") {
-        return "run_event";
-      }
-      if (value === "trace_event") {
-        return "run_trace";
-      }
       return value;
     },
 
@@ -1731,7 +1724,7 @@
         return {};
       }
       const kind = this.governanceNormalizeEvidenceKind(ref.kind || ref.source_kind);
-      const traceId = String(ref.trace_id || ref.run_trace_id || ref.trace_event_id || "").trim();
+      const traceId = String(ref.trace_id || ref.run_trace_id || "").trim();
       if (traceId) {
         return { trace_id: traceId };
       }

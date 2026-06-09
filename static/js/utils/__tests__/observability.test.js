@@ -143,7 +143,6 @@ test("observability methods load global metrics with the selected window", async
       window_hours: 72,
       run_id: "",
       run_trace_event_type: "",
-      trace_event_type: "",
       agent_run_id: ""
     },
     observabilityMetrics: null,
@@ -204,8 +203,7 @@ test("observability methods query run traces with optional event type", async ()
     observabilityFilters: {
       window_hours: 24,
       run_id: "run 1",
-      run_trace_event_type: "runtime.failed",
-      trace_event_type: ""
+      run_trace_event_type: "runtime.failed"
     },
     observabilityRunTraces: [],
     observabilityTraceLookupRunId: "",
@@ -236,8 +234,7 @@ test("observability methods query global run traces when run id is empty", async
     observabilityFilters: {
       window_hours: 72,
       run_id: "",
-      run_trace_event_type: "runtime.failed",
-      trace_event_type: ""
+      run_trace_event_type: "runtime.failed"
     },
     observabilityRunTraces: [],
     observabilityTraceLookupRunId: "",
@@ -257,36 +254,9 @@ test("observability methods query global run traces when run id is empty", async
 
   expect(context.observabilityFilters.run_id).toBe("");
   expect(context.observabilityFilters.run_trace_event_type).toBe("runtime.completed");
-  expect(context.observabilityFilters.trace_event_type).toBe("");
   expect(context.apiRequest).toHaveBeenLastCalledWith(
     "/observability/run-traces?run_trace_event_type=runtime.completed&window_hours=72&limit=50"
   );
-});
-
-test("observability run trace query accepts legacy trace event filter state", async () => {
-  const methods = loadObservabilityMethods();
-  const traces = [{ id: "trace-legacy", run_id: "run-1", event_type: "runtime.failed", payload: {} }];
-  const context = {
-    ...methods,
-    busy: { observabilityTraceLookup: false },
-    observabilityFilters: {
-      window_hours: 24,
-      run_id: "",
-      run_trace_event_type: "",
-      trace_event_type: "runtime.failed"
-    },
-    observabilityRunTraces: [],
-    observabilityTraceLookupRunId: "",
-    apiRequest: jest.fn(async () => traces),
-    showNotice: jest.fn()
-  };
-
-  await methods.loadObservabilityRunTraces.call(context);
-
-  expect(context.apiRequest).toHaveBeenCalledWith(
-    "/observability/run-traces?run_trace_event_type=runtime.failed&window_hours=24&limit=50"
-  );
-  expect(context.observabilityRunTraces).toEqual(traces);
 });
 
 test("observability methods query global run events from distribution filters", async () => {
@@ -725,7 +695,6 @@ test("observability methods query agent run observability streams", async () => 
       window_hours: 24,
       run_id: "",
       run_trace_event_type: "",
-      trace_event_type: "",
       agent_run_id: "agent run 1"
     },
     observabilityAgentRunDetail: null,

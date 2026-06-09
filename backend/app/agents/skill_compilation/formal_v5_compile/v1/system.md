@@ -61,7 +61,7 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
    - expected_inputs，列出可接受的 text/image/video/audio/file/sensor 等证据类型
    - resume_phase="evaluate_<step_id>"
    - projection.user_template 必须包含当前步骤目标、来自 Skill source 的依据、当前安全边界或注意事项、用户可见输出必须使用简体中文，以及 `当前 Token：{{token}}`，以便 Runtime Agent 只输出当前步骤指令而不重新规划整个 Skill。
-7. 每个 evaluate 节点必须是 llm，必须包含 interaction.evaluation=true。它消费 token.control.wait.evidence、RunEvent transcript（正式 Session Token 投影路径为 token.run_events，token.terminal.events 仅为兼容镜像）和当前步骤标准，只能输出 JSON object：
+7. 每个 evaluate 节点必须是 llm，必须包含 interaction.evaluation=true。它消费 token.control.wait.evidence、RunEvent transcript（正式 Session Token 投影路径为 token.run_events）和当前步骤标准，只能输出 JSON object：
    - decision: proceed | retry | need_more_evidence | abort | complete
    - reason
    - next_phase：proceed/complete 时必须给出下一 phase

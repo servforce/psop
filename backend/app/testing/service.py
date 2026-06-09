@@ -683,8 +683,7 @@ class SkillTestService:
                     "actual_sent_at": actual_sent_at.isoformat(),
                     "drift_ms": max(0, int((actual_sent_at - scheduled_at).total_seconds() * 1000)),
                     "run_event_id": append_response.event_id,
-                    "terminal_event_id": append_response.event_id,
-                    "terminal_seq": append_response.seq_no,
+                    "run_event_seq": append_response.seq_no,
                 }
             )
             scenario_run.driver_events = driver_events
@@ -800,7 +799,7 @@ class SkillTestService:
             "source_scenario_run_id": source_run.id,
             "source_run_id": source_run.run_id,
             "snapshot_seq": cursor.snapshot_seq,
-            "terminal_seq": cursor.terminal_seq,
+            "run_event_seq": cursor.run_event_seq,
             "time_ms": cursor.time_ms,
         }
         scenario = SkillTestScenario(
@@ -851,7 +850,7 @@ class SkillTestService:
             session,
             source_run_id=source_run.run_id,
             snapshot_seq=payload.cursor.snapshot_seq,
-            terminal_seq=payload.cursor.terminal_seq,
+            run_event_seq=payload.cursor.run_event_seq,
             terminal_context=terminal_context,
             input_envelope={},
         )
@@ -1010,7 +1009,7 @@ class SkillTestService:
             session,
             source_run_id=str(source_run_id),
             snapshot_seq=int(seed.get("snapshot_seq") or 0),
-            terminal_seq=int(seed.get("terminal_seq") or 0),
+            run_event_seq=int(seed.get("run_event_seq") or 0),
             terminal_context=terminal_context,
             input_envelope={
                 "pskill_test_scenario_id": scenario.id,
@@ -2455,19 +2454,11 @@ class SkillTestService:
     def _normalize_judge_evidence_refs(value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, list):
             return []
-        kind_aliases = {
-            "terminal_event": "run_event",
-            "trace_event": "run_trace",
-        }
         normalized: list[dict[str, Any]] = []
         for item in value:
             if not isinstance(item, dict):
                 continue
-            ref = dict(item)
-            kind = ref.get("kind")
-            if isinstance(kind, str):
-                ref["kind"] = kind_aliases.get(kind, kind)
-            normalized.append(ref)
+            normalized.append(dict(item))
         return normalized
 
     @classmethod
@@ -2827,7 +2818,6 @@ class SkillTestService:
         return SkillTestStageActualOutputResponse(
             id=f"stage_output_{event_id}",
             run_event_id=event_id,
-            terminal_event_id=event_id,
             seq_no=int(seq_no) if seq_no is not None else None,
             at_ms=self._run_event_at_ms(scenario_run, event),
             occurred_at=self._coerce_datetime(self._event_value(event, "occurred_at")),
@@ -2862,8 +2852,6 @@ class SkillTestService:
     @staticmethod
     def _replay_run_events(replay: Any) -> list[Any]:
         run_events = getattr(replay, "run_events", None)
-        if run_events is None:
-            run_events = getattr(replay, "terminal_events", [])
         return list(run_events or [])
 
     def _cursor_for_time_ms(self, time_ms: int, cursor_anchors: list[dict[str, Any]]) -> dict[str, int]:
@@ -2871,7 +2859,7 @@ class SkillTestService:
         eligible = [item for item in cursor_anchors if int(item.get("time_ms") or 0) <= cutoff_ms]
         return {
             "time_ms": cutoff_ms,
-            "terminal_seq": max([int(item.get("terminal_seq") or 0) for item in eligible] or [0]),
+            "run_event_seq": max([int(item.get("run_event_seq") or 0) for item in eligible] or [0]),
             "snapshot_seq": max([int(item.get("snapshot_seq") or 0) for item in eligible] or [0]),
         }
 
@@ -2882,19 +2870,19 @@ class SkillTestService:
         snapshots = sorted(replay.snapshots, key=lambda item: item.seq_no)
         anchors: list[dict[str, Any]] = []
         latest_snapshot_seq = 0
-        latest_terminal_seq = 0
+        latest_run_event_seq = 0
         for item in replay.timeline:
             occurred_at = self._aware_datetime(item.occurred_at)
             while snapshots and self._aware_datetime(snapshots[0].created_at) <= occurred_at:
                 latest_snapshot_seq = snapshots.pop(0).seq_no
             payload = item.payload if isinstance(item.payload, dict) else {}
             if item.event_type in {"run.event.appended", "terminal.event.appended"}:
-                latest_terminal_seq = max(latest_terminal_seq, int(payload.get("seq_no") or 0))
+                latest_run_event_seq = max(latest_run_event_seq, int(payload.get("seq_no") or 0))
             anchors.append(
                 {
                     "time_ms": max(0, int((occurred_at - origin).total_seconds() * 1000)),
                     "occurred_at": item.occurred_at.isoformat(),
-                    "terminal_seq": latest_terminal_seq,
+                    "run_event_seq": latest_run_event_seq,
                     "snapshot_seq": latest_snapshot_seq,
                     "event_type": item.event_type,
                 }

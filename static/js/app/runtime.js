@@ -145,7 +145,7 @@
           this.liveRunTerminalSession = this.liveRunTerminalSessionFromRun(run);
           this.liveRunEvents = window.PSOPRuntimeEvents.mergeBySeq([], runEvents);
           this.liveRunToolAuthorizations = Array.isArray(toolAuthorizations) ? toolAuthorizations : [];
-          this.updateLiveRunLatestTerminalSeq();
+          this.updateLiveRunLatestRunEventSeq();
           this.ensureLiveRunProcessSelection();
           this.scrollRunEventTranscriptToBottom();
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], traceEvents);
@@ -436,7 +436,7 @@
           this.replayDetail.run = { ...this.replayDetail.run, ...run };
         }
         this.liveRunTerminalSession = this.liveRunTerminalSessionFromRun(this.liveRun);
-        this.updateLiveRunLatestTerminalSeq();
+        this.updateLiveRunLatestRunEventSeq();
       },
 
 
@@ -451,7 +451,7 @@
           ? this.liveRunEvents.filter((event) => !realIncomingSeqs.has(Number(event.seq_no)))
           : this.liveRunEvents;
         this.liveRunEvents = window.PSOPRuntimeEvents.mergeBySeq(baseEvents, incoming);
-        this.updateLiveRunLatestTerminalSeq();
+        this.updateLiveRunLatestRunEventSeq();
         this.ensureLiveRunProcessSelection();
         this.scrollRunEventTranscriptToBottom();
       },
@@ -522,23 +522,22 @@
       },
 
 
-      updateLiveRunLatestTerminalSeq() {
+      updateLiveRunLatestRunEventSeq() {
         if (!this.liveRun) {
           return;
         }
         const eventSeqs = this.liveRunEvents.map((event) => Number(event.seq_no) || 0);
         const latestSeq = eventSeqs.length
           ? Math.max(...eventSeqs)
-          : Number(this.liveRun.latest_run_event_seq || this.liveRun.latest_terminal_seq || 0);
+          : Number(this.liveRun.latest_run_event_seq || 0);
         this.liveRun.latest_run_event_seq = latestSeq || 0;
-        this.liveRun.latest_terminal_seq = latestSeq || 0;
       },
 
 
-      nextOptimisticTerminalSeq() {
+      nextOptimisticRunEventSeq() {
         return (
           Math.max(
-            Number(this.liveRun?.latest_run_event_seq || this.liveRun?.latest_terminal_seq || 0),
+            Number(this.liveRun?.latest_run_event_seq || 0),
             ...this.liveRunEvents.map((event) => Number(event.seq_no) || 0)
           ) + 1
         );
@@ -644,7 +643,7 @@
           mime_type: "multipart/mixed",
           payload_inline: textPayload || attachments.map((attachment) => attachment.file?.name || "").filter(Boolean).join("\n"),
           parts,
-          seq_no: this.nextOptimisticTerminalSeq(),
+          seq_no: this.nextOptimisticRunEventSeq(),
           external_event_id: id,
           source_ref: {
             kind: "web",
@@ -660,7 +659,7 @@
 
       removeOptimisticRunEvent(eventId) {
         this.liveRunEvents = this.liveRunEvents.filter((event) => event.id !== eventId);
-        this.updateLiveRunLatestTerminalSeq();
+        this.updateLiveRunLatestRunEventSeq();
       },
 
 
@@ -1756,8 +1755,7 @@
         ]);
         const runTraceId = this.liveRunToolAuthorizationFirstNestedValue(authorization, [
           "run_trace_id",
-          "trace_id",
-          "trace_event_id"
+          "trace_id"
         ]);
         const snapshotSeq = this.liveRunToolAuthorizationFirstNestedValue(authorization, [
           "snapshot_seq",
@@ -2056,7 +2054,6 @@
               payload.event_id ||
               payload.run_event_id ||
               payload.run_trace_id ||
-              payload.trace_event_id ||
               payload.trace_id ||
               ""
           ).trim();
@@ -2617,12 +2614,6 @@
 
       liveRunReplayNormalizeEvidenceKind(kind) {
         const value = String(kind || "").trim().toLowerCase();
-        if (value === "trace_event") {
-          return "run_trace";
-        }
-        if (value === "terminal_event") {
-          return "run_event";
-        }
         return value;
       },
 
@@ -2648,7 +2639,6 @@
           payload.event_id,
           payload.run_event_id,
           payload.run_trace_id,
-          payload.trace_event_id,
           payload.trace_id
         ]
           .map((value) => String(value || "").trim())

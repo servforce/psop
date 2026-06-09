@@ -571,7 +571,6 @@ test("run live websocket events update replay timeline evidence incrementally", 
     runtime_phase: "completed",
     latest_snapshot_seq: 2,
     latest_run_event_seq: 2,
-    latest_terminal_seq: 2,
     latest_trace_seq: 3,
     current_step: "",
     wait_reason: "",
@@ -1093,15 +1092,12 @@ test("run replay finding evidence refs select matching timeline item", () => {
 
   const traceRef = { kind: "run_trace", id: "trace-1", event_type: "runtime.failed" };
   const eventRef = { kind: "run_event", id: "event-1", event_kind: "agent_output" };
-  const legacyEventRef = { kind: "terminal_event", id: "event-1", event_kind: "agent_output" };
 
   expect(methods.liveRunReplayEvidenceRefs({ evidence_refs: [traceRef] })).toEqual([traceRef]);
   expect(methods.liveRunReplayEvidenceRefLabel(traceRef)).toBe("run_trace:runtime.failed");
   expect(methods.liveRunReplayTraceTitle({ event_type: "gateway.inference.failed" })).toBe("LLM 失败");
-  expect(methods.liveRunReplayEvidenceRefLabel(legacyEventRef)).toBe("run_event:agent_output");
   expect(methods.liveRunReplayFindEvidenceItem.call(context, traceRef)).toBe(traceItem);
   expect(methods.liveRunReplayFindEvidenceItem.call(context, eventRef)).toBe(eventItem);
-  expect(methods.liveRunReplayFindEvidenceItem.call(context, legacyEventRef)).toBe(eventItem);
   expect(methods.liveRunReplayEvidenceRefClass.call(context, traceRef)).toContain("text-sky-200");
 
   expect(methods.selectLiveRunReplayEvidenceRef.call(context, traceRef)).toBe(traceItem);
