@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "required": ["overall_outcome", "quality_score", "summary", "attribution", "findings"],
+  "properties": {
+    "overall_outcome": {
+      "type": "string",
+      "enum": ["success", "completed_with_issues", "failed", "aborted", "cancelled"]
+    },
+    "quality_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "summary": {"type": "string"},
+    "attribution": {"type": "object"},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["category", "severity", "confidence", "description", "evidence_refs", "recommended_action"],
+        "properties": {
+          "category": {"type": "string"},
+          "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+          "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+          "description": {"type": "string"},
+          "evidence_refs": {"type": "array", "items": {"type": "object"}},
+          "recommended_action": {"type": "string"}
+        }
+      }
+    }
+  }
+}

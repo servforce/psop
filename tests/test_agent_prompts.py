@@ -28,6 +28,8 @@ def test_agent_prompt_seed_creates_default_bindings_and_db_registry_priority() -
             assert "pskill.compile.formal_v5" in bindings
             assert "pskill.test.pre_publish" in bindings
             assert "pskill.run.node" in bindings
+            assert "pskill.evaluate.run" in bindings
+            assert "psop.governance.proposal" in bindings
             assert "default.compile_agent" in bindings
             assert "default.skill_creation_agent" in bindings
             assert "skill_test.semantic_judge" in bindings

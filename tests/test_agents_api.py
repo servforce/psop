@@ -1260,14 +1260,15 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
         events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
 
         authorization = authorizations_response.json()[0]
-        approve_response = client.post(
-            f"/api/v1/tool-authorizations/{authorization['id']}/approve",
-            json={"response_payload": {"approved_by": "tester"}},
-        )
         with client.websocket_connect("/ws/tool-authorizations") as tool_authorization_ws:
             executed_tool_authorization_ws_connected = tool_authorization_ws.receive_json()
-            resumed_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+            approve_response = client.post(
+                f"/api/v1/tool-authorizations/{authorization['id']}/approve",
+                json={"response_payload": {"approved_by": "tester"}},
+            )
+            approved_tool_authorization_ws_message = tool_authorization_ws.receive_json()
             executed_tool_authorization_ws_message = tool_authorization_ws.receive_json()
+        resumed_response = client.get(f"/api/v1/agent-runs/{agent_run_id}")
         executed_authorization_response = client.get(f"/api/v1/tool-authorizations/{authorization['id']}")
         resumed_tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
         resumed_events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
@@ -1321,13 +1322,15 @@ def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authoriza
     assert memory_event["payload"]["used_as_runtime_state"] is False
 
     assert approve_response.status_code == 200
-    assert approve_response.json()["status"] == "approved"
+    assert approve_response.json()["status"] == "executed"
     assert executed_tool_authorization_ws_connected["event_type"] == "ws.connected"
     assert resumed_response.status_code == 200
     assert resumed_response.json()["status"] == "succeeded"
     assert resumed_response.json()["output_payload"]["tool_result"]["tool_name"] == "psop.agent_version.activate"
     assert resumed_response.json()["output_payload"]["tool_result"]["result"]["version_id"] == draft_version["id"]
     assert executed_authorization_response.json()["status"] == "executed"
+    assert approved_tool_authorization_ws_message["event_type"] == "tool.authorization_approved"
+    assert approved_tool_authorization_ws_message["authorization_id"] == authorization["id"]
     assert executed_tool_authorization_ws_message["event_type"] == "tool.authorization_executed"
     assert executed_tool_authorization_ws_message["authorization_id"] == authorization["id"]
     assert executed_tool_authorization_ws_message["payload"]["status"] == "executed"
@@ -1411,7 +1414,7 @@ def test_agent_runner_executes_authorized_skill_version_activation_tool() -> Non
             f"/api/v1/tool-authorizations/{authorization['id']}/approve",
             json={"response_payload": {"approved_by": "tester"}},
         )
-        resumed_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        resumed_response = client.get(f"/api/v1/agent-runs/{agent_run_id}")
         after_response = client.get("/api/v1/skills/pskill-builder")
         tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
         executed_authorization_response = client.get(f"/api/v1/tool-authorizations/{authorization['id']}")
@@ -1423,6 +1426,7 @@ def test_agent_runner_executes_authorized_skill_version_activation_tool() -> Non
     assert first_run_response.json()["status"] == "waiting_tool_authorization"
     assert authorization["tool_name"] == "psop.skill_version.activate"
     assert approve_response.status_code == 200
+    assert approve_response.json()["status"] == "executed"
     assert resumed_response.status_code == 200
     assert resumed_response.json()["status"] == "succeeded"
     assert resumed_response.json()["output_payload"]["tool_result"]["result"]["version_id"] == candidate_version_id
@@ -2013,14 +2017,14 @@ def test_agent_runner_records_authorized_tool_execution_failure_event() -> None:
             f"/api/v1/tool-authorizations/{authorization['id']}/approve",
             json={"response_payload": {"approved_by": "tester"}},
         )
-        resumed_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        resumed_response = client.get(f"/api/v1/agent-runs/{agent_run_id}")
         executed_authorization_response = client.get(f"/api/v1/tool-authorizations/{authorization['id']}")
         tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
         events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
 
     assert run_response.status_code == 201
     assert first_run_response.json()["status"] == "waiting_tool_authorization"
-    assert approve_response.json()["status"] == "approved"
+    assert approve_response.json()["status"] == "executed"
     assert resumed_response.status_code == 200
     assert resumed_response.json()["status"] == "failed"
     assert "缺少 agent_key 或 version_id" in resumed_response.json()["error_message"]

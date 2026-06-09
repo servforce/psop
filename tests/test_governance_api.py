@@ -124,7 +124,12 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
     assert output_trace_ref["source_finding_id"] == finding["id"]
     assert output_trace_ref["source_evaluation_id"] == evaluation["id"]
     assert output_trace_ref["source_run_id"] == run_id
+    governance_prompt = agent_run["input_payload"]["agent_prompt"]
+    assert governance_prompt["definition_key"] == "governance.proposal"
+    assert governance_prompt["agent_id"] == "psop.governance.proposal"
     assert agent_model_calls[0]["provider"] == "deterministic"
+    assert agent_model_calls[0]["route_key"] == "text"
+    assert agent_model_calls[0]["request_payload"]["agent_prompt"]["definition_key"] == "governance.proposal"
     assert agent_authorizations == []
     assert {
         "agent.run.created",
@@ -178,6 +183,17 @@ def test_governance_api_creates_proposal_from_finding_and_tracks_business_states
     memory_events = [item for item in final_agent_events if item["event_type"] == "governance.memory_candidates.written"]
     assert len(memory_events) >= 2
     assert all(event["payload"]["used_as_runtime_state"] is False for event in memory_events)
+    final_event_types = {item["event_type"] for item in final_agent_events}
+    assert {
+        "governance.proposal.tests_completed",
+        "governance.proposal.review_submitted",
+        "governance.proposal.canary_activated",
+        "governance.proposal.rolled_back",
+    } <= final_event_types
+    review_event = next(item for item in final_agent_events if item["event_type"] == "governance.proposal.review_submitted")
+    assert review_event["payload"]["hitl_kind"] == "business_review"
+    assert review_event["payload"]["agent_run_waiting"] is False
+    assert review_event["payload"]["decision"] == "approved"
 
 
 def test_governance_api_creates_manual_proposal_with_agent_run() -> None:
@@ -356,3 +372,6 @@ def test_governance_proposal_activity_websocket_streams_proposal_snapshot() -> N
     assert updated_payload["proposal"]["experiments"][0]["status"] == "succeeded"
     assert updated_payload["memory_entries"][0]["memory_type"] == "artifact"
     assert updated_payload["memory_entries"][0]["agent_key"] == "psop.governance"
+    assert "governance.proposal.tests_completed" in {
+        item["event_type"] for item in updated_payload["agent_events"]
+    }

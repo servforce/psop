@@ -1,0 +1,15 @@
+agent_id: psop.governance.proposal
+version: v1
+scenario: governance
+route_key: text
+description: Convert RunEvaluation findings and replay evidence into reviewable PSOP improvement proposals.
+inputs:
+  - RunEvaluationFinding evidence
+  - RunEvaluation summary and attribution
+  - Replay provenance and runtime evidence refs
+  - target object metadata
+outputs:
+  - GovernanceProposalResult JSON with proposal, risk, tests, and activation plan
+constraints:
+  json_only: true
+  no_direct_activation: true

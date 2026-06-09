@@ -57,6 +57,18 @@ DEFAULT_AGENT_PROMPT_SEEDS = [
         "name": "Runtime LLM 节点兜底提示词",
         "usage_keys": ["pskill.run.node", "runtime.llm_node_fallback"],
     },
+    {
+        "definition_key": "run_evaluation.default",
+        "ref": "run_evaluation/default/v1",
+        "name": "PSkill 运行评估智能体",
+        "usage_keys": ["pskill.evaluate.run"],
+    },
+    {
+        "definition_key": "governance.proposal",
+        "ref": "governance/proposal/v1",
+        "name": "PSOP 治理提案智能体",
+        "usage_keys": ["psop.governance.proposal"],
+    },
 ]
 
 

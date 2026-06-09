@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agent_prompts.service import AgentPromptService
 from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
 from app.agents.service import AgentService
 from app.evaluations.evidence import finding_evidence_refs, finding_source_ref
@@ -38,6 +39,8 @@ VALID_FINDING_CATEGORIES = {
 VALID_FINDING_SEVERITIES = {"low", "medium", "high", "critical"}
 VALID_EVALUATION_OUTCOMES = {"success", "completed_with_issues", "failed", "aborted", "cancelled"}
 SEVERITY_PENALTIES = {"low": 5, "medium": 12, "high": 24, "critical": 40}
+EVALUATOR_PROMPT_USAGE_KEY = "pskill.evaluate.run"
+EVALUATOR_PROMPT_FALLBACK_REF = "run_evaluation/default/v1"
 
 
 class EvaluationService:
@@ -48,11 +51,13 @@ class EvaluationService:
         agent_service: AgentService | None = None,
         job_repository: JobRepository | None = None,
         memory_service: MemoryService | None = None,
+        agent_prompt_service: AgentPromptService | None = None,
     ) -> None:
         self.repository = repository or EvaluationRepository()
         self.agent_service = agent_service or AgentService()
         self.job_repository = job_repository or JobRepository()
         self.memory_service = memory_service or MemoryService()
+        self.agent_prompt_service = agent_prompt_service or AgentPromptService()
 
     def create_run_evaluation(self, session: Session, run_id: str) -> RunEvaluationResponse:
         run = self._get_terminal_run(session, run_id)
@@ -555,6 +560,12 @@ class EvaluationService:
         run: Run,
         facts: dict[str, Any],
     ) -> str:
+        prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
+            session,
+            usage_key=EVALUATOR_PROMPT_USAGE_KEY,
+            fallback_ref=EVALUATOR_PROMPT_FALLBACK_REF,
+        )
+        prompt_metadata = prompt_pack.metadata()
         agent_run = self.agent_service.create_run(
             session,
             CreateAgentRunRequest(
@@ -570,6 +581,7 @@ class EvaluationService:
                     "pskill_version_id": run.pskill_version_id,
                     "artifact_id": run.compile_artifact_id,
                     "facts": facts,
+                    "agent_prompt": prompt_metadata,
                 },
             ),
             commit=False,
@@ -583,7 +595,7 @@ class EvaluationService:
             AppendAgentEventRequest(
                 event_type="evaluation.run.started",
                 phase="evaluation",
-                payload={"evaluation_id": evaluation_id, "run_id": run.id},
+                payload={"evaluation_id": evaluation_id, "run_id": run.id, "agent_prompt": prompt_metadata},
             ),
             commit=False,
         )
@@ -597,14 +609,22 @@ class EvaluationService:
         evaluation: RunEvaluation,
         output_payload: dict[str, Any],
     ) -> None:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        prompt_metadata = {}
+        if isinstance(agent_run.input_payload, dict) and isinstance(agent_run.input_payload.get("agent_prompt"), dict):
+            prompt_metadata = dict(agent_run.input_payload["agent_prompt"])
         self.agent_service.record_model_call(
             session,
             agent_run_id=agent_run_id,
             provider="deterministic",
-            route_key="json",
+            route_key=str(prompt_metadata.get("route_key") or "text"),
             model_name="pskill-evaluator-deterministic",
             status="succeeded",
-            request_payload={"evaluation_id": evaluation.id, "run_id": evaluation.run_id},
+            request_payload={
+                "evaluation_id": evaluation.id,
+                "run_id": evaluation.run_id,
+                "agent_prompt": prompt_metadata,
+            },
             response_payload=output_payload,
             usage_json={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
             commit=False,
@@ -615,11 +635,14 @@ class EvaluationService:
             AppendAgentEventRequest(
                 event_type="evaluation.agent.model_call.completed",
                 phase="evaluation",
-                payload={"evaluation_id": evaluation.id, "quality_score": evaluation.quality_score},
+                payload={
+                    "evaluation_id": evaluation.id,
+                    "quality_score": evaluation.quality_score,
+                    "agent_prompt": prompt_metadata,
+                },
             ),
             commit=False,
         )
-        agent_run = self.agent_service.get_run_model(session, agent_run_id)
         agent_run.status = "succeeded"
         agent_run.output_payload = output_payload
         agent_run.error_message = ""

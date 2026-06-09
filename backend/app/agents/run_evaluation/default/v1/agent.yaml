@@ -1,0 +1,15 @@
+agent_id: psop.run_evaluation.default
+version: v1
+scenario: run_evaluation
+route_key: text
+description: Evaluate completed PSOP Runs from replay facts, score quality, attribute failures, and produce actionable findings.
+inputs:
+  - Run replay provenance
+  - run_event and run_trace facts
+  - AgentEvent, ModelCall, ToolCall, ToolAuthorization evidence
+  - PSkill and compile artifact metadata
+outputs:
+  - RunEvaluationResult JSON with score, attribution, findings, and memory candidates
+constraints:
+  json_only: true
+  runtime_state_source: replay_facts_only

@@ -327,6 +327,7 @@ async def approve_tool_authorization(
     session: Session = Depends(get_db_session),
     service: AgentService = Depends(get_agent_service),
     runtime_service: RuntimeService = Depends(get_runtime_service),
+    runner: AgentRunner = Depends(get_agent_runner),
 ) -> AgentToolAuthorizationResponse:
     authorization = service.approve_tool_authorization(session, authorization_id, payload or ToolAuthorizationDecisionRequest())
     await _broadcast_tool_authorization_change(
@@ -335,6 +336,9 @@ async def approve_tool_authorization(
         authorization=authorization,
         action="approved",
     )
+    if authorization.agent_tool_call_id:
+        runner.run_once(session, authorization.agent_run_id)
+        return service.get_tool_authorization(session, authorization_id)
     return authorization
 
 

@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "required": [
+    "proposal_type",
+    "target",
+    "problem_statement",
+    "evidence_refs",
+    "proposed_changes",
+    "risk_assessment",
+    "required_tests",
+    "activation_plan"
+  ],
+  "properties": {
+    "proposal_type": {"type": "string"},
+    "target": {"type": "object"},
+    "problem_statement": {"type": "string"},
+    "evidence_refs": {"type": "array", "items": {"type": "object"}},
+    "proposed_changes": {"type": "array", "items": {"type": "object"}},
+    "risk_assessment": {"type": "object"},
+    "required_tests": {"type": "array", "items": {"type": "object"}},
+    "activation_plan": {"type": "object"}
+  }
+}

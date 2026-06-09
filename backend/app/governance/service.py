@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agent_prompts.service import AgentPromptService
 from app.agents.schemas import AppendAgentEventRequest, CreateAgentRunRequest
 from app.agents.service import AgentService
 from app.evaluations.evidence import finding_evidence_refs, finding_source_ref
@@ -60,6 +61,8 @@ SEVERITY_TO_RISK = {
     "medium": "medium",
     "low": "low",
 }
+GOVERNANCE_PROMPT_USAGE_KEY = "psop.governance.proposal"
+GOVERNANCE_PROMPT_FALLBACK_REF = "governance/proposal/v1"
 
 
 class GovernanceService:
@@ -70,11 +73,13 @@ class GovernanceService:
         agent_service: AgentService | None = None,
         job_repository: JobRepository | None = None,
         memory_service: MemoryService | None = None,
+        agent_prompt_service: AgentPromptService | None = None,
     ) -> None:
         self.repository = repository or GovernanceRepository()
         self.agent_service = agent_service or AgentService()
         self.job_repository = job_repository or JobRepository()
         self.memory_service = memory_service or MemoryService()
+        self.agent_prompt_service = agent_prompt_service or AgentPromptService()
 
     def create_proposal(
         self,
@@ -400,6 +405,20 @@ class GovernanceService:
         )
         session.add(experiment)
         session.flush()
+        self._append_governance_agent_event(
+            session,
+            proposal=proposal,
+            event_type="governance.proposal.tests_completed",
+            phase="governance_testing",
+            payload={
+                "proposal_id": proposal.id,
+                "status": proposal.status,
+                "experiment_id": experiment.id,
+                "experiment_type": experiment.experiment_type,
+                "experiment_status": experiment.status,
+                "direct_activation_performed": False,
+            },
+        )
         self._write_governance_memory_candidates(
             session,
             proposal=proposal,
@@ -434,6 +453,20 @@ class GovernanceService:
                 "reviewed_at": now_utc().isoformat(),
             },
         }
+        self._append_governance_agent_event(
+            session,
+            proposal=proposal,
+            event_type="governance.proposal.review_submitted",
+            phase="governance_review",
+            payload={
+                "proposal_id": proposal.id,
+                "status": proposal.status,
+                "decision": decision or "reviewing",
+                "review_notes": payload.review_notes,
+                "hitl_kind": "business_review",
+                "agent_run_waiting": False,
+            },
+        )
         if proposal.status == "rejected":
             self._write_governance_memory_candidates(
                 session,
@@ -474,6 +507,20 @@ class GovernanceService:
             started_at=now_utc(),
         )
         session.add(experiment)
+        session.flush()
+        self._append_governance_agent_event(
+            session,
+            proposal=proposal,
+            event_type="governance.proposal.canary_activated",
+            phase="governance_canary",
+            payload={
+                "proposal_id": proposal.id,
+                "status": proposal.status,
+                "experiment_id": experiment.id,
+                "canary_scope": canary_scope,
+                "direct_activation_performed": False,
+            },
+        )
         session.commit()
         return self.get_proposal(session, proposal.id)
 
@@ -512,6 +559,18 @@ class GovernanceService:
             )
         )
         session.flush()
+        self._append_governance_agent_event(
+            session,
+            proposal=proposal,
+            event_type="governance.proposal.rolled_back",
+            phase="governance_rollback",
+            payload={
+                "proposal_id": proposal.id,
+                "status": proposal.status,
+                "rolled_back_at": now.isoformat(),
+                "direct_activation_performed": False,
+            },
+        )
         self._write_governance_memory_candidates(
             session,
             proposal=proposal,
@@ -525,6 +584,26 @@ class GovernanceService:
         )
         session.commit()
         return self.get_proposal(session, proposal.id)
+
+    def _append_governance_agent_event(
+        self,
+        session: Session,
+        *,
+        proposal: PsopImprovementProposal,
+        event_type: str,
+        phase: str,
+        payload: dict[str, Any],
+    ) -> None:
+        self.agent_service.append_event(
+            session,
+            proposal.agent_run_id,
+            AppendAgentEventRequest(
+                event_type=event_type,
+                phase=phase,
+                payload=payload,
+            ),
+            commit=False,
+        )
 
     def get_experiment(self, session: Session, experiment_id: str) -> GovernanceExperimentResponse:
         experiment = self.repository.get_experiment(session, experiment_id)
@@ -615,6 +694,12 @@ class GovernanceService:
         source_run_id: str | None,
         input_payload: dict[str, Any],
     ) -> str:
+        prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
+            session,
+            usage_key=GOVERNANCE_PROMPT_USAGE_KEY,
+            fallback_ref=GOVERNANCE_PROMPT_FALLBACK_REF,
+        )
+        prompt_metadata = prompt_pack.metadata()
         agent_run = self.agent_service.create_run(
             session,
             CreateAgentRunRequest(
@@ -622,7 +707,7 @@ class GovernanceService:
                 owner_type="governance_proposal",
                 owner_id=proposal_id,
                 run_id=source_run_id,
-                input_payload=input_payload,
+                input_payload={**input_payload, "agent_prompt": prompt_metadata},
             ),
             commit=False,
         )
@@ -635,7 +720,7 @@ class GovernanceService:
             AppendAgentEventRequest(
                 event_type="governance.proposal.started",
                 phase="governance",
-                payload={"proposal_id": proposal_id, "source_run_id": source_run_id},
+                payload={"proposal_id": proposal_id, "source_run_id": source_run_id, "agent_prompt": prompt_metadata},
             ),
             commit=False,
         )
@@ -649,14 +734,18 @@ class GovernanceService:
         proposal_id: str,
         output_payload: dict[str, Any],
     ) -> None:
+        agent_run = self.agent_service.get_run_model(session, agent_run_id)
+        prompt_metadata = {}
+        if isinstance(agent_run.input_payload, dict) and isinstance(agent_run.input_payload.get("agent_prompt"), dict):
+            prompt_metadata = dict(agent_run.input_payload["agent_prompt"])
         self.agent_service.record_model_call(
             session,
             agent_run_id=agent_run_id,
             provider="deterministic",
-            route_key="json",
+            route_key=str(prompt_metadata.get("route_key") or "text"),
             model_name="psop-governance-deterministic",
             status="succeeded",
-            request_payload={"proposal_id": proposal_id},
+            request_payload={"proposal_id": proposal_id, "agent_prompt": prompt_metadata},
             response_payload=output_payload,
             usage_json={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
             commit=False,
@@ -667,11 +756,14 @@ class GovernanceService:
             AppendAgentEventRequest(
                 event_type="governance.agent.model_call.completed",
                 phase="governance",
-                payload={"proposal_id": proposal_id, "proposal_type": output_payload.get("proposal_type")},
+                payload={
+                    "proposal_id": proposal_id,
+                    "proposal_type": output_payload.get("proposal_type"),
+                    "agent_prompt": prompt_metadata,
+                },
             ),
             commit=False,
         )
-        agent_run = self.agent_service.get_run_model(session, agent_run_id)
         agent_run.status = "succeeded"
         agent_run.output_payload = output_payload
         agent_run.error_message = ""
