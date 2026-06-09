@@ -14,6 +14,8 @@ class AgentHarnessEventTypes:
     MODEL_CALL_FAILED = "agent.model_call.failed"
     OUTPUT_GUARDRAIL_CHECKED = "agent.output_guardrail.checked"
     OUTPUT_GUARDRAIL_FAILED = "agent.output_guardrail.failed"
+    TOOL_GUARDRAIL_CHECKED = "agent.tool_guardrail.checked"
+    TOOL_GUARDRAIL_FAILED = "agent.tool_guardrail.failed"
     FINAL_OUTPUT = "agent.final_output"
     FAILED = "agent.failed"
     TOOL_CALL_BLOCKED = "agent.tool_call.blocked"

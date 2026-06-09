@@ -10,19 +10,20 @@ from sqlalchemy.orm import Session
 from app.agent_prompts.service import AgentPromptService
 from app.agent_harness.agent_decision import AgentDecision
 from app.agent_harness.events import AgentEventEmitter, AgentHarnessEventTypes
-from app.agent_harness.guardrails import InputGuardrail, OutputGuardrail
+from app.agent_harness.guardrails import InputGuardrail, OutputGuardrail, ToolGuardrail
+from app.agent_harness.memory import AgentMemoryHarness
 from app.agent_harness.model import AgentModelClient, AgentModelDecisionResult
 from app.agent_harness.planning import AgentPlanner
 from app.agent_harness.sandbox import normalize_sandbox_policy, sandbox_policy_summary
-from app.agent_harness.tools import ToolPolicy
+from app.agent_harness.skills import AgentSkillHarness
+from app.agent_harness.tools import AgentToolHarness, ToolPolicy
 from app.agents.models import AgentRun, AgentToolAuthorization
 from app.agents.schemas import (
     AppendAgentEventRequest,
-    CreateAgentToolCallRequest,
     CreateToolAuthorizationRequest,
     AgentRunResponse,
 )
-from app.agent_harness.definitions import AGENT_PROMPT_FALLBACKS, DEFAULT_AGENT_SKILLS
+from app.agent_harness.definitions import AGENT_PROMPT_FALLBACKS
 from app.agents.service import AgentService
 from app.compiler.formal_v5 import validate_and_normalize_artifact
 from app.compiler.service import CompilerService
@@ -30,7 +31,6 @@ from app.evaluations.service import EvaluationService
 from app.gateway.inference import LlmInferenceGateway
 from app.governance.schemas import GovernanceProposalCreateRequest
 from app.governance.service import GovernanceService
-from app.memory.schemas import MemorySearchRequest
 from app.memory.service import MemoryService
 from app.pskills.exceptions import SkillNotFoundError, SkillValidationError, SkillsConfigurationError, SkillsGatewayError
 from app.pskills.manifest import SkillDocument, document_from_manifest_snapshot, parse_skill_yaml, render_skill_yaml
@@ -66,6 +66,7 @@ class AgentRunner:
         governance_service: GovernanceService | None = None,
         input_guardrail: InputGuardrail | None = None,
         output_guardrail: OutputGuardrail | None = None,
+        tool_guardrail: ToolGuardrail | None = None,
         planner: AgentPlanner | None = None,
         inference_gateway: LlmInferenceGateway | None = None,
         model_client: AgentModelClient | None = None,
@@ -75,8 +76,11 @@ class AgentRunner:
         self.event_emitter = AgentEventEmitter(self.agent_service)
         self.skill_service = skill_service or SkillPackageService(repository=skill_repository)
         self.skill_repository = self.skill_service.repository
+        self.skill_harness = AgentSkillHarness(self.skill_service)
         self.tool_policy = tool_policy or ToolPolicy()
+        self.tool_harness = AgentToolHarness(self.tool_policy)
         self.memory_service = memory_service or MemoryService()
+        self.memory_harness = AgentMemoryHarness(self.memory_service)
         self.pskills_service = pskills_service
         self.compiler_service = compiler_service
         self.runtime_service = runtime_service
@@ -85,6 +89,7 @@ class AgentRunner:
         self.governance_service = governance_service or GovernanceService()
         self.input_guardrail = input_guardrail or InputGuardrail()
         self.output_guardrail = output_guardrail or OutputGuardrail()
+        self.tool_guardrail = tool_guardrail or ToolGuardrail()
         self.planner = planner or AgentPlanner()
         self.model_client = model_client or AgentModelClient(inference_gateway)
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
@@ -119,28 +124,24 @@ class AgentRunner:
             agent_key=agent_run.agent_key,
             input_payload=agent_run.input_payload,
         )
-        self.agent_service.append_event(
+        self.event_emitter.emit(
             session,
             agent_run.id,
-            AppendAgentEventRequest(
-                event_type="agent.input_guardrail.checked",
-                phase="guardrails",
-                payload=input_guardrail_result.as_event_payload(),
-            ),
+            event_type=AgentHarnessEventTypes.INPUT_GUARDRAIL_CHECKED,
+            phase="guardrails",
+            payload=input_guardrail_result.as_event_payload(),
             commit=False,
         )
         if not input_guardrail_result.passed:
             agent_run.status = "failed"
             agent_run.error_message = "input_guardrail_failed"
             agent_run.ended_at = now_utc()
-            self.agent_service.append_event(
+            self.event_emitter.emit(
                 session,
                 agent_run.id,
-                AppendAgentEventRequest(
-                    event_type="agent.input_guardrail.failed",
-                    phase="guardrails",
-                    payload={"findings": [item.as_dict() for item in input_guardrail_result.findings]},
-                ),
+                event_type=AgentHarnessEventTypes.INPUT_GUARDRAIL_FAILED,
+                phase="guardrails",
+                payload={"findings": [item.as_dict() for item in input_guardrail_result.findings]},
                 commit=False,
             )
             session.commit()
@@ -148,7 +149,7 @@ class AgentRunner:
 
         active_tools, active_skill_names = self._activate_skills(session, agent_run=agent_run, spec=spec)
         effective_allowed_tools = self._effective_allowed_tools(spec=spec, active_tools=active_tools)
-        skill_context = self.skill_service.hydrate_agent_run_skill_context(session, agent_run_id=agent_run.id)
+        skill_context = self.skill_harness.hydrate_context(session, agent_run_id=agent_run.id)
         self.event_emitter.emit(
             session,
             agent_run.id,
@@ -182,10 +183,10 @@ class AgentRunner:
             payload=sandbox_policy_summary(sandbox_policy, agent_key=agent_run.agent_key),
             commit=False,
         )
-        memory_context = self.memory_service.retrieve_context_for_agent(
+        memory_context = self.memory_harness.retrieve_context(
             session,
             agent_key=agent_run.agent_key,
-            limit=self._memory_context_limit(spec),
+            spec=spec,
         )
         self.event_emitter.emit(
             session,
@@ -254,14 +255,12 @@ class AgentRunner:
             usage_json=model_result.usage_json,
             commit=False,
         )
-        self.agent_service.append_event(
+        self.event_emitter.emit(
             session,
             agent_run.id,
-            AppendAgentEventRequest(
-                event_type="agent.model_call.completed",
-                phase="model",
-                payload={"decision_type": decision.decision_type},
-            ),
+            event_type=AgentHarnessEventTypes.MODEL_CALL_COMPLETED,
+            phase="model",
+            payload={"decision_type": decision.decision_type},
             commit=False,
         )
 
@@ -270,14 +269,12 @@ class AgentRunner:
                 agent_key=agent_run.agent_key,
                 output_payload=decision.output_payload,
             )
-            self.agent_service.append_event(
+            self.event_emitter.emit(
                 session,
                 agent_run.id,
-                AppendAgentEventRequest(
-                    event_type="agent.output_guardrail.checked",
-                    phase="guardrails",
-                    payload=guardrail_result.as_event_payload(),
-                ),
+                event_type=AgentHarnessEventTypes.OUTPUT_GUARDRAIL_CHECKED,
+                phase="guardrails",
+                payload=guardrail_result.as_event_payload(),
                 commit=False,
             )
             if not guardrail_result.passed:
@@ -288,14 +285,12 @@ class AgentRunner:
                 agent_run.status = "failed"
                 agent_run.error_message = "output_guardrail_failed"
                 agent_run.ended_at = now_utc()
-                self.agent_service.append_event(
+                self.event_emitter.emit(
                     session,
                     agent_run.id,
-                    AppendAgentEventRequest(
-                        event_type="agent.output_guardrail.failed",
-                        phase="guardrails",
-                        payload={"findings": [item.as_dict() for item in guardrail_result.findings]},
-                    ),
+                    event_type=AgentHarnessEventTypes.OUTPUT_GUARDRAIL_FAILED,
+                    phase="guardrails",
+                    payload={"findings": [item.as_dict() for item in guardrail_result.findings]},
                     commit=False,
                 )
                 session.commit()
@@ -304,19 +299,17 @@ class AgentRunner:
             memory_count = self._write_memory_candidates(session, agent_run=agent_run, output_payload=decision.output_payload)
             agent_run.status = "succeeded"
             agent_run.ended_at = now_utc()
-            self.agent_service.append_event(
+            self.event_emitter.emit(
                 session,
                 agent_run.id,
-                AppendAgentEventRequest(
-                    event_type="agent.final_output",
-                    phase="output",
-                    payload={
-                        "output_schema": spec.get("output_schema", {}),
-                        "memory_candidate_count": memory_count,
-                        "business_wait_state": guardrail_result.business_wait_state,
-                        "non_hitl_business_state": bool(guardrail_result.business_wait_state),
-                    },
-                ),
+                event_type=AgentHarnessEventTypes.FINAL_OUTPUT,
+                phase="output",
+                payload={
+                    "output_schema": spec.get("output_schema", {}),
+                    "memory_candidate_count": memory_count,
+                    "business_wait_state": guardrail_result.business_wait_state,
+                    "non_hitl_business_state": bool(guardrail_result.business_wait_state),
+                },
                 commit=False,
             )
             session.commit()
@@ -326,10 +319,12 @@ class AgentRunner:
             agent_run.status = "failed"
             agent_run.error_message = decision.error_message or "agent_decision_failed"
             agent_run.ended_at = now_utc()
-            self.agent_service.append_event(
+            self.event_emitter.emit(
                 session,
                 agent_run.id,
-                AppendAgentEventRequest(event_type="agent.failed", phase="output", payload={"error": agent_run.error_message}),
+                event_type=AgentHarnessEventTypes.FAILED,
+                phase="output",
+                payload={"error": agent_run.error_message},
                 commit=False,
             )
             session.commit()
@@ -629,28 +624,7 @@ class AgentRunner:
         if tool_call.tool_name == "psop.testing.write_diagnostics":
             return {"result": self._write_testing_diagnostics(session, tool_call=tool_call, arguments=arguments)}
         if tool_call.tool_name == "psop.memory.search":
-            try:
-                payload = MemorySearchRequest(
-                    query=str(arguments.get("query") or arguments.get("q") or ""),
-                    namespace=arguments.get("namespace"),
-                    memory_type=arguments.get("memory_type"),
-                    status=arguments.get("status", "active"),
-                    agent_key=arguments.get("agent_key"),
-                    limit=int(arguments.get("limit") or 25),
-                )
-            except (TypeError, ValueError, ValidationError) as error:
-                raise SkillValidationError(
-                    "psop.memory.search 参数无效。",
-                    details={"arguments_summary": arguments, "error": str(error)},
-                ) from error
-            entries = self.memory_service.search(session, payload)
-            return {
-                "result": {
-                    "memory_entry_count": len(entries),
-                    "memory_entry_ids": [item.id for item in entries],
-                    "entries": [item.model_dump(mode="json") for item in entries],
-                }
-            }
+            return {"result": self.memory_harness.search_tool(session, arguments)}
         if tool_call.tool_name == "psop.memory.write_candidate":
             agent_run = self.agent_service.get_run_model(session, tool_call.agent_run_id)
             candidates = arguments.get("candidates", arguments.get("memory_candidates", []))
@@ -671,17 +645,17 @@ class AgentRunner:
                     details={"findings": [item.as_dict() for item in guardrail_result.findings]},
                 )
             try:
-                entries = self.memory_service.write_candidates(
+                entries = self.memory_harness.write_candidates(
                     session,
                     agent_key=agent_run.agent_key,
-                    created_by_agent_run_id=agent_run.id,
+                    agent_run_id=agent_run.id,
                     candidates=candidates,
                     commit=False,
                 )
-            except ValidationError as error:
+            except SkillValidationError as error:
                 raise SkillValidationError(
                     "psop.memory.write_candidate 参数无效。",
-                    details={"arguments_summary": arguments, "error": str(error)},
+                    details={"arguments_summary": arguments, "error": str(error), **dict(error.details or {})},
                 ) from error
             return {
                 "result": {
@@ -747,7 +721,7 @@ class AgentRunner:
                     "psop.skill_version.activate 缺少 package_name 或 version_id。",
                     details={"arguments_summary": arguments},
                 )
-            activation = self.skill_service.activate_version_from_tool(
+            activation = self.skill_harness.activate_version_from_tool(
                 session,
                 package_name=package_name,
                 version_id=version_id,
@@ -875,18 +849,16 @@ class AgentRunner:
                 "capability_summary": validation.artifact.get("capability_summary") if validation.artifact else None,
                 "normalized_artifact": validation.artifact,
             }
-        self.agent_service.append_event(
+        self.event_emitter.emit(
             session,
             tool_call.agent_run_id,
-            AppendAgentEventRequest(
-                event_type="compiler.formal_v5.validated",
-                phase="compiler",
-                payload={
-                    "artifact_id": result.get("artifact_id") or artifact_id,
-                    "valid": result.get("valid"),
-                    "diagnostic_count": len(result.get("diagnostics") or []),
-                },
-            ),
+            event_type=AgentHarnessEventTypes.COMPILER_FORMAL_V5_VALIDATED,
+            phase="compiler",
+            payload={
+                "artifact_id": result.get("artifact_id") or artifact_id,
+                "valid": result.get("valid"),
+                "diagnostic_count": len(result.get("diagnostics") or []),
+            },
             commit=False,
         )
         return result
@@ -1059,35 +1031,31 @@ class AgentRunner:
         return document_from_manifest_snapshot(manifest)
 
     def _activate_skills(self, session: Session, *, agent_run: AgentRun, spec: dict[str, Any]) -> tuple[set[str], list[str]]:
-        selected_names = list(spec.get("allowed_skill_names") or DEFAULT_AGENT_SKILLS.get(agent_run.agent_key, []))
-        active_tools, active_skill_names = self.skill_service.activate_agent_run_skills(
+        active_tools, active_skill_names, selected_names = self.skill_harness.activate_run_skills(
             session,
             agent_run_id=agent_run.id,
             agent_key=agent_run.agent_key,
-            selected_names=selected_names,
-            sync=True,
+            spec=spec,
         )
         has_activation_event = any(
             event.event_type == "agent.skills.activated"
             for event in self.agent_service.repository.list_events(session, agent_run.id)
         )
         if not has_activation_event:
-            self.agent_service.append_event(
+            self.event_emitter.emit(
                 session,
                 agent_run.id,
-                AppendAgentEventRequest(
-                    event_type="agent.skills.activated",
-                    phase="skills",
-                    payload={
-                        "skill_names": selected_names,
-                        "active_skill_names": active_skill_names,
-                        "allowed_tools": sorted(active_tools),
-                        "effective_allowed_tools": self._effective_allowed_tools(
-                            spec=spec,
-                            active_tools=active_tools,
-                        ),
-                    },
-                ),
+                event_type=AgentHarnessEventTypes.SKILLS_ACTIVATED,
+                phase="skills",
+                payload={
+                    "skill_names": selected_names,
+                    "active_skill_names": active_skill_names,
+                    "allowed_tools": sorted(active_tools),
+                    "effective_allowed_tools": self._effective_allowed_tools(
+                        spec=spec,
+                        active_tools=active_tools,
+                    ),
+                },
                 commit=False,
             )
         return active_tools, active_skill_names
@@ -1101,27 +1069,50 @@ class AgentRunner:
         decision: AgentDecision,
         active_tools: set[str],
     ) -> AgentRunResponse:
-        if not decision.tool_name:
-            raise SkillValidationError("tool_call decision 缺少 tool_name。", details={"agent_run_id": agent_run.id})
-        effective_allowed_tools = set(self._effective_allowed_tools(spec=spec, active_tools=active_tools))
-        policy_decision = self.tool_policy.check(
-            tool_name=decision.tool_name,
-            tool_provider=decision.tool_provider,
-            requested_side_effect_level=decision.side_effect_level,
-            effective_allowed_tools=effective_allowed_tools,
-        )
-        tool_call = self.agent_service.create_tool_call(
-            session,
-            agent_run.id,
-            CreateAgentToolCallRequest(
+        if decision.tool_name in self.tool_policy.allowed_tools:
+            tool_guardrail_result = self.tool_guardrail.check(
+                agent_key=agent_run.agent_key,
                 tool_name=decision.tool_name,
-                tool_provider=decision.tool_provider,
                 arguments_summary=decision.arguments_summary,
-                side_effect_level=policy_decision.side_effect_level,
-                idempotency_key=decision.idempotency_key,
-            ),
-            commit=False,
+                expected_effect_summary=decision.expected_effect_summary,
+            )
+            self.event_emitter.emit(
+                session,
+                agent_run.id,
+                event_type=AgentHarnessEventTypes.TOOL_GUARDRAIL_CHECKED,
+                phase="guardrails",
+                payload={
+                    "tool_name": decision.tool_name,
+                    "tool_provider": decision.tool_provider,
+                    **tool_guardrail_result.as_event_payload(),
+                },
+                commit=False,
+            )
+            if not tool_guardrail_result.passed:
+                agent_run.status = "failed"
+                agent_run.error_message = "tool_guardrail_failed"
+                agent_run.ended_at = now_utc()
+                self.event_emitter.emit(
+                    session,
+                    agent_run.id,
+                    event_type=AgentHarnessEventTypes.TOOL_GUARDRAIL_FAILED,
+                    phase="guardrails",
+                    payload={"findings": [item.as_dict() for item in tool_guardrail_result.findings]},
+                    commit=False,
+                )
+                session.commit()
+                return self.agent_service._build_run_response(agent_run)
+
+        tool_plan = self.tool_harness.prepare_tool_call(
+            session,
+            agent_service=self.agent_service,
+            agent_run=agent_run,
+            spec=spec,
+            decision=decision,
+            active_tools=active_tools,
         )
+        tool_call = tool_plan.tool_call
+        policy_decision = tool_plan.policy_decision
         if not policy_decision.allowed:
             model = self.agent_service.repository.get_tool_call(session, tool_call.id)
             if model:
@@ -1273,34 +1264,22 @@ class AgentRunner:
         candidates = output_payload.get("memory_candidates") if isinstance(output_payload, dict) else None
         if not isinstance(candidates, list) or not candidates:
             return 0
-        entries = self.memory_service.write_candidates(
+        entries = self.memory_harness.write_candidates(
             session,
             agent_key=agent_run.agent_key,
-            created_by_agent_run_id=agent_run.id,
+            agent_run_id=agent_run.id,
             candidates=candidates,
             commit=False,
         )
-        self.agent_service.append_event(
+        self.event_emitter.emit(
             session,
             agent_run.id,
-            AppendAgentEventRequest(
-                event_type="agent.memory_candidates.written",
-                phase="memory",
-                payload={"memory_entry_ids": [item.id for item in entries]},
-            ),
+            event_type=AgentHarnessEventTypes.MEMORY_CANDIDATES_WRITTEN,
+            phase="memory",
+            payload={"memory_entry_ids": [item.id for item in entries]},
             commit=False,
         )
         return len(entries)
-
-    @staticmethod
-    def _memory_context_limit(spec: dict[str, Any]) -> int:
-        policy = spec.get("memory_policy")
-        if not isinstance(policy, dict):
-            return 5
-        try:
-            return max(1, min(20, int(policy.get("context_limit") or 5)))
-        except (TypeError, ValueError):
-            return 5
 
     def _resolve_model_decision(
         self,
@@ -1314,27 +1293,12 @@ class AgentRunner:
         plan_payload: dict[str, Any],
         effective_allowed_tools: list[str],
     ) -> AgentModelDecisionResult:
-        if self._uses_deterministic_input(agent_run.input_payload) or not AgentModelClient.uses_llm_model(spec):
-            decision = self._decision_from_input(agent_run.input_payload)
-            return AgentModelDecisionResult(
-                decision=decision,
-                provider="deterministic",
-                route_key=str(spec.get("model_policy", {}).get("route_key") or "json"),
-                model_name="agent-harness-deterministic",
-                request_payload={
-                    "mode": "deterministic",
-                    "input_payload": agent_run.input_payload,
-                    "agent_key": agent_run.agent_key,
-                    "skill_context": skill_context,
-                    "allowed_tools": effective_allowed_tools,
-                    "memory_context": memory_context,
-                    "plan": plan_payload,
-                },
-                response_payload=decision.model_dump(mode="json"),
-                usage_json={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
-            )
-        prompt_pack = self._resolve_agent_prompt_pack(session, agent_key=agent_run.agent_key, spec=spec)
-        return self.model_client.complete_decision(
+        prompt_pack = (
+            self._resolve_agent_prompt_pack(session, agent_key=agent_run.agent_key, spec=spec)
+            if self.model_client.should_use_llm(input_payload=agent_run.input_payload, spec=spec)
+            else None
+        )
+        return self.model_client.resolve_decision(
             agent_key=agent_run.agent_key,
             spec=spec,
             input_payload=agent_run.input_payload,
@@ -1388,21 +1352,19 @@ class AgentRunner:
         agent_run.status = "failed"
         agent_run.error_message = message
         agent_run.ended_at = now_utc()
-        self.agent_service.append_event(
+        self.event_emitter.emit(
             session,
             agent_run.id,
-            AppendAgentEventRequest(
-                event_type="agent.model_call.failed",
-                phase="model",
-                payload={"error": message, "details": details},
-            ),
+            event_type=AgentHarnessEventTypes.MODEL_CALL_FAILED,
+            phase="model",
+            payload={"error": message, "details": details},
             commit=False,
         )
         session.commit()
         return self.agent_service._build_run_response(agent_run)
 
     def _uses_llm_model_decision(self, *, agent_run: AgentRun, spec: dict[str, Any]) -> bool:
-        return not self._uses_deterministic_input(agent_run.input_payload) and AgentModelClient.uses_llm_model(spec)
+        return self.model_client.should_use_llm(input_payload=agent_run.input_payload, spec=spec)
 
     def _safe_agent_prompt_failure_context(
         self,
@@ -1427,8 +1389,7 @@ class AgentRunner:
         return str(policy.get("route_key") or default)
 
     def _effective_allowed_tools(self, *, spec: dict[str, Any], active_tools: set[str]) -> list[str]:
-        agent_allowed_tools = {str(tool) for tool in spec.get("allowed_tools") or []}
-        return sorted(agent_allowed_tools & active_tools & self.tool_policy.allowed_tools)
+        return sorted(self.tool_harness.effective_allowed_tools(spec=spec, active_tools=active_tools))
 
     def _resolve_agent_prompt_pack(self, session: Session, *, agent_key: str, spec: dict[str, Any]) -> Any | None:
         fallback = AGENT_PROMPT_FALLBACKS.get(agent_key)
@@ -1441,16 +1402,3 @@ class AgentRunner:
             usage_key=usage_key or fallback_usage_key,
             fallback_ref=str(spec.get("prompt_fallback_ref") or fallback_ref),
         )
-
-    @staticmethod
-    def _uses_deterministic_input(input_payload: dict[str, Any]) -> bool:
-        return "agent_decision" in input_payload or "expected_output" in input_payload
-
-    @staticmethod
-    def _decision_from_input(input_payload: dict[str, Any]) -> AgentDecision:
-        payload = input_payload.get("agent_decision") or {"decision_type": "final_output", "output_payload": input_payload.get("expected_output", {})}
-        if isinstance(payload, AgentDecision):
-            return payload
-        if not isinstance(payload, dict):
-            raise SkillValidationError("agent_decision 必须是对象。")
-        return AgentDecision(**payload)

@@ -1211,9 +1211,57 @@ def test_agent_runner_executes_runtime_read_tool_from_persisted_facts() -> None:
     assert tool_call["result_summary"]["result"]["run"]["id"] == run_id
 
     event_types = [item["event_type"] for item in events_response.json()]
+    assert "agent.tool_guardrail.checked" in event_types
     assert "tool.execution_started" in event_types
     assert "tool.execution_succeeded" in event_types
     assert "agent.tool_call.succeeded" in event_types
+
+
+def test_agent_runner_tool_guardrail_blocks_runner_runtime_state_mutation() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.runner",
+                "owner_type": "runtime_run",
+                "owner_id": "runtime-state-sovereignty-tool",
+                "run_id": "runtime-state-sovereignty-tool",
+                "input_payload": {
+                    "agent_decision": {
+                        "decision_type": "tool_call",
+                        "tool_name": "psop.runtime.read",
+                        "side_effect_level": "read",
+                        "arguments_summary": {
+                            "target": "session_token_snapshot",
+                            "operation": "write token_payload",
+                        },
+                        "expected_effect_summary": "write run_event directly from runner",
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+        tool_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-calls")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "failed"
+    assert run_once_response.json()["error_message"] == "tool_guardrail_failed"
+    assert authorizations_response.json() == []
+    assert tool_calls_response.json() == []
+
+    events = events_response.json()
+    checked_event = next(item for item in events if item["event_type"] == "agent.tool_guardrail.checked")
+    failed_event = next(item for item in events if item["event_type"] == "agent.tool_guardrail.failed")
+    assert checked_event["payload"]["passed"] is False
+    assert checked_event["payload"]["findings"][0]["code"] == "tool_runtime_state_sovereignty_violation"
+    assert failed_event["payload"]["findings"][0]["path"] == "agent_decision.tool_call"
+    assert "tool.authorization_requested" not in [item["event_type"] for item in events]
 
 
 def test_agent_runner_executes_compiler_read_and_formal_v5_validation_tools() -> None:
@@ -1492,6 +1540,88 @@ def test_agent_version_api_creates_publishes_and_activates_draft() -> None:
     assert activate_response.json()["active_version_id"] == draft["id"]
     assert activate_response.json()["active_version"]["spec_json"]["runtime_policy"] == {"rollout": "canary"}
     assert {item["active_version_id"] for item in activate_response.json()["bindings"]} == {draft["id"]}
+
+
+def test_agent_runner_memory_harness_applies_agent_memory_policy_limit() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        with client.app.state.db_manager.session() as session:
+            session.add_all(
+                [
+                    AgentMemoryEntry(
+                        namespace="builder",
+                        memory_type="semantic",
+                        agent_key="pskill.builder",
+                        status="active",
+                        confidence=88,
+                        title="First material evidence rule",
+                        content="Material evidence should be linked to pskill_material source refs.",
+                        source_refs=[{"kind": "pskill_material", "id": "material-memory-1"}],
+                        tags=["material"],
+                    ),
+                    AgentMemoryEntry(
+                        namespace="builder",
+                        memory_type="semantic",
+                        agent_key="pskill.builder",
+                        status="active",
+                        confidence=86,
+                        title="Second material evidence rule",
+                        content="Builder memory should remain advisory and not become Runtime state.",
+                        source_refs=[{"kind": "pskill_material", "id": "material-memory-2"}],
+                        tags=["material"],
+                    ),
+                ]
+            )
+            session.commit()
+        builder_before = client.get("/api/v1/agents/pskill.builder").json()
+        builder_spec = {
+            **builder_before["active_version"]["spec_json"],
+            "memory_policy": {"context_limit": 1},
+        }
+        draft_response = client.post(
+            "/api/v1/agents/pskill.builder/versions",
+            json={"version_label": "builder-memory-limit", "spec_json": builder_spec},
+        )
+        draft_version = next(
+            item for item in draft_response.json()["versions"] if item["version_label"] == "builder-memory-limit"
+        )
+        publish_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft_version['id']}/publish")
+        activate_response = client.post(
+            f"/api/v1/agents/pskill.builder/versions/{draft_version['id']}/activate",
+            json={"update_bindings": True},
+        )
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.builder",
+                "owner_type": "pskill_draft",
+                "owner_id": "builder-memory-limit",
+                "input_payload": {
+                    "expected_output": {
+                        "draft_summary": "Memory limit should constrain retrieved context.",
+                        "ready_for_human_review": True,
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        model_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/model-calls")
+
+    assert draft_response.status_code == 201
+    assert publish_response.status_code == 200
+    assert activate_response.status_code == 200
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "succeeded"
+
+    memory_event = next(item for item in events_response.json() if item["event_type"] == "agent.memory.retrieved")
+    assert memory_event["payload"]["memory_entry_count"] == 1
+    assert memory_event["payload"]["used_as_runtime_state"] is False
+    model_call = model_calls_response.json()[0]
+    assert len(model_call["request_payload"]["memory_context"]) == 1
 
 
 def test_agent_runner_records_skills_model_tool_call_and_resumes_after_authorization() -> None:

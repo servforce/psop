@@ -9,6 +9,9 @@ from app.agent_harness.definitions import (
     DEFAULT_AGENT_SKILLS,
     PROMPT_USAGE_AGENT_KEYS,
 )
+from app.agent_harness.memory import AgentMemoryHarness
+from app.agent_harness.skills import AgentSkillHarness
+from app.agent_harness.tools import AgentToolHarness, ToolPolicy
 from app.agents.service import DEFAULT_AGENT_SPECS
 from tests.test_skills_api import create_test_settings
 
@@ -56,10 +59,51 @@ def test_agent_harness_definitions_keep_builtin_agent_modules() -> None:
     expected_sandbox_files = {"sandbox.py", "sandbox_workspace.py", "restricted_workspace.py", "docker_sandbox.py"}
     events_dir = PROJECT_ROOT / "backend" / "app" / "agent_harness" / "events"
     expected_events_files = {"agent_event_emitter.py", "event_types.py", "event_redaction.py"}
+    memory_dir = PROJECT_ROOT / "backend" / "app" / "agent_harness" / "memory"
+    expected_memory_files = {"memory_harness.py"}
+    skills_dir = PROJECT_ROOT / "backend" / "app" / "agent_harness" / "skills"
+    expected_skills_files = {"skill_harness.py"}
 
     assert expected_files <= {path.name for path in definitions_dir.glob("*.py")}
     assert expected_sandbox_files <= {path.name for path in sandbox_dir.glob("*.py")}
     assert expected_events_files <= {path.name for path in events_dir.glob("*.py")}
+    assert expected_memory_files <= {path.name for path in memory_dir.glob("*.py")}
+    assert expected_skills_files <= {path.name for path in skills_dir.glob("*.py")}
+
+
+def test_agent_harness_memory_policy_limit_is_bounded() -> None:
+    assert AgentMemoryHarness.context_limit({}) == 5
+    assert AgentMemoryHarness.context_limit({"memory_policy": {"context_limit": 2}}) == 2
+    assert AgentMemoryHarness.context_limit({"memory_policy": {"context_limit": 0}}) == 1
+    assert AgentMemoryHarness.context_limit({"memory_policy": {"context_limit": 200}}) == 20
+    assert AgentMemoryHarness.context_limit({"memory_policy": {"context_limit": "invalid"}}) == 5
+
+
+def test_agent_harness_skill_selection_uses_agent_spec_or_builtin_defaults() -> None:
+    assert AgentSkillHarness.selected_skill_names(
+        agent_key="pskill.builder",
+        spec={"allowed_skill_names": ["pskill-builder", "", "  ffmpeg-video-processing  "]},
+    ) == ["pskill-builder", "ffmpeg-video-processing"]
+    assert AgentSkillHarness.selected_skill_names(agent_key="pskill.compiler", spec={}) == [
+        "pskill-compiler-formal-v5"
+    ]
+
+
+def test_agent_harness_tool_effective_permissions_are_intersection_only() -> None:
+    harness = AgentToolHarness(
+        ToolPolicy(
+            {
+                "psop.repository.propose_patch": "low_write",
+                "psop.media.compute": "compute",
+                "psop.unregistered_in_agent": "read",
+            }
+        )
+    )
+
+    assert harness.effective_allowed_tools(
+        spec={"allowed_tools": ["psop.repository.propose_patch", "psop.media.compute", "psop.missing_policy"]},
+        active_tools={"psop.media.compute", "psop.unregistered_in_agent"},
+    ) == {"psop.media.compute"}
 
 
 def test_api_routes_use_pskill_and_materials_naming() -> None:

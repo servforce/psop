@@ -1,6 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, TYPE_CHECKING
+
+from sqlalchemy.orm import Session
+
+from app.agents.schemas import AgentToolCallResponse, CreateAgentToolCallRequest
+from app.pskills.exceptions import SkillValidationError
+
+if TYPE_CHECKING:
+    from app.agent_harness.agent_decision import AgentDecision
+    from app.agents.models import AgentRun
+    from app.agents.service import AgentService
 
 
 AUTH_REQUIRED_LEVELS = {"high_write", "external_action", "physical_action"}
@@ -99,3 +110,56 @@ class ToolPolicy:
             requires_authorization=requires_authorization,
             reason="requires_authorization" if requires_authorization else "auto_allowed",
         )
+
+
+@dataclass(frozen=True)
+class AgentToolCallPlan:
+    tool_call: AgentToolCallResponse
+    policy_decision: ToolPolicyDecision
+    effective_allowed_tools: set[str]
+
+
+class AgentToolHarness:
+    def __init__(self, tool_policy: ToolPolicy | None = None) -> None:
+        self.tool_policy = tool_policy or ToolPolicy()
+
+    def prepare_tool_call(
+        self,
+        session: Session,
+        *,
+        agent_service: "AgentService",
+        agent_run: "AgentRun",
+        spec: dict[str, Any],
+        decision: "AgentDecision",
+        active_tools: set[str],
+    ) -> AgentToolCallPlan:
+        if not decision.tool_name:
+            raise SkillValidationError("tool_call decision 缺少 tool_name。", details={"agent_run_id": agent_run.id})
+        effective_allowed_tools = self.effective_allowed_tools(spec=spec, active_tools=active_tools)
+        policy_decision = self.tool_policy.check(
+            tool_name=decision.tool_name,
+            tool_provider=decision.tool_provider,
+            requested_side_effect_level=decision.side_effect_level,
+            effective_allowed_tools=effective_allowed_tools,
+        )
+        tool_call = agent_service.create_tool_call(
+            session,
+            agent_run.id,
+            CreateAgentToolCallRequest(
+                tool_name=decision.tool_name,
+                tool_provider=decision.tool_provider,
+                arguments_summary=decision.arguments_summary,
+                side_effect_level=policy_decision.side_effect_level,
+                idempotency_key=decision.idempotency_key,
+            ),
+            commit=False,
+        )
+        return AgentToolCallPlan(
+            tool_call=tool_call,
+            policy_decision=policy_decision,
+            effective_allowed_tools=effective_allowed_tools,
+        )
+
+    def effective_allowed_tools(self, *, spec: dict[str, Any], active_tools: set[str]) -> set[str]:
+        agent_allowed_tools = {str(tool) for tool in spec.get("allowed_tools") or []}
+        return agent_allowed_tools & active_tools & self.tool_policy.allowed_tools

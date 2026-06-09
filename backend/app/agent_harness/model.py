@@ -92,6 +92,97 @@ class AgentModelClient:
             usage_json=dict(getattr(completion, "usage", {}) or {}),
         )
 
+    def resolve_decision(
+        self,
+        *,
+        agent_key: str,
+        spec: dict[str, Any],
+        input_payload: dict[str, Any],
+        active_skill_names: list[str],
+        skill_context: list[dict[str, Any]],
+        memory_context: list[dict[str, Any]],
+        plan_payload: dict[str, Any],
+        allowed_tools: list[str],
+        system_prompt: str | None = None,
+        agent_prompt: dict[str, Any] | None = None,
+        route_key: str | None = None,
+    ) -> AgentModelDecisionResult:
+        if self.uses_deterministic_input(input_payload) or not self.uses_llm_model(spec):
+            return self.deterministic_decision_result(
+                agent_key=agent_key,
+                spec=spec,
+                input_payload=input_payload,
+                skill_context=skill_context,
+                memory_context=memory_context,
+                plan_payload=plan_payload,
+                allowed_tools=allowed_tools,
+            )
+        return self.complete_decision(
+            agent_key=agent_key,
+            spec=spec,
+            input_payload=input_payload,
+            active_skill_names=active_skill_names,
+            skill_context=skill_context,
+            memory_context=memory_context,
+            plan_payload=plan_payload,
+            allowed_tools=allowed_tools,
+            system_prompt=system_prompt,
+            agent_prompt=agent_prompt,
+            route_key=route_key,
+        )
+
+    def should_use_llm(self, *, input_payload: dict[str, Any], spec: dict[str, Any]) -> bool:
+        return not self.uses_deterministic_input(input_payload) and self.uses_llm_model(spec)
+
+    @classmethod
+    def deterministic_decision_result(
+        cls,
+        *,
+        agent_key: str,
+        spec: dict[str, Any],
+        input_payload: dict[str, Any],
+        skill_context: list[dict[str, Any]],
+        memory_context: list[dict[str, Any]],
+        plan_payload: dict[str, Any],
+        allowed_tools: list[str],
+    ) -> AgentModelDecisionResult:
+        decision = cls.decision_from_input(input_payload)
+        policy = spec.get("model_policy")
+        route_key = str(policy.get("route_key") or "json") if isinstance(policy, dict) else "json"
+        return AgentModelDecisionResult(
+            decision=decision,
+            provider="deterministic",
+            route_key=route_key,
+            model_name="agent-harness-deterministic",
+            request_payload={
+                "mode": "deterministic",
+                "input_payload": input_payload,
+                "agent_key": agent_key,
+                "skill_context": skill_context,
+                "allowed_tools": allowed_tools,
+                "memory_context": memory_context,
+                "plan": plan_payload,
+            },
+            response_payload=decision.model_dump(mode="json"),
+            usage_json={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        )
+
+    @staticmethod
+    def uses_deterministic_input(input_payload: dict[str, Any]) -> bool:
+        return "agent_decision" in input_payload or "expected_output" in input_payload
+
+    @staticmethod
+    def decision_from_input(input_payload: dict[str, Any]) -> AgentDecision:
+        payload = input_payload.get("agent_decision") or {
+            "decision_type": "final_output",
+            "output_payload": input_payload.get("expected_output", {}),
+        }
+        if isinstance(payload, AgentDecision):
+            return payload
+        if not isinstance(payload, dict):
+            raise SkillValidationError("agent_decision 必须是对象。")
+        return AgentDecision(**payload)
+
     @staticmethod
     def uses_llm_model(spec: dict[str, Any]) -> bool:
         policy = spec.get("model_policy")

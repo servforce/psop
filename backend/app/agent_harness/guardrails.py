@@ -30,6 +30,20 @@ RUNTIME_STATE_MUTATION_MARKERS = (
     "runtime kernel",
     "token_payload",
 )
+RUNTIME_STATE_MUTATION_VERBS = (
+    "write",
+    "update",
+    "mutate",
+    "modify",
+    "insert",
+    "delete",
+    "patch",
+    "写",
+    "更新",
+    "修改",
+    "插入",
+    "删除",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +79,20 @@ class OutputGuardrailResult:
 
 @dataclass(frozen=True, slots=True)
 class InputGuardrailResult:
+    passed: bool
+    findings: list[GuardrailFinding] = field(default_factory=list)
+
+    def as_event_payload(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "findings": [item.as_dict() for item in self.findings],
+            "warning_count": sum(1 for item in self.findings if item.severity == "warning"),
+            "error_count": sum(1 for item in self.findings if item.severity == "error"),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ToolGuardrailResult:
     passed: bool
     findings: list[GuardrailFinding] = field(default_factory=list)
 
@@ -121,6 +149,47 @@ class InputGuardrail:
                 results.extend(self._iter_strings(item, path=f"{path}[{index}]"))
             return results
         return []
+
+
+class ToolGuardrail:
+    """Validate tool-call decisions before ToolPolicy and authorization checks."""
+
+    def check(
+        self,
+        *,
+        agent_key: str,
+        tool_name: str,
+        arguments_summary: dict[str, Any],
+        expected_effect_summary: str = "",
+    ) -> ToolGuardrailResult:
+        findings: list[GuardrailFinding] = []
+        if agent_key == "pskill.runner" and self._mentions_runtime_state_mutation(
+            {
+                "tool_name": tool_name,
+                "arguments_summary": arguments_summary,
+                "expected_effect_summary": expected_effect_summary,
+            }
+        ):
+            findings.append(
+                GuardrailFinding(
+                    code="tool_runtime_state_sovereignty_violation",
+                    message=(
+                        "pskill.runner cannot request tools that mutate Runtime formal state; "
+                        "RuntimeService remains the only writer."
+                    ),
+                    path="agent_decision.tool_call",
+                )
+            )
+        return ToolGuardrailResult(
+            passed=not any(item.severity == "error" for item in findings),
+            findings=findings,
+        )
+
+    def _mentions_runtime_state_mutation(self, value: Any) -> bool:
+        texts = [text.lower() for _path, text in InputGuardrail()._iter_strings(value, path="tool_call")]
+        mentions_state = any(marker in text for text in texts for marker in RUNTIME_STATE_MUTATION_MARKERS)
+        mentions_mutation = any(verb in text for text in texts for verb in RUNTIME_STATE_MUTATION_VERBS)
+        return mentions_state and mentions_mutation
 
 
 class OutputGuardrail:
