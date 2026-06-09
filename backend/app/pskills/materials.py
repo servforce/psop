@@ -340,7 +340,7 @@ def parse_generated_skill_draft(content: str) -> GeneratedSkillDraft:
     parsed = _parse_json_object(content)
     raw_files = parsed.get("files")
     if not isinstance(raw_files, dict):
-        raise SkillValidationError("Skill 创建智能体响应缺少 files 对象。")
+        raise SkillValidationError("PSkill 构建智能体响应缺少 files 对象。")
     files: dict[str, str] = {}
     for path, value in raw_files.items():
         normalized_path = normalize_generated_path(str(path))
@@ -349,7 +349,7 @@ def parse_generated_skill_draft(content: str) -> GeneratedSkillDraft:
         files[normalized_path] = str(value)
     missing = [path for path in REQUIRED_GENERATED_FILES if not files.get(path)]
     if missing:
-        raise SkillValidationError("Skill 创建智能体响应缺少必需文件。", details={"missing_files": missing})
+        raise SkillValidationError("PSkill 构建智能体响应缺少必需文件。", details={"missing_files": missing})
     review_notes = parsed.get("review_notes")
     material_usage = parsed.get("material_usage")
     selected_reference_assets = parsed.get("selected_reference_assets")

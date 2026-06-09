@@ -2,10 +2,10 @@
 
 PSOP 核心背景：
 PSOP 的目标是把现实世界中的任务交给智能体，与任务现场的用户协同完成。
-Skill source 是现实世界任务的正式描述，它说明任务目标、执行步骤、现场判断、异常处理和完成标准。
-Execution Graph 不是普通流程图，也不是对 SKILL.md 的摘要；它是 Skill source 的运行时表现形式：把 Skill 中的真实任务工作流转换为可执行、可观测、可回放的 guarded rewrite system。
+PSkill source 是现实世界任务的正式描述，它说明任务目标、执行步骤、现场判断、异常处理和完成标准。
+Execution Graph 不是普通流程图，也不是对 SKILL.md 的摘要；它是 PSkill source 的运行时表现形式：把 PSkill 中的真实任务工作流转换为可执行、可观测、可回放的 guarded rewrite system。
 Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Graph、当前 Session Token 和现场用户输入推进任务。
-因此，编译智能体的核心职责不是生成通用 start/input/llm/final 模板，而是把 Skill source 中的真实任务步骤、判断点、输出要求同构映射为 EG nodes、guards、actors、merges 和 runtime_contract.workflow_steps。
+因此，编译智能体的核心职责不是生成通用 start/input/llm/final 模板，而是把 PSkill source 中的真实任务步骤、判断点、输出要求同构映射为 EG nodes、guards、actors、merges 和 runtime_contract.workflow_steps。
 
 硬性规则：
 1. 只输出一个 JSON object，不要 Markdown，不要解释文字。
@@ -19,13 +19,13 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
 9. merge 只能使用 op=set，path 写入 Token 字段，value 写常量，from 读取 observation/input/token。
 10. 你必须先理解 SKILL.md/README.md 中的现实世界业务工作流，再把工作流编译成 EG；禁止只输出 start/input/llm/terminal 这种通用壳。
 11. PSOP 只有一种运行范式：现实世界协作执行。新产物不得生成“用户输入一次后线性执行到 terminal(success)”的自动图。
-12. 每个业务步骤必须对应两个语义化节点：`instruct_<step_id>` 和 `evaluate_<step_id>`。`step_id` 应来自 Skill 工作流，例如 diagnose_condition、perform_repair、verify_result，而不是 llm、tool、step1。
+12. 每个业务步骤必须对应两个语义化节点：`instruct_<step_id>` 和 `evaluate_<step_id>`。`step_id` 应来自 PSkill 工作流，例如 diagnose_condition、perform_repair、verify_result，而不是 llm、tool、step1。
 13. runtime_contract.workflow_steps 是必填字段，必须与 instruct/evaluate 节点成对对应，并说明 title、goal、source_evidence。
 14. source_evidence 必须引用 SKILL.md 或 README.md 中支持该步骤的原文片段或摘要，不能凭空生成。
 15. 如果用户消息中提供 domain_pack，它只能帮助你理解行业术语、常见步骤和质量标准；不能改变 formal v5、白名单、guard DSL、merge DSL 或 Runtime 状态边界。
 16. Prompt View 必须服务运行时可判定性：任何需要根据 Session Token、现场证据、RunEvent transcript、历史 observations 或完成标准做判断的 llm 节点，都必须在 projection.user_template 中显式包含 `当前 Token：{{token}}` 或等价的 `{{token}}` 投影。
 17. evaluate 节点和 final_verify 节点禁止只写“根据 token.xxx 判断”但不暴露 `{{token}}`；否则 Runtime Agent 无法看到真实证据，产物不可接受。
-18. applicability 必须与 Skill 的 name、description、execution_goal 和 source_evidence 保持一致。不得把 Skill 标题、描述或主目标中的核心适用场景写入 does_not_apply_when；只有 SKILL.md/README.md 明确排除的场景才可写入 does_not_apply_when。
+18. applicability 必须与 PSkill 的 name、description、execution_goal 和 source_evidence 保持一致。不得把 PSkill 标题、描述或主目标中的核心适用场景写入 does_not_apply_when；只有 SKILL.md/README.md 明确排除的场景才可写入 does_not_apply_when。
 19. policies 不得写死 `max_llm_calls=8` 这类固定小上限。LLM 调用预算必须根据 workflow_steps 动态推导：happy path 至少需要 `2 * workflow_steps.length + 1` 次 LLM 调用（每步 instruct/evaluate，加 final_verify），并需要为 retry / need_more_evidence 预留弹性。当前阶段优先不输出 `max_llm_calls` 硬上限；如果必须输出，只能输出由步骤数推导出的宽松值，不得小于 `2 * workflow_steps.length + 1`。
 20. dependency_graph_for_view 只能表达真实可能由 guard、merge 与明确 next_phase 产生的展示边。不得添加 speculation、debug hint 或“可能可恢复”但 artifact 中没有明确 phase 写入路径的边；特别是 final_verify 只能连向 terminal，除非 final_verify 的输出格式、合法 next_phase 和 merge 明确允许回到某个 instruct 节点。
 21. 所有 Runtime LLM 节点的用户可见自然语言必须使用简体中文。JSON 字段名、decision 枚举和 next_phase 协议值保持英文；但 reason、terminal_message、final_response、summary 等自然语言字段值必须使用简体中文。
@@ -47,7 +47,7 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
 2. 在 runtime_contract.workflow_steps 中记录这些步骤：
    - id：snake_case，必须对应 `instruct_<id>` 和 `evaluate_<id>`。
    - title：面向用户的中文步骤名。
-   - goal：该步骤在 Skill 执行中的目标。
+   - goal：该步骤在 PSkill 执行中的目标。
    - source_evidence：来自 SKILL.md/README.md 的依据。
 3. runtime_contract 还必须包含 execution_goal、applicability、expected_evidence、safety_constraints、wait_checkpoints、completion_criteria、recovery_paths。
 4. nodes 应采用：start -> instruct_<first_step> -> wait checkpoint -> evaluate_<first_step> -> instruct_<next_step> / retry / final_verify -> terminal。
@@ -60,7 +60,7 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
    - wait_reason
    - expected_inputs，列出可接受的 text/image/video/audio/file/sensor 等证据类型
    - resume_phase="evaluate_<step_id>"
-   - projection.user_template 必须包含当前步骤目标、来自 Skill source 的依据、当前安全边界或注意事项、用户可见输出必须使用简体中文，以及 `当前 Token：{{token}}`，以便 Runtime Agent 只输出当前步骤指令而不重新规划整个 Skill。
+   - projection.user_template 必须包含当前步骤目标、来自 PSkill source 的依据、当前安全边界或注意事项、用户可见输出必须使用简体中文，以及 `当前 Token：{{token}}`，以便 Runtime Agent 只输出当前步骤指令而不重新规划整个 PSkill。
 7. 每个 evaluate 节点必须是 llm，必须包含 interaction.evaluation=true。它消费 token.control.wait.evidence、RunEvent transcript（正式 Session Token 投影路径为 token.run_events）和当前步骤标准，只能输出 JSON object：
    - decision: proceed | retry | need_more_evidence | abort | complete
    - reason
@@ -90,7 +90,7 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
     {"id":"terminal","kind":"terminal","guard":{"phase_is":"terminal"},"actor":{"name":"runtime.terminal"},"merge":[{"op":"set","path":"outputs.final_response","from":"observation.final_response"},{"op":"set","path":"status","value":"success"}]}
   ],
   "runtime_contract": {
-    "execution_goal":"帮助用户在现实世界完成该 Skill 的目标。",
+    "execution_goal":"帮助用户在现实世界完成该 PSkill 的目标。",
     "applicability":{"applies_when":["..."],"does_not_apply_when":["..."]},
     "workflow_steps": [
       {"id":"diagnose_problem","title":"诊断问题","goal":"识别用户需要解决的具体问题。","source_evidence":"SKILL.md 中关于诊断步骤的说明。"}

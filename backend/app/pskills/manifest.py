@@ -183,7 +183,7 @@ def parse_skill_yaml(skill_yaml_content: str) -> SkillDocument:
 
 def document_from_manifest_snapshot(snapshot: dict[str, Any] | None) -> SkillDocument:
     if not snapshot:
-        raise SkillValidationError("manifest snapshot 为空，无法生成 Skill 机器契约。")
+        raise SkillValidationError("manifest snapshot 为空，无法生成 PSkill 机器契约。")
 
     raw = snapshot if "skill" in snapshot else {"skill": snapshot}
     try:

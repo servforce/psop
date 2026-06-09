@@ -46,7 +46,7 @@
 
       async createInvocation() {
         if (!this.invocationForm.skill_key) {
-          this.showNotice("error", "请选择 Skill。");
+          this.showNotice("error", "请选择 PSkill。");
           return;
         }
 
@@ -83,7 +83,7 @@
 
       async createSkillDebugInvocation() {
         if (!this.currentSkill?.key) {
-          this.showNotice("error", "请选择 Skill。");
+          this.showNotice("error", "请选择 PSkill。");
           return;
         }
 
@@ -131,7 +131,7 @@
             this.selectedLiveRunSnapshotBaseSeq = "";
             this.selectedLiveRunSnapshotTargetSeq = "";
           }
-          const [run, bindings, runEvents, traceEvents, replayDetail, toolAuthorizations] = await Promise.all([
+          const [run, bindings, runEvents, runTraces, replayDetail, toolAuthorizations] = await Promise.all([
             this.apiRequest(`/runs/${runId}`),
             this.apiRequest(`/runs/${runId}/bindings`),
             this.apiRequest(`/runs/${runId}/events`),
@@ -148,7 +148,7 @@
           this.updateLiveRunLatestRunEventSeq();
           this.ensureLiveRunProcessSelection();
           this.scrollRunEventTranscriptToBottom();
-          this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], traceEvents);
+          this.liveRunTraces = window.PSOPRuntimeEvents.mergeBySeq([], runTraces);
           this.replayDetail = replayDetail;
           this.ensureLiveRunSnapshotCompareSelection();
           this.syncLiveRunInteractionTabFromRoute(isSameRun);
@@ -415,7 +415,7 @@
           }
         }
         if (["run.trace.appended", "trace.event.appended"].includes(event.event_type) && event.payload) {
-          this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq(this.liveRunTraceEvents, [event.payload]);
+          this.liveRunTraces = window.PSOPRuntimeEvents.mergeBySeq(this.liveRunTraces, [event.payload]);
           this.mergeLiveRunReplayRunTraces([event.payload]);
         }
         if (event.event_type === "session_token.snapshot.appended" && event.payload) {

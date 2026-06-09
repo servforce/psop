@@ -5,11 +5,11 @@
       <nav class="breadcrumb-bar h-7 min-h-0 flex-nowrap gap-1 border-b border-slate-800 px-2 pb-0 text-xs" aria-label="Breadcrumb">
         <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
         <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
-        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">PSkills</button>
         <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
         <button type="button" class="breadcrumb-link min-w-0 truncate font-medium text-slate-100" @click="refreshCurrentSkill()" x-text="currentSkill.name"></button>
       </nav>
-      <div class="flex h-8 items-stretch overflow-hidden" role="tablist" aria-label="Skill 详情页签">
+      <div class="flex h-8 items-stretch overflow-hidden" role="tablist" aria-label="PSkill 详情页签">
         <button type="button" class="detail-tab" :class="activeDetailTab === 'overview' ? 'detail-tab-active' : ''" @click="selectDetailTab('overview')">
           <span class="material-symbols-outlined text-[15px]">badge</span>
           <span>信息</span>
@@ -46,16 +46,16 @@
         <section class="detail-section !p-3">
           <form class="space-y-4" @submit.prevent="saveMetadata()">
             <label class="field-block">
-              <span class="field-label">Skill ID</span>
+              <span class="field-label">PSkill ID</span>
               <div class="copyable-field">
-                <input class="copyable-input" :value="currentSkill.id || ''" readonly aria-label="Skill ID" />
-                <button type="button" class="copyable-button" title="复制 Skill ID" aria-label="复制 Skill ID" @click="copyText(currentSkill.id, `skill-id-${currentSkill.id}`)">
+                <input class="copyable-input" :value="currentSkill.id || ''" readonly aria-label="PSkill ID" />
+                <button type="button" class="copyable-button" title="复制 PSkill ID" aria-label="复制 PSkill ID" @click="copyText(currentSkill.id, `skill-id-${currentSkill.id}`)">
                   <span class="material-symbols-outlined text-[16px]" x-text="copyIcon(`skill-id-${currentSkill.id}`)"></span>
                 </button>
               </div>
             </label>
             <label class="field-block">
-              <span class="field-label">Skill 名称</span>
+              <span class="field-label">PSkill 名称</span>
               <input x-model="metadataForm.name" class="input-field" required />
             </label>
             <label class="field-block">
@@ -360,36 +360,36 @@
                 <div class="min-w-0">
                   <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">素材</p>
                   <p class="mt-1 truncate text-sm text-slate-300">
-                    <span x-text="rawMaterials.length"></span>
+                    <span x-text="materials.length"></span>
                     <span> 个素材</span>
-                    <span x-show="rawMaterials.length > 0">
+                    <span x-show="materials.length > 0">
                       <span class="text-slate-600"> / </span>
                       <span>全部参与生成</span>
                     </span>
                   </p>
                 </div>
                 <div class="flex shrink-0 items-center gap-2">
-                  <button type="button" class="topbar-icon-button h-9 w-9" title="上传文件" aria-label="上传文件" @click="openRawMaterialUploadModal()">
+                  <button type="button" class="topbar-icon-button h-9 w-9" title="上传文件" aria-label="上传文件" @click="openMaterialUploadModal()">
                     <span class="material-symbols-outlined text-[18px]">upload_file</span>
                   </button>
-                  <button type="button" class="topbar-icon-button h-9 w-9" title="生成 Skill" aria-label="生成 Skill" :disabled="!canGenerateSkillDraftFromRawMaterials()" @click="openRawMaterialGenerateModal()">
+                  <button type="button" class="topbar-icon-button h-9 w-9" title="生成 PSkill" aria-label="生成 PSkill" :disabled="!canGenerateSkillDraftFromMaterials()" @click="openMaterialGenerateModal()">
                     <span class="material-symbols-outlined text-[18px]">auto_fix_high</span>
                   </button>
-                  <button type="button" class="topbar-icon-button h-9 w-9" title="刷新素材" aria-label="刷新素材" :disabled="busy.rawMaterials" @click="loadRawMaterials(currentSkill.id, true)">
-                    <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterials ? 'animate-spin' : ''">sync</span>
+                  <button type="button" class="topbar-icon-button h-9 w-9" title="刷新素材" aria-label="刷新素材" :disabled="busy.materials" @click="loadMaterials(currentSkill.id, true)">
+                    <span class="material-symbols-outlined text-[18px]" :class="busy.materials ? 'animate-spin' : ''">sync</span>
                   </button>
                 </div>
               </div>
 
               <div class="min-h-0 overflow-y-auto overflow-x-hidden">
-                <template x-if="busy.rawMaterials && rawMaterialsLoadedSkillId !== currentSkill.id">
+                <template x-if="busy.materials && materialsLoadedSkillId !== currentSkill.id">
                   <div class="empty-state py-14">
                     <span class="material-symbols-outlined text-[30px] text-slate-500">sync</span>
                     <p class="mt-3 text-sm text-slate-500">正在加载素材...</p>
                   </div>
                 </template>
 
-                <template x-if="!busy.rawMaterials && rawMaterials.length === 0">
+                <template x-if="!busy.materials && materials.length === 0">
                   <div class="empty-state py-14">
                     <span class="material-symbols-outlined text-[30px] text-slate-500">inventory_2</span>
                     <p class="mt-3 text-sm text-slate-500">暂无素材。</p>
@@ -397,25 +397,25 @@
                 </template>
 
                 <div class="min-h-0">
-                  <template x-for="material in rawMaterials" :key="material.id">
-                    <article class="group flex min-h-12 items-center gap-2 border-b border-slate-800 px-2.5 py-1.5 transition hover:bg-slate-900/70" :class="rawMaterialDetail?.id === material.id ? 'bg-slate-900 shadow-[inset_3px_0_0_rgba(249,115,22,0.85)]' : ''">
-                      <button type="button" class="flex min-w-0 flex-1 flex-col justify-center text-left" @click="openRawMaterialDetail(material)">
+                  <template x-for="material in materials" :key="material.id">
+                    <article class="group flex min-h-12 items-center gap-2 border-b border-slate-800 px-2.5 py-1.5 transition hover:bg-slate-900/70" :class="materialDetail?.id === material.id ? 'bg-slate-900 shadow-[inset_3px_0_0_rgba(249,115,22,0.85)]' : ''">
+                      <button type="button" class="flex min-w-0 flex-1 flex-col justify-center text-left" @click="openMaterialDetail(material)">
                         <div class="flex min-w-0 items-center gap-1.5">
-                          <span class="material-symbols-outlined text-[15px] text-slate-400" x-text="rawMaterialKindIcon(material.material_kind)"></span>
+                          <span class="material-symbols-outlined text-[15px] text-slate-400" x-text="materialKindIcon(material.material_kind)"></span>
                           <span class="truncate text-[13px] font-semibold leading-4 text-slate-100" x-text="material.name"></span>
                           <span class="status-badge shrink-0 px-2 py-0 text-[10px] tracking-wider" :class="statusBadgeTone(material.status)" x-text="formatStatus(material.status)"></span>
                         </div>
                         <div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0 text-[11px] leading-3 text-slate-500">
-                          <span x-text="rawMaterialKindLabel(material.material_kind)"></span>
+                          <span x-text="materialKindLabel(material.material_kind)"></span>
                           <span class="mono-field" x-text="material.mime_type"></span>
                           <span class="mono-field" x-text="formatBytes(material.size_bytes)"></span>
                         </div>
                       </button>
                       <div class="flex shrink-0 items-center justify-end gap-0.5 self-center">
-                        <button type="button" class="topbar-icon-button h-6 w-6 opacity-70 transition group-hover:opacity-100" title="重新解析素材" aria-label="重新解析素材" :disabled="busy.rawMaterialAnalyze || material.status === 'processing' || ['pending', 'running'].includes(material.analysis_status || material.status)" @click="analyzeRawMaterial(material)">
-                          <span class="material-symbols-outlined text-[16px]" :class="busy.rawMaterialAnalyze ? 'animate-spin' : ''" x-text="busy.rawMaterialAnalyze ? 'progress_activity' : 'restart_alt'"></span>
+                        <button type="button" class="topbar-icon-button h-6 w-6 opacity-70 transition group-hover:opacity-100" title="重新解析素材" aria-label="重新解析素材" :disabled="busy.materialAnalyze || material.status === 'processing' || ['pending', 'running'].includes(material.analysis_status || material.status)" @click="analyzeMaterial(material)">
+                          <span class="material-symbols-outlined text-[16px]" :class="busy.materialAnalyze ? 'animate-spin' : ''" x-text="busy.materialAnalyze ? 'progress_activity' : 'restart_alt'"></span>
                         </button>
-                        <button type="button" class="topbar-icon-button h-6 w-6 opacity-70 transition group-hover:opacity-100" title="移除素材" aria-label="移除素材" :disabled="busy.rawMaterialDelete" @click="deleteRawMaterial(material)">
+                        <button type="button" class="topbar-icon-button h-6 w-6 opacity-70 transition group-hover:opacity-100" title="移除素材" aria-label="移除素材" :disabled="busy.materialDelete" @click="deleteMaterial(material)">
                           <span class="material-symbols-outlined text-[16px]">delete</span>
                         </button>
                       </div>
@@ -426,106 +426,106 @@
             </section>
 
             <section class="min-h-0 overflow-hidden bg-slate-950">
-              <template x-if="!rawMaterialDetail && !busy.rawMaterialDetail">
+              <template x-if="!materialDetail && !busy.materialDetail">
                 <div class="empty-state min-h-[32rem]">
                   <span class="material-symbols-outlined text-[34px] text-slate-500">preview</span>
                   <p class="mt-3 text-sm text-slate-500">选择一个素材查看详情。</p>
                 </div>
               </template>
 
-              <template x-if="busy.rawMaterialDetail">
+              <template x-if="busy.materialDetail">
                 <div class="empty-state min-h-[32rem]">
                   <span class="material-symbols-outlined animate-spin text-[30px] text-slate-500">sync</span>
                   <p class="mt-3 text-sm text-slate-500">正在加载素材详情...</p>
                 </div>
               </template>
 
-              <template x-if="rawMaterialDetail && !busy.rawMaterialDetail">
+              <template x-if="materialDetail && !busy.materialDetail">
                 <div class="flex h-full min-h-0 flex-col">
                   <div class="flex min-h-14 shrink-0 items-center border-b border-slate-800 bg-slate-950/70 px-3 py-1.5">
                     <div class="flex w-full min-w-0 items-center gap-2.5">
                       <span class="flex size-7 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-orange-200">
-                        <span class="material-symbols-outlined text-[17px]" x-text="rawMaterialKindIcon(rawMaterialDetail.material_kind)"></span>
+                        <span class="material-symbols-outlined text-[17px]" x-text="materialKindIcon(materialDetail.material_kind)"></span>
                       </span>
                       <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5 xl:flex-nowrap xl:overflow-hidden">
-                        <p class="min-w-0 max-w-full truncate text-sm font-semibold leading-5 text-slate-100 xl:max-w-[14rem]" x-text="rawMaterialDetail.name"></p>
+                        <p class="min-w-0 max-w-full truncate text-sm font-semibold leading-5 text-slate-100 xl:max-w-[14rem]" x-text="materialDetail.name"></p>
                         <dl class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-4 xl:flex-1 xl:flex-nowrap xl:overflow-hidden">
                           <div class="inline-flex min-w-0 items-baseline gap-1.5">
                             <dt class="font-semibold uppercase tracking-[0.16em] text-slate-500">类型</dt>
-                            <dd class="font-semibold text-slate-100" x-text="rawMaterialKindLabel(rawMaterialDetail.material_kind)"></dd>
+                            <dd class="font-semibold text-slate-100" x-text="materialKindLabel(materialDetail.material_kind)"></dd>
                           </div>
                           <div class="inline-flex min-w-0 items-baseline gap-1.5">
                             <dt class="font-semibold uppercase tracking-[0.16em] text-slate-500">大小</dt>
-                            <dd class="mono-field" x-text="formatBytes(rawMaterialDetail.size_bytes)"></dd>
+                            <dd class="mono-field" x-text="formatBytes(materialDetail.size_bytes)"></dd>
                           </div>
                           <div class="inline-flex min-w-0 items-baseline gap-1.5 xl:flex-1">
                             <dt class="font-semibold uppercase tracking-[0.16em] text-slate-500">MIME</dt>
-                            <dd class="mono-field truncate" x-text="rawMaterialDetail.mime_type"></dd>
+                            <dd class="mono-field truncate" x-text="materialDetail.mime_type"></dd>
                           </div>
                           <div class="inline-flex min-w-0 items-baseline gap-1.5">
                             <dt class="font-semibold uppercase tracking-[0.16em] text-slate-500">创建</dt>
-                            <dd class="mono-field truncate" x-text="formatDateTime(rawMaterialDetail.created_at)"></dd>
+                            <dd class="mono-field truncate" x-text="formatDateTime(materialDetail.created_at)"></dd>
                           </div>
                         </dl>
                       </div>
-                      <span class="status-badge shrink-0" :class="statusBadgeTone(rawMaterialDetail.status)" x-text="formatStatus(rawMaterialDetail.status)"></span>
+                      <span class="status-badge shrink-0" :class="statusBadgeTone(materialDetail.status)" x-text="formatStatus(materialDetail.status)"></span>
                     </div>
                   </div>
 
                   <div class="flex min-h-0 flex-1 flex-col">
                     <div class="flex h-10 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950">
                       <div class="flex h-full min-w-0 items-center overflow-x-auto">
-                        <button type="button" class="detail-tab" :class="rawMaterialDetailTab === 'preview' ? 'detail-tab-active' : ''" @click="selectRawMaterialDetailTab('preview')">
+                        <button type="button" class="detail-tab" :class="materialDetailTab === 'preview' ? 'detail-tab-active' : ''" @click="selectMaterialDetailTab('preview')">
                           <span class="material-symbols-outlined text-[16px]">preview</span>
                           <span>原文件预览</span>
                         </button>
-                        <button type="button" class="detail-tab" :class="rawMaterialDetailTab === 'analysis' ? 'detail-tab-active' : ''" @click="selectRawMaterialDetailTab('analysis')">
+                        <button type="button" class="detail-tab" :class="materialDetailTab === 'analysis' ? 'detail-tab-active' : ''" @click="selectMaterialDetailTab('analysis')">
                           <span class="material-symbols-outlined text-[16px]">analytics</span>
                           <span>解析结果</span>
                         </button>
                       </div>
-                      <a class="topbar-icon-button h-7 w-7 shrink-0" :href="rawMaterialContentUrl(rawMaterialDetail)" target="_blank" rel="noreferrer noopener" title="打开原文件" aria-label="打开原文件">
+                      <a class="topbar-icon-button h-7 w-7 shrink-0" :href="materialContentUrl(materialDetail)" target="_blank" rel="noreferrer noopener" title="打开原文件" aria-label="打开原文件">
                         <span class="material-symbols-outlined text-[16px]">open_in_new</span>
                       </a>
                     </div>
 
-                    <section x-show="rawMaterialDetailTab === 'analysis'" class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
-                      <p class="text-sm leading-6 text-slate-200" x-text="rawMaterialDetail.analysis_result?.summary || rawMaterialDetail.analysis_result_summary || '暂无解析摘要。'"></p>
-                      <template x-if="rawMaterialDetail.error_message">
-                        <p class="mt-3 border-l-2 border-rose-400 bg-rose-500/10 px-3 py-2 text-sm text-rose-200" x-text="rawMaterialDetail.error_message"></p>
+                    <section x-show="materialDetailTab === 'analysis'" class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
+                      <p class="text-sm leading-6 text-slate-200" x-text="materialDetail.analysis_result?.summary || materialDetail.analysis_result_summary || '暂无解析摘要。'"></p>
+                      <template x-if="materialDetail.error_message">
+                        <p class="mt-3 border-l-2 border-rose-400 bg-rose-500/10 px-3 py-2 text-sm text-rose-200" x-text="materialDetail.error_message"></p>
                       </template>
-                      <template x-if="rawMaterialDetail.analysis_result?.content?.text">
+                      <template x-if="materialDetail.analysis_result?.content?.text">
                         <section class="mt-5 space-y-2">
                           <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">文本内容</p>
-                          <pre class="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-300" x-text="rawMaterialDetail.analysis_result.content.text"></pre>
+                          <pre class="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-300" x-text="materialDetail.analysis_result.content.text"></pre>
                         </section>
                       </template>
                       <div class="mt-5 space-y-4 border-t border-slate-800 pt-4">
-                        <template x-if="rawMaterialAnalysis?.error_details && Object.keys(rawMaterialAnalysis.error_details).length">
+                        <template x-if="materialAnalysis?.error_details && Object.keys(materialAnalysis.error_details).length">
                           <section class="space-y-2">
                             <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">失败详情</p>
-                            <pre class="max-h-52 overflow-auto whitespace-pre-wrap rounded-md border border-rose-500/20 bg-rose-500/10 px-3 py-2 font-mono text-xs leading-5 text-rose-100" x-text="formatJson(rawMaterialAnalysis.error_details)"></pre>
+                            <pre class="max-h-52 overflow-auto whitespace-pre-wrap rounded-md border border-rose-500/20 bg-rose-500/10 px-3 py-2 font-mono text-xs leading-5 text-rose-100" x-text="formatJson(materialAnalysis.error_details)"></pre>
                           </section>
                         </template>
-                        <template x-if="rawMaterialDetail.analysis_result?.limitations?.length">
+                        <template x-if="materialDetail.analysis_result?.limitations?.length">
                           <section class="space-y-2">
                             <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">限制</p>
                             <ul class="space-y-1 text-xs leading-5 text-slate-300">
-                              <template x-for="item in rawMaterialDetail.analysis_result.limitations" :key="item">
+                              <template x-for="item in materialDetail.analysis_result.limitations" :key="item">
                                 <li x-text="item"></li>
                               </template>
                             </ul>
                           </section>
                         </template>
-                        <template x-if="rawMaterialVisibleEvidenceItems().length">
+                        <template x-if="materialVisibleEvidenceItems().length">
                           <section class="space-y-2">
                             <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">证据</p>
                             <div class="space-y-2">
-                              <template x-for="item in rawMaterialVisibleEvidenceItems()" :key="item.id">
+                              <template x-for="item in materialVisibleEvidenceItems()" :key="item.id">
                                 <article class="rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2">
                                   <div class="flex items-center justify-between gap-2">
                                     <span class="mono-field" x-text="item.timestamp_ms != null ? `${Math.round((item.timestamp_ms || 0) / 1000)}s` : item.kind"></span>
-                                    <span class="status-badge" x-show="item.asset_metadata?.frame_source" x-text="rawMaterialFrameSourceLabel(item.asset_metadata?.frame_source)"></span>
+                                    <span class="status-badge" x-show="item.asset_metadata?.frame_source" x-text="materialFrameSourceLabel(item.asset_metadata?.frame_source)"></span>
                                   </div>
                                   <p class="mt-1 text-xs leading-5 text-slate-300" x-text="item.content"></p>
                                 </article>
@@ -533,14 +533,14 @@
                             </div>
                           </section>
                         </template>
-                        <template x-if="rawMaterialDetail.derived_assets?.length">
+                        <template x-if="materialDetail.derived_assets?.length">
                           <section class="space-y-2">
                             <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">关键帧图片分析</p>
                             <div class="grid gap-3 sm:grid-cols-2">
-                              <template x-for="asset in rawMaterialDetail.derived_assets" :key="asset.id">
+                              <template x-for="asset in materialDetail.derived_assets" :key="asset.id">
                                 <article class="overflow-hidden rounded-md border border-slate-800 bg-slate-900/40">
-                                  <button type="button" class="group relative block w-full overflow-hidden bg-black text-left" title="放大查看图片" aria-label="放大查看图片" @click="openRawMaterialImagePreview(asset)">
-                                    <img class="aspect-video w-full object-cover transition duration-150" :src="rawMaterialDerivedAssetContentUrl(asset)" :alt="asset.label || asset.filename" />
+                                  <button type="button" class="group relative block w-full overflow-hidden bg-black text-left" title="放大查看图片" aria-label="放大查看图片" @click="openMaterialImagePreview(asset)">
+                                    <img class="aspect-video w-full object-cover transition duration-150" :src="materialDerivedAssetContentUrl(asset)" :alt="asset.label || asset.filename" />
                                     <span class="absolute right-2 top-2 flex size-7 items-center justify-center rounded-md border border-slate-700 bg-slate-950/70 text-slate-200 opacity-0 transition group-hover:opacity-100">
                                       <span class="material-symbols-outlined text-[16px]">zoom_in</span>
                                     </span>
@@ -548,7 +548,7 @@
                                   <div class="space-y-1 px-2.5 py-2">
                                     <div class="flex items-center justify-between gap-2">
                                       <span class="mono-field" x-text="`${Math.round((asset.timestamp_ms || 0) / 1000)}s`"></span>
-                                      <span class="status-badge border-slate-700 bg-slate-950/40 text-slate-400" x-text="rawMaterialFrameSourceLabel(asset.asset_metadata?.frame_source) || '候选资产'"></span>
+                                      <span class="status-badge border-slate-700 bg-slate-950/40 text-slate-400" x-text="materialFrameSourceLabel(asset.asset_metadata?.frame_source) || '候选资产'"></span>
                                     </div>
                                     <p class="text-xs leading-5 text-slate-300" x-text="asset.label"></p>
                                   </div>
@@ -560,22 +560,22 @@
                       </div>
                     </section>
 
-                    <section x-show="rawMaterialDetailTab === 'preview'" class="min-h-0 flex-1 overflow-hidden">
+                    <section x-show="materialDetailTab === 'preview'" class="min-h-0 flex-1 overflow-hidden">
                       <div class="flex h-full min-h-0 items-center justify-center overflow-auto bg-black">
-                        <template x-if="canPreviewRawMaterial('image')">
-                          <img class="h-full w-full object-contain" :src="rawMaterialContentUrl(rawMaterialDetail)" :alt="rawMaterialDetail.name" />
+                        <template x-if="canPreviewMaterial('image')">
+                          <img class="h-full w-full object-contain" :src="materialContentUrl(materialDetail)" :alt="materialDetail.name" />
                         </template>
-                        <template x-if="canPreviewRawMaterial('audio')">
-                          <audio class="w-full" controls :src="rawMaterialContentUrl(rawMaterialDetail)"></audio>
+                        <template x-if="canPreviewMaterial('audio')">
+                          <audio class="w-full" controls :src="materialContentUrl(materialDetail)"></audio>
                         </template>
-                        <template x-if="canPreviewRawMaterial('video')">
-                          <video class="h-full w-full bg-black object-contain" controls :src="rawMaterialContentUrl(rawMaterialDetail)"></video>
+                        <template x-if="canPreviewMaterial('video')">
+                          <video class="h-full w-full bg-black object-contain" controls :src="materialContentUrl(materialDetail)"></video>
                         </template>
-                        <template x-if="canPreviewRawMaterial('pdf')">
-                          <iframe class="h-full w-full border-0 bg-white" :src="rawMaterialContentUrl(rawMaterialDetail)" title="PDF 预览"></iframe>
+                        <template x-if="canPreviewMaterial('pdf')">
+                          <iframe class="h-full w-full border-0 bg-white" :src="materialContentUrl(materialDetail)" title="PDF 预览"></iframe>
                         </template>
-                        <template x-if="canPreviewRawMaterial('document')">
-                          <iframe class="h-full w-full border-0 bg-white" :src="rawMaterialContentUrl(rawMaterialDetail)" :title="(rawMaterialDetail.name || '素材') + ' 预览'" sandbox referrerpolicy="no-referrer"></iframe>
+                        <template x-if="canPreviewMaterial('document')">
+                          <iframe class="h-full w-full border-0 bg-white" :src="materialContentUrl(materialDetail)" :title="(materialDetail.name || '素材') + ' 预览'" sandbox referrerpolicy="no-referrer"></iframe>
                         </template>
                       </div>
                     </section>
@@ -585,29 +585,29 @@
             </section>
           </div>
 
-          <template x-if="rawMaterialImagePreview.open">
-            <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95 px-4 py-6 backdrop-blur-sm" @click.self="closeRawMaterialImagePreview()" @keydown.escape.window="closeRawMaterialImagePreview()">
+          <template x-if="materialImagePreview.open">
+            <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95 px-4 py-6 backdrop-blur-sm" @click.self="closeMaterialImagePreview()" @keydown.escape.window="closeMaterialImagePreview()">
               <section class="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-slate-700 bg-slate-950 shadow-xl">
                 <div class="flex h-12 items-center justify-between gap-3 border-b border-slate-800 px-3 py-2">
                   <div class="min-w-0">
-                    <p class="truncate text-sm font-semibold text-slate-100" x-text="rawMaterialImagePreview.title"></p>
+                    <p class="truncate text-sm font-semibold text-slate-100" x-text="materialImagePreview.title"></p>
                     <p class="mt-0.5 text-[11px] text-slate-500">
-                      <span x-show="rawMaterialImagePreview.timestamp_ms != null" class="mono-field" x-text="`${Math.round((rawMaterialImagePreview.timestamp_ms || 0) / 1000)}s`"></span>
-                      <span x-show="rawMaterialImagePreview.frame_source" class="ml-2" x-text="rawMaterialFrameSourceLabel(rawMaterialImagePreview.frame_source)"></span>
+                      <span x-show="materialImagePreview.timestamp_ms != null" class="mono-field" x-text="`${Math.round((materialImagePreview.timestamp_ms || 0) / 1000)}s`"></span>
+                      <span x-show="materialImagePreview.frame_source" class="ml-2" x-text="materialFrameSourceLabel(materialImagePreview.frame_source)"></span>
                     </p>
                   </div>
-                  <button type="button" class="topbar-icon-button h-8 w-8 shrink-0" title="关闭预览" aria-label="关闭预览" @click="closeRawMaterialImagePreview()">
+                  <button type="button" class="topbar-icon-button h-8 w-8 shrink-0" title="关闭预览" aria-label="关闭预览" @click="closeMaterialImagePreview()">
                     <span class="material-symbols-outlined text-[17px]">close</span>
                   </button>
                 </div>
                 <div class="flex min-h-0 flex-1 items-center justify-center bg-black">
-                  <img class="max-h-[92vh] max-w-full object-contain" :src="rawMaterialImagePreview.src" :alt="rawMaterialImagePreview.title" />
+                  <img class="max-h-[92vh] max-w-full object-contain" :src="materialImagePreview.src" :alt="materialImagePreview.title" />
                 </div>
               </section>
             </div>
           </template>
 
-          <template x-if="rawMaterialUploadModalOpen">
+          <template x-if="materialUploadModalOpen">
             <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-8 backdrop-blur-sm">
               <section class="modal-panel max-h-[92vh] max-w-5xl overflow-hidden">
                 <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
@@ -615,30 +615,30 @@
                     <p class="panel-kicker">文件素材</p>
                     <h3 class="panel-title">新增素材</h3>
                   </div>
-                  <button type="button" class="icon-button" title="关闭" aria-label="关闭" :disabled="busy.rawMaterialUpload" @click="closeRawMaterialUploadModal()">
+                  <button type="button" class="icon-button" title="关闭" aria-label="关闭" :disabled="busy.materialUpload" @click="closeMaterialUploadModal()">
                     <span class="material-symbols-outlined text-[18px]">close</span>
                   </button>
                 </div>
-                <form class="flex max-h-[calc(92vh-5.5rem)] min-h-0 flex-col" @submit.prevent="submitRawMaterial()">
+                <form class="flex max-h-[calc(92vh-5.5rem)] min-h-0 flex-col" @submit.prevent="submitMaterial()">
                   <div class="grid min-h-0 flex-1 grid-cols-[18rem_minmax(0,1fr)] divide-x divide-slate-200">
                     <aside class="flex min-h-0 flex-col bg-slate-50">
                       <div class="border-b border-slate-200 px-4 py-3">
-                        <label class="button-secondary w-full cursor-pointer justify-center" :class="busy.rawMaterialUpload ? 'pointer-events-none opacity-60' : ''">
+                        <label class="button-secondary w-full cursor-pointer justify-center" :class="busy.materialUpload ? 'pointer-events-none opacity-60' : ''">
                           <span class="material-symbols-outlined text-[18px]">upload_file</span>
                           <span>选择文件</span>
-                          <input x-ref="rawMaterialFileInput" type="file" multiple class="sr-only" :disabled="busy.rawMaterialUpload" @change="handleRawMaterialFileChange($event)" />
+                          <input x-ref="materialFileInput" type="file" multiple class="sr-only" :disabled="busy.materialUpload" @change="handleMaterialFileChange($event)" />
                         </label>
-                        <p class="mt-2 text-xs text-slate-500" x-text="rawMaterialUploadItems.length ? `${rawMaterialUploadItems.length} 个素材待上传` : '尚未选择素材文件'"></p>
+                        <p class="mt-2 text-xs text-slate-500" x-text="materialUploadItems.length ? `${materialUploadItems.length} 个素材待上传` : '尚未选择素材文件'"></p>
                       </div>
                       <div class="min-h-0 flex-1 overflow-y-auto p-2">
-                        <template x-if="rawMaterialUploadItems.length === 0">
+                        <template x-if="materialUploadItems.length === 0">
                           <div class="flex h-full min-h-48 items-center justify-center px-4 text-center text-sm text-slate-500">
                             <p>选择一个或多个文件后，这里会显示待上传素材列表。</p>
                           </div>
                         </template>
-                        <template x-for="(item, index) in rawMaterialUploadItems" :key="item.file.name + item.file.size + index">
-                          <div class="group flex items-start gap-1 rounded-md transition hover:bg-white" :class="rawMaterialUploadSelectedIndex === index ? 'bg-white shadow-sm ring-1 ring-orange-200' : ''">
-                            <button type="button" class="flex min-w-0 flex-1 items-start gap-2 px-2.5 py-2 text-left" :disabled="busy.rawMaterialUpload" @click="selectRawMaterialUploadItem(index)">
+                        <template x-for="(item, index) in materialUploadItems" :key="item.file.name + item.file.size + index">
+                          <div class="group flex items-start gap-1 rounded-md transition hover:bg-white" :class="materialUploadSelectedIndex === index ? 'bg-white shadow-sm ring-1 ring-orange-200' : ''">
+                            <button type="button" class="flex min-w-0 flex-1 items-start gap-2 px-2.5 py-2 text-left" :disabled="busy.materialUpload" @click="selectMaterialUploadItem(index)">
                               <span class="material-symbols-outlined mt-0.5 text-[18px] text-slate-400">draft</span>
                               <span class="min-w-0 flex-1">
                                 <span class="block truncate text-sm font-semibold text-slate-800" x-text="item.name || item.file.name"></span>
@@ -648,7 +648,7 @@
                                 </span>
                               </span>
                             </button>
-                            <button type="button" class="mr-1 mt-2 rounded p-0.5 text-slate-400 opacity-0 transition hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100" title="移除" aria-label="移除" :disabled="busy.rawMaterialUpload" @click="removeRawMaterialUploadItem(index)">
+                            <button type="button" class="mr-1 mt-2 rounded p-0.5 text-slate-400 opacity-0 transition hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100" title="移除" aria-label="移除" :disabled="busy.materialUpload" @click="removeMaterialUploadItem(index)">
                               <span class="material-symbols-outlined text-[17px]">delete</span>
                             </button>
                           </div>
@@ -657,38 +657,38 @@
                     </aside>
 
                     <div class="min-h-0 overflow-y-auto px-5 py-5">
-                      <template x-if="rawMaterialUploadSelectedItem()">
+                      <template x-if="materialUploadSelectedItem()">
                         <div class="space-y-4">
                           <div class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                            <p class="truncate font-semibold" x-text="rawMaterialUploadSelectedItem().file.name"></p>
+                            <p class="truncate font-semibold" x-text="materialUploadSelectedItem().file.name"></p>
                             <p class="mt-1 text-xs text-slate-500">
-                              <span x-text="formatBytes(rawMaterialUploadSelectedItem().file.size)"></span>
+                              <span x-text="formatBytes(materialUploadSelectedItem().file.size)"></span>
                               <span> · </span>
-                              <span x-text="rawMaterialUploadSelectedItem().file.type || 'application/octet-stream'"></span>
+                              <span x-text="materialUploadSelectedItem().file.type || 'application/octet-stream'"></span>
                             </p>
                           </div>
 
                           <div class="grid gap-4 md:grid-cols-2">
                             <label class="field-block">
                               <span class="field-label">名称</span>
-                              <input x-model.trim="rawMaterialUploadForm.name" class="input-field" placeholder="默认使用文件名" :disabled="busy.rawMaterialUpload" @input="syncRawMaterialUploadSelectedItem()" />
+                              <input x-model.trim="materialUploadForm.name" class="input-field" placeholder="默认使用文件名" :disabled="busy.materialUpload" @input="syncMaterialUploadSelectedItem()" />
                             </label>
                             <label class="field-block">
                               <span class="field-label">文件格式</span>
-                              <div class="input-field flex cursor-default items-center text-slate-400" x-text="rawMaterialUploadSelectedItem().file.type || '由系统根据文件内容识别'"></div>
+                              <div class="input-field flex cursor-default items-center text-slate-400" x-text="materialUploadSelectedItem().file.type || '由系统根据文件内容识别'"></div>
                             </label>
                           </div>
                           <label class="field-block">
                             <span class="field-label">描述</span>
-                            <textarea x-model.trim="rawMaterialUploadForm.description" class="textarea-field h-24" placeholder="补充这份素材的用途或重点。" :disabled="busy.rawMaterialUpload" @input="syncRawMaterialUploadSelectedItem()"></textarea>
+                            <textarea x-model.trim="materialUploadForm.description" class="textarea-field h-24" placeholder="补充这份素材的用途或重点。" :disabled="busy.materialUpload" @input="syncMaterialUploadSelectedItem()"></textarea>
                           </label>
                           <label class="field-block">
                             <span class="field-label">来源说明</span>
-                            <input x-model.trim="rawMaterialUploadForm.source_note" class="input-field" placeholder="例如：现场 SOP、供应商手册、专家访谈纪要" :disabled="busy.rawMaterialUpload" @input="syncRawMaterialUploadSelectedItem()" />
+                            <input x-model.trim="materialUploadForm.source_note" class="input-field" placeholder="例如：现场 SOP、供应商手册、专家访谈纪要" :disabled="busy.materialUpload" @input="syncMaterialUploadSelectedItem()" />
                           </label>
                         </div>
                       </template>
-                      <template x-if="!rawMaterialUploadSelectedItem()">
+                      <template x-if="!materialUploadSelectedItem()">
                         <div class="flex min-h-72 items-center justify-center rounded-md border border-dashed border-slate-300 text-center text-sm text-slate-500">
                           <p>请先在左侧添加素材文件。</p>
                         </div>
@@ -697,20 +697,20 @@
                   </div>
 
                   <div class="space-y-3 border-t border-slate-200 px-5 py-4">
-                    <template x-if="rawMaterialUploadError">
-                      <p class="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700" x-text="rawMaterialUploadError"></p>
+                    <template x-if="materialUploadError">
+                      <p class="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700" x-text="materialUploadError"></p>
                     </template>
-                    <template x-if="rawMaterialUploadProgress">
-                      <p class="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700" x-text="`正在上传 ${rawMaterialUploadProgress.current}/${rawMaterialUploadProgress.total}：${rawMaterialUploadProgress.filename}`"></p>
+                    <template x-if="materialUploadProgress">
+                      <p class="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700" x-text="`正在上传 ${materialUploadProgress.current}/${materialUploadProgress.total}：${materialUploadProgress.filename}`"></p>
                     </template>
                     <div class="flex justify-end gap-3">
-                    <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.rawMaterialUpload" @click="closeRawMaterialUploadModal()">
+                    <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.materialUpload" @click="closeMaterialUploadModal()">
                       <span class="material-symbols-outlined text-[18px]">close</span>
                       <span>取消</span>
                     </button>
-                    <button type="submit" class="button-primary" title="保存素材" aria-label="保存素材" :disabled="busy.rawMaterialUpload || rawMaterialUploadItems.length === 0">
-                      <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterialUpload ? 'animate-spin' : ''" x-text="busy.rawMaterialUpload ? 'progress_activity' : 'add'"></span>
-                      <span x-text="rawMaterialUploadProgress ? `保存中 ${rawMaterialUploadProgress.current}/${rawMaterialUploadProgress.total}` : '保存素材'"></span>
+                    <button type="submit" class="button-primary" title="保存素材" aria-label="保存素材" :disabled="busy.materialUpload || materialUploadItems.length === 0">
+                      <span class="material-symbols-outlined text-[18px]" :class="busy.materialUpload ? 'animate-spin' : ''" x-text="busy.materialUpload ? 'progress_activity' : 'add'"></span>
+                      <span x-text="materialUploadProgress ? `保存中 ${materialUploadProgress.current}/${materialUploadProgress.total}` : '保存素材'"></span>
                     </button>
                     </div>
                   </div>
@@ -719,26 +719,26 @@
             </div>
           </template>
 
-          <template x-if="rawMaterialGenerateModalOpen">
+          <template x-if="materialGenerateModalOpen">
             <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-8 backdrop-blur-sm">
               <section class="modal-panel flex max-h-[92vh] max-w-3xl flex-col">
                 <div class="flex shrink-0 items-start justify-between gap-4 border-b border-slate-800 px-5 py-4">
                   <div>
-                    <p class="panel-kicker">Skill 生成</p>
+                    <p class="panel-kicker">PSkill 生成</p>
                     <h3 class="panel-title">基于素材生成可审查草稿</h3>
                   </div>
-                  <button type="button" class="icon-button" title="关闭" aria-label="关闭" :disabled="busy.rawMaterialGenerate || busy.rawMaterialApply" @click="closeRawMaterialGenerateModal()">
+                  <button type="button" class="icon-button" title="关闭" aria-label="关闭" :disabled="busy.materialGenerate || busy.materialApply" @click="closeMaterialGenerateModal()">
                     <span class="material-symbols-outlined text-[18px]">close</span>
                   </button>
                 </div>
-                <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="generateSkillDraftFromRawMaterials()">
+                <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="generateSkillDraftFromMaterials()">
                   <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
                     <div class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-3">
                       <p class="field-label">全部素材</p>
                       <div class="mt-2 flex flex-wrap gap-2">
-                        <template x-for="material in rawMaterials" :key="material.id">
+                        <template x-for="material in materials" :key="material.id">
                           <span class="inline-flex max-w-full items-center gap-2 rounded-md border border-slate-700 bg-slate-950/40 px-2.5 py-1 text-xs font-medium text-slate-300">
-                            <span class="material-symbols-outlined text-[15px]" x-text="rawMaterialKindIcon(material.material_kind)"></span>
+                            <span class="material-symbols-outlined text-[15px]" x-text="materialKindIcon(material.material_kind)"></span>
                             <span class="truncate" x-text="material.name"></span>
                           </span>
                         </template>
@@ -746,26 +746,26 @@
                     </div>
                     <label class="field-block">
                       <span class="field-label">生成描述</span>
-                      <textarea x-model.trim="rawMaterialGenerateForm.user_description" class="textarea-field h-36" placeholder="请描述希望生成的 Skill 目标、使用场景、边界和输出风格。" required></textarea>
+                      <textarea x-model.trim="materialGenerateForm.user_description" class="textarea-field h-36" placeholder="请描述希望生成的 PSkill 目标、使用场景、边界和输出风格。" required></textarea>
                     </label>
-                    <template x-if="rawMaterialGenerationResult && rawMaterialGenerationResult.status === 'patch_proposed'">
+                    <template x-if="materialGenerationResult && materialGenerationResult.status === 'patch_proposed'">
                       <div class="rounded-md border border-sky-500/25 bg-sky-500/10 px-3 py-3 text-sm leading-6 text-sky-100">
                         <p class="font-semibold">pskill.builder 已生成可审查 patch</p>
                         <p class="mt-1 text-sky-100">确认 diff 后可应用到 GitLab draft，再进入发布与编译。</p>
                         <div class="mt-3 grid gap-2 sm:grid-cols-2">
                           <div>
                             <p class="field-label">AgentRun</p>
-                            <p class="mono-field mt-1 break-all" x-text="rawMaterialGenerationResult.agent_run?.id"></p>
+                            <p class="mono-field mt-1 break-all" x-text="materialGenerationResult.agent_run?.id"></p>
                           </div>
                           <div>
                             <p class="field-label">Base Commit</p>
-                            <p class="mono-field mt-1 break-all" x-text="rawMaterialGenerationResult.base_commit_sha"></p>
+                            <p class="mono-field mt-1 break-all" x-text="materialGenerationResult.base_commit_sha"></p>
                           </div>
                         </div>
                         <div class="mt-3 border-t border-sky-500/25 pt-3">
                           <p class="font-semibold">变更文件</p>
                           <div class="mt-2 flex flex-wrap gap-2">
-                            <template x-for="change in rawMaterialDraftPatchFileChanges()" :key="change.path">
+                            <template x-for="change in materialDraftPatchFileChanges()" :key="change.path">
                               <span class="inline-flex max-w-full items-center gap-2 rounded-md border border-sky-500/25 bg-slate-950/40 px-2.5 py-1 text-xs font-medium text-sky-100">
                                 <span class="material-symbols-outlined text-[15px]" x-text="change.changed === false ? 'visibility' : 'edit'"></span>
                                 <span class="truncate" x-text="change.path"></span>
@@ -773,18 +773,18 @@
                             </template>
                           </div>
                         </div>
-                        <pre class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-slate-800 bg-slate-950/80 p-3 text-xs leading-5 text-slate-200" x-text="rawMaterialGenerationResult.patch?.diff || 'No diff.'"></pre>
+                        <pre class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-slate-800 bg-slate-950/80 p-3 text-xs leading-5 text-slate-200" x-text="materialGenerationResult.patch?.diff || 'No diff.'"></pre>
                       </div>
                     </template>
-                    <template x-if="rawMaterialGenerationResult && rawMaterialGenerationResult.status === 'applied'">
+                    <template x-if="materialGenerationResult && materialGenerationResult.status === 'applied'">
                       <div class="rounded-md border border-emerald-500/25 bg-emerald-500/10 px-3 py-3 text-sm leading-6 text-emerald-100">
                         <p class="font-semibold">已应用到 GitLab draft</p>
-                        <p class="mt-1 mono-field break-all" x-text="rawMaterialGenerationResult.committed_commit_sha"></p>
-                        <template x-if="rawMaterialGenerationResult.changed_files?.length">
+                        <p class="mt-1 mono-field break-all" x-text="materialGenerationResult.committed_commit_sha"></p>
+                        <template x-if="materialGenerationResult.changed_files?.length">
                           <div class="mt-3 border-t border-emerald-500/25 pt-3">
                             <p class="font-semibold">已提交文件</p>
                             <div class="mt-2 max-h-72 overflow-y-auto">
-                              <template x-for="path in rawMaterialGenerationResult.changed_files" :key="path">
+                              <template x-for="path in materialGenerationResult.changed_files" :key="path">
                                 <p class="mono-field mt-1 break-all" x-text="path"></p>
                               </template>
                             </div>
@@ -792,25 +792,25 @@
                         </template>
                       </div>
                     </template>
-                    <template x-if="rawMaterialGenerationResult && rawMaterialGenerationResult.status === 'failed'">
+                    <template x-if="materialGenerationResult && materialGenerationResult.status === 'failed'">
                       <div class="rounded-md border border-rose-500/25 bg-rose-500/10 px-3 py-3 text-sm leading-6 text-rose-100">
                         <p class="font-semibold">生成失败</p>
-                        <p class="mt-2 text-rose-100" x-text="rawMaterialGenerationResult.error_message || 'pskill.builder 未生成有效草稿。'"></p>
+                        <p class="mt-2 text-rose-100" x-text="materialGenerationResult.error_message || 'pskill.builder 未生成有效草稿。'"></p>
                       </div>
                     </template>
                   </div>
                   <div class="flex shrink-0 justify-end gap-3 border-t border-slate-800 px-5 py-4">
-                    <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.rawMaterialGenerate || busy.rawMaterialApply" @click="closeRawMaterialGenerateModal()">
+                    <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.materialGenerate || busy.materialApply" @click="closeMaterialGenerateModal()">
                       <span class="material-symbols-outlined text-[18px]">close</span>
                       <span>取消</span>
                     </button>
-                    <button type="button" class="button-secondary" title="应用草稿 patch" aria-label="应用草稿 patch" x-show="rawMaterialGenerationResult?.status === 'patch_proposed'" :disabled="busy.rawMaterialGenerate || busy.rawMaterialApply || !canApplyRawMaterialDraftPatch()" @click="applyRawMaterialDraftPatch()">
-                      <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterialApply ? 'animate-spin' : ''" x-text="busy.rawMaterialApply ? 'progress_activity' : 'done'"></span>
-                      <span x-text="busy.rawMaterialApply ? '应用中...' : '应用 patch'"></span>
+                    <button type="button" class="button-secondary" title="应用草稿 patch" aria-label="应用草稿 patch" x-show="materialGenerationResult?.status === 'patch_proposed'" :disabled="busy.materialGenerate || busy.materialApply || !canApplyMaterialDraftPatch()" @click="applyMaterialDraftPatch()">
+                      <span class="material-symbols-outlined text-[18px]" :class="busy.materialApply ? 'animate-spin' : ''" x-text="busy.materialApply ? 'progress_activity' : 'done'"></span>
+                      <span x-text="busy.materialApply ? '应用中...' : '应用 patch'"></span>
                     </button>
-                    <button type="submit" class="button-primary" title="生成源码草稿" aria-label="生成源码草稿" :disabled="busy.rawMaterialGenerate || busy.rawMaterialApply || !rawMaterialGenerateForm.user_description || !canGenerateSkillDraftFromRawMaterials()">
-                      <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterialGenerate ? 'animate-spin' : ''" x-text="busy.rawMaterialGenerate ? 'progress_activity' : 'auto_fix_high'"></span>
-                      <span x-text="busy.rawMaterialGenerate ? '生成中...' : '生成源码草稿'"></span>
+                    <button type="submit" class="button-primary" title="生成源码草稿" aria-label="生成源码草稿" :disabled="busy.materialGenerate || busy.materialApply || !materialGenerateForm.user_description || !canGenerateSkillDraftFromMaterials()">
+                      <span class="material-symbols-outlined text-[18px]" :class="busy.materialGenerate ? 'animate-spin' : ''" x-text="busy.materialGenerate ? 'progress_activity' : 'auto_fix_high'"></span>
+                      <span x-text="busy.materialGenerate ? '生成中...' : '生成源码草稿'"></span>
                     </button>
                   </div>
                 </form>
@@ -829,7 +829,7 @@
               <div class="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 bg-sky-50/80 px-5 py-4">
                 <div>
                   <p class="panel-kicker" x-text="publishProgress.active ? '发布进度' : '发布确认'"></p>
-                  <p class="mt-1 text-lg font-semibold text-slate-950">发布 Skill</p>
+                  <p class="mt-1 text-lg font-semibold text-slate-950">发布 PSkill</p>
                   <p class="mt-2 text-sm leading-6 text-slate-600" x-text="publishProgress.active ? '系统正在冻结源码、调用编译智能体并写入 EG artifact。' : '本次发布会冻结当前草稿源码与 manifest snapshot，并触发自动编译。'"></p>
                 </div>
                 <button type="button" class="icon-button" title="返回发布列表" aria-label="返回发布列表" :disabled="isPublishInProgress()" @click="closePublishDrawer()">
@@ -1169,7 +1169,7 @@
             <template x-if="!busy.compilerRequests && currentSkillFilteredCompilerRequests().length === 0">
               <div class="empty-state py-14">
                 <span class="material-symbols-outlined text-[30px] text-slate-400">account_tree</span>
-                <p class="mt-3 text-sm text-slate-500" x-text="currentSkillCompilerRequests().length > 0 ? '没有匹配的编译任务。' : '当前 Skill 尚无编译任务。'"></p>
+                <p class="mt-3 text-sm text-slate-500" x-text="currentSkillCompilerRequests().length > 0 ? '没有匹配的编译任务。' : '当前 PSkill 尚无编译任务。'"></p>
                 <p class="mt-2 text-xs text-slate-500">可点击右上角编译按钮创建编译任务。</p>
               </div>
             </template>
@@ -1260,7 +1260,7 @@
 
           <template x-if="!currentSkill.latest_published_version">
             <div class="border-b border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-              当前 Skill 尚未发布，无法建立真实运行连接。
+              当前 PSkill 尚未发布，无法建立真实运行连接。
             </div>
           </template>
 
@@ -1274,7 +1274,7 @@
           <template x-if="!busy.invocations && currentSkillFilteredInvocations().length === 0">
             <div class="empty-state flex-1 py-14">
               <span class="material-symbols-outlined text-[30px] text-slate-400">play_circle</span>
-              <p class="mt-3 text-sm text-slate-500" x-text="currentSkillInvocations().length > 0 ? '没有匹配的运行记录。' : '当前 Skill 尚无运行记录。'"></p>
+              <p class="mt-3 text-sm text-slate-500" x-text="currentSkillInvocations().length > 0 ? '没有匹配的运行记录。' : '当前 PSkill 尚无运行记录。'"></p>
               <p class="mt-2 text-xs text-slate-500">发布后可在这里建立运行连接，并进入运行现场查看执行过程。</p>
             </div>
           </template>
@@ -1358,7 +1358,7 @@
           <template x-if="!busy.skillTestCases && skillTestCases.length === 0">
             <div class="empty-state flex-1 py-14">
               <span class="material-symbols-outlined text-[30px] text-slate-400">science</span>
-              <p class="mt-3 text-sm text-slate-500">当前 Skill 尚无黑盒时序测试场景。</p>
+              <p class="mt-3 text-sm text-slate-500">当前 PSkill 尚无黑盒时序测试场景。</p>
               <button type="button" class="button-primary mt-4" @click="navigate(`/admin/skills/${currentSkill.id}/tests/new`)">
                 <span class="material-symbols-outlined text-[18px]">add</span>
                 <span>新增场景</span>

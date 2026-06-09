@@ -20,7 +20,7 @@
 - Platform Agents、Agent Runs、Skill Packages、Tools、Memory。
 - Runtime job 任务页和统计。
 - Invocation 列表、Run Live、Terminal transcript、多模态输入、WebSocket 增量提示。
-- Skill Test Scenario、timeline、asset、run、review、evaluate、fork。
+- PSkill Test Scenario、timeline、asset、run、review、evaluate、fork。
 - Replay run 列表和 run replay 视图。
 - Run Evaluation Reports、Findings。
 - Governance Proposals、Experiments。
@@ -105,7 +105,7 @@ static/
 - 左侧 sidebar：桌面端显示，可折叠。
 - 顶部 header：显示当前路由标题。
 - 主内容区：多个固定 `div` 容器按 route name `x-show` 切换。
-- 全局 modal/drawer 容器：创建 Skill、发布 Skill、删除 Skill。
+- 全局 modal/drawer 容器：创建 PSkill、发布 PSkill、删除 PSkill。
 
 左侧一级菜单：
 
@@ -144,7 +144,7 @@ static/
 | `/admin/skills/:skillId/tests/new` | `skill-test-scenario-new` | 新建测试场景 |
 | `/admin/skills/:skillId/tests/:scenarioId` | `skill-test-scenario` | 测试场景详情 |
 | `/admin/skills/:skillId/tests/:scenarioId/runs/:scenarioRunId/review` | `skill-test-scenario-review` | 测试运行 review |
-| `/admin/skills/:skillId/compiler/artifacts/:artifactId` | `skill-compiler-artifact` | Skill 上下文 artifact 详情 |
+| `/admin/skills/:skillId/compiler/artifacts/:artifactId` | `skill-compiler-artifact` | PSkill 上下文 artifact 详情 |
 | `/admin/compiler` | `compiler-list` | 编译请求列表深链 |
 | `/admin/compiler/artifacts/:artifactId` | `compiler-artifact` | Artifact 详情 |
 | `/admin/agent-prompts` | `agent-prompts-list` | Prompt Pack 列表 |
@@ -223,12 +223,12 @@ static/
 | App / Route | `apiBaseUrl`、`route`、`loadingPage`、`notice`、`centerToast` | `app.js`、`core.js` |
 | Dashboard | `dashboardMetrics`、`dashboardFilters` | `dashboard.js` |
 | Skills | `skills`、`currentSkill`、`sourceLoadedSkillId`、`repositoryEntries` | `skill-detail.js` |
-| Materials | `rawMaterials`、`rawMaterialDetail`、`rawMaterialAnalysis`、upload/generate modal state | `skill-detail.js` |
+| Materials | `materials`、`materialDetail`、`materialAnalysis`、upload/generate modal state | `skill-detail.js` |
 | Publish / Compiler | `publishProgress`、`compilerRequests`、`compilerArtifact`、BPMN viewer state | `compiler.js` |
 | Agent Prompts | `agentPrompts`、`agentPromptDetail`、`agentPromptBindings` | `agent-prompts.js` |
 | Tasks | `tasks`、`taskStats`、`taskFilters`、`taskPollTimer` | `tasks.js` |
-| Runtime | `invocations`、`liveRun`、`terminalEvents`、`runWs`、`liveRunPollTimer` | `runtime.js` |
-| Skill Tests | `skillTestCases`、`skillTestCase`、`skillTestRuns`、`skillTestReview`、timeline state | `skill-test.js` |
+| Runtime | `invocations`、`liveRun`、`runEvents`、`runWs`、`liveRunPollTimer` | `runtime.js` |
+| PSkill Tests | `skillTestCases`、`skillTestCase`、`skillTestRuns`、`skillTestReview`、timeline state | `skill-test.js` |
 | Evaluations | `currentEvaluation`、`evaluationFindings`、`evaluationActivityWs` | `evaluations.js` |
 | Governance | `governanceProposals`、`governanceExperimentRows`、`governanceProposalActivityWs` | `governance.js` |
 | Platform Agents | `platformAgents`、`platformAgentRuns`、`platformAgentToolAuthorizations` | `platform-agents.js` |
@@ -255,7 +255,7 @@ static/
 | Run Live | `GET /api/v1/runs/{run_id}`、`POST /api/v1/runs/{run_id}/cancel`、`/snapshots`、`/traces`、`/bindings`、`/events`；侧栏展示 `compile_request_id` 与 Artifact 入口，Replay 证据区可跳转 `pskill.runner` AgentRun |
 | Terminal WS | `/ws/runs/{run_id}` |
 | Replay | `GET /api/v1/replay/runs`、`GET /api/v1/replay/runs/{run_id}`、`GET /api/v1/replay/traces/{trace_id}` |
-| Skill Tests | `/api/v1/pskills/{skill_id}/test-scenarios*`、`/api/v1/skill-test-scenario-runs*` |
+| PSkill Tests | `/api/v1/pskills/{skill_id}/test-scenarios*`、`/api/v1/skill-test-scenario-runs*` |
 | Inference Models | `GET /api/v1/gateway/inference/models` |
 | Evaluations | `/api/v1/evaluations*` |
 | Governance | `/api/v1/governance/proposals*`、`/api/v1/governance/experiments*` |
@@ -286,7 +286,7 @@ static/
 | Run Live 状态 | WebSocket `/ws/runs/{run_id}` 接收 `run.updated` 增量更新状态栏、compile provenance 和 Replay run metadata；REST 刷新 run、run events、run traces、bindings 补齐 |
 | Run Live binding | WebSocket `/ws/runs/{run_id}` 接收 `binding.updated`，增量更新 Binding 列表和 Replay binding evidence，REST 补齐 |
 | Tasks | 轮询 runtime jobs 和 stats |
-| Skill Test Review | REST 拉取 review DTO，必要时轮询运行状态 |
+| PSkill Test Review | REST 拉取 review DTO，必要时轮询运行状态 |
 | Replay | REST 一次性拉取 replay detail；侧栏展示 Replay Provenance；deep link 支持 `event_id`、`trace_id`、`seq_no`、`snapshot_seq` 定位证据；RunTrace、AgentEvent、ModelCall、ToolCall、ToolAuthorization 证据可回跳 Platform AgentRun 详情对应 tab，并用 `event_id`、`model_call_id`、`tool_call_id`、`authorization_id` 聚焦具体证据行 |
 | Evaluation / Governance activity | WebSocket 活动快照 + REST 补齐 |
 | Tool Authorizations | WebSocket `/ws/tool-authorizations` 接收授权变更，REST 补齐 |

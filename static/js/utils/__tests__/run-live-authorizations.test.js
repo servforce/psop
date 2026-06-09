@@ -401,7 +401,7 @@ test("loadRunLive loads run-scoped tool authorizations", async () => {
     busy: { liveRun: false },
     liveRunLoadedRunId: "",
     liveRunEvents: [],
-    liveRunTraceEvents: [],
+    liveRunTraces: [],
     liveRunToolAuthorizations: [],
     selectedLiveRunReplayItemKey: "",
     selectedLiveRunProcessEventKey: "",
@@ -504,7 +504,7 @@ test("run live websocket accepts legacy run event aliases", () => {
     ...methods,
     liveRun: { id: "run-1" },
     liveRunEvents: [],
-    liveRunTraceEvents: [],
+    liveRunTraces: [],
     liveRunToolAuthorizations: [],
     replayDetail: null,
     mergeRunEvents: jest.fn(),
@@ -521,7 +521,7 @@ test("run live websocket accepts legacy run event aliases", () => {
   });
 
   expect(context.mergeRunEvents).toHaveBeenCalledWith([runEvent]);
-  expect(context.liveRunTraceEvents).toEqual([runTrace]);
+  expect(context.liveRunTraces).toEqual([runTrace]);
 });
 
 test("run live websocket events update replay timeline evidence incrementally", () => {
@@ -536,7 +536,7 @@ test("run live websocket events update replay timeline evidence incrementally", 
     parts: [],
     occurred_at: "2026-06-08T00:00:02.000Z"
   };
-  const traceEvent = {
+  const runTrace = {
     id: "trace-1",
     run_id: "run-1",
     phase: "instruct_collect_context",
@@ -582,7 +582,7 @@ test("run live websocket events update replay timeline evidence incrementally", 
     ...methods,
     liveRun: { id: "run-1", status: "waiting_input", latest_snapshot_seq: 1 },
     liveRunEvents: [],
-    liveRunTraceEvents: [],
+    liveRunTraces: [],
     liveRunBindings: [],
     liveRunToolAuthorizations: [],
     replayDetail: {
@@ -617,7 +617,7 @@ test("run live websocket events update replay timeline evidence incrementally", 
   });
   methods.handleRunWsEvent.call(context, {
     event_type: "run.trace.appended",
-    payload: traceEvent
+    payload: runTrace
   });
   methods.handleRunWsEvent.call(context, {
     event_type: "binding.updated",
@@ -633,12 +633,12 @@ test("run live websocket events update replay timeline evidence incrementally", 
   });
 
   expect(context.liveRunEvents).toEqual([runEvent]);
-  expect(context.liveRunTraceEvents).toEqual([traceEvent]);
+  expect(context.liveRunTraces).toEqual([runTrace]);
   expect(methods.liveRunReplayRunEventCount.call(context)).toBe(1);
   expect(methods.liveRunReplayTraceCount.call(context)).toBe(1);
   expect(context.replayDetail.run_events).toEqual([runEvent]);
   expect(context.replayDetail.terminal_events).toBeUndefined();
-  expect(context.replayDetail.run_traces).toEqual([traceEvent]);
+  expect(context.replayDetail.run_traces).toEqual([runTrace]);
   expect(context.replayDetail.trace_events).toBeUndefined();
   expect(context.replayDetail.bindings).toEqual([binding]);
   expect(methods.liveRunReplaySnapshots.call(context).map((item) => item.seq_no)).toEqual([1, 2]);
@@ -815,7 +815,7 @@ test("run replay selection follows event id from location", () => {
 
 test("run replay selection follows trace source id from location", () => {
   const methods = loadRuntimeMethods("?trace_id=trace-1");
-  const traceEvent = {
+  const runTrace = {
     seq_no: 1,
     event_type: "runtime.failed",
     occurred_at: "2026-01-01T00:00:01.000Z",
@@ -828,14 +828,14 @@ test("run replay selection follows trace source id from location", () => {
     liveRun: { id: "run-1" },
     replayDetail: {
       run: { id: "run-1" },
-      timeline: [traceEvent]
+      timeline: [runTrace]
     },
     selectedLiveRunReplayItemKey: ""
   };
 
   methods.syncLiveRunReplaySelectionFromLocation.call(context);
 
-  expect(context.selectedLiveRunReplayItemKey).toBe(methods.liveRunReplayItemKey(traceEvent));
+  expect(context.selectedLiveRunReplayItemKey).toBe(methods.liveRunReplayItemKey(runTrace));
 });
 
 test("run replay exposes closed-loop evidence counts", () => {

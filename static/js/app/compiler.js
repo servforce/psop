@@ -733,7 +733,7 @@
         if (this.currentSkill?.id === compileRequest.pskill_definition_id) {
           return this.currentSkill.name;
         }
-        return this.skillForCompileRequest(compileRequest)?.name || "未知 Skill";
+        return this.skillForCompileRequest(compileRequest)?.name || "未知 PSkill";
       },
 
 

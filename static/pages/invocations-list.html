@@ -10,9 +10,9 @@
 
     <div class="grid gap-5 border-b border-slate-200 bg-slate-50/80 p-5 xl:grid-cols-[18rem_1fr_auto]">
       <label class="field-block">
-        <span class="field-label">Skill</span>
+        <span class="field-label">PSkill</span>
         <select x-model="invocationForm.skill_key" class="input-field">
-          <option value="">请选择 Skill</option>
+          <option value="">请选择 PSkill</option>
           <template x-for="skill in skills.filter((item) => item.latest_published_commit_sha)" :key="skill.id">
             <option :value="skill.key" x-text="skill.name"></option>
           </template>

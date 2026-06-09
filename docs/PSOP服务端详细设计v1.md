@@ -122,18 +122,18 @@ backend/app/
 
 ## 7. 领域设计
 
-### 7.1 Skills
+### 7.1 PSkills
 
 代码位置：`backend/app/pskills/*`
 
 职责：
 
-- 创建 Skill 时通过 GitLab gateway 创建项目和默认 `README.md`、`SKILL.md`、`skill.yaml`。
-- 保存 Skill metadata、source 和 repository file 时同步 GitLab commit 和 draft `manifest_snapshot`。
-- 发布 Skill 时冻结 GitLab branch head，创建 published `PPSkillVersion`、`PPSkillPublishRecord`、`SkillCompileRequest` 和 `RuntimeJob(job_type=compile)`。
-- 管理 materials：上传、对象存储、分析、派生资产、从视频素材生成 Skill draft。
+- 创建 PSkill 时通过 GitLab gateway 创建项目和默认 `README.md`、`SKILL.md`、`skill.yaml`。
+- 保存 PSkill metadata、source 和 repository file 时同步 GitLab commit 和 draft `manifest_snapshot`。
+- 发布 PSkill 时冻结 GitLab branch head，创建 published `PSkillVersion`、`PSkillPublishRecord`、`pskill_compile_request` 和 `RuntimeJob(job_type=compile)`。
+- 管理 materials：上传、对象存储、分析、派生资产、从视频素材生成 PSkill draft。
 
-当前 Skill source 事实源：
+当前 PSkill source 事实源：
 
 - 用户可读源码：GitLab repository。
 - 结构化机器契约：`pskill_version.manifest_snapshot`。
@@ -145,7 +145,7 @@ backend/app/
 
 职责：
 
-- `SkillCompileRequest` 记录编译请求。
+- `pskill_compile_request` 记录编译请求。
 - `RuntimeJob(job_type=compile)` 承载异步编译执行。
 - `SkillCompileAgent` 通过 active DB prompt binding `default.compile_agent` 或 repo fallback `skill_compilation/formal_v5_compile/v1` 构造 LLM 编译请求。
 - `DomainPackRegistry` 解析 `generic/v1`、`industrial_inspection/v1`、`equipment_maintenance/v1` 等 domain pack。
@@ -281,11 +281,11 @@ Claim 规则：
 
 当前所有表由 SQLAlchemy declarative models 定义，`DatabaseManager.create_schema()` 通过 `Base.metadata.create_all()` 创建。当前代码没有 Alembic migration。
 
-### 8.1 Skills
+### 8.1 PSkills
 
 | 表 | 关键字段 | 说明 |
 | --- | --- | --- |
-| `pskill_definition` | `key`、`name`、`status`、`gitlab_project_id`、`repository_url`、`default_branch`、`manifest_path`、`latest_draft_version_id`、`latest_published_version_id` | Skill 总对象和 GitLab 绑定 |
+| `pskill_definition` | `key`、`name`、`status`、`gitlab_project_id`、`repository_url`、`default_branch`、`manifest_path`、`latest_draft_version_id`、`latest_published_version_id` | PSkill 总对象和 GitLab 绑定 |
 | `pskill_version` | `pskill_definition_id`、`version_no`、`status`、`source_ref`、`source_commit_sha`、`manifest_snapshot`、`runtime_policy_snapshot` | draft/published 版本 |
 | `pskill_publish_record` | `pskill_definition_id`、`pskill_version_id`、`publish_reason`、`publish_status`、`published_commit_sha`、`release_ref` | 发布记录 |
 | `pskill_material` | `pskill_definition_id`、`artifact_object_id`、`material_kind`、`mime_type`、`status`、`size_bytes`、`checksum` | PSkill 素材 |
@@ -428,7 +428,7 @@ Claim 规则：
 | `POST` | `/api/v1/skills/sync` | 同步 `skills/psop` 和 `skills/public` 下的 Skill 包 |
 | `GET` | `/api/v1/skills/{package_name}` | Skill 包详情 |
 | `GET` | `/api/v1/skills/{package_name}/versions` | Skill 包版本列表 |
-| `POST` | `/api/v1/skills/{package_name}/versions` | 创建 Skill 包候选版本 |
+| `POST` | `/api/v1/skills/{package_name}/versions` | 创建 PSkill 包候选版本 |
 | `POST` | `/api/v1/skills/{package_name}/versions/{version_id}/validate` | 校验 Skill 包版本 |
 | `POST` | `/api/v1/skills/{package_name}/versions/{version_id}/activate` | 激活 Skill 包版本 |
 

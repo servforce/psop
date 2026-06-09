@@ -2114,7 +2114,7 @@
         if (review.replay?.run) {
           this.liveRun = review.replay.run;
           this.liveRunEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_events || []);
-          this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_traces || []);
+          this.liveRunTraces = window.PSOPRuntimeEvents.mergeBySeq([], review.replay.run_traces || []);
           this.liveRunBindings = window.PSOPRuntimeEvents.mergeById([], review.replay.bindings || []);
         }
         if (

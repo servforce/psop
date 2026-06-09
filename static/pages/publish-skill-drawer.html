@@ -4,7 +4,7 @@
       <div class="flex items-start justify-between gap-4 border-b border-slate-200 bg-sky-50/80 px-6 py-5">
         <div>
           <p class="panel-kicker" x-text="publishProgress.active ? '发布进度' : '发布确认'"></p>
-          <h2 class="mt-1 text-xl font-semibold text-slate-950">发布 Skill</h2>
+          <h2 class="mt-1 text-xl font-semibold text-slate-950">发布 PSkill</h2>
           <p class="mt-2 text-sm leading-6 text-slate-600" x-text="publishProgress.active ? '系统正在冻结源码、调用编译智能体并写入 EG artifact。' : '本次发布会冻结当前草稿源码与 manifest snapshot，并触发自动编译。'"></p>
         </div>
         <button type="button" class="icon-button" title="关闭" :disabled="isPublishInProgress()" @click="closePublishDrawer()">

@@ -1196,7 +1196,7 @@ test("review refresh replaces pending semantic judgement with saved judge output
   app.skillTestRun = initialReview.scenario_run;
   app.skillTestRuns = [];
   app.liveRunEvents = [];
-  app.liveRunTraceEvents = [];
+  app.liveRunTraces = [];
   app.liveRunBindings = [];
   app.route = { name: "skill-test-scenario-review" };
   app.apiRequest = jest.fn().mockResolvedValue(refreshedReview);

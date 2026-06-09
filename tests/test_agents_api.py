@@ -377,7 +377,7 @@ def test_agent_runner_can_use_llm_gateway_for_agent_decision() -> None:
     assert run_once_response.json()["output_payload"]["draft_summary"] == "LLM gateway produced an AgentDecision."
     assert gateway.calls
     assert gateway.calls[0]["route_key"] == "text"
-    assert "物理世界任务 Skill 构建智能体" in gateway.calls[0]["system_prompt"]
+    assert "物理世界任务 PSkill 构建智能体" in gateway.calls[0]["system_prompt"]
     assert "JSON decision" in gateway.calls[0]["system_prompt"]
     prompt_payload = json.loads(gateway.calls[0]["user_prompt"])
     assert prompt_payload["agent_key"] == "pskill.builder"

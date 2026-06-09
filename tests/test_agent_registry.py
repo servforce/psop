@@ -28,9 +28,9 @@ def test_prompt_registry_loads_agent_prompt_packs() -> None:
     assert creation_pack.agent_id == "psop.skill_creation.conversational_draft"
     assert creation_pack.agent_key == "pskill.builder"
     assert creation_pack.route_key == "text"
-    assert "Skill 构建智能体" in creation_pack.system_prompt
+    assert "PSkill 构建智能体" in creation_pack.system_prompt
     assert "AI 协助人类完成现实任务" in creation_pack.system_prompt
-    assert "物理世界 Skill" in creation_pack.system_prompt
+    assert "物理世界 PSkill" in creation_pack.system_prompt
     assert evaluator_pack.agent_id == "psop.run_evaluation.default"
     assert evaluator_pack.agent_key == "pskill.evaluator"
     assert evaluator_pack.scenario == "run_evaluation"
@@ -51,7 +51,7 @@ def test_domain_pack_registry_loads_initial_packs() -> None:
     maintenance = registry.load_domain_pack("equipment_maintenance")
 
     assert generic.key == "generic/v1"
-    assert "通用 Skill 工作流指导" in generic.guidance
+    assert "通用 PSkill 工作流指导" in generic.guidance
     assert "现场巡检" in inspection.guidance
     assert "故障诊断" in maintenance.guidance
 

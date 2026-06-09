@@ -6,7 +6,7 @@
           <span class="material-symbols-outlined text-[19px]">delete</span>
         </span>
         <div class="min-w-0 flex-1">
-          <h2 class="text-base font-semibold text-slate-100">删除 Skill</h2>
+          <h2 class="text-base font-semibold text-slate-100">删除 PSkill</h2>
           <p class="mt-1 text-sm leading-6 text-slate-400">该 Skill 会被标记为已归档，对应 GitLab 仓库项目也会同步归档。</p>
         </div>
         <button type="button" class="icon-button -mr-2 -mt-1" title="关闭" aria-label="关闭" :disabled="busy.delete" @click="closeDeleteModal()">
@@ -24,7 +24,7 @@
         </div>
 
         <label class="field-block">
-          <span class="field-label">Skill 名称</span>
+          <span class="field-label">PSkill 名称</span>
           <input x-model="deleteForm.confirmation_name" class="input-field" :placeholder="deleteTargetSkill.name" required />
         </label>
 

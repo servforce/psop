@@ -4,7 +4,7 @@
       <nav class="breadcrumb-bar border-0 pb-0" aria-label="Breadcrumb">
         <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
         <span class="material-symbols-outlined text-[16px] text-slate-400">chevron_right</span>
-        <button type="button" class="breadcrumb-link font-medium text-slate-950" @click="navigate('/admin/skills')">Skills</button>
+        <button type="button" class="breadcrumb-link font-medium text-slate-950" @click="navigate('/admin/skills')">PSkills</button>
       </nav>
     </div>
 
@@ -29,7 +29,7 @@
           <span class="text-xs text-slate-400">至</span>
           <input x-model="filters.created_to" type="date" class="input-field h-10 w-40 py-0" aria-label="创建结束时间" @change="loadSkills()" />
         </div>
-        <button type="button" class="button-primary h-10 w-10 shrink-0 px-0" title="新建 Skill" aria-label="新建 Skill" data-tooltip="新建 Skill" @click="openCreateModal()">
+        <button type="button" class="button-primary h-10 w-10 shrink-0 px-0" title="新建 PSkill" aria-label="新建 PSkill" data-tooltip="新建 PSkill" @click="openCreateModal()">
           <span class="material-symbols-outlined text-[18px]">add</span>
         </button>
       </div>
@@ -48,8 +48,8 @@
       <template x-if="filteredSkills().length === 0">
         <div class="empty-state h-full min-h-80">
           <span class="material-symbols-outlined text-[32px] text-slate-400">inventory_2</span>
-          <p class="mt-3 text-base font-medium text-slate-950">没有匹配的 Skill</p>
-          <p class="mt-2 text-sm text-slate-500">调整搜索条件，或创建一个新的 Skill。</p>
+          <p class="mt-3 text-base font-medium text-slate-950">没有匹配的 PSkill</p>
+          <p class="mt-2 text-sm text-slate-500">调整搜索条件，或创建一个新的 PSkill。</p>
         </div>
       </template>
 
@@ -75,8 +75,8 @@
                 <button
                   type="button"
                   class="icon-button-danger"
-                  title="删除 Skill"
-                  aria-label="删除 Skill"
+                  title="删除 PSkill"
+                  aria-label="删除 PSkill"
                   @click.stop="openDeleteModal(skill)"
                   @keydown.enter.stop
                   @keydown.space.stop

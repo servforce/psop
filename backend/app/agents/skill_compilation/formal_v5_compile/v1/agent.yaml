@@ -3,7 +3,7 @@ agent_key: pskill.compiler
 version: v1
 scenario: skill_compilation
 route_key: text
-description: Compile frozen PSOP Skill source into formal-v5 EG candidates.
+description: Compile frozen PSOP PSkill source into formal-v5 EG candidates.
 inputs:
   - skill metadata
   - frozen manifest snapshot

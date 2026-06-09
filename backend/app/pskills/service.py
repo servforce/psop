@@ -282,7 +282,7 @@ class SkillsService:
         definition = self._require_definition(session, skill_id)
         if payload.confirmation_name != definition.name:
             raise SkillValidationError(
-                "确认名称与 Skill 名称不一致。",
+                "确认名称与 PSkill 名称不一致。",
                 details={"expected": definition.name},
             )
 
@@ -905,7 +905,7 @@ class SkillsService:
             raise SkillNotFoundError("未找到素材分析记录。", details={"job_id": job_id, "analysis_id": analysis_id})
         material = self.repository.get_material(session, analysis.material_id)
         if not material or material.status == "archived":
-            raise SkillNotFoundError("未找到原始素材。", details={"material_id": analysis.material_id})
+            raise SkillNotFoundError("未找到素材。", details={"material_id": analysis.material_id})
         artifact_object = session.get(ArtifactObject, material.artifact_object_id)
         if not artifact_object:
             raise SkillNotFoundError("未找到素材对象。", details={"artifact_object_id": material.artifact_object_id})
@@ -984,7 +984,7 @@ class SkillsService:
             material.status = "failed"
             material.error_message = str(exc)
             session.commit()
-            LOGGER.exception("raw material analysis failed", extra={"material_id": material.id, "job_id": job_id})
+            LOGGER.exception("material analysis failed", extra={"material_id": material.id, "job_id": job_id})
             return analysis
 
     def generate_skill_draft_from_materials(
@@ -998,12 +998,12 @@ class SkillsService:
         materials = self.repository.list_materials(session, definition.id)
         material_ids = [material.id for material in materials]
         if not materials:
-            raise SkillValidationError("生成 Skill 至少需要一个已分析完成的视频素材。")
+            raise SkillValidationError("生成 PSkill 至少需要一个已分析完成的视频素材。")
         failed_materials = [material.id for material in materials if material.status != "ready"]
         if failed_materials:
-            raise SkillValidationError("存在未就绪素材，不能用于生成 Skill。", details={"material_ids": failed_materials})
+            raise SkillValidationError("存在未就绪素材，不能用于生成 PSkill。", details={"material_ids": failed_materials})
         if not any(self._is_video_material(material) for material in materials):
-            raise SkillValidationError("生成 Skill 至少需要选择一个已分析完成的视频素材。")
+            raise SkillValidationError("生成 PSkill 至少需要选择一个已分析完成的视频素材。")
         if payload.base_commit_sha:
             draft_version = self._require_draft_version(session, definition)
             current_head = self.gitlab_gateway.get_branch_head(definition.gitlab_project_id, draft_version.source_ref)
@@ -1136,13 +1136,13 @@ class SkillsService:
     ) -> PSkillMaterialGeneration:
         job = self.job_repository.get_runtime_job(session, job_id)
         if not job:
-            raise SkillNotFoundError("未找到 Skill 生成任务。", details={"job_id": job_id})
+            raise SkillNotFoundError("未找到 PSkill 生成任务。", details={"job_id": job_id})
         if job.job_type != PSKILL_BUILD_JOB_TYPE:
-            raise SkillValidationError("当前 worker 仅支持 Skill 生成任务。", details={"job_type": job.job_type})
+            raise SkillValidationError("当前 worker 仅支持 PSkill 生成任务。", details={"job_type": job.job_type})
         generation_id = str((job.payload or {}).get("generation_id") or "")
         generation = self.repository.get_material_generation(session, generation_id)
         if not generation:
-            raise SkillNotFoundError("未找到 Skill 生成记录。", details={"job_id": job_id, "generation_id": generation_id})
+            raise SkillNotFoundError("未找到 PSkill 生成记录。", details={"job_id": job_id, "generation_id": generation_id})
         if generation.status == "succeeded":
             job.status = "succeeded"
             job.lease_until = None
@@ -1433,14 +1433,14 @@ class SkillsService:
         if len(materials) != len(material_ids):
             found_ids = {material.id for material in materials}
             raise SkillNotFoundError(
-                "部分原始素材不存在。",
+                "部分素材不存在。",
                 details={"missing_material_ids": [item for item in material_ids if item not in found_ids]},
             )
         material_by_id = {material.id: material for material in materials}
         materials = [material_by_id[material_id] for material_id in material_ids]
         failed_materials = [material.id for material in materials if material.status != "ready"]
         if failed_materials:
-            raise SkillValidationError("存在未就绪素材，不能用于生成 Skill。", details={"material_ids": failed_materials})
+            raise SkillValidationError("存在未就绪素材，不能用于生成 PSkill。", details={"material_ids": failed_materials})
 
         material_generation_context = self._collect_generation_material_context(session, materials)
         source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, draft_version.source_ref)
@@ -1638,14 +1638,14 @@ class SkillsService:
                 ],
                 "draft_policy": "生成结果会提交到 GitLab draft 标准路径，但不会发布、不会编译。",
                 "video_reference_policy": (
-                    f"必须从 candidate_reference_assets 中选择 1 到 {MAX_SKILL_REFERENCE_ASSETS} 张最适合 Skill 运行时参考的关键帧，"
+                    f"必须从 candidate_reference_assets 中选择 1 到 {MAX_SKILL_REFERENCE_ASSETS} 张最适合 PSkill 运行时参考的关键帧，"
                     "输出到 selected_reference_assets。每一个 selected_reference_assets.reference_path 都必须至少被 "
                     "SKILL.md 或 references/README.md 引用一次；SKILL.md、references/README.md、examples/ 和 tests/ "
                     "不得引用未出现在 selected_reference_assets 中的 reference_path。"
                 ),
                 "material_analysis_policy": (
                     "material_analysis_results 是素材证据包，不是任务拆解；"
-                    "必须由 Skill 构建智能体综合判断任务目标、步骤、安全风险和完成标准。"
+                    "必须由 PSkill 构建智能体综合判断任务目标、步骤、安全风险和完成标准。"
                 ),
                 "reference_selection_policy": (
                     "优先选择能支撑关键步骤、状态变化、工具/对象识别、安全风险和完成标准的画面；"
@@ -1657,12 +1657,12 @@ class SkillsService:
     @staticmethod
     def _skill_creation_form_definition_context() -> dict:
         return {
-            "definition": "PSOP Skill is a source-level contract for a real task. The platform compiles Skills into EG Compile Artifacts.",
+            "definition": "PSOP PSkill is a source-level contract for a real task. The platform compiles PSkills into EG Compile Artifacts.",
             "formal_revision": "psop-eg-formal/v5",
             "core_constraints": [
-                "WEB IDE users author Skills; the system compiles and executes EG.",
+                "WEB IDE users author PSkills; the system compiles and executes EG.",
                 "SKILL.md is the source contract for task workflow, evidence, safety, recovery, and completion criteria.",
-                "A publishable document Skill must be self-contained enough for compilation from README.md and SKILL.md.",
+                "A publishable document PSkill must be self-contained enough for compilation from README.md and SKILL.md.",
                 "Runtime execution must preserve explicit wait checkpoints and evidence requirements instead of silently advancing.",
             ],
             "minimum_contract_sections": [
@@ -1731,13 +1731,13 @@ class SkillsService:
         candidate_reference_assets: list[dict] = []
         video_material_ids = [material.id for material in materials if self._is_video_material(material)]
         if not video_material_ids:
-            raise SkillValidationError("生成 Skill 至少需要选择一个已分析完成的视频素材。")
+            raise SkillValidationError("生成 PSkill 至少需要选择一个已分析完成的视频素材。")
 
         for material in materials:
             analysis = self.repository.get_latest_material_analysis(session, material.id)
             if not analysis or analysis.status != "ready":
                 raise SkillValidationError(
-                    "存在未完成分析的素材，不能用于生成 Skill。",
+                    "存在未完成分析的素材，不能用于生成 PSkill。",
                     details={"material_id": material.id, "analysis_status": analysis.status if analysis else "missing"},
                 )
             analysis_result = dict(analysis.analysis_result or {})
@@ -1766,7 +1766,7 @@ class SkillsService:
                 candidate_reference_assets.append(asset_payload)
 
         if not material_analysis_results:
-            raise SkillValidationError("生成 Skill 至少需要选择一个已分析完成的视频素材。")
+            raise SkillValidationError("生成 PSkill 至少需要选择一个已分析完成的视频素材。")
         return {
             "material_analysis_results": material_analysis_results,
             "candidate_reference_assets": candidate_reference_assets,
@@ -1793,10 +1793,10 @@ class SkillsService:
             if isinstance(item, dict) and item.get("reference_path")
         }
         if candidate_by_id and not selected_reference_assets:
-            raise SkillValidationError("Skill 创建智能体未选择任何参考帧。")
+            raise SkillValidationError("PSkill 构建智能体未选择任何参考帧。")
         if len(selected_reference_assets) > MAX_SKILL_REFERENCE_ASSETS:
             raise SkillValidationError(
-                "Skill 创建智能体选择的参考帧数量超过限制。",
+                "PSkill 构建智能体选择的参考帧数量超过限制。",
                 details={"max_reference_assets": MAX_SKILL_REFERENCE_ASSETS, "actual": len(selected_reference_assets)},
             )
 
@@ -1811,13 +1811,13 @@ class SkillsService:
                 candidate = candidate_by_reference_path.get(reference_path_hint)
                 asset_id = str(candidate.get("id") or "").strip() if candidate else ""
             if not asset_id:
-                raise SkillValidationError("Skill 创建智能体选择的参考帧缺少 asset_id。", details={"item": item})
+                raise SkillValidationError("PSkill 构建智能体选择的参考帧缺少 asset_id。", details={"item": item})
             if asset_id in seen_asset_ids:
                 continue
             candidate = candidate_by_id.get(asset_id)
             if not candidate:
                 raise SkillValidationError(
-                    "Skill 创建智能体选择了不属于本次素材的参考帧。",
+                    "PSkill 构建智能体选择了不属于本次素材的参考帧。",
                     details={"asset_id": asset_id},
                 )
             asset = self.repository.get_derived_asset(session, asset_id)
@@ -2177,7 +2177,7 @@ class SkillsService:
     def _require_material(self, session: Session, *, skill_id: str, material_id: str) -> PSkillMaterial:
         material = self.repository.get_material(session, material_id)
         if not material or material.pskill_definition_id != skill_id or material.status == "archived":
-            raise SkillNotFoundError("未找到原始素材。", details={"material_id": material_id, "skill_id": skill_id})
+            raise SkillNotFoundError("未找到素材。", details={"material_id": material_id, "skill_id": skill_id})
         return material
 
     @staticmethod
@@ -2236,12 +2236,12 @@ class SkillsService:
             )
         if document.skill.identity.name != definition.name:
             raise SkillValidationError(
-                "manifest identity.name 需与 Skill 基本信息一致，请先通过基本信息面板修改名称。",
+                "manifest identity.name 需与 PSkill 基本信息一致，请先通过基本信息面板修改名称。",
                 details={"expected": definition.name, "actual": document.skill.identity.name},
             )
         if document.skill.identity.description != definition.description:
             raise SkillValidationError(
-                "manifest identity.description 需与 Skill 基本信息一致，请先通过基本信息面板修改描述。",
+                "manifest identity.description 需与 PSkill 基本信息一致，请先通过基本信息面板修改描述。",
                 details={"expected": definition.description, "actual": document.skill.identity.description},
             )
 
@@ -2269,14 +2269,14 @@ class SkillsService:
     def _require_definition(self, session: Session, skill_id: str) -> PSkillDefinition:
         definition = self.repository.get_pskill_definition(session, skill_id)
         if not definition:
-            raise SkillNotFoundError("未找到对应的 Skill。", details={"skill_id": skill_id})
+            raise SkillNotFoundError("未找到对应的 PSkill。", details={"skill_id": skill_id})
         return definition
 
     def _require_draft_version(self, session: Session, definition: PSkillDefinition) -> PSkillVersion:
         draft_version = self.repository.get_draft_version(session, definition)
         if not draft_version:
             raise SkillNotFoundError(
-                "当前 Skill 不存在 draft version。",
+                "当前 PSkill 不存在 draft version。",
                 details={"skill_id": definition.id},
             )
         return draft_version

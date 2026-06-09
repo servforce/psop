@@ -1,1 +1,1 @@
-"""Skills domain for the PSOP Skills Management MVP."""
+"""Skills domain for the PSOP PSkills Management MVP."""

@@ -185,11 +185,11 @@ Content-Type: application/json
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `skill_key` | 是 | 要运行的 Skill key。 |
+| `skill_key` | 是 | 要运行的 PSkill key。 |
 | `version_selector` | 否 | 当前默认使用 `latest`。 |
 | `gateway_type` | 否 | 终端接入传 `terminal`。 |
 | `terminal_context` | 否 | 终端类型、设备、连接来源等上下文。 |
-| `input_envelope` | 否 | 不推荐新终端使用。Invocation 只负责建立运行会话，真实用户输入应在创建成功后通过 terminal event 提交。 |
+| `input_envelope` | 否 | 不推荐新终端使用。Invocation 只负责建立运行会话，真实用户输入应在创建成功后通过 RunEvent 提交。 |
 
 `terminal_context` 建议字段：
 

@@ -296,7 +296,7 @@ class FakeInferenceGateway:
                 material_id = "material-1"
                 keyframe_paths = []
                 selected_reference_assets = []
-            reference_lines = "\n".join(f"![关键帧]({path})" for path in keyframe_paths) or "- 原始素材摘要已用于生成。"
+            reference_lines = "\n".join(f"![关键帧]({path})" for path in keyframe_paths) or "- 素材摘要已用于生成。"
             content = json.dumps(
                 {
                     "directory_tree": (
@@ -309,9 +309,9 @@ class FakeInferenceGateway:
                         "tests/checklist.md"
                     ),
                     "files": {
-                        "README.md": "# Generated Skill\n\n基于原始素材生成的 Skill 草稿。\n",
-                        "SKILL.md": "# Generated Skill\n\n请根据素材帮助用户完成任务，并参考视频关键帧。\n",
-                        "prompts/system.md": "你是一个基于素材工作的 PSOP Skill 智能体。\n",
+                        "README.md": "# Generated PSkill\n\n基于素材生成的 PSkill 草稿。\n",
+                        "SKILL.md": "# Generated PSkill\n\n请根据素材帮助用户完成任务，并参考视频关键帧。\n",
+                        "prompts/system.md": "你是一个基于素材工作的 PSOP PSkill 智能体。\n",
                         "references/README.md": f"# References\n\n{reference_lines}\n",
                         "examples/input.md": "# Input\n\n用户给出现场问题。\n",
                         "examples/expected-output.md": "# Expected Output\n\n给出结构化行动建议。\n",
@@ -319,7 +319,7 @@ class FakeInferenceGateway:
                         "skill.yaml": "skill:\n  identity:\n    key: should-be-ignored\n",
                     },
                     "review_notes": ["需要人工复核边界条件。"],
-                    "generation_reason": "素材包含创建 Skill 所需的任务说明与示例。",
+                    "generation_reason": "素材包含创建 PSkill 所需的任务说明与示例。",
                     "material_usage": [{"material_id": material_id, "usage": "提炼流程与示例"}],
                     "selected_reference_assets": selected_reference_assets,
                 },
@@ -451,11 +451,11 @@ class FakeInferenceGateway:
             content = json.dumps(
                 {
                     "summary": "视觉或音视频素材已由 LLM Gateway 解析。",
-                    "content": {"text": "素材包含可用于创建 Skill 的多模态线索。", "language": ""},
+                    "content": {"text": "素材包含可用于创建 PSkill 的多模态线索。", "language": ""},
                     "evidence_items": [
                         {
                             "kind": "visual_observation",
-                            "content": "素材包含可用于创建 Skill 的多模态线索。",
+                            "content": "素材包含可用于创建 PSkill 的多模态线索。",
                             "observations": ["fake multimodal signal"],
                         }
                     ],
@@ -702,7 +702,7 @@ def build_test_formal_v5_artifact() -> dict:
         "runtime_contract": {
             "llm_route_key": "text",
             "skill_instruction": "遵循 SKILL.md 完成任务。",
-            "execution_goal": "帮助用户在现实世界完成当前 Skill 目标。",
+            "execution_goal": "帮助用户在现实世界完成当前 PSkill 目标。",
             "applicability": {
                 "applies_when": ["用户处在真实任务现场并可提交证据。"],
                 "does_not_apply_when": ["任务存在不可控安全风险或用户无法提供现场反馈。"],
@@ -1073,8 +1073,8 @@ def test_pskill_material_upload_list_detail_content_and_delete() -> None:
         created = client.post(
             "/api/v1/pskills",
             json={
-                "key": "raw-material-skill",
-                "name": "Raw Material Skill",
+                "key": "material-skill",
+                "name": "Material Skill",
                 "description": "Create skills from source materials.",
             },
         ).json()
@@ -1151,7 +1151,7 @@ def test_pskill_material_upload_rejects_url_only_payload() -> None:
             json={
                 "key": "url-only-material-skill",
                 "name": "URL Only Material Skill",
-                "description": "Reject URL raw materials.",
+                "description": "Reject URL materials.",
             },
         ).json()
         response = client.post(
@@ -1276,7 +1276,7 @@ def test_pskill_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
     )
 
 
-def test_failed_video_raw_material_can_be_reanalyzed(monkeypatch) -> None:
+def test_failed_video_material_can_be_reanalyzed(monkeypatch) -> None:
     attempts = {"count": 0}
 
     def fake_analyze_video_material(**_: object) -> video_analysis.VideoAnalysisResult:
@@ -1327,7 +1327,7 @@ def test_failed_video_raw_material_can_be_reanalyzed(monkeypatch) -> None:
     assert attempts["count"] == 2
 
 
-def test_processing_video_raw_material_cannot_be_reanalyzed(monkeypatch) -> None:
+def test_processing_video_material_cannot_be_reanalyzed(monkeypatch) -> None:
     monkeypatch.setattr(
         skills_service_module,
         "analyze_video_material",
@@ -1453,7 +1453,7 @@ def test_generate_skill_draft_from_materials_commits_standard_files_without_publ
     }
     assert "skill.yaml" not in payload["generated_files"]
     assert payload["material_usage"][0]["material_id"] == video_material_id
-    assert fake_gateway.projects[created["gitlab_project_id"]].files["README.md"].startswith("# Generated Skill")
+    assert fake_gateway.projects[created["gitlab_project_id"]].files["README.md"].startswith("# Generated PSkill")
     assert fake_gateway.projects[created["gitlab_project_id"]].files[
         f"references/video-keyframes/{video_material_id}/000000000.jpg"
     ] == b"fake-keyframe-0"
@@ -1462,8 +1462,8 @@ def test_generate_skill_draft_from_materials_commits_standard_files_without_publ
     assert detail_response.json()["current_draft_version"]["builder_agent_run_id"] == agent_run_id
     assert detail_response.json()["updated_at"] != created["updated_at"]
     prompt_material = detail_response.json()["current_draft_version"]["manifest_snapshot"]["prompt_material"]
-    assert prompt_material["readme"].startswith("# Generated Skill")
-    assert prompt_material["skill_md"].startswith("# Generated Skill")
+    assert prompt_material["readme"].startswith("# Generated PSkill")
+    assert prompt_material["skill_md"].startswith("# Generated PSkill")
     assert source_response.json()["head_commit_sha"] == payload["committed_commit_sha"]
     assert publishes_response.json() == []
     assert versions_response.json()[0]["builder_agent_run_id"] == agent_run_id
@@ -1586,7 +1586,7 @@ def test_generate_skill_draft_from_materials_requires_ready_video() -> None:
         )
 
     assert response.status_code == 422
-    assert response.json()["message"] == "生成 Skill 至少需要选择一个已分析完成的视频素材。"
+    assert response.json()["message"] == "生成 PSkill 至少需要选择一个已分析完成的视频素材。"
 
 
 def test_repository_tree_file_and_folder_operations() -> None:
@@ -2661,21 +2661,21 @@ def test_run_events_accept_multipart_multimodal_parts_and_feed_llm() -> None:
         created = client.post(
             "/api/v1/pskills",
             json={
-                "key": "terminal-multipart-event",
-                "name": "Terminal Multipart Event",
-                "description": "Validate one terminal event can carry ordered multimodal parts.",
+                "key": "run-multipart-event",
+                "name": "Run Multipart Event",
+                "description": "Validate one run event can carry ordered multimodal parts.",
             },
         ).json()
         publish_response = client.post(
             f"/api/v1/pskills/{created['id']}/publish",
-            json={"publish_reason": "Multipart terminal publish"},
+            json={"publish_reason": "Multipart run event publish"},
         )
         compile_request_id = publish_response.json()["compile_request"]["id"]
         client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
         invocation_response = client.post(
             "/api/v1/gateway/invocations",
             json={
-                "skill_key": "terminal-multipart-event",
+                "skill_key": "run-multipart-event",
                 "gateway_type": "terminal",
                 "terminal_context": {"terminal_kind": "web", "operator_mode": "debug"},
                 "input_envelope": {"user_input": "启动多模态验证"},
@@ -3195,7 +3195,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert fork_debug_response.json()["terminal_context"]["debug_context"]["kind"] == "skill_debug"
 
 
-def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> None:
+def test_skill_test_scenario_timeline_parts_append_single_run_event() -> None:
     client, _, fake_inference = create_test_client()
 
     with client:
@@ -3204,7 +3204,7 @@ def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> No
             json={
                 "key": "skill-test-multimodal-parts",
                 "name": "Skill Test Multimodal Parts",
-                "description": "Validate timeline parts are sent as one terminal event.",
+                "description": "Validate timeline parts are sent as one run event.",
             },
         ).json()
         publish_response = client.post(

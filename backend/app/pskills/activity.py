@@ -31,7 +31,7 @@ class PSkillActivityService:
     def build_snapshot(self, session: Session, skill_id: str) -> dict[str, Any]:
         definition = self.skills_repository.get_pskill_definition(session, skill_id)
         if not definition:
-            raise SkillNotFoundError("未找到 Skill。", details={"skill_id": skill_id})
+            raise SkillNotFoundError("未找到 PSkill。", details={"skill_id": skill_id})
 
         compile_requests = self.compiler_repository.list_compile_requests(session, skill_id=skill_id)
         publishes = self.skills_repository.get_publish_records(session, skill_id)
