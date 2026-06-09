@@ -90,9 +90,9 @@
             <div>
               <dt class="field-label">Artifact</dt>
               <dd class="mt-1">
-                <button type="button" class="button-secondary h-8 max-w-full px-2.5 text-xs" @click="openCompilerArtifact(liveRun.compile_artifact_id)">
+                <button type="button" class="button-secondary h-8 max-w-full px-2.5 text-xs" :disabled="!liveRunCompileArtifactId()" @click="openLiveRunCompileArtifact()" title="打开 EG Artifact 证据">
                   <span class="material-symbols-outlined text-[16px]">account_tree</span>
-                  <span class="truncate font-mono" x-text="liveRun.compile_artifact_id"></span>
+                  <span class="truncate font-mono" x-text="liveRunCompileArtifactId() || 'N/A'"></span>
                 </button>
               </dd>
             </div>
@@ -114,7 +114,12 @@
             <div x-show="replayDetail?.provenance">
               <dt class="field-label">Replay Provenance</dt>
               <dd class="mt-2 space-y-1 rounded-lg border border-slate-200 bg-white p-3">
-                <p class="mono-field break-all" x-text="'compile:' + (replayDetail?.provenance?.compile_request_id || 'N/A')"></p>
+                <button type="button" class="block max-w-full text-left mono-field break-all disabled:cursor-not-allowed disabled:opacity-60" :disabled="!liveRunCompileRequestId()" @click="openLiveRunCompileRequest()" title="打开编译请求证据">
+                  <span x-text="'compile:' + (replayDetail?.provenance?.compile_request_id || 'N/A')"></span>
+                </button>
+                <button type="button" class="block max-w-full text-left mono-field break-all disabled:cursor-not-allowed disabled:opacity-60" :disabled="!liveRunCompileArtifactId()" @click="openLiveRunCompileArtifact()" title="打开 EG Artifact 证据">
+                  <span x-text="'artifact:' + (replayDetail?.provenance?.compile_artifact_id || 'N/A')"></span>
+                </button>
                 <p class="mono-field break-all" x-text="'snapshot:' + (replayDetail?.provenance?.latest_session_token_snapshot_id || 'N/A')"></p>
                 <p class="mono-field break-all" x-text="'seq:' + (replayDetail?.provenance?.latest_session_token_seq ?? 0)"></p>
               </dd>

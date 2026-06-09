@@ -115,7 +115,17 @@ function loadEvaluationHarness(locationSearch = "") {
         buildToolAuthorizationsPath: (filters = {}) => buildFilteredPath(
           "/admin/platform/tool-authorizations",
           filters,
-          ["status", "tool_name"]
+          [
+            "status",
+            "tool_name",
+            "agent_run_id",
+            "run_id",
+            "agent_key",
+            "proposal_id",
+            "source_run_id",
+            "source_evaluation_id",
+            "source_finding_id"
+          ]
         )
       }
     },
@@ -401,7 +411,7 @@ test("evaluation finding evidence refs build run replay deep links", () => {
     findingWithAuthorizationListEvidence,
     findingWithAuthorizationListEvidence.evidence_refs[0]
   )).toBe(
-    "/admin/platform/tool-authorizations?status=pending&tool_name=psop.agent_version.activate"
+    "/admin/platform/tool-authorizations?status=pending&tool_name=psop.agent_version.activate&source_run_id=run-current&source_evaluation_id=evaluation-1&source_finding_id=finding-6"
   );
   expect(methods.findingEvidencePath.call(
     context,

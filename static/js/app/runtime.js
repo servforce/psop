@@ -1623,9 +1623,18 @@
         return String(this.liveRun?.compile_request_id || this.replayDetail?.provenance?.compile_request_id || "").trim();
       },
 
+      liveRunCompileArtifactId() {
+        return String(this.liveRun?.compile_artifact_id || this.replayDetail?.provenance?.compile_artifact_id || "").trim();
+      },
+
 
       liveRunCompileRequestPath() {
         return buildCompilerRequestPath(this.liveRunCompileRequestId());
+      },
+
+      liveRunCompileArtifactPath() {
+        const compileArtifactId = this.liveRunCompileArtifactId();
+        return compileArtifactId ? buildCompilerArtifactPath(compileArtifactId) : "";
       },
 
 
@@ -1635,6 +1644,14 @@
           return;
         }
         this.navigate(this.liveRunCompileRequestPath());
+      },
+
+      openLiveRunCompileArtifact() {
+        const compileArtifactId = this.liveRunCompileArtifactId();
+        if (!compileArtifactId) {
+          return;
+        }
+        this.navigate(this.liveRunCompileArtifactPath());
       },
 
 

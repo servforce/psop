@@ -1077,8 +1077,12 @@
       return buildGovernanceExperimentsPath(filters);
     },
 
-    toolAuthorizationsPath() {
-      return buildToolAuthorizationsPath();
+    toolAuthorizationsPath(filters = {}) {
+      return buildToolAuthorizationsPath(filters);
+    },
+
+    governanceProposalToolAuthorizationsPath(proposal = this.currentGovernanceProposal) {
+      return buildToolAuthorizationsPath(this.governanceToolAuthorizationEvidenceFilters(proposal, {}));
     },
 
     governanceProposalTypeOptions() {
@@ -1594,7 +1598,7 @@
         const ownerAgentRunId = agentRunId || String(proposal?.agent_run_id || "").trim();
         const href = ownerAgentRunId && value
           ? buildPlatformAgentRunPath(ownerAgentRunId, { tab: "authorizations", authorization_id: value })
-          : buildToolAuthorizationsPath();
+          : buildToolAuthorizationsPath(this.governanceToolAuthorizationEvidenceFilters(proposal, ref));
         return this.governanceEvidenceLink("authorization", "Authorization", value || "Tool Authorizations", href, "admin_panel_settings");
       }
       if (["psop_improvement_proposal", "governance_proposal", "proposal"].includes(kind)) {
@@ -1636,6 +1640,26 @@
         href,
         icon
       };
+    },
+
+    governanceToolAuthorizationEvidenceFilters(proposal, ref = {}) {
+      const sourceFindingIds = Array.isArray(proposal?.source_finding_ids) ? proposal.source_finding_ids : [];
+      const filters = {
+        status: ref?.status || "",
+        tool_name: ref?.tool_name || "",
+        agent_run_id: ref?.agent_run_id || ref?.owner_agent_run_id || "",
+        run_id: ref?.authorization_run_id || ref?.tool_authorization_run_id || "",
+        agent_key: ref?.agent_key || "",
+        proposal_id: ref?.proposal_id || ref?.governance_proposal_id || proposal?.id || "",
+        source_run_id: ref?.source_run_id || ref?.run_id || proposal?.source_run_id || "",
+        source_evaluation_id: ref?.source_evaluation_id || ref?.evaluation_id || ref?.run_evaluation_id || proposal?.source_evaluation_id || "",
+        source_finding_id: ref?.source_finding_id || ref?.finding_id || (sourceFindingIds.length === 1 ? sourceFindingIds[0] : "")
+      };
+      return Object.fromEntries(
+        Object.entries(filters)
+          .map(([key, value]) => [key, String(value || "").trim()])
+          .filter(([, value]) => value)
+      );
     },
 
     governanceEvidenceRefId(ref) {

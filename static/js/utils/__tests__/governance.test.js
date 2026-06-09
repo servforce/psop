@@ -201,6 +201,17 @@ test("governance methods build filters and labels", () => {
   expect(methods.governanceExperimentsPath({ status: "running", experiment_type: "canary" })).toBe(
     "/admin/governance/experiments?status=running&experiment_type=canary"
   );
+  expect(methods.toolAuthorizationsPath.call(context, { status: "pending" })).toBe(
+    "/admin/platform/tool-authorizations?status=pending"
+  );
+  expect(methods.governanceProposalToolAuthorizationsPath.call(context, {
+    id: "proposal-1",
+    source_run_id: "run-1",
+    source_evaluation_id: "evaluation-1",
+    source_finding_ids: ["finding-1"]
+  })).toBe(
+    "/admin/platform/tool-authorizations?proposal_id=proposal-1&source_run_id=run-1&source_evaluation_id=evaluation-1&source_finding_id=finding-1"
+  );
 });
 
 test("governance proposal opens governance AgentRun details", () => {
@@ -229,6 +240,7 @@ test("governance proposal evidence refs expose navigation links", () => {
     agent_run_id: "governance-agent-run-1",
     source_run_id: "runtime-run-1",
     source_evaluation_id: "evaluation-1",
+    source_finding_ids: ["finding-1"],
     evidence_refs: [
       { kind: "run_evaluation", id: "evaluation-1" },
       { kind: "run_evaluation_finding", id: "finding-1" },
@@ -236,6 +248,7 @@ test("governance proposal evidence refs expose navigation links", () => {
       { kind: "run_trace", id: "trace-1" },
       { kind: "run_event", id: "event-1" },
       { kind: "agent_tool_authorization", id: "authorization-1", agent_run_id: "governance-agent-run-1" },
+      { kind: "tool_authorization", status: "pending", tool_name: "psop.agent_version.activate" },
       { kind: "psop_improvement_experiment", id: "experiment-1" },
       { kind: "memory", id: "memory-1" }
     ]
@@ -250,6 +263,7 @@ test("governance proposal evidence refs expose navigation links", () => {
     "run-trace-trace-1",
     "run-event-event-1",
     "authorization-authorization-1",
+    "authorization-Tool Authorizations",
     "experiment-experiment-1",
     "memory-memory-1"
   ]);
@@ -267,6 +281,9 @@ test("governance proposal evidence refs expose navigation links", () => {
   );
   expect(links.find((item) => item.key === "authorization-authorization-1").href).toBe(
     "/admin/platform/agent-runs/governance-agent-run-1?tab=authorizations&authorization_id=authorization-1"
+  );
+  expect(links.find((item) => item.key === "authorization-Tool Authorizations").href).toBe(
+    "/admin/platform/tool-authorizations?status=pending&tool_name=psop.agent_version.activate&proposal_id=proposal-1&source_run_id=runtime-run-1&source_evaluation_id=evaluation-1&source_finding_id=finding-1"
   );
   expect(links.find((item) => item.key === "experiment-experiment-1").href).toBe(
     "/admin/governance/experiments?experiment_id=experiment-1"
@@ -840,6 +857,7 @@ test("governance methods edit proposal payloads and source finding links", async
   expect(html).toContain("governanceProposalSourceFindings(currentGovernanceProposal)");
   expect(html).toContain("governanceProposalPatchDiffText(currentGovernanceProposal)");
   expect(html).toContain("governanceProposalToolAuthorizations");
+  expect(html).toContain("governanceProposalToolAuthorizationsPath(currentGovernanceProposal)");
 });
 
 test("governance methods flatten proposal experiments", () => {

@@ -1005,7 +1005,7 @@
           return buildPlatformAgentRunPath(agentRunId, { tab: "authorizations", authorization_id: authorizationId });
         }
         return typeof buildToolAuthorizationsPath === "function"
-          ? buildToolAuthorizationsPath({ status: ref.status || "", tool_name: ref.tool_name || "" })
+          ? buildToolAuthorizationsPath(this.findingToolAuthorizationFilters(finding, ref, evaluation))
           : "";
       }
       if (["run_evaluation", "evaluation"].includes(kind)) {
@@ -1085,6 +1085,25 @@
         evaluation?.agent_run_id ||
         ""
       ).trim();
+    },
+
+    findingToolAuthorizationFilters(finding, ref = {}, evaluation = this.currentEvaluation) {
+      const filters = {
+        status: ref?.status || "",
+        tool_name: ref?.tool_name || "",
+        agent_run_id: ref?.agent_run_id || ref?.owner_agent_run_id || "",
+        run_id: ref?.authorization_run_id || ref?.tool_authorization_run_id || "",
+        agent_key: ref?.agent_key || "",
+        proposal_id: ref?.proposal_id || ref?.governance_proposal_id || "",
+        source_run_id: ref?.source_run_id || ref?.run_id || finding?.run_id || evaluation?.run_id || "",
+        source_evaluation_id: ref?.source_evaluation_id || ref?.evaluation_id || finding?.evaluation_id || evaluation?.id || "",
+        source_finding_id: ref?.source_finding_id || ref?.finding_id || finding?.id || ""
+      };
+      return Object.fromEntries(
+        Object.entries(filters)
+          .map(([key, value]) => [key, String(value || "").trim()])
+          .filter(([, value]) => value)
+      );
     },
 
     canOpenFindingEvidence(finding, ref = null, evaluation = this.currentEvaluation) {

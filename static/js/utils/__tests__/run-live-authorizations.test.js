@@ -149,6 +149,9 @@ function loadRuntimeHarness(locationSearch = "") {
   context.window.PSOPConsoleHelpers.buildCompilerRequestPath = (compileRequestId) => (
     `/admin/compiler?compile_request_id=${encodeURIComponent(compileRequestId)}`
   );
+  context.window.PSOPConsoleHelpers.buildCompilerArtifactPath = (compileArtifactId) => (
+    `/admin/compiler/artifacts/${encodeURIComponent(compileArtifactId)}`
+  );
   context.window.PSOPConsoleHelpers.buildPlatformAgentRunPath = (agentRunId, focus = {}) => {
     const params = new URLSearchParams();
     for (const key of ["tab", "event_id", "model_call_id", "tool_call_id", "authorization_id"]) {
@@ -215,9 +218,11 @@ test("run live page exposes embedded tool authorization tab", () => {
   expect(runtimeJs).toContain("refreshLiveRunToolAuthorizations");
   expect(html).toContain("Replay Provenance");
   expect(html).toContain("liveRunCompileRequestId()");
+  expect(html).toContain("liveRunCompileArtifactId()");
   expect(html).toContain("openLiveRunCompileRequest()");
-  expect(html).toContain("openCompilerArtifact(liveRun.compile_artifact_id)");
+  expect(html).toContain("openLiveRunCompileArtifact()");
   expect(html).toContain("replayDetail?.provenance?.compile_request_id");
+  expect(html).toContain("replayDetail?.provenance?.compile_artifact_id");
   expect(html).toContain("replayDetail?.provenance?.latest_session_token_snapshot_id");
 });
 
@@ -308,17 +313,31 @@ test("run live compile request evidence link opens compiler request filter", () 
   const methods = loadRuntimeMethods();
   const context = {
     ...methods,
-    liveRun: { compile_request_id: "compile-1" },
-    replayDetail: null,
+    liveRun: { compile_request_id: "compile-1", compile_artifact_id: "artifact-1" },
+    replayDetail: {
+      provenance: {
+        compile_request_id: "compile-replay",
+        compile_artifact_id: "artifact-replay"
+      }
+    },
     navigate: jest.fn()
   };
 
   expect(methods.liveRunCompileRequestId.call(context)).toBe("compile-1");
   expect(methods.liveRunCompileRequestPath.call(context)).toBe("/admin/compiler?compile_request_id=compile-1");
+  expect(methods.liveRunCompileArtifactId.call(context)).toBe("artifact-1");
+  expect(methods.liveRunCompileArtifactPath.call(context)).toBe("/admin/compiler/artifacts/artifact-1");
 
   methods.openLiveRunCompileRequest.call(context);
+  methods.openLiveRunCompileArtifact.call(context);
 
   expect(context.navigate).toHaveBeenCalledWith("/admin/compiler?compile_request_id=compile-1");
+  expect(context.navigate).toHaveBeenCalledWith("/admin/compiler/artifacts/artifact-1");
+
+  context.liveRun = {};
+
+  expect(methods.liveRunCompileRequestId.call(context)).toBe("compile-replay");
+  expect(methods.liveRunCompileArtifactId.call(context)).toBe("artifact-replay");
 });
 
 test("runtime compile request helper opens compiler request evidence from lists", () => {
