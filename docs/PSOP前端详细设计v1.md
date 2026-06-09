@@ -259,12 +259,12 @@ static/
 | Inference Models | `GET /api/v1/gateway/inference/models` |
 | Evaluations | `/api/v1/evaluations*` |
 | Governance | `/api/v1/governance/proposals*`、`/api/v1/governance/experiments*` |
-| Tool Authorizations | `/api/v1/tool-authorizations*`、`/api/v1/runs/{run_id}/tool-authorizations`、`/api/v1/agent-runs/{agent_run_id}/tool-authorizations` |
+| Tool Authorizations | `/api/v1/tool-authorizations*`、`/api/v1/runs/{run_id}/tool-authorizations`、`/api/v1/agent-runs/{agent_run_id}/tool-authorizations`；全局列表支持按状态、工具名、Agent、source run、evaluation、finding、governance proposal 过滤 |
 | Platform Agents | `/api/v1/agents*`、`/api/v1/agent-runs*` |
 | Platform Skill Packages | `/api/v1/skills*` |
 | Platform Tools | `/api/v1/tools*` |
 | Platform Memory | `/api/v1/memory*` |
-| Platform Observability | `/api/v1/observability/*`；metrics 面板展示 Runtime、Agent、Evaluation、Governance 与 OTel 状态；RunTrace 列表展示 OTel trace/span 并可跳转 Replay |
+| Platform Observability | `/api/v1/observability/*`；metrics 面板展示 Runtime、Agent、Evaluation、Governance 与 OTel 状态；RunTrace 列表展示 OTel trace/span 并可跳转 Replay；ToolAuthorization 查询支持按 Agent、run、status、risk、tool、source run、evaluation、finding、governance proposal 过滤 |
 
 当前前端不应调用以下未实现接口：
 

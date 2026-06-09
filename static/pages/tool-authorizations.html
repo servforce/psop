@@ -23,6 +23,26 @@
           <span class="field-label">工具名</span>
           <input x-model="toolAuthorizationFilters.tool_name" class="input-field h-9" placeholder="psop.repository.commit_patch" @input.debounce.300ms="applyToolAuthorizationFilters()" />
         </label>
+        <label class="field-block w-48 shrink-0">
+          <span class="field-label">Agent</span>
+          <input x-model="toolAuthorizationFilters.agent_key" class="input-field h-9 py-0 font-mono text-xs" placeholder="psop.governance" @input.debounce.300ms="applyToolAuthorizationFilters()" />
+        </label>
+        <label class="field-block w-56 shrink-0">
+          <span class="field-label">Source Run</span>
+          <input x-model="toolAuthorizationFilters.source_run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="run_id" @input.debounce.300ms="applyToolAuthorizationFilters()" />
+        </label>
+        <label class="field-block w-56 shrink-0">
+          <span class="field-label">Evaluation</span>
+          <input x-model="toolAuthorizationFilters.source_evaluation_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="evaluation_id" @input.debounce.300ms="applyToolAuthorizationFilters()" />
+        </label>
+        <label class="field-block w-56 shrink-0">
+          <span class="field-label">Finding</span>
+          <input x-model="toolAuthorizationFilters.source_finding_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="finding_id" @input.debounce.300ms="applyToolAuthorizationFilters()" />
+        </label>
+        <label class="field-block w-56 shrink-0">
+          <span class="field-label">Proposal</span>
+          <input x-model="toolAuthorizationFilters.proposal_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="proposal_id" @input.debounce.300ms="applyToolAuthorizationFilters()" />
+        </label>
         <button type="button" class="button-secondary h-9 shrink-0 px-3" :disabled="busy.toolAuthorizations" @click="loadToolAuthorizations()">
           <span class="material-symbols-outlined text-[18px]">refresh</span>
         </button>

@@ -332,11 +332,19 @@ class ObservabilityService:
         status: str | None = None,
         risk_level: str | None = None,
         side_effect_level: str | None = None,
+        proposal_id: str | None = None,
+        source_run_id: str | None = None,
+        source_evaluation_id: str | None = None,
+        source_finding_id: str | None = None,
         limit: int = 50,
     ) -> list[AgentToolAuthorizationResponse]:
         resolved_window_hours = max(1, min(24 * 30, int(window_hours or 24)))
         resolved_limit = max(1, min(200, int(limit or 50)))
         since = now_utc() - timedelta(hours=resolved_window_hours)
+        has_context_filters = any(
+            self._normalize_filter_value(value)
+            for value in [proposal_id, source_run_id, source_evaluation_id, source_finding_id]
+        )
         conditions = [AgentToolAuthorization.created_at >= since]
         if agent_run_id:
             conditions.append(AgentToolAuthorization.agent_run_id == agent_run_id)
@@ -352,15 +360,27 @@ class ObservabilityService:
             conditions.append(AgentToolAuthorization.side_effect_level == side_effect_level)
         if agent_key:
             conditions.append(AgentRun.agent_key == agent_key)
-        authorizations = list(
-            session.scalars(
-                select(AgentToolAuthorization)
-                .join(AgentRun, AgentRun.id == AgentToolAuthorization.agent_run_id)
-                .where(*conditions)
-                .order_by(AgentToolAuthorization.created_at.desc())
-                .limit(resolved_limit)
-            ).all()
+        query = (
+            select(AgentToolAuthorization)
+            .join(AgentRun, AgentRun.id == AgentToolAuthorization.agent_run_id)
+            .where(*conditions)
+            .order_by(AgentToolAuthorization.created_at.desc())
         )
+        if not has_context_filters:
+            query = query.limit(resolved_limit)
+        authorizations = list(session.scalars(query).all())
+        if has_context_filters:
+            authorizations = [
+                authorization
+                for authorization in authorizations
+                if self._tool_authorization_matches_context_filters(
+                    authorization,
+                    proposal_id=proposal_id,
+                    source_run_id=source_run_id,
+                    source_evaluation_id=source_evaluation_id,
+                    source_finding_id=source_finding_id,
+                )
+            ][:resolved_limit]
         return [self._build_tool_authorization_response(authorization) for authorization in authorizations]
 
     def _pskill_metrics(self, session: Session, *, since: datetime) -> PSkillDashboardMetrics:
@@ -783,6 +803,53 @@ class ObservabilityService:
             responded_at=authorization.responded_at,
             executed_at=authorization.executed_at,
         )
+
+    def _tool_authorization_matches_context_filters(
+        self,
+        authorization: AgentToolAuthorization,
+        *,
+        proposal_id: str | None = None,
+        source_run_id: str | None = None,
+        source_evaluation_id: str | None = None,
+        source_finding_id: str | None = None,
+    ) -> bool:
+        context = tool_authorization_business_context(authorization)
+        expected = {
+            "proposal_id": self._normalize_filter_value(proposal_id),
+            "source_run_id": self._normalize_filter_value(source_run_id),
+            "source_evaluation_id": self._normalize_filter_value(source_evaluation_id),
+        }
+        for key, value in expected.items():
+            if value and value not in self._business_context_values(context, key):
+                return False
+        normalized_source_finding_id = self._normalize_filter_value(source_finding_id)
+        if normalized_source_finding_id and normalized_source_finding_id not in self._business_context_values(
+            context,
+            "source_finding_ids",
+            "source_finding_id",
+        ):
+            return False
+        return True
+
+    @staticmethod
+    def _normalize_filter_value(value: object) -> str:
+        return str(value or "").strip()
+
+    @classmethod
+    def _business_context_values(cls, context: dict[str, object], *keys: str) -> set[str]:
+        values: set[str] = set()
+        for key in keys:
+            value = context.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    normalized = cls._normalize_filter_value(item)
+                    if normalized:
+                        values.add(normalized)
+            else:
+                normalized = cls._normalize_filter_value(value)
+                if normalized:
+                    values.add(normalized)
+        return values
 
     @staticmethod
     def _open_telemetry_status(*, settings: Settings, configured: bool) -> OpenTelemetryStatus:

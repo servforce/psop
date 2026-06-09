@@ -41,11 +41,20 @@ function loadObservabilityMethods() {
         },
         buildToolAuthorizationsPath: (filters = {}) => {
           const params = new URLSearchParams();
-          if (filters.status) {
-            params.set("status", filters.status);
-          }
-          if (filters.tool_name) {
-            params.set("tool_name", filters.tool_name);
+          for (const key of [
+            "status",
+            "tool_name",
+            "agent_run_id",
+            "run_id",
+            "agent_key",
+            "proposal_id",
+            "source_run_id",
+            "source_evaluation_id",
+            "source_finding_id"
+          ]) {
+            if (filters[key]) {
+              params.set(key, filters[key]);
+            }
           }
           const query = params.toString();
           return query ? `/admin/platform/tool-authorizations?${query}` : "/admin/platform/tool-authorizations";
@@ -628,7 +637,11 @@ test("observability methods query global tool authorizations from status filters
       tool_authorization_run_id: "",
       tool_authorization_status: "pending",
       tool_authorization_risk_level: "high",
-      tool_authorization_tool_name: ""
+      tool_authorization_tool_name: "",
+      tool_authorization_proposal_id: "",
+      tool_authorization_source_run_id: "",
+      tool_authorization_source_evaluation_id: "",
+      tool_authorization_source_finding_id: ""
     },
     observabilityToolAuthorizationResults: [],
     apiRequest: jest.fn(async () => authorizations),
@@ -653,10 +666,14 @@ test("observability methods query global tool authorizations from status filters
   context.observabilityFilters.tool_authorization_status = "";
   context.observabilityFilters.tool_authorization_risk_level = "";
   context.observabilityFilters.tool_authorization_tool_name = "psop.memory.search";
+  context.observabilityFilters.tool_authorization_proposal_id = "proposal-1";
+  context.observabilityFilters.tool_authorization_source_run_id = "run-source-1";
+  context.observabilityFilters.tool_authorization_source_evaluation_id = "evaluation-1";
+  context.observabilityFilters.tool_authorization_source_finding_id = "finding-1";
   await methods.loadObservabilityToolAuthorizations.call(context);
 
   expect(context.apiRequest).toHaveBeenLastCalledWith(
-    "/observability/tool-authorizations?agent_key=pskill.runner&run_id=run+1&tool_name=psop.memory.search&window_hours=24&limit=50"
+    "/observability/tool-authorizations?agent_key=pskill.runner&run_id=run+1&tool_name=psop.memory.search&proposal_id=proposal-1&source_run_id=run-source-1&source_evaluation_id=evaluation-1&source_finding_id=finding-1&window_hours=24&limit=50"
   );
 
   await methods.selectObservabilityToolAuthorizationStatus.call(context, "rejected");
@@ -666,6 +683,10 @@ test("observability methods query global tool authorizations from status filters
   expect(context.observabilityFilters.tool_authorization_status).toBe("rejected");
   expect(context.observabilityFilters.tool_authorization_risk_level).toBe("");
   expect(context.observabilityFilters.tool_authorization_tool_name).toBe("");
+  expect(context.observabilityFilters.tool_authorization_proposal_id).toBe("");
+  expect(context.observabilityFilters.tool_authorization_source_run_id).toBe("");
+  expect(context.observabilityFilters.tool_authorization_source_evaluation_id).toBe("");
+  expect(context.observabilityFilters.tool_authorization_source_finding_id).toBe("");
   expect(context.apiRequest).toHaveBeenLastCalledWith(
     "/observability/tool-authorizations?status=rejected&window_hours=24&limit=50"
   );
@@ -677,6 +698,10 @@ test("observability methods query global tool authorizations from status filters
   expect(context.observabilityFilters.tool_authorization_status).toBe("");
   expect(context.observabilityFilters.tool_authorization_risk_level).toBe("");
   expect(context.observabilityFilters.tool_authorization_tool_name).toBe("");
+  expect(context.observabilityFilters.tool_authorization_proposal_id).toBe("");
+  expect(context.observabilityFilters.tool_authorization_source_run_id).toBe("");
+  expect(context.observabilityFilters.tool_authorization_source_evaluation_id).toBe("");
+  expect(context.observabilityFilters.tool_authorization_source_finding_id).toBe("");
   expect(context.observabilityToolAuthorizationResults).toEqual([]);
 });
 
@@ -778,6 +803,8 @@ test("observability tool authorization context links expose source evidence", ()
     id: "auth-context",
     agent_run_id: "agent-run-1",
     agent_tool_call_id: "tool-call-1",
+    tool_name: "psop.agent_version.activate",
+    status: "pending",
     run_event_id: "event-1",
     business_context: {
       proposal_id: "proposal-business",
@@ -842,6 +869,9 @@ test("observability tool authorization context links expose source evidence", ()
   );
   expect(links.find((item) => item.key === "pskill-pskill-business").href).toBe(
     "/admin/skills/pskill-business"
+  );
+  expect(methods.observabilityToolAuthorizationHistoryPath.call(context, authorization)).toBe(
+    "/admin/platform/tool-authorizations?status=pending&tool_name=psop.agent_version.activate&proposal_id=proposal-business&source_run_id=run-business&source_evaluation_id=evaluation-business&source_finding_id=finding-business"
   );
   expect(methods.observabilityToolAuthorizationFirstNestedValue.call(context, authorization, ["source_finding_ids"])).toBe(
     "finding-business"
@@ -949,6 +979,10 @@ test("observability page exposes linked distribution filters", () => {
   expect(html).toContain("observabilitySkillActivationPath(activation)");
   expect(html).toContain("observabilityToolAuthorizationPath(authorization)");
   expect(html).toContain("observabilityToolAuthorizationHistoryPath(authorization)");
+  expect(html).toContain("tool_authorization_source_run_id");
+  expect(html).toContain("tool_authorization_source_evaluation_id");
+  expect(html).toContain("tool_authorization_source_finding_id");
+  expect(html).toContain("tool_authorization_proposal_id");
   expect(html).toContain("observabilityEvaluationReportsPath({ overall_outcome: item.key })");
   expect(html).toContain("observabilityEvaluationFindingsPath({ status: item.key })");
   expect(html).toContain("observabilityEvaluationFindingsPath({ category: item.key })");

@@ -87,7 +87,11 @@
         this.observabilityFilters.tool_authorization_run_id ||
         this.observabilityFilters.tool_authorization_status ||
         this.observabilityFilters.tool_authorization_risk_level ||
-        this.observabilityFilters.tool_authorization_tool_name
+        this.observabilityFilters.tool_authorization_tool_name ||
+        this.observabilityFilters.tool_authorization_proposal_id ||
+        this.observabilityFilters.tool_authorization_source_run_id ||
+        this.observabilityFilters.tool_authorization_source_evaluation_id ||
+        this.observabilityFilters.tool_authorization_source_finding_id
       ) {
         await this.loadObservabilityToolAuthorizations();
       }
@@ -352,6 +356,10 @@
       const status = String(this.observabilityFilters.tool_authorization_status || "").trim();
       const riskLevel = String(this.observabilityFilters.tool_authorization_risk_level || "").trim();
       const toolName = String(this.observabilityFilters.tool_authorization_tool_name || "").trim();
+      const proposalId = String(this.observabilityFilters.tool_authorization_proposal_id || "").trim();
+      const sourceRunId = String(this.observabilityFilters.tool_authorization_source_run_id || "").trim();
+      const sourceEvaluationId = String(this.observabilityFilters.tool_authorization_source_evaluation_id || "").trim();
+      const sourceFindingId = String(this.observabilityFilters.tool_authorization_source_finding_id || "").trim();
 
       this.busy.observabilityToolAuthorizationLookup = true;
       try {
@@ -371,6 +379,18 @@
         if (toolName) {
           params.set("tool_name", toolName);
         }
+        if (proposalId) {
+          params.set("proposal_id", proposalId);
+        }
+        if (sourceRunId) {
+          params.set("source_run_id", sourceRunId);
+        }
+        if (sourceEvaluationId) {
+          params.set("source_evaluation_id", sourceEvaluationId);
+        }
+        if (sourceFindingId) {
+          params.set("source_finding_id", sourceFindingId);
+        }
         params.set("window_hours", String(normalizedWindowHours(this.observabilityFilters.window_hours)));
         params.set("limit", "50");
         const authorizations = await this.apiRequest(`/observability/tool-authorizations?${params.toString()}`);
@@ -388,6 +408,10 @@
       this.observabilityFilters.tool_authorization_status = "";
       this.observabilityFilters.tool_authorization_risk_level = "";
       this.observabilityFilters.tool_authorization_tool_name = "";
+      this.observabilityFilters.tool_authorization_proposal_id = "";
+      this.observabilityFilters.tool_authorization_source_run_id = "";
+      this.observabilityFilters.tool_authorization_source_evaluation_id = "";
+      this.observabilityFilters.tool_authorization_source_finding_id = "";
       this.observabilityToolAuthorizationResults = [];
     },
 
@@ -397,6 +421,10 @@
       this.observabilityFilters.tool_authorization_status = status || "";
       this.observabilityFilters.tool_authorization_risk_level = "";
       this.observabilityFilters.tool_authorization_tool_name = "";
+      this.observabilityFilters.tool_authorization_proposal_id = "";
+      this.observabilityFilters.tool_authorization_source_run_id = "";
+      this.observabilityFilters.tool_authorization_source_evaluation_id = "";
+      this.observabilityFilters.tool_authorization_source_finding_id = "";
       await this.loadObservabilityToolAuthorizations();
     },
 
@@ -529,9 +557,35 @@
     },
 
     observabilityToolAuthorizationHistoryPath(authorization) {
+      const proposalId = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "proposal_id",
+        "governance_proposal_id"
+      ]);
+      const sourceEvaluationId = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "source_evaluation_id",
+        "evaluation_id",
+        "evaluation_report_id",
+        "run_evaluation_id"
+      ]);
+      const sourceFindingId = this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "source_finding_id",
+        "source_finding_ids",
+        "finding_id",
+        "finding_ids",
+        "run_evaluation_finding_id",
+        "run_evaluation_finding_ids"
+      ]);
+      const sourceRunId = String(authorization?.run_id || this.observabilityToolAuthorizationFirstNestedValue(authorization, [
+        "source_run_id",
+        "run_id"
+      ]) || "").trim();
       return buildToolAuthorizationsPath({
         status: authorization?.status || "",
-        tool_name: authorization?.tool_name || ""
+        tool_name: authorization?.tool_name || "",
+        proposal_id: proposalId,
+        source_run_id: sourceRunId,
+        source_evaluation_id: sourceEvaluationId,
+        source_finding_id: sourceFindingId
       });
     },
 

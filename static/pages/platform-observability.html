@@ -863,6 +863,22 @@
                   <span class="field-label">Tool Name</span>
                   <input x-model="observabilityFilters.tool_authorization_tool_name" class="input-field h-9 py-0 font-mono text-xs" placeholder="psop.repository.commit_patch" @keydown.enter.prevent="loadObservabilityToolAuthorizations()" />
                 </label>
+                <label class="field-block w-56 shrink-0">
+                  <span class="field-label">Source Run</span>
+                  <input x-model="observabilityFilters.tool_authorization_source_run_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="source_run_id" @keydown.enter.prevent="loadObservabilityToolAuthorizations()" />
+                </label>
+                <label class="field-block w-56 shrink-0">
+                  <span class="field-label">Evaluation</span>
+                  <input x-model="observabilityFilters.tool_authorization_source_evaluation_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="evaluation_id" @keydown.enter.prevent="loadObservabilityToolAuthorizations()" />
+                </label>
+                <label class="field-block w-56 shrink-0">
+                  <span class="field-label">Finding</span>
+                  <input x-model="observabilityFilters.tool_authorization_source_finding_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="finding_id" @keydown.enter.prevent="loadObservabilityToolAuthorizations()" />
+                </label>
+                <label class="field-block w-56 shrink-0">
+                  <span class="field-label">Proposal</span>
+                  <input x-model="observabilityFilters.tool_authorization_proposal_id" class="input-field h-9 py-0 font-mono text-xs" placeholder="proposal_id" @keydown.enter.prevent="loadObservabilityToolAuthorizations()" />
+                </label>
                 <button type="button" class="button-primary h-9 shrink-0 px-3" :disabled="busy.observabilityToolAuthorizationLookup" @click="loadObservabilityToolAuthorizations()">
                   <span class="material-symbols-outlined text-[18px]">search</span>
                   <span class="hidden sm:inline">查询</span>

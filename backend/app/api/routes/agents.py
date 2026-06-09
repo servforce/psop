@@ -285,12 +285,30 @@ async def create_tool_authorization(
 
 @tool_authorizations_router.get("", response_model=list[AgentToolAuthorizationResponse])
 def list_tool_authorizations(
+    agent_run_id: str | None = Query(default=None),
+    run_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
     tool_name: str | None = Query(default=None),
+    agent_key: str | None = Query(default=None),
+    proposal_id: str | None = Query(default=None),
+    source_run_id: str | None = Query(default=None),
+    source_evaluation_id: str | None = Query(default=None),
+    source_finding_id: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: AgentService = Depends(get_agent_service),
 ) -> list[AgentToolAuthorizationResponse]:
-    return service.list_tool_authorizations(session, status=status, tool_name=tool_name)
+    return service.list_tool_authorizations(
+        session,
+        agent_run_id=agent_run_id,
+        run_id=run_id,
+        status=status,
+        tool_name=tool_name,
+        agent_key=agent_key,
+        proposal_id=proposal_id,
+        source_run_id=source_run_id,
+        source_evaluation_id=source_evaluation_id,
+        source_finding_id=source_finding_id,
+    )
 
 
 @tool_authorizations_router.get("/{authorization_id}", response_model=AgentToolAuthorizationResponse)

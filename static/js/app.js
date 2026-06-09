@@ -331,7 +331,17 @@
 
   function buildToolAuthorizationsPath(filters = {}) {
     const params = new URLSearchParams();
-    for (const key of ["status", "tool_name"]) {
+    for (const key of [
+      "status",
+      "tool_name",
+      "agent_run_id",
+      "run_id",
+      "agent_key",
+      "proposal_id",
+      "source_run_id",
+      "source_evaluation_id",
+      "source_finding_id"
+    ]) {
       const value = String(filters?.[key] || "").trim();
       if (value) {
         params.set(key, value);
@@ -737,6 +747,10 @@
         tool_authorization_status: "",
         tool_authorization_risk_level: "",
         tool_authorization_tool_name: "",
+        tool_authorization_proposal_id: "",
+        tool_authorization_source_run_id: "",
+        tool_authorization_source_evaluation_id: "",
+        tool_authorization_source_finding_id: "",
         run_id: "",
         run_trace_event_type: "",
         trace_event_type: "",
@@ -946,7 +960,14 @@
       toolAuthorizationWsStatus: "idle",
       toolAuthorizationFilters: {
         status: "pending",
-        tool_name: ""
+        tool_name: "",
+        agent_run_id: "",
+        run_id: "",
+        agent_key: "",
+        proposal_id: "",
+        source_run_id: "",
+        source_evaluation_id: "",
+        source_finding_id: ""
       },
       toolAuthorizationLocationSearch: "",
       agentRuns: [],

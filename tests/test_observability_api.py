@@ -1365,7 +1365,14 @@ def test_observability_tool_authorization_query_filters_recent_agent_authorizati
                         expected_effect_summary="update skill source",
                         reversible=False,
                         status="pending",
-                        request_payload={"request": "newer"},
+                        request_payload={
+                            "request": "newer",
+                            "business_context": {
+                                "proposal_id": "proposal-observe-noise",
+                                "source_evaluation_id": "evaluation-observe-noise",
+                                "source_finding_ids": ["finding-observe-noise"],
+                            },
+                        },
                         response_payload={},
                         created_at=now - timedelta(minutes=1),
                     ),
@@ -1378,11 +1385,18 @@ def test_observability_tool_authorization_query_filters_recent_agent_authorizati
                         side_effect_level="high_write",
                         risk_level="high",
                         authorization_reason="needs write approval",
-                        tool_arguments_summary={"path": "README.md"},
+                        tool_arguments_summary={"path": "README.md", "source_finding_ids": ["finding-observe-2"]},
                         expected_effect_summary="update docs",
                         reversible=False,
                         status="pending",
-                        request_payload={"request": "older"},
+                        request_payload={
+                            "request": "older",
+                            "business_context": {
+                                "proposal_id": "proposal-observe-1",
+                                "source_evaluation_id": "evaluation-observe-1",
+                                "source_finding_ids": ["finding-observe-1"],
+                            },
+                        },
                         response_payload={},
                         created_at=now - timedelta(minutes=2),
                     ),
@@ -1455,6 +1469,16 @@ def test_observability_tool_authorization_query_filters_recent_agent_authorizati
             "/api/v1/observability/tool-authorizations",
             params={"window_hours": 24, "status": "executed", "limit": 10},
         )
+        source_context_response = client.get(
+            "/api/v1/observability/tool-authorizations",
+            params={
+                "window_hours": 24,
+                "proposal_id": "proposal-observe-1",
+                "source_evaluation_id": "evaluation-observe-1",
+                "source_finding_id": "finding-observe-2",
+                "limit": 1,
+            },
+        )
 
     assert response.status_code == 200
     payload = response.json()
@@ -1477,6 +1501,16 @@ def test_observability_tool_authorization_query_filters_recent_agent_authorizati
     assert [item["id"] for item in executed_payload] == ["tool-auth-observe-executed"]
     assert executed_payload[0]["status"] == "executed"
     assert executed_payload[0]["executed_at"]
+
+    assert source_context_response.status_code == 200
+    source_context_payload = source_context_response.json()
+    assert [item["id"] for item in source_context_payload] == ["tool-auth-observe-older"]
+    assert source_context_payload[0]["business_context"]["proposal_id"] == "proposal-observe-1"
+    assert source_context_payload[0]["business_context"]["source_evaluation_id"] == "evaluation-observe-1"
+    assert source_context_payload[0]["business_context"]["source_finding_ids"] == [
+        "finding-observe-1",
+        "finding-observe-2",
+    ]
 
 
 def test_observability_skill_activation_query_filters_recent_agent_skill_activations() -> None:

@@ -322,7 +322,17 @@ export function buildGovernanceExperimentsPath(filters = {}) {
 
 export function buildToolAuthorizationsPath(filters = {}) {
   const params = new URLSearchParams();
-  for (const key of ["status", "tool_name"]) {
+  for (const key of [
+    "status",
+    "tool_name",
+    "agent_run_id",
+    "run_id",
+    "agent_key",
+    "proposal_id",
+    "source_run_id",
+    "source_evaluation_id",
+    "source_finding_id"
+  ]) {
     const value = String(filters?.[key] || "").trim();
     if (value) {
       params.set(key, value);

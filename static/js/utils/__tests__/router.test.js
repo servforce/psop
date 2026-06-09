@@ -138,6 +138,16 @@ test("resolveAdminRoute maps governance and platform authorization routes", () =
   expect(buildToolAuthorizationsPath({ status: "pending", tool_name: "psop.memory.search" })).toBe(
     "/admin/platform/tool-authorizations?status=pending&tool_name=psop.memory.search"
   );
+  expect(
+    buildToolAuthorizationsPath({
+      agent_key: "psop.governance",
+      proposal_id: "proposal-1",
+      source_evaluation_id: "evaluation-1",
+      source_finding_id: "finding-1"
+    })
+  ).toBe(
+    "/admin/platform/tool-authorizations?agent_key=psop.governance&proposal_id=proposal-1&source_evaluation_id=evaluation-1&source_finding_id=finding-1"
+  );
   expect(buildPlatformAgentsPath()).toBe("/admin/platform/agents");
   expect(buildPlatformAgentPath("pskill.runner")).toBe("/admin/platform/agents/pskill.runner");
   expect(buildPlatformAgentRunsPath()).toBe("/admin/platform/agent-runs");

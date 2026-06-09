@@ -563,16 +563,35 @@ class AgentService:
         run_id: str | None = None,
         status: str | None = None,
         tool_name: str | None = None,
+        agent_key: str | None = None,
+        proposal_id: str | None = None,
+        source_run_id: str | None = None,
+        source_evaluation_id: str | None = None,
+        source_finding_id: str | None = None,
     ) -> list[AgentToolAuthorizationResponse]:
+        authorizations = self.repository.list_tool_authorizations(
+            session,
+            agent_run_id=agent_run_id,
+            run_id=run_id,
+            status=status,
+            tool_name=tool_name,
+        )
+        authorizations = [
+            item
+            for item in authorizations
+            if self._tool_authorization_matches_business_filters(
+                session,
+                item,
+                agent_key=agent_key,
+                proposal_id=proposal_id,
+                source_run_id=source_run_id,
+                source_evaluation_id=source_evaluation_id,
+                source_finding_id=source_finding_id,
+            )
+        ]
         return [
             self._build_tool_authorization_response(item)
-            for item in self.repository.list_tool_authorizations(
-                session,
-                agent_run_id=agent_run_id,
-                run_id=run_id,
-                status=status,
-                tool_name=tool_name,
-            )
+            for item in authorizations
         ]
 
     def get_tool_authorization(self, session: Session, authorization_id: str) -> AgentToolAuthorizationResponse:
@@ -882,6 +901,66 @@ class AgentService:
             "idempotency_key": authorization.idempotency_key,
             "business_context": tool_authorization_business_context(authorization),
         }
+
+    def _tool_authorization_matches_business_filters(
+        self,
+        session: Session,
+        authorization: AgentToolAuthorization,
+        *,
+        agent_key: str | None = None,
+        proposal_id: str | None = None,
+        source_run_id: str | None = None,
+        source_evaluation_id: str | None = None,
+        source_finding_id: str | None = None,
+    ) -> bool:
+        expected = {
+            "proposal_id": self._normalize_filter_value(proposal_id),
+            "source_run_id": self._normalize_filter_value(source_run_id),
+            "source_evaluation_id": self._normalize_filter_value(source_evaluation_id),
+        }
+        normalized_agent_key = self._normalize_filter_value(agent_key)
+        normalized_source_finding_id = self._normalize_filter_value(source_finding_id)
+        if not any(expected.values()) and not normalized_agent_key and not normalized_source_finding_id:
+            return True
+
+        context = tool_authorization_business_context(authorization)
+        if normalized_agent_key:
+            agent_run = self.repository.get_run(session, authorization.agent_run_id)
+            actual_agent_key = self._normalize_filter_value(
+                context.get("agent_key") or getattr(agent_run, "agent_key", "")
+            )
+            if actual_agent_key != normalized_agent_key:
+                return False
+        for key, value in expected.items():
+            if value and value not in self._business_context_values(context, key):
+                return False
+        if normalized_source_finding_id and normalized_source_finding_id not in self._business_context_values(
+            context,
+            "source_finding_ids",
+            "source_finding_id",
+        ):
+            return False
+        return True
+
+    @staticmethod
+    def _normalize_filter_value(value: Any) -> str:
+        return str(value or "").strip()
+
+    @classmethod
+    def _business_context_values(cls, context: dict[str, Any], *keys: str) -> set[str]:
+        values: set[str] = set()
+        for key in keys:
+            value = context.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    normalized = cls._normalize_filter_value(item)
+                    if normalized:
+                        values.add(normalized)
+            else:
+                normalized = cls._normalize_filter_value(value)
+                if normalized:
+                    values.add(normalized)
+        return values
 
     def _ensure_session_for_run(self, session: Session, agent_run: AgentRun) -> AgentSession:
         agent_session = self.repository.get_session(session, agent_run.agent_session_id)

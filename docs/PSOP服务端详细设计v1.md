@@ -485,7 +485,7 @@ Claim 规则：
 | `GET` | `/api/v1/evaluations` | Run evaluation report 列表 |
 | `GET` | `/api/v1/evaluations/findings` | Run evaluation finding 列表 |
 | `GET` | `/api/v1/governance/proposals` | 治理提案列表 |
-| `GET` | `/api/v1/tool-authorizations` | AgentRun 工具授权列表 |
+| `GET` | `/api/v1/tool-authorizations` | AgentRun 工具授权列表；支持按 `status`、`tool_name`、`agent_run_id`、`run_id`、`agent_key`、`proposal_id`、`source_run_id`、`source_evaluation_id`、`source_finding_id` 过滤 |
 
 ## 10. WebSocket
 
@@ -540,6 +540,8 @@ Claim 规则：
 - Agent：AgentRun、AgentEvent、ModelCall、ToolCall、SkillActivation、ToolAuthorization 数量和分布。
 - Evaluation：RunEvaluation、RunEvaluationFinding、quality score、outcome、finding status/category/severity 分布。
 - Governance：Proposal、Experiment、source run/evaluation/finding 关联数量和状态/type 分布。
+
+`/api/v1/observability/tool-authorizations` 支持按 `agent_key`、`run_id`、`status`、`risk_level`、`side_effect_level`、`tool_name` 以及 `proposal_id`、`source_run_id`、`source_evaluation_id`、`source_finding_id` 查询窗口内授权记录，用于从 OTel / Replay / Governance 排障上下文反查高副作用工具 gate。
 
 ## 12. 当前实现缺口
 

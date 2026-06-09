@@ -45,6 +45,18 @@
     { value: "executed", label: "已执行" }
   ];
 
+  const TOOL_AUTH_FILTER_KEYS = [
+    "status",
+    "tool_name",
+    "agent_run_id",
+    "run_id",
+    "agent_key",
+    "proposal_id",
+    "source_run_id",
+    "source_evaluation_id",
+    "source_finding_id"
+  ];
+
   const EXPERIMENT_STATUS_OPTIONS = [
     { value: "planned", label: "已计划" },
     { value: "running", label: "运行中" },
@@ -862,10 +874,52 @@
     toolAuthorizationMatchesFilters(authorization) {
       const status = String(this.toolAuthorizationFilters?.status || "").trim();
       const toolName = String(this.toolAuthorizationFilters?.tool_name || "").trim();
+      const agentRunId = String(this.toolAuthorizationFilters?.agent_run_id || "").trim();
+      const runId = String(this.toolAuthorizationFilters?.run_id || "").trim();
+      const agentKey = String(this.toolAuthorizationFilters?.agent_key || "").trim();
+      const proposalId = String(this.toolAuthorizationFilters?.proposal_id || "").trim();
+      const sourceRunId = String(this.toolAuthorizationFilters?.source_run_id || "").trim();
+      const sourceEvaluationId = String(this.toolAuthorizationFilters?.source_evaluation_id || "").trim();
+      const sourceFindingId = String(this.toolAuthorizationFilters?.source_finding_id || "").trim();
       if (status && authorization.status !== status) {
         return false;
       }
       if (toolName && authorization.tool_name !== toolName) {
+        return false;
+      }
+      if (agentRunId && authorization.agent_run_id !== agentRunId) {
+        return false;
+      }
+      if (runId && authorization.run_id !== runId) {
+        return false;
+      }
+      if (agentKey && !this.toolAuthorizationContextHasValue(authorization, ["agent_key"], agentKey)) {
+        return false;
+      }
+      if (proposalId && !this.toolAuthorizationContextHasValue(authorization, ["proposal_id", "governance_proposal_id"], proposalId)) {
+        return false;
+      }
+      if (sourceRunId && !this.toolAuthorizationContextHasValue(authorization, ["source_run_id", "run_id"], sourceRunId, authorization.run_id)) {
+        return false;
+      }
+      if (
+        sourceEvaluationId &&
+        !this.toolAuthorizationContextHasValue(
+          authorization,
+          ["source_evaluation_id", "evaluation_id", "evaluation_report_id", "run_evaluation_id"],
+          sourceEvaluationId
+        )
+      ) {
+        return false;
+      }
+      if (
+        sourceFindingId &&
+        !this.toolAuthorizationContextHasValue(
+          authorization,
+          ["source_finding_id", "source_finding_ids", "finding_id", "finding_ids", "run_evaluation_finding_id", "run_evaluation_finding_ids"],
+          sourceFindingId
+        )
+      ) {
         return false;
       }
       return true;
@@ -873,15 +927,27 @@
 
     toolAuthorizationQueryString() {
       const params = new URLSearchParams();
-      const status = String(this.toolAuthorizationFilters.status || "").trim();
-      const toolName = String(this.toolAuthorizationFilters.tool_name || "").trim();
-      if (status) {
-        params.set("status", status);
-      }
-      if (toolName) {
-        params.set("tool_name", toolName);
+      for (const key of TOOL_AUTH_FILTER_KEYS) {
+        const value = String(this.toolAuthorizationFilters?.[key] || "").trim();
+        if (value) {
+          params.set(key, value);
+        }
       }
       return params.toString();
+    },
+
+    emptyToolAuthorizationFilters() {
+      return {
+        status: "pending",
+        tool_name: "",
+        agent_run_id: "",
+        run_id: "",
+        agent_key: "",
+        proposal_id: "",
+        source_run_id: "",
+        source_evaluation_id: "",
+        source_finding_id: ""
+      };
     },
 
     syncToolAuthorizationFiltersFromLocation() {
@@ -894,15 +960,18 @@
       }
       this.toolAuthorizationLocationSearch = search;
       if (!search) {
-        this.toolAuthorizationFilters = { status: "pending", tool_name: "" };
+        this.toolAuthorizationFilters = this.emptyToolAuthorizationFilters();
         return;
       }
       const params = new URLSearchParams(search);
-      this.toolAuthorizationFilters = {
-        ...this.toolAuthorizationFilters,
-        status: params.has("status") ? params.get("status") || "" : "",
-        tool_name: params.get("tool_name") || ""
-      };
+      const next = this.emptyToolAuthorizationFilters();
+      next.status = params.has("status") ? params.get("status") || "" : "";
+      for (const key of TOOL_AUTH_FILTER_KEYS) {
+        if (key !== "status") {
+          next[key] = params.get(key) || "";
+        }
+      }
+      this.toolAuthorizationFilters = next;
     },
 
     applyToolAuthorizationFilters() {
@@ -911,7 +980,7 @@
     },
 
     resetToolAuthorizationFilters() {
-      this.toolAuthorizationFilters = { status: "pending", tool_name: "" };
+      this.toolAuthorizationFilters = this.emptyToolAuthorizationFilters();
       this.replaceToolAuthorizationFilterLocation();
       return this.loadToolAuthorizations();
     },
@@ -1327,6 +1396,19 @@
 
     toolAuthorizationFirstNestedValue(authorization, keys) {
       return this.toolAuthorizationNestedValues(authorization, keys)[0] || "";
+    },
+
+    toolAuthorizationContextHasValue(authorization, keys, expected, fallback = "") {
+      const normalizedExpected = String(expected || "").trim();
+      if (!normalizedExpected) {
+        return true;
+      }
+      const values = this.toolAuthorizationNestedValues(authorization, keys);
+      const normalizedFallback = String(fallback || "").trim();
+      if (normalizedFallback) {
+        values.push(normalizedFallback);
+      }
+      return values.includes(normalizedExpected);
     },
 
     toolAuthorizationNestedValues(authorization, keys) {

@@ -150,6 +150,34 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
             "/api/v1/tool-authorizations",
             params={"tool_name": "psop.agent_version.activate"},
         )
+        run_scoped_authorizations_response = client.get(
+            "/api/v1/tool-authorizations",
+            params={"run_id": agent_run["run_id"]},
+        )
+        agent_run_scoped_authorizations_response = client.get(
+            "/api/v1/tool-authorizations",
+            params={"agent_run_id": reject_run["id"]},
+        )
+        governance_authorizations_response = client.get(
+            "/api/v1/tool-authorizations",
+            params={"agent_key": "psop.governance", "tool_name": "psop.agent_version.activate"},
+        )
+        source_run_authorizations_response = client.get(
+            "/api/v1/tool-authorizations",
+            params={"source_run_id": "run-context-1"},
+        )
+        source_evaluation_authorizations_response = client.get(
+            "/api/v1/tool-authorizations",
+            params={"source_evaluation_id": "evaluation-context-1"},
+        )
+        source_finding_authorizations_response = client.get(
+            "/api/v1/tool-authorizations",
+            params={"source_finding_id": "finding-context-3"},
+        )
+        proposal_authorizations_response = client.get(
+            "/api/v1/tool-authorizations",
+            params={"proposal_id": "proposal-1"},
+        )
 
     agent_keys = {item["key"] for item in agents_response.json()}
     assert agents_response.status_code == 200
@@ -242,6 +270,13 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert [item["id"] for item in expired_authorizations_response.json()] == [expire_authorization["id"]]
     assert [item["id"] for item in commit_patch_authorizations_response.json()] == [authorization["id"]]
     assert [item["id"] for item in activate_authorizations_response.json()] == [reject_authorization["id"]]
+    assert [item["id"] for item in run_scoped_authorizations_response.json()] == [authorization["id"]]
+    assert [item["id"] for item in agent_run_scoped_authorizations_response.json()] == [reject_authorization["id"]]
+    assert [item["id"] for item in governance_authorizations_response.json()] == [reject_authorization["id"]]
+    assert [item["id"] for item in source_run_authorizations_response.json()] == [reject_authorization["id"]]
+    assert [item["id"] for item in source_evaluation_authorizations_response.json()] == [reject_authorization["id"]]
+    assert [item["id"] for item in source_finding_authorizations_response.json()] == [reject_authorization["id"]]
+    assert [item["id"] for item in proposal_authorizations_response.json()] == [reject_authorization["id"]]
 
 
 def test_agent_run_activity_websocket_streams_observability_snapshot() -> None:
