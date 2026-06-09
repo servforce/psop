@@ -268,6 +268,7 @@ class AgentRunner:
             guardrail_result = self.output_guardrail.check(
                 agent_key=agent_run.agent_key,
                 output_payload=decision.output_payload,
+                spec=spec,
             )
             self.event_emitter.emit(
                 session,

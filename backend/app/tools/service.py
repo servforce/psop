@@ -263,7 +263,10 @@ class ToolService:
                     "requires_authorization": policy_decision.requires_authorization,
                 },
                 "auth_required_levels": sorted(AUTH_REQUIRED_LEVELS),
-                "permission_rule": "AgentSpec.allowed_tools ∩ SkillPackage.allowed_tools ∩ ToolPolicy.allowed_tools",
+                "permission_rule": (
+                    "AgentSpec.allowed_tools ∩ SkillPackage.allowed_tools ∩ "
+                    "RuntimePolicy.allowed_tools ∩ ToolPolicy.allowed_tools"
+                ),
             },
             created_at=tool.created_at,
             updated_at=tool.updated_at,
@@ -283,7 +286,11 @@ class ToolService:
             agent_key=agent_key,
             sync=False,
         )
-        return agent_allowed_tools & skill_allowed_tools
+        allowed_tools = agent_allowed_tools & skill_allowed_tools
+        runtime_policy = spec.get("runtime_policy")
+        if isinstance(runtime_policy, dict) and "allowed_tools" in runtime_policy:
+            allowed_tools &= set(str(item) for item in runtime_policy.get("allowed_tools") or [])
+        return allowed_tools
 
     @staticmethod
     def _tool_test_policy_reason(
@@ -352,7 +359,11 @@ class ToolService:
                 agent_key=definition.key,
                 sync=False,
             )
-            if tool_name in agent_allowed_tools and tool_name in skill_allowed_tools:
+            allowed_tools = agent_allowed_tools & skill_allowed_tools
+            runtime_policy = spec.get("runtime_policy")
+            if isinstance(runtime_policy, dict) and "allowed_tools" in runtime_policy:
+                allowed_tools &= set(str(item) for item in runtime_policy.get("allowed_tools") or [])
+            if tool_name in allowed_tools:
                 keys.append(definition.key)
         return keys
 

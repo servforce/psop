@@ -28,6 +28,12 @@ class AgentDecisionInferenceGateway:
                     "decision_type": "final_output",
                     "output_payload": {
                         "draft_summary": "LLM gateway produced an AgentDecision.",
+                        "files": [{"path": "SKILL.md", "change_type": "modify"}],
+                        "manifest_patch": {},
+                        "evidence_requirements": [],
+                        "safety_constraints": [],
+                        "clarifying_questions": [],
+                        "risk_notes": [],
                         "ready_for_human_review": True,
                     },
                 },
@@ -83,6 +89,8 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
         agents_response = client.get("/api/v1/agents")
         builder_detail_response = client.get("/api/v1/agents/pskill.builder")
         agent_detail_response = client.get("/api/v1/agents/pskill.runner")
+        evaluator_detail_response = client.get("/api/v1/agents/pskill.evaluator")
+        governance_detail_response = client.get("/api/v1/agents/psop.governance")
         versions_response = client.get("/api/v1/agents/pskill.runner/versions")
         run_response = client.post(
             "/api/v1/agent-runs",
@@ -246,6 +254,14 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert builder_spec["prompt_usage_key"] == "pskill.build.default"
     assert builder_spec["sandbox_policy"]["mode"] == "restricted_workspace"
     assert "run_event" in builder_spec["sandbox_policy"]["filesystem"]["deny"]
+    assert builder_spec["runtime_policy"]["draft_state_owner"] == "PSkillService"
+    assert builder_spec["runtime_policy"]["draft_output"] == "reviewable_patch"
+    assert builder_spec["runtime_policy"]["direct_publish_allowed"] is False
+    assert builder_spec["memory_policy"]["artifact_namespace"] == "materials"
+    assert builder_spec["memory_policy"]["used_as_runtime_state"] is False
+    assert builder_spec["guardrail_policy"]["deny_direct_publish"] is True
+    assert builder_spec["guardrail_policy"]["require_reviewable_patch"] is True
+    assert "ready_for_human_review" in builder_spec["output_schema"]["required"]
     assert agent_detail_response.json()["active_version"]["spec_json"]["output_schema"]["name"] == "RuntimeAgentObservation"
     assert agent_detail_response.json()["active_version"]["spec_json"]["allowed_tools"] == ["psop.runtime.read"]
     runner_spec = agent_detail_response.json()["active_version"]["spec_json"]
@@ -256,6 +272,24 @@ def test_agents_seed_agent_runs_events_and_tool_authorizations() -> None:
     assert runner_spec["memory_policy"]["used_as_runtime_state"] is False
     assert runner_spec["guardrail_policy"]["deny_runtime_state_mutation"] is True
     assert "terminal_message" in runner_spec["output_schema"]["required"]
+    assert evaluator_detail_response.status_code == 200
+    evaluator_spec = evaluator_detail_response.json()["active_version"]["spec_json"]
+    assert evaluator_spec["runtime_policy"]["facts_source"] == "runtime_replay"
+    assert evaluator_spec["runtime_policy"]["business_state_owner"] == "EvaluationService"
+    assert evaluator_spec["memory_policy"]["artifact_namespace"] == "evaluation"
+    assert evaluator_spec["memory_policy"]["used_as_runtime_state"] is False
+    assert evaluator_spec["guardrail_policy"]["require_replayable_evidence_refs"] is True
+    assert "findings" in evaluator_spec["output_schema"]["required"]
+    assert governance_detail_response.status_code == 200
+    governance_spec = governance_detail_response.json()["active_version"]["spec_json"]
+    assert governance_spec["runtime_policy"]["proposal_state_owner"] == "GovernanceService"
+    assert governance_spec["runtime_policy"]["direct_activation_allowed"] is False
+    assert governance_spec["runtime_policy"]["high_side_effect_tool_authorization_required"] is True
+    assert governance_spec["memory_policy"]["artifact_namespace"] == "governance"
+    assert governance_spec["memory_policy"]["used_as_runtime_state"] is False
+    assert governance_spec["guardrail_policy"]["deny_direct_activation_without_authorization"] is True
+    assert governance_spec["guardrail_policy"]["require_rollback_plan"] is True
+    assert "activation_plan" in governance_spec["output_schema"]["required"]
     assert versions_response.status_code == 200
     assert versions_response.json()[0]["status"] == "published"
 
@@ -1743,6 +1777,12 @@ def test_agent_runner_memory_harness_applies_agent_memory_policy_limit() -> None
                 "input_payload": {
                     "expected_output": {
                         "draft_summary": "Memory limit should constrain retrieved context.",
+                        "files": [{"path": "SKILL.md", "change_type": "modify"}],
+                        "manifest_patch": {},
+                        "evidence_requirements": [],
+                        "safety_constraints": [],
+                        "clarifying_questions": [],
+                        "risk_notes": [],
                         "ready_for_human_review": True,
                     }
                 },
@@ -2629,7 +2669,13 @@ def test_agent_runner_output_guardrail_records_business_wait_as_non_hitl() -> No
                 "input_payload": {
                     "expected_output": {
                         "draft_summary": "需要用户补充设备铭牌照片。",
+                        "files": [],
+                        "manifest_patch": {},
+                        "evidence_requirements": [],
+                        "safety_constraints": [],
                         "clarifying_questions": ["请补充设备铭牌照片和额定电压。"],
+                        "risk_notes": [],
+                        "ready_for_human_review": False,
                         "memory_candidates": [
                             {
                                 "namespace": "builder",
@@ -2671,6 +2717,89 @@ def test_agent_runner_output_guardrail_records_business_wait_as_non_hitl() -> No
     assert memory_entries[0]["source_refs"] == [{"kind": "pskill_material", "id": "material-nameplate-1"}]
 
 
+def test_agent_runner_output_guardrail_rejects_builder_direct_publish_output() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.builder",
+                "owner_type": "pskill_draft",
+                "owner_id": "builder-direct-publish",
+                "input_payload": {
+                    "expected_output": {
+                        "draft_summary": "Builder tried to publish directly.",
+                        "files": [{"path": "SKILL.md", "change_type": "modify"}],
+                        "manifest_patch": {},
+                        "evidence_requirements": [],
+                        "safety_constraints": [],
+                        "clarifying_questions": [],
+                        "risk_notes": [],
+                        "published": True,
+                        "ready_for_human_review": True,
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    payload = run_once_response.json()
+    assert payload["status"] == "failed"
+    assert payload["error_message"] == "output_guardrail_failed"
+    assert payload["output_payload"]["guardrail_findings"][0]["code"] == "output_direct_publish_denied"
+
+    guardrail_event = next(
+        item for item in events_response.json() if item["event_type"] == "agent.output_guardrail.checked"
+    )
+    assert guardrail_event["payload"]["passed"] is False
+    assert guardrail_event["payload"]["findings"][0]["path"] == "output_payload"
+
+
+def test_agent_runner_output_guardrail_rejects_tester_output_without_replay_evidence() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.tester",
+                "owner_type": "pskill_test_run",
+                "owner_id": "tester-output-replay-evidence",
+                "input_payload": {
+                    "expected_output": {
+                        "decision": "require_human_review",
+                        "score": 72,
+                        "coverage": {"scenario_count": 1},
+                        "blocking_findings": [],
+                        "warnings": [{"code": "coverage.warning", "message": "当前仅覆盖一个测试场景。"}],
+                        "publish_gate_summary": "测试诊断建议进入人工 review。",
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    payload = run_once_response.json()
+    assert payload["status"] == "failed"
+    assert payload["error_message"] == "output_guardrail_failed"
+    assert payload["output_payload"]["guardrail_findings"][0]["code"] == "output_replay_evidence_required"
+
+    guardrail_event = next(
+        item for item in events_response.json() if item["event_type"] == "agent.output_guardrail.checked"
+    )
+    assert guardrail_event["payload"]["passed"] is False
+    assert guardrail_event["payload"]["findings"][0]["path"] == "output_payload"
+
+
 def test_agent_runner_input_guardrail_records_prompt_injection_without_hitl() -> None:
     client, _, _ = create_test_client()
 
@@ -2690,7 +2819,11 @@ def test_agent_runner_input_guardrail_records_prompt_injection_without_hitl() ->
                     "expected_output": {
                         "decision": "need_more_evidence",
                         "reason": "用户输入包含策略绕过和 Runtime 状态写入风险，只能作为风险信号记录。",
+                        "next_phase": "waiting_input",
                         "terminal_message": "请提供正常现场证据。",
+                        "facts": {},
+                        "evidence_refs": [{"kind": "run_event", "id": "run-input-guardrail-event"}],
+                        "safety_flags": ["prompt_injection_risk"],
                     },
                 },
             },
@@ -2709,7 +2842,7 @@ def test_agent_runner_input_guardrail_records_prompt_injection_without_hitl() ->
     event_types = [item["event_type"] for item in events]
     input_guardrail_event = next(item for item in events if item["event_type"] == "agent.input_guardrail.checked")
     assert input_guardrail_event["payload"]["passed"] is True
-    assert input_guardrail_event["payload"]["warning_count"] == 2
+    assert input_guardrail_event["payload"]["warning_count"] == 3
     assert {
         item["code"] for item in input_guardrail_event["payload"]["findings"]
     } == {
@@ -2719,6 +2852,151 @@ def test_agent_runner_input_guardrail_records_prompt_injection_without_hitl() ->
     assert event_types.index("agent.input_guardrail.checked") < event_types.index("agent.memory.retrieved")
     assert event_types.index("agent.input_guardrail.checked") < event_types.index("agent.model_call.completed")
     assert "tool.authorization_requested" not in event_types
+
+
+def test_agent_runner_output_guardrail_rejects_missing_required_output_fields() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.runner",
+                "owner_type": "runtime",
+                "owner_id": "run-output-schema",
+                "run_id": "run-output-schema",
+                "input_payload": {
+                    "expected_output": {
+                        "decision": "need_more_evidence",
+                        "reason": "Missing required RuntimeAgentObservation fields.",
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        memory_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/memory-entries")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    payload = run_once_response.json()
+    assert payload["status"] == "failed"
+    assert payload["error_message"] == "output_guardrail_failed"
+    assert {item["code"] for item in payload["output_payload"]["guardrail_findings"]} == {
+        "output_replayable_evidence_refs_required",
+        "output_schema_required_missing",
+    }
+    assert memory_response.json() == []
+
+    guardrail_event = next(
+        item for item in events_response.json() if item["event_type"] == "agent.output_guardrail.checked"
+    )
+    assert guardrail_event["payload"]["passed"] is False
+    assert "output_payload.terminal_message" in {
+        item["path"] for item in guardrail_event["payload"]["findings"]
+    }
+
+
+def test_agent_runner_output_guardrail_rejects_runtime_state_mutation_output() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.runner",
+                "owner_type": "runtime",
+                "owner_id": "run-output-runtime-state",
+                "run_id": "run-output-runtime-state",
+                "input_payload": {
+                    "expected_output": {
+                        "decision": "proceed",
+                        "reason": "I will update run_event and session_token_snapshot directly.",
+                        "next_phase": "node_completed",
+                        "terminal_message": "Continuing.",
+                        "facts": {},
+                        "evidence_refs": [{"kind": "run_event", "id": "run-event-runtime-state"}],
+                        "safety_flags": [],
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    payload = run_once_response.json()
+    assert payload["status"] == "failed"
+    assert payload["error_message"] == "output_guardrail_failed"
+    assert payload["output_payload"]["guardrail_findings"][0]["code"] == (
+        "output_runtime_state_sovereignty_violation"
+    )
+
+    guardrail_event = next(
+        item for item in events_response.json() if item["event_type"] == "agent.output_guardrail.checked"
+    )
+    assert guardrail_event["payload"]["passed"] is False
+    assert guardrail_event["payload"]["findings"][0]["path"] == "output_payload.reason"
+
+
+def test_agent_runner_output_guardrail_rejects_governance_direct_activation_output() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "psop.governance",
+                "owner_type": "governance_proposal",
+                "owner_id": "governance-output-policy",
+                "input_payload": {
+                    "expected_output": {
+                        "proposal_type": "agent_spec_update",
+                        "target": {"kind": "agent", "agent_key": "pskill.runner"},
+                        "problem_statement": "Activate a runner update without review.",
+                        "evidence_refs": [],
+                        "proposed_changes": [
+                            {
+                                "kind": "agent_version_activation",
+                                "agent_key": "pskill.runner",
+                                "direct_activation_allowed": True,
+                                "permission_expansion_performed": True,
+                            }
+                        ],
+                        "risk_assessment": {"risk_level": "high"},
+                        "required_tests": [],
+                        "activation_plan": {"strategy": "direct", "direct_activation_allowed": True},
+                    }
+                },
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+        authorizations_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/tool-authorizations")
+
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    payload = run_once_response.json()
+    assert payload["status"] == "failed"
+    assert payload["error_message"] == "output_guardrail_failed"
+    assert authorizations_response.json() == []
+    assert {item["code"] for item in payload["output_payload"]["guardrail_findings"]} == {
+        "output_evidence_refs_required",
+        "output_rollback_plan_required",
+        "output_direct_activation_denied",
+        "output_required_tests_required",
+        "output_tool_permission_expansion_denied",
+    }
+
+    guardrail_event = next(
+        item for item in events_response.json() if item["event_type"] == "agent.output_guardrail.checked"
+    )
+    assert guardrail_event["payload"]["passed"] is False
+    assert guardrail_event["payload"]["non_hitl_business_state"] is False
 
 
 def test_agent_runner_output_guardrail_rejects_memory_candidate_without_source_refs() -> None:
@@ -2733,7 +3011,12 @@ def test_agent_runner_output_guardrail_rejects_memory_candidate_without_source_r
                 "owner_id": "evaluation-guardrail",
                 "input_payload": {
                     "expected_output": {
+                        "overall_outcome": "completed_with_issues",
+                        "quality_score": 40,
                         "summary": "Evaluator attempted to persist an unsupported memory candidate.",
+                        "attribution": {},
+                        "findings": [],
+                        "evidence_refs": [{"kind": "run_trace", "id": "trace-evaluation-guardrail"}],
                         "memory_candidates": [
                             {
                                 "namespace": "evaluation",

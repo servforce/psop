@@ -118,7 +118,7 @@ class ToolPolicy:
                 reason="tool_not_allowed_by_agent_or_skill",
             )
         side_effect_level = requested_side_effect_level or self.side_effects[tool_name]
-        requires_authorization = side_effect_level in AUTH_REQUIRED_LEVELS or tool_provider == "mcp"
+        requires_authorization = side_effect_level in AUTH_REQUIRED_LEVELS or is_mcp_tool
         return ToolPolicyDecision(
             allowed=True,
             side_effect_level=side_effect_level,
@@ -186,15 +186,24 @@ class AgentToolHarness:
         active_tools: set[str],
         tool_provider: str,
     ) -> set[str]:
-        agent_skill_allowed_tools = self.agent_skill_allowed_tools(spec=spec, active_tools=active_tools)
+        agent_skill_allowed_tools = self.agent_skill_runtime_allowed_tools(spec=spec, active_tools=active_tools)
         if tool_provider.strip().lower() == "mcp":
             return agent_skill_allowed_tools
         return agent_skill_allowed_tools & self.tool_policy.allowed_tools
 
     def effective_allowed_tools(self, *, spec: dict[str, Any], active_tools: set[str]) -> set[str]:
-        return self.agent_skill_allowed_tools(spec=spec, active_tools=active_tools) & self.tool_policy.allowed_tools
+        return self.agent_skill_runtime_allowed_tools(spec=spec, active_tools=active_tools) & self.tool_policy.allowed_tools
 
     @staticmethod
     def agent_skill_allowed_tools(*, spec: dict[str, Any], active_tools: set[str]) -> set[str]:
         agent_allowed_tools = {str(tool) for tool in spec.get("allowed_tools") or []}
         return agent_allowed_tools & active_tools
+
+    @classmethod
+    def agent_skill_runtime_allowed_tools(cls, *, spec: dict[str, Any], active_tools: set[str]) -> set[str]:
+        allowed_tools = cls.agent_skill_allowed_tools(spec=spec, active_tools=active_tools)
+        runtime_policy = spec.get("runtime_policy")
+        if not isinstance(runtime_policy, dict) or "allowed_tools" not in runtime_policy:
+            return allowed_tools
+        runtime_allowed_tools = {str(tool) for tool in runtime_policy.get("allowed_tools") or []}
+        return allowed_tools & runtime_allowed_tools

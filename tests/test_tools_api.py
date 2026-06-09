@@ -72,7 +72,8 @@ def test_tools_api_lists_seeded_tools_and_exposes_policy_metadata() -> None:
     assert detail["policy_summary"]["policy_decision"]["reason"] == "requires_authorization"
     assert detail["allowed_agent_keys"] == ["psop.governance"]
     assert detail["policy_summary"]["permission_rule"] == (
-        "AgentSpec.allowed_tools ∩ SkillPackage.allowed_tools ∩ ToolPolicy.allowed_tools"
+        "AgentSpec.allowed_tools ∩ SkillPackage.allowed_tools ∩ "
+        "RuntimePolicy.allowed_tools ∩ ToolPolicy.allowed_tools"
     )
 
     memory_detail = memory_detail_response.json()
@@ -182,6 +183,53 @@ def test_tools_api_uses_skill_bindings_for_agent_allowed_tools() -> None:
     assert propose_patch_detail_response.json()["allowed_agent_keys"] == []
     assert read_test_response.status_code == 200
     assert read_test_response.json()["policy_reason"] == "tool_not_allowed_by_agent_or_skill"
+
+
+def test_tools_api_uses_runtime_policy_to_narrow_agent_allowed_tools() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        sync_response = client.post("/api/v1/skills/sync")
+        before_agent_response = client.get("/api/v1/agents/pskill.builder")
+        base_spec = before_agent_response.json()["active_version"]["spec_json"]
+        spec = {
+            **base_spec,
+            "allowed_tools": ["psop.media.compute", "psop.pskills.get"],
+            "allowed_skill_names": ["ffmpeg-video-processing", "pskill-builder"],
+            "runtime_policy": {
+                **base_spec["runtime_policy"],
+                "allowed_tools": ["psop.media.compute"],
+            },
+        }
+        draft_response = client.post(
+            "/api/v1/agents/pskill.builder/versions",
+            json={"version_label": "builder-tool-policy-runtime-narrow", "spec_json": spec},
+        )
+        draft = next(
+            item
+            for item in draft_response.json()["versions"]
+            if item["version_label"] == "builder-tool-policy-runtime-narrow"
+        )
+        publish_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft['id']}/publish")
+        activate_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft['id']}/activate")
+        media_detail_response = client.get("/api/v1/tools/psop.media.compute")
+        pskill_read_detail_response = client.get("/api/v1/tools/psop.pskills.get")
+        pskill_read_test_response = client.post(
+            "/api/v1/tools/psop.pskills.get/test",
+            json={"agent_key": "pskill.builder", "arguments_summary": {"pskill_id": "pskill-1"}},
+        )
+
+    assert sync_response.status_code == 200
+    assert draft_response.status_code == 201
+    assert publish_response.status_code == 200
+    assert activate_response.status_code == 200
+
+    assert media_detail_response.status_code == 200
+    assert media_detail_response.json()["allowed_agent_keys"] == ["pskill.builder"]
+    assert pskill_read_detail_response.status_code == 200
+    assert pskill_read_detail_response.json()["allowed_agent_keys"] == []
+    assert pskill_read_test_response.status_code == 200
+    assert pskill_read_test_response.json()["policy_reason"] == "tool_not_allowed_by_agent_or_skill"
 
 
 def test_tools_api_dry_runs_read_compute_and_explains_authorization_policy() -> None:

@@ -215,6 +215,15 @@ def test_default_agents_keep_closed_loop_keys_and_runner_boundary() -> None:
     assert specs["pskill.runner"]["memory_policy"]["used_as_runtime_state"] is False
     assert specs["pskill.runner"]["guardrail_policy"]["deny_runtime_state_mutation"] is True
     assert "evidence_refs" in specs["pskill.runner"]["output_schema"]["required"]
+    assert specs["pskill.builder"]["runtime_policy"]["draft_state_owner"] == "PSkillService"
+    assert specs["pskill.builder"]["runtime_policy"]["draft_output"] == "reviewable_patch"
+    assert specs["pskill.builder"]["runtime_policy"]["direct_publish_allowed"] is False
+    assert specs["pskill.builder"]["memory_policy"]["artifact_namespace"] == "materials"
+    assert specs["pskill.builder"]["memory_policy"]["used_as_runtime_state"] is False
+    assert specs["pskill.builder"]["memory_policy"]["requires_source_refs"] is True
+    assert specs["pskill.builder"]["guardrail_policy"]["deny_direct_publish"] is True
+    assert specs["pskill.builder"]["guardrail_policy"]["require_reviewable_patch"] is True
+    assert "ready_for_human_review" in specs["pskill.builder"]["output_schema"]["required"]
     assert specs["pskill.compiler"]["runtime_policy"]["formal_revision"] == "psop-eg-formal/v5"
     assert specs["pskill.compiler"]["runtime_policy"]["repair_attempt_limit"] == 1
     assert specs["pskill.compiler"]["memory_policy"]["artifact_namespace"] == "compile"
@@ -226,7 +235,28 @@ def test_default_agents_keep_closed_loop_keys_and_runner_boundary() -> None:
     assert specs["pskill.tester"]["memory_policy"]["artifact_namespace"] == "testing"
     assert specs["pskill.tester"]["memory_policy"]["used_as_runtime_state"] is False
     assert "publish_gate_summary" in specs["pskill.tester"]["output_schema"]["required"]
+    assert specs["pskill.evaluator"]["allowed_skill_names"] == ["pskill-run-evaluator"]
+    assert specs["pskill.evaluator"]["runtime_policy"]["facts_source"] == "runtime_replay"
+    assert specs["pskill.evaluator"]["runtime_policy"]["business_state_owner"] == "EvaluationService"
+    assert specs["pskill.evaluator"]["runtime_policy"]["governance_handoff"] == "run_evaluation_finding"
+    assert specs["pskill.evaluator"]["memory_policy"]["artifact_namespace"] == "evaluation"
+    assert specs["pskill.evaluator"]["memory_policy"]["used_as_runtime_state"] is False
+    assert specs["pskill.evaluator"]["guardrail_policy"]["deny_runtime_state_mutation"] is True
+    assert specs["pskill.evaluator"]["guardrail_policy"]["require_replayable_evidence_refs"] is True
+    assert "findings" in specs["pskill.evaluator"]["output_schema"]["required"]
     assert specs["psop.governance"]["output_schema"]["name"] == "GovernanceProposalResult"
+    assert specs["psop.governance"]["allowed_skill_names"] == ["psop-governance-manager"]
+    assert specs["psop.governance"]["runtime_policy"]["proposal_state_owner"] == "GovernanceService"
+    assert specs["psop.governance"]["runtime_policy"]["proposal_review_required"] is True
+    assert specs["psop.governance"]["runtime_policy"]["direct_activation_allowed"] is False
+    assert specs["psop.governance"]["runtime_policy"]["high_side_effect_tool_authorization_required"] is True
+    assert specs["psop.governance"]["memory_policy"]["artifact_namespace"] == "governance"
+    assert specs["psop.governance"]["memory_policy"]["used_as_runtime_state"] is False
+    assert specs["psop.governance"]["guardrail_policy"]["deny_runtime_state_mutation"] is True
+    assert specs["psop.governance"]["guardrail_policy"]["deny_direct_activation_without_authorization"] is True
+    assert specs["psop.governance"]["guardrail_policy"]["deny_tool_permission_expansion"] is True
+    assert specs["psop.governance"]["guardrail_policy"]["require_rollback_plan"] is True
+    assert "activation_plan" in specs["psop.governance"]["output_schema"]["required"]
     assert set(specs) == set(DEFAULT_AGENT_SKILLS) == set(AGENT_PROMPT_FALLBACKS)
     assert {key: spec["allowed_skill_names"] for key, spec in specs.items()} == DEFAULT_AGENT_SKILLS
     for spec in DEFAULT_AGENT_SPECS:

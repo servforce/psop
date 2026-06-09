@@ -19,7 +19,12 @@ def test_memory_api_lists_searches_and_reviews_agent_memory_candidates() -> None
                 "input_payload": {
                     "expected_output": {
                         "schema": "RunEvaluationResult",
+                        "overall_outcome": "completed_with_issues",
+                        "quality_score": 40,
                         "summary": "Evaluation produced an episodic memory candidate.",
+                        "attribution": {},
+                        "findings": [],
+                        "evidence_refs": [{"kind": "run_trace", "id": "trace-1"}],
                         "memory_candidates": [
                             {
                                 "namespace": "evaluation",
@@ -222,7 +227,12 @@ def test_memory_candidate_cannot_replace_formal_runtime_sources() -> None:
                 "input_payload": {
                     "expected_output": {
                         "schema": "RunEvaluationResult",
+                        "overall_outcome": "completed_with_issues",
+                        "quality_score": 30,
                         "summary": "Invalid memory candidate tries to replace Runtime facts.",
+                        "attribution": {},
+                        "findings": [],
+                        "evidence_refs": [{"kind": "run_trace", "id": "trace-boundary-1"}],
                         "memory_candidates": [
                             {
                                 "namespace": "evaluation",
