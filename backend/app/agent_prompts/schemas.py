@@ -62,6 +62,7 @@ class AgentPromptDefinitionDetailResponse(AgentPromptDefinitionSummaryResponse):
 class AgentPromptCreateRequest(BaseModel):
     key: str = Field(min_length=2, max_length=160, pattern=r"^[a-z0-9][a-z0-9_.-]*$")
     agent_id: str = Field(min_length=2, max_length=255)
+    agent_key: str = Field(default="", max_length=160)
     scenario: str = Field(min_length=2, max_length=120)
     name: str = Field(min_length=2, max_length=255)
     description: str = ""

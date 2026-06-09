@@ -11,6 +11,7 @@ from app.compiler.formal_v5 import validate_and_normalize_artifact
 from app.jobs.repository import JobRepository
 from app.jobs.types import RUN_EVALUATION_JOB_TYPE
 from app.memory.models import AgentMemoryEntry
+from app.memory.service import MemoryService
 from app.runtime.schemas import AppendRunEventRequest, CreateInvocationRequest
 from app.runtime.service import RuntimeService
 from app.pskills.exceptions import SkillsGatewayError, SkillValidationError
@@ -90,7 +91,11 @@ def runtime_stack() -> Iterator[tuple[DatabaseManager, FakeGitLabGateway, FakeIn
         gitlab_gateway=gitlab_gateway,
         compiler_service=compiler_service,
     )
-    runtime_service = RuntimeService(settings=settings, inference_gateway=inference_gateway)
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=inference_gateway,
+        memory_service=MemoryService(),
+    )
 
     try:
         yield database_manager, gitlab_gateway, inference_gateway, compiler_service, skills_service, runtime_service
@@ -1060,7 +1065,11 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
         gitlab_gateway=gitlab_gateway,
         compiler_service=compiler_service,
     )
-    runtime_service = RuntimeService(settings=settings, inference_gateway=inference_gateway)
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=inference_gateway,
+        memory_service=MemoryService(),
+    )
 
     try:
         with database_manager.session() as session:
@@ -1232,7 +1241,11 @@ def test_run_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
 
 def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> None:
     database_manager, _, _, compiler_service, skills_service, _ = runtime_stack
-    failing_runtime = RuntimeService(settings=create_test_settings(), inference_gateway=FailingInferenceGateway())
+    failing_runtime = RuntimeService(
+        settings=create_test_settings(),
+        inference_gateway=FailingInferenceGateway(),
+        memory_service=MemoryService(),
+    )
 
     with database_manager.session() as session:
         skill = skills_service.create_skill(
@@ -1362,7 +1375,11 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
 
 def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(runtime_stack) -> None:
     database_manager, _, _, compiler_service, skills_service, _ = runtime_stack
-    failing_runtime = RuntimeService(settings=create_test_settings(), inference_gateway=FailingSkillsGatewayInferenceGateway())
+    failing_runtime = RuntimeService(
+        settings=create_test_settings(),
+        inference_gateway=FailingSkillsGatewayInferenceGateway(),
+        memory_service=MemoryService(),
+    )
 
     with database_manager.session() as session:
         skill = skills_service.create_skill(
@@ -1420,7 +1437,11 @@ def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(r
 
 def test_runtime_service_recovers_when_single_terminal_message_processing_fails(runtime_stack) -> None:
     database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
-    failing_runtime = RuntimeService(settings=create_test_settings(), inference_gateway=FailingSkillsGatewayInferenceGateway())
+    failing_runtime = RuntimeService(
+        settings=create_test_settings(),
+        inference_gateway=FailingSkillsGatewayInferenceGateway(),
+        memory_service=MemoryService(),
+    )
 
     with database_manager.session() as session:
         skill = skills_service.create_skill(

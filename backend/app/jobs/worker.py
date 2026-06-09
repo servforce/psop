@@ -131,6 +131,7 @@ class RuntimeJobWorker:
                             runtime_service = RuntimeService(
                                 settings=self.settings,
                                 inference_gateway=self.inference_gateway,
+                                memory_service=MemoryService(),
                                 object_store=self.object_store,
                             )
                             runtime_service.process_run(session, job.run_id)
@@ -138,6 +139,12 @@ class RuntimeJobWorker:
                             skill_test_service = SkillTestService(
                                 settings=self.settings,
                                 inference_gateway=self.inference_gateway,
+                                runtime_service=RuntimeService(
+                                    settings=self.settings,
+                                    inference_gateway=self.inference_gateway,
+                                    memory_service=MemoryService(),
+                                    object_store=self.object_store,
+                                ),
                                 object_store=self.object_store,
                             )
                             skill_test_service.process_driver_job(session, job_id)

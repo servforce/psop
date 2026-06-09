@@ -134,3 +134,63 @@ def test_agent_prompt_api_validates_publishes_and_activates_versions() -> None:
         assert bindings_response.status_code == 200
         binding = next(item for item in bindings_response.json() if item["usage_key"] == "skill_test.semantic_judge")
         assert binding["active_version_id"] == draft["id"]
+
+
+def test_agent_prompt_api_create_persists_agent_key_in_generated_pack() -> None:
+    client = TestClient(
+        create_app(
+            create_test_settings(),
+            gitlab_gateway=FakeGitLabGateway(),
+            inference_gateway=FakeInferenceGateway(),
+            object_store=FakeObjectStore(),
+        )
+    )
+    with client:
+        create_response = client.post(
+            "/api/v1/agent-prompts",
+            json={
+                "key": "custom.runner.prompt",
+                "agent_id": "custom.runner.prompt",
+                "agent_key": "pskill.runner",
+                "scenario": "runtime_execution",
+                "name": "Custom Runner Prompt",
+                "description": "Custom runner prompt",
+                "route_key": "text",
+            },
+        )
+        assert create_response.status_code == 201
+        created = create_response.json()
+        assert created["agent_key"] == "pskill.runner"
+        assert created["active_version_id"] is None
+
+        version = created["selected_version"]
+        files = dict(version["files"])
+        assert "agent_key: pskill.runner" in files["agent.yaml"]
+
+        files["system.md"] = "Custom runner prompt body"
+        save_response = client.put(
+            f"/api/v1/agent-prompts/{created['id']}/versions/{version['id']}/files",
+            json={"files": files},
+        )
+        assert save_response.status_code == 200
+
+        validate_response = client.post(
+            f"/api/v1/agent-prompts/{created['id']}/versions/{version['id']}/validate"
+        )
+        assert validate_response.status_code == 200
+        assert validate_response.json()["valid"] is True
+        assert validate_response.json()["metadata"]["agent_key"] == "pskill.runner"
+
+        publish_response = client.post(
+            f"/api/v1/agent-prompts/{created['id']}/versions/{version['id']}/publish"
+        )
+        assert publish_response.status_code == 200
+        assert publish_response.json()["status"] == "published"
+
+        activate_response = client.post(
+            f"/api/v1/agent-prompts/{created['id']}/versions/{version['id']}/activate",
+            json={"usage_key": "custom.runner.prompt"},
+        )
+        assert activate_response.status_code == 200
+        assert activate_response.json()["active_version_id"] == version["id"]
+        assert activate_response.json()["agent_key"] == "pskill.runner"

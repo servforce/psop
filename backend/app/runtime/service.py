@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 from datetime import timedelta, timezone
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -75,7 +75,6 @@ from app.pskills.exceptions import SkillsError, SkillNotFoundError, SkillValidat
 from app.pskills.models import now_utc
 from app.gateway.inference import LlmAttachment, LlmInferenceGateway, MULTIMODAL_ROUTE_KEY, TEXT_ROUTE_KEY
 from app.infra.object_store import ObjectStoreService
-from app.memory.service import MemoryService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -85,6 +84,28 @@ RUNTIME_LLM_LANGUAGE_POLICY = """平台级输出语言要求：
 - reason、terminal_message、final_response、summary 等自然语言字段值必须使用简体中文。
 - 不要因为附件内容、文件名、模型默认行为或上游 prompt 语言而改用英文。
 - 如果当前节点要求只输出 JSON，不要在 JSON 外追加任何说明。"""
+
+
+class RuntimeMemoryContextProvider(Protocol):
+    def retrieve_context_for_agent(
+        self,
+        session: Session,
+        *,
+        agent_key: str,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Return advisory Agent memory context without becoming Runtime state."""
+
+
+class EmptyRuntimeMemoryContextProvider:
+    def retrieve_context_for_agent(
+        self,
+        session: Session,
+        *,
+        agent_key: str,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        return []
 
 
 class RuntimeService:
@@ -100,7 +121,7 @@ class RuntimeService:
         agent_prompt_service: AgentPromptService | None = None,
         agent_service: AgentService | None = None,
         input_guardrail: InputGuardrail | None = None,
-        memory_service: MemoryService | None = None,
+        memory_service: RuntimeMemoryContextProvider | None = None,
         planner: AgentPlanner | None = None,
         object_store: ObjectStoreService | None = None,
     ) -> None:
@@ -111,7 +132,7 @@ class RuntimeService:
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
         self.agent_service = agent_service or AgentService()
         self.input_guardrail = input_guardrail or InputGuardrail()
-        self.memory_service = memory_service or MemoryService()
+        self.memory_service = memory_service or EmptyRuntimeMemoryContextProvider()
         self.planner = planner or AgentPlanner()
         self.object_store = object_store
 

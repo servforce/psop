@@ -410,6 +410,63 @@ def test_agent_runner_can_use_llm_gateway_for_agent_decision() -> None:
     assert "agent.model_call.completed" in [item["event_type"] for item in events]
 
 
+def test_agent_runner_llm_prompt_uses_effective_allowed_tools_intersection() -> None:
+    client, _, _ = create_test_client()
+    gateway = AgentDecisionInferenceGateway()
+
+    with client:
+        client.app.state.inference_gateway = gateway
+        builder_before = client.get("/api/v1/agents/pskill.builder").json()
+        llm_spec = {
+            **builder_before["active_version"]["spec_json"],
+            "model_policy": {"mode": "llm", "route_key": "text"},
+            "allowed_tools": ["psop.repository.propose_patch", "psop.media.compute"],
+            "allowed_skill_names": ["ffmpeg-video-processing"],
+        }
+        draft_response = client.post(
+            "/api/v1/agents/pskill.builder/versions",
+            json={"version_label": "builder-llm-effective-tools", "spec_json": llm_spec},
+        )
+        draft_version = next(
+            item for item in draft_response.json()["versions"] if item["version_label"] == "builder-llm-effective-tools"
+        )
+        publish_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft_version['id']}/publish")
+        activate_response = client.post(f"/api/v1/agents/pskill.builder/versions/{draft_version['id']}/activate")
+        run_response = client.post(
+            "/api/v1/agent-runs",
+            json={
+                "agent_key": "pskill.builder",
+                "owner_type": "pskill_draft",
+                "owner_id": "draft-effective-tools",
+                "input_payload": {"task": "narrow_allowed_tools"},
+            },
+        )
+        agent_run_id = run_response.json()["id"]
+        run_once_response = client.post(f"/api/v1/agent-runs/{agent_run_id}/run-once")
+        model_calls_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/model-calls")
+        events_response = client.get(f"/api/v1/agent-runs/{agent_run_id}/events")
+
+    assert draft_response.status_code == 201
+    assert publish_response.status_code == 200
+    assert activate_response.status_code == 200
+    assert run_response.status_code == 201
+    assert run_once_response.status_code == 200
+    assert run_once_response.json()["status"] == "succeeded"
+
+    prompt_payload = json.loads(gateway.calls[0]["user_prompt"])
+    assert prompt_payload["active_skill_names"] == ["ffmpeg-video-processing"]
+    assert prompt_payload["allowed_tools"] == ["psop.media.compute"]
+    assert "psop.repository.propose_patch" not in prompt_payload["allowed_tools"]
+
+    model_call = model_calls_response.json()[0]
+    assert model_calls_response.status_code == 200
+    assert model_call["request_payload"]["prompt_payload"]["allowed_tools"] == ["psop.media.compute"]
+
+    skill_event = next(item for item in events_response.json() if item["event_type"] == "agent.skills.activated")
+    assert skill_event["payload"]["allowed_tools"] == ["psop.media.compute"]
+    assert skill_event["payload"]["effective_allowed_tools"] == ["psop.media.compute"]
+
+
 def test_agent_runner_records_failed_llm_agent_decision() -> None:
     client, _, _ = create_test_client()
 

@@ -44,6 +44,7 @@ from app.agents.tool_authorization_context import (
 from app.pskills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.pskills.models import now_utc
 from app.runtime.tool_authorization_events import RunToolAuthorizationEventWriter
+from app.agent_harness.tools import ToolPolicy
 from app.skills.service import SkillPackageService
 
 
@@ -383,6 +384,7 @@ class AgentService:
                     "skill_names": selected_skill_names,
                     "active_skill_names": active_skill_names,
                     "allowed_tools": sorted(active_tools),
+                    "effective_allowed_tools": self._effective_allowed_tools(spec=spec, active_tools=active_tools),
                 },
             ),
             commit=False,
@@ -390,6 +392,11 @@ class AgentService:
         if commit:
             session.commit()
         return self._build_run_response(agent_run)
+
+    @staticmethod
+    def _effective_allowed_tools(*, spec: dict[str, Any], active_tools: set[str]) -> list[str]:
+        agent_allowed_tools = {str(tool) for tool in spec.get("allowed_tools") or []}
+        return sorted(agent_allowed_tools & active_tools & ToolPolicy().allowed_tools)
 
     def list_runs(
         self,

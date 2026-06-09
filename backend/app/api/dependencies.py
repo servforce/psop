@@ -121,6 +121,7 @@ def get_runtime_service(request: Request) -> RuntimeService:
     return RuntimeService(
         settings=get_app_settings(request),
         inference_gateway=get_inference_gateway(request),
+        memory_service=get_memory_service(request),
         object_store=get_object_store(request),
     )
 
@@ -133,6 +134,12 @@ def get_skill_test_service(request: Request) -> SkillTestService:
     return SkillTestService(
         settings=get_app_settings(request),
         inference_gateway=get_inference_gateway(request),
+        runtime_service=RuntimeService(
+            settings=get_app_settings(request),
+            inference_gateway=get_inference_gateway(request),
+            memory_service=get_memory_service(request),
+            object_store=get_object_store(request),
+        ),
         object_store=get_object_store(request),
     )
 

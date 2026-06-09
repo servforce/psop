@@ -208,17 +208,17 @@ class AgentPromptService:
             raise SkillConflictError("Agent Prompt Pack key 已存在。", details={"key": payload.key})
         files = self._normalize_files(payload.files)
         if "agent.yaml" not in files:
-            files["agent.yaml"] = yaml.safe_dump(
-                {
-                    "agent_id": payload.agent_id,
-                    "version": "v1",
-                    "scenario": payload.scenario,
-                    "route_key": payload.route_key or TEXT_ROUTE_KEY,
-                    "description": payload.description,
-                },
-                allow_unicode=True,
-                sort_keys=False,
-            )
+            spec = {
+                "agent_id": payload.agent_id,
+                "version": "v1",
+                "scenario": payload.scenario,
+                "route_key": payload.route_key or TEXT_ROUTE_KEY,
+                "description": payload.description,
+            }
+            agent_key = payload.agent_key.strip()
+            if agent_key:
+                spec["agent_key"] = agent_key
+            files["agent.yaml"] = yaml.safe_dump(spec, allow_unicode=True, sort_keys=False)
         if "system.md" not in files:
             files["system.md"] = ""
 
@@ -490,12 +490,13 @@ class AgentPromptService:
     ) -> AgentPromptDefinitionSummaryResponse:
         versions = self.repository.list_versions(session, definition.id)
         active_version = session.get(AgentPromptVersion, definition.active_version_id) if definition.active_version_id else None
+        agent_key_version = active_version or (versions[0] if versions else None)
         bindings = self.repository.list_bindings_for_definition(session, definition.id)
         return AgentPromptDefinitionSummaryResponse(
             id=definition.id,
             key=definition.key,
             agent_id=definition.agent_id,
-            agent_key=self._definition_agent_key(active_version=active_version, bindings=bindings),
+            agent_key=self._definition_agent_key(prompt_version=agent_key_version, bindings=bindings),
             scenario=definition.scenario,
             name=definition.name,
             description=definition.description,
@@ -513,11 +514,11 @@ class AgentPromptService:
     def _definition_agent_key(
         cls,
         *,
-        active_version: AgentPromptVersion | None,
+        prompt_version: AgentPromptVersion | None,
         bindings: list[AgentPromptBinding],
     ) -> str:
-        if active_version:
-            agent_key = cls._agent_key_from_files(active_version.files)
+        if prompt_version:
+            agent_key = cls._agent_key_from_files(prompt_version.files)
             if agent_key:
                 return agent_key
         for binding in bindings:

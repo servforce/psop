@@ -165,6 +165,7 @@ class AgentRunner:
             return self.agent_service._build_run_response(agent_run)
 
         active_tools, active_skill_names = self._activate_skills(session, agent_run=agent_run, spec=spec)
+        effective_allowed_tools = self._effective_allowed_tools(spec=spec, active_tools=active_tools)
         skill_context = self.skill_service.hydrate_agent_run_skill_context(session, agent_run_id=agent_run.id)
         self.agent_service.append_event(
             session,
@@ -237,6 +238,7 @@ class AgentRunner:
                 skill_context=skill_context,
                 memory_context=memory_context,
                 plan_payload=plan_payload,
+                effective_allowed_tools=effective_allowed_tools,
             )
         except (SkillValidationError, SkillsConfigurationError, SkillsGatewayError, ValidationError) as error:
             if not llm_model_mode:
@@ -248,6 +250,7 @@ class AgentRunner:
                 skill_context=skill_context,
                 memory_context=memory_context,
                 plan_payload=plan_payload,
+                effective_allowed_tools=effective_allowed_tools,
                 error=error,
             )
         decision = model_result.decision
@@ -1091,6 +1094,10 @@ class AgentRunner:
                         "skill_names": selected_names,
                         "active_skill_names": active_skill_names,
                         "allowed_tools": sorted(active_tools),
+                        "effective_allowed_tools": self._effective_allowed_tools(
+                            spec=spec,
+                            active_tools=active_tools,
+                        ),
                     },
                 ),
                 commit=False,
@@ -1108,9 +1115,7 @@ class AgentRunner:
     ) -> AgentRunResponse:
         if not decision.tool_name:
             raise SkillValidationError("tool_call decision 缺少 tool_name。", details={"agent_run_id": agent_run.id})
-        effective_allowed_tools = set(str(tool) for tool in spec.get("allowed_tools") or [])
-        effective_allowed_tools &= active_tools
-        effective_allowed_tools &= self.tool_policy.allowed_tools
+        effective_allowed_tools = set(self._effective_allowed_tools(spec=spec, active_tools=active_tools))
         policy_decision = self.tool_policy.check(
             tool_name=decision.tool_name,
             tool_provider=decision.tool_provider,
@@ -1319,6 +1324,7 @@ class AgentRunner:
         skill_context: list[dict[str, Any]],
         memory_context: list[dict[str, Any]],
         plan_payload: dict[str, Any],
+        effective_allowed_tools: list[str],
     ) -> AgentModelDecisionResult:
         if self._uses_deterministic_input(agent_run.input_payload) or not AgentModelClient.uses_llm_model(spec):
             decision = self._decision_from_input(agent_run.input_payload)
@@ -1332,6 +1338,7 @@ class AgentRunner:
                     "input_payload": agent_run.input_payload,
                     "agent_key": agent_run.agent_key,
                     "skill_context": skill_context,
+                    "allowed_tools": effective_allowed_tools,
                     "memory_context": memory_context,
                     "plan": plan_payload,
                 },
@@ -1347,6 +1354,7 @@ class AgentRunner:
             skill_context=skill_context,
             memory_context=memory_context,
             plan_payload=plan_payload,
+            allowed_tools=effective_allowed_tools,
             system_prompt=prompt_pack.system_prompt if prompt_pack else None,
             agent_prompt=prompt_pack.metadata() if prompt_pack else {},
             route_key=self._model_route_key(spec, default=prompt_pack.route_key if prompt_pack else "text"),
@@ -1361,6 +1369,7 @@ class AgentRunner:
         skill_context: list[dict[str, Any]],
         memory_context: list[dict[str, Any]],
         plan_payload: dict[str, Any],
+        effective_allowed_tools: list[str],
         error: Exception,
     ) -> AgentRunResponse:
         message = str(getattr(error, "message", "") or error)
@@ -1379,6 +1388,7 @@ class AgentRunner:
                 "agent_prompt": prompt_metadata,
                 "input_payload": agent_run.input_payload,
                 "skill_context": skill_context,
+                "allowed_tools": effective_allowed_tools,
                 "memory_context": memory_context,
                 "plan": plan_payload,
             },
@@ -1427,6 +1437,10 @@ class AgentRunner:
         if not isinstance(policy, dict):
             return default
         return str(policy.get("route_key") or default)
+
+    def _effective_allowed_tools(self, *, spec: dict[str, Any], active_tools: set[str]) -> list[str]:
+        agent_allowed_tools = {str(tool) for tool in spec.get("allowed_tools") or []}
+        return sorted(agent_allowed_tools & active_tools & self.tool_policy.allowed_tools)
 
     def _resolve_agent_prompt_pack(self, session: Session, *, agent_key: str, spec: dict[str, Any]) -> Any | None:
         fallback = AGENT_PROMPT_FALLBACKS.get(agent_key)
