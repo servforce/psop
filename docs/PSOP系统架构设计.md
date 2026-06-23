@@ -28,7 +28,7 @@ PSOP 采用确定性 Runtime 与受治理 Agent Harness 结合的架构。
 
 核心约束：
 
-1. `PSOP Skill` 是现实任务契约，不是 prompt。
+1. `PSOP Skill` 是现实物理世界技能本体，不是 prompt。
 2. `PSOP-EG` 是 formal-v5 执行图，是 runner 的正式输入。
 3. `Session Token` 是真实运行实例的一等状态对象。
 4. `RuntimeService` 是 `psop-runner-agent` 的正式治理环境。
@@ -101,6 +101,8 @@ static/
 
 ### 4.1 PSOP Skill
 
+`PSOP Skill` 是现实物理世界技能本体。它既包括用户正在编辑的草稿形态，也包括 Git-backed source、结构化 manifest snapshot、版本化发布记录和运行策略快照。
+
 当前实现对象：
 
 ```text
@@ -113,17 +115,7 @@ SkillRawMaterialDerivedAsset
 SkillRawMaterialGeneration
 ```
 
-职责：
-
-- 管理 Skill 元数据。
-- 管理 Git-backed source。
-- 管理 draft / published 版本。
-- 管理 raw material、分析结果与生成链路。
-- 发布时冻结 source commit 并创建 compile request。
-
-### 4.2 pskill
-
-`pskill` 是面向构建与编译的 Skill source 表示。当前由以下内容共同构成：
+当前源码与结构化表达：
 
 ```text
 README.md
@@ -134,9 +126,18 @@ runtime_policy_snapshot
 raw_material_analysis
 ```
 
-`psop-builder` 生成或更新 pskill draft。`psop-compiler` 消费 pskill 并生成 PSOP-EG。
+职责：
 
-### 4.3 PSOP-EG formal-v5
+- 管理 Skill 元数据。
+- 管理 Git-backed source。
+- 管理 draft / published 版本。
+- 管理 manifest snapshot 与 runtime policy snapshot。
+- 管理 raw material、分析结果与生成链路。
+- 发布时冻结 source commit 并创建 compile request。
+
+`psop-builder` 生成或更新 PSOP Skill draft。`psop-compiler` 消费 PSOP Skill 并生成 PSOP-EG。
+
+### 4.2 PSOP-EG formal-v5
 
 当前实现对象：
 
@@ -170,7 +171,7 @@ view graph summary
 | guard DSL | `always`、`phase_is`、`field_exists`、`field_equals`、`all`、`any`、`not` |
 | merge DSL | `op=set` |
 
-### 4.4 Runtime Run
+### 4.3 Runtime Run
 
 当前实现对象：
 
@@ -187,7 +188,7 @@ TerminalEventPart
 
 一次 invocation 创建一个逻辑 run。run 不是 OS 进程，而是可持久化、可回放、可审计的执行实例。
 
-### 4.5 Session Token
+### 4.4 Session Token
 
 Session Token 是运行实例的正式状态对象。工程实现为 `session_token_snapshot.token_payload`。
 
@@ -213,13 +214,13 @@ Session Token 是运行实例的正式状态对象。工程实现为 `session_to
 
 RuntimeService 只能通过受控 merge 与 snapshot 追加推进 Session Token。
 
-### 4.6 Terminal Facts
+### 4.5 Terminal Facts
 
 `terminal_event` 是终端输入输出的 append-only 事实源。
 
 `terminal_event_part` 表示输入事件中的多模态 part，例如文本、图片、音频、视频或文件。非文本内容通过 `artifact_object` 关联对象存储。
 
-### 4.7 Agent Harness Objects
+### 4.6 Agent Harness Objects
 
 新增对象：
 
@@ -432,7 +433,7 @@ agent_key: psop-builder
 version: v1
 runner_kind: deep_agent
 profile: dev_open
-purpose: Build pskill drafts from raw materials and standards.
+purpose: Build PSOP Skill drafts from raw materials and standards.
 model:
   route_key: text
   multimodal_route_key: multimodal
@@ -483,7 +484,7 @@ return AgentResult
 | `shell.*` | workspace 内 shell 执行。 |
 | `mcp.*` | MCP tools adapter。 |
 | `psop.raw_material.*` | 素材、关键帧、ASR/OCR、分析结果读取。 |
-| `psop.skill.*` | pskill source / draft 读写。 |
+| `psop.skill.*` | PSOP Skill source / draft 读写。 |
 | `psop.compiler.*` | formal-v5 validator、artifact writer、diagnostics。 |
 | `psop.runtime.*` | invocation、terminal event、replay、trace 读取。 |
 | `psop.test.*` | test scenario、timeline、judge、coverage。 |
@@ -533,11 +534,11 @@ Agent Skill 与 PSOP Skill 是不同对象。
 
 | 智能体 | runner_kind | 输入 | 输出 | 首版工具 |
 | --- | --- | --- | --- | --- |
-| `psop-builder` | `deep_agent` | raw material、keyframes、transcript、standards、user goal | pskill draft、evidence map、missing questions、safety constraints | raw_material、standard、skill draft、workspace、shell、MCP |
-| `psop-compiler` | `deep_agent` | pskill、manifest、domain pack、allowed runtime | PSOP-EG、compile diagnostics、summary | skill read、formal-v5 validate、artifact write、workspace |
-| `psop-tester` | `deep_agent` | pskill、PSOP-EG、world model | test suite、scenario runs、coverage、feedback | test scenario、runtime invocation、terminal event、replay、judge |
+| `psop-builder` | `deep_agent` | raw material、keyframes、transcript、standards、user goal | PSOP Skill draft、evidence map、missing questions、safety constraints | raw_material、standard、skill draft、workspace、shell、MCP |
+| `psop-compiler` | `deep_agent` | PSOP Skill、manifest、domain pack、allowed runtime | PSOP-EG、compile diagnostics、summary | skill read、formal-v5 validate、artifact write、workspace |
+| `psop-tester` | `deep_agent` | PSOP Skill、PSOP-EG、world model | test suite、scenario runs、coverage、feedback | test scenario、runtime invocation、terminal event、replay、judge |
 | `psop-runner` | `psop_runtime` | invocation、PSOP-EG、terminal events | Run Package、Replay、final output | RuntimeService 内置 actor/tool |
-| `psop-audit` | `deep_agent` | replay、trace、terminal events、pskill、EG、test report | audit report、quality attribution、evidence refs | replay read、trace read、skill/EG read、workspace |
+| `psop-audit` | `deep_agent` | replay、trace、terminal events、PSOP Skill、EG、test report | audit report、quality attribution、evidence refs | replay read、trace read、skill/EG read、workspace |
 | `psop-eval` | `deep_agent` | audit reports、test reports、diagnostics、prompt/code history | improvement proposal、patch draft、test plan、release checklist | audit/test read、prompt draft、skill patch、workspace、shell、MCP |
 
 ## 9. 数据模型
@@ -597,7 +598,7 @@ Agent Skill 与 PSOP Skill 是不同对象。
 | --- | --- |
 | `id` | Artifact ID |
 | `agent_run_id` | Agent Run |
-| `artifact_type` | pskill_draft / eg_candidate / test_report / audit_report / proposal 等 |
+| `artifact_type` | skill_draft / eg_candidate / test_report / audit_report / proposal 等 |
 | `artifact_object_id` | 对应 artifact_object |
 | `inline_content` | 小型 JSON 产物 |
 | `content_hash` | 内容哈希 |
@@ -780,7 +781,7 @@ Eval proposal
 | --- | --- |
 | Agent Runs | 查看 AgentRun 列表、状态、输入输出摘要。 |
 | Agent Run Detail | 查看 AgentEvent timeline、workspace artifact、错误信息。 |
-| Build Workspace | 触发 builder，查看 pskill draft、evidence map、missing questions。 |
+| Build Workspace | 触发 builder，查看 PSOP Skill draft、evidence map、missing questions。 |
 | Test Feedback | 查看 tester 生成的测试、执行结果和覆盖度。 |
 | Audit Reports | 查看质量归因。 |
 | Eval Proposals | 查看改进提案和 patch draft。 |
@@ -811,7 +812,7 @@ Eval proposal
 
 ```text
 raw material summary + standard snippets
-  -> pskill draft
+  -> PSOP Skill draft
   -> PSOP-EG
   -> generated positive/negative tests
   -> runner execution
