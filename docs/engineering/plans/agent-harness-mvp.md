@@ -1,3 +1,7 @@
+# Agent Harness MVP 实施计划
+
+本文是阶段性实施计划，不是长期架构事实源。Agent Harness 的系统边界和长期架构以 [系统架构设计](../../architecture/system-architecture.md) 为准。
+
 下面是基于 `issue-1-psop-mvp` 当前代码现状制定的 **Agent Harness MVP 实施计划**。这个计划的目标不是一次性完成完整多智能体治理平台，而是先在现有代码上建立一个可运行、可测试、可扩展的 `agent_harness` 底座，并通过一个 demo 智能体验收：**Python 脚本可调用，运行过程中包含 skill 激活、tool 调用、memory 读写，并产出可审计的 agent events。**
 
 ---

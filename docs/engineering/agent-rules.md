@@ -4,14 +4,13 @@
 
 ## 1. 通用原则
 
-- 默认使用中文沟通、中文文档；接口字段、代码标识符与协议名保持英文。
 - 任何重要判断都应尽量落在可验证的文档、代码、接口或测试事实上，而不是口头印象。
 - 优先做小而完整的改动：文档、接口、实现、验证尽量闭环。
 
 ## 2. 架构边界规则
 
-- `Skills` 是用户创作对象，`EG` 是编译后的形式对象；不要把二者混成一个概念。
-- [PSOP_execution_graph_formal_v5.md](../PSOP_execution_graph_formal_v5.md) 是 `EG` 的形式事实源；编译产物与 runtime 推进逻辑都必须与其一致。
+- `PSOP Skill` 是用户创作对象，`EG` 是编译后的形式对象；不要把二者混成一个概念。
+- [execution-graph-formal-v5.md](../architecture/execution-graph-formal-v5.md) 是 `EG` 的形式事实源；编译产物与 runtime 推进逻辑都必须与其一致。
 - `Session Token` 是唯一正式状态对象，禁止引入并行“第二状态源”。
 - `Runtime Kernel` 是唯一正式状态提交边界；agent、tool、worker、sandbox 都不是状态主权者。
 - `MCP Gateway` 负责受控接入 MCP server/tool；禁止在业务代码中直接把 reference server 当平台内核。
@@ -23,7 +22,7 @@
 - 后端应显式区分 `skills/`、`compiler/`、`runtime/` 三层，不要把“用户对象”和“运行时对象”混在一起。
 - 当前后端包结构以 `backend/app/` 为准；新增代码按 `api / domain / gateway / infra / core` 分层扩张，按领域而不是按“杂项 util”扩张。
 - 当前前端以 `static/index.html` 作为主控制台入口，页面片段放在 `static/pages/`，保持静态轻栈，不在 v1 默认引入重量级前端框架。
-- 文档按 `vision / architecture / reference / ui / agent-rules` 分层，避免所有知识都堆进一个文件。
+- 文档按 `overview / architecture / guides / engineering / research / reference / archive` 分层，避免所有知识都堆进一个文件。
 
 ## 4. 数据与接口规则
 

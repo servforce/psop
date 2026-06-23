@@ -184,16 +184,16 @@ scripts/dev/build-web.sh
 
 项目主文档按以下顺序阅读：
 
-- [项目愿景](vision.md)
-- [系统架构设计](docs/PSOP系统架构设计.md)
-- [Execution Graph 形式定义](docs/PSOP_execution_graph_formal_v5.md)
-- [Agent 协作规则](docs/agent-rules/general.md)
+- [项目愿景](docs/overview/vision.md)
+- [系统架构设计](docs/architecture/system-architecture.md)
+- [Execution Graph 形式定义](docs/architecture/execution-graph-formal-v5.md)
+- [Agent 协作规则](docs/engineering/agent-rules.md)
 
 参考资料位于 [docs/reference](docs/reference/)。
 
 ## 贡献
 
-当前仓库主要通过 feature branch 开发。实现变更需要与 `vision.md`、`docs/PSOP系统架构设计.md` 和 `docs/PSOP_execution_graph_formal_v5.md` 保持一致；如果行为发生变化，应先更新或同步更新对应设计文档，再推进代码实现。
+当前仓库主要通过 feature branch 开发。实现变更需要与 `docs/overview/vision.md`、`docs/architecture/system-architecture.md` 和 `docs/architecture/execution-graph-formal-v5.md` 保持一致；如果行为发生变化，应先更新或同步更新对应设计文档，再推进代码实现。
 
 本地验证优先使用：
 

@@ -10,11 +10,9 @@
 
 本文用于指导后续产品设计、交互设计、Skill 设计规范、编译诊断、运行体验、审计回放与企业治理能力的规划。它不替代以下事实源：
 
-- [PSOP-Whitepaper-v3.md](./PSOP-Whitepaper-v3.md)
-- [PSOP_execution_graph_formal_v5.md](./PSOP_execution_graph_formal_v5.md)
-- [PSOP概要设计v1.md](./PSOP概要设计v1.md)
-- [PSOP前端详细设计v1.md](./PSOP前端详细设计v1.md)
-- [PSOP服务端详细设计v1.md](./PSOP服务端详细设计v1.md)
+- [产品愿景](vision.md)
+- [系统架构设计](../architecture/system-architecture.md)
+- [Execution Graph 形式定义](../architecture/execution-graph-formal-v5.md)
 
 ## 2. 产品安全主张
 

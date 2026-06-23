@@ -6,8 +6,8 @@
 
 本文不重新展开 `Skill -> Execution Graph` 编译体系，相关正式语义以：
 
-- [PSOP_execution_graph_formal_v5.md](./PSOP_execution_graph_formal_v5.md)
-- [PSOP Run Server详细设计.md](./PSOP%20Run%20Server详细设计.md)
+- [Execution Graph 形式定义](../architecture/execution-graph-formal-v5.md)
+- [系统架构设计](../architecture/system-architecture.md)
 
 为准。
 

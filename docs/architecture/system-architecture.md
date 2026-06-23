@@ -18,9 +18,9 @@
 
 不在本文展开的专题：
 
-- PSOP-EG 形式语义：见 `docs/PSOP_execution_graph_formal_v5.md`。
-- 产品愿景与项目纲领：见 `vision.md`。
-- Agent 协作规则：见 `docs/agent-rules/general.md`。
+- PSOP-EG 形式语义：见 `execution-graph-formal-v5.md`。
+- 产品愿景与项目纲领：见 `../overview/vision.md`。
+- Agent 协作规则：见 `../engineering/agent-rules.md`。
 
 ## 2. 架构总则
 
@@ -856,23 +856,7 @@ run replay/test report
 
 ### 16.1 文档迁移
 
-项目主文档收敛为：
-
-```text
-vision.md
-  项目愿景与产品纲领。
-
-docs/PSOP系统架构设计.md
-  系统架构基线。
-
-docs/PSOP_execution_graph_formal_v5.md
-  Execution Graph 形式定义。
-
-docs/agent-rules/general.md
-  Agent 协作规则。
-```
-
-旧的概要、服务端、前端和白皮书文档不再作为架构基线维护。
+项目文档结构以 `docs/README.md` 为准；本文只维护系统架构基线，不再重复定义文档目录治理规则。
 
 ### 16.2 代码迁移
 

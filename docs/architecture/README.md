@@ -1,19 +1,18 @@
-# Architecture Docs
+# Architecture
 
-本目录保留给未来的服务端专题补充文档，例如：
+本目录保存 PSOP 的架构事实源和核心技术定义。这里的文档可以约束实现、测试和接入手册。
 
-- 分布式部署专题
-- Sandbox 运行隔离专题
-- 数据迁移与升级专题
-- 高可用与灾备专题
+## 当前文档
 
-## 当前阶段说明
-
-- 当前有效的服务端详细设计基线是 [../PSOP服务端详细设计v1.md](../PSOP%E6%9C%8D%E5%8A%A1%E7%AB%AF%E8%AF%A6%E7%BB%86%E8%AE%BE%E8%AE%A1v1.md)。
-- 本目录暂不承载一线实现基线，后续新增文档只能作为补充专题。
+- [system-architecture.md](system-architecture.md)
+  - 当前系统架构基线，覆盖后端、前端、Runtime、Agent Harness、数据模型、API 与迁移策略。
+- [execution-graph-formal-v5.md](execution-graph-formal-v5.md)
+  - `PSOP-EG` 与 `Session Token` 的形式定义和运行语义。
 
 ## 维护原则
 
-- 根目录服务端详细设计负责回答“当前版本必须如何实现”。
-- 本目录文档负责回答“某个架构专题如何深化或演进”。
-- 如本目录文档与根目录服务端详细设计冲突，以根目录服务端详细设计为准。
+- 只有已经决定成为项目约束的设计才进入本目录。
+- 外部项目调研、对比矩阵和可行性预研放入 `../research/`。
+- MVP 实施计划、开发拆分和验收清单放入 `../engineering/plans/`。
+- 面向接入方的操作步骤放入 `../guides/`。
+- 如果本目录文档之间冲突，以 `system-architecture.md` 和 `execution-graph-formal-v5.md` 的明确约束为准，并尽快修正文档。

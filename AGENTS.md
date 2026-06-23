@@ -1,36 +1,80 @@
-# PSOP AGENTS
+# AGENTS.md
 
-本文只保留本项目最高频、全局、立即生效的协作规则。完整协作规则见 [docs/agent-rules/general.md](./docs/agent-rules/general.md)。
 
-## 1. 架构事实源
+## 当前项目的文档指引
 
-- [docs/PSOP-Whitepaper-v3.md](./docs/PSOP-Whitepaper-v3.md) 是产品纲领事实源。
-- [docs/PSOP_execution_graph_formal_v5.md](./docs/PSOP_execution_graph_formal_v5.md) 是 `EG` 形式定义事实源。
-- [docs/PSOP概要设计v1.md](./docs/PSOP概要设计v1.md) 是系统分层、模块边界与总体约束事实源。
-- [docs/PSOP前端详细设计v1.md](./docs/PSOP前端详细设计v1.md) 是 `WEB IDE` 的唯一有效详细设计基线。
-- [docs/PSOP服务端详细设计v1.md](./docs/PSOP服务端详细设计v1.md) 是服务端、编译、运行时、数据库、接口与可观测的唯一有效详细设计基线。
+- 开始任务前，先阅读与任务直接相关的项目文档；不要只凭记忆推断项目约定。
+- 项目概览、本地启动、配置和测试入口见 `README.md`。
+- 文档总入口、推荐阅读顺序和目录约定见 `docs/README.md`；如文档与当前代码事实冲突，先指出冲突，再按任务目标修正文档或实现。
+- 涉及系统架构、Execution Graph、终端接入、Agent Harness 的工作，优先查阅 `docs/architecture/system-architecture.md`、`docs/architecture/execution-graph-formal-v5.md`、`docs/guides/terminal-integration-v1.md` 和 `docs/engineering/plans/agent-harness-mvp.md`。
+- 涉及后端或前端脚手架、本地开发命令时，分别查阅 `backend/README.md` 和 `static/README.md`。
+- `docs/reference/` 下的资料作为背景和参考，不应替代当前实现或正式设计基线。
 
-## 2. 不可破坏的核心约束
+## 工作语言
 
-- 用户在 `WEB IDE` 中定义的是 `Skills`，系统编译和执行的是 `EG`。
-- `EG Compile Artifact` 必须符合 formal v5。
-- `Session Token` 是唯一正式状态对象。
-- `Runtime Kernel` 是唯一正式状态主权者。
-- `Run != OS 进程`，默认执行模型是 `Run -> Worker -> Sandbox`。
-- `Gateway` 负责 skill invocation 的受控接入，不直接持有正式运行时状态。
-- `MCP` 是能力协议，不是状态协议。
-- 大模型调用必须经过 `LLM Inference Gateway`。
-- `Replay + OpenTelemetry` 是默认排障闭环。
-- `DeerFlow` 只作为 harness 适配层复用，不接管正式状态。
+**默认使用简体中文。**
 
-## 3. 当前阶段优先级
+- 与用户沟通、计划、总结、文档新增内容默认使用简体中文。
+- 代码、命令、日志、API 字段、专有名词可保留英文原文。
+- 如果用户明确要求使用其他语言，以用户请求为准。
 
-- 优先打通 `Skills -> Publish -> Auto Compile -> Invocation -> Runtime -> Replay / OTel`。
-- 当前阶段不扩展租户、用户、权限、复杂审批流。
-- 详细设计基线只认根目录下两篇文档，不再把 `docs/ui/` 或 `docs/architecture/` 下的说明文档当作一线事实源。
+## 编码规范
 
-## 4. 项目内 Skills 使用约定
+### 1. 编码前思考
 
-- 涉及 `job`、`worker`、`scheduler`、`lease`、`retry` 时，优先参考 `skills/job-system-design/`。
-- 涉及 Python Web、FastAPI、SQLAlchemy 结构调整时，优先参考 `skills/python-web-refactor/`。
-- 涉及 `static/` 下控制台页面、Alpine.js、Tailwind CSS 时，优先参考 `skills/static-ui/`。
+**不要想当然。不要掩盖困惑。坦诚地权衡利弊。**
+
+实施前：
+- 是否与项目中 `docs/` 目录中的设计文档一致，如果有冲突请指出。
+- 明确陈述你的假设。如有疑问，请提出。
+- 如果存在多种解释，请列出它们——不要默默地选择。
+- 如果存在更简单的方法，请说明。必要时提出异议。
+- 如果有任何不清楚的地方，请停止。指出困惑之处。提出问题。
+
+### 2. 简洁至上
+
+**解决问题所需的最小代码量。不做任何推测性代码。**
+
+- 不添加超出要求的功能。
+- 不为一次性使用的代码编写抽象。
+- 不添加任何未经请求的“灵活性”或“可配置性”。
+- 不对不可能的情况进行错误处理。
+- 如果你写了 200 行代码，而它其实可以简化成 50 行，那就重写。
+
+问问自己：“一位资深工程师会觉得这段代码过于复杂吗？” 如果会，那就简化它。
+
+### 3. 精准修改
+
+**只修改必要的部分。只清理你自己造成的混乱。**
+
+编辑现有代码时：
+- 不要“改进”相邻的代码、注释或格式。
+- 不要重构没有问题的代码。
+- 保持与现有代码风格一致，即使你的想法不同。
+- 如果你发现无关的无用代码，请指出——不要删除它。
+
+当你的修改导致孤立代码出现时：
+- 删除你修改后不再使用的导入/变量/函数。
+- 除非被要求，否则不要删除已有的无用代码。
+
+测试：每一行修改都应该直接追溯到用户的请求。
+
+### 4. 目标驱动执行
+
+**定义成功标准。循环执行直至验证通过。**
+
+将任务转化为可验证的目标：
+- “添加验证” → “编写无效输入的测试，并确保测试通过”
+- “修复错误” → “编写可复现该错误的测试，并确保测试通过”
+- “重构 X” → “确保重构前后的测试均通过”
+
+对于多步骤任务，请简要说明计划：
+```
+1. [步骤] → 验证：[检查]
+2. [步骤] → 验证：[检查]
+3. [步骤] → 验证：[检查]
+```
+
+严格的成功标准允许你独立循环执行。而较弱的标准（例如“使其正常工作”）则需要不断澄清。
+
+---

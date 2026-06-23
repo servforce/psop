@@ -1,19 +1,18 @@
-# Reference Docs
+# Reference
 
-本目录用于承载稳定参考型材料，例如：
+本目录保存稳定参考资料、外部材料和原始资产。这里的内容用于提供背景证据，不直接替代产品规划、架构基线或接入手册。
 
-- API 字段字典
-- WebSocket 事件字典
-- 配置项字典
-- 排障手册
-- 运行运维手册
+## 当前文档
 
-## 当前阶段说明
-
-- 当前版本暂不单独拆出 API 或数据库字典。
-- 接口与数据库细节暂时内聚在 [../PSOP服务端详细设计v1.md](../PSOP%E6%9C%8D%E5%8A%A1%E7%AB%AF%E8%AF%A6%E7%BB%86%E8%AE%BE%E8%AE%A1v1.md) 中，以便尽快启动开发。
+- [suzhou-manufacturing-2026.md](suzhou-manufacturing-2026.md)
+  - 苏州市“AI+制造”应用场景需求清单图片识别与 PSOP 相关性分析。
+- [assets/suzhou-manufacturing-2026.jpg](assets/suzhou-manufacturing-2026.jpg)
+  - 原始图片资料。
+- [assets/suzhou-manufacturing-2026.pdf](assets/suzhou-manufacturing-2026.pdf)
+  - 原始 PDF 资料。
 
 ## 维护原则
 
-- 只有当接口与表结构进入稳定期后，才从服务端详细设计中抽取到本目录。
-- 本目录只收稳定契约，不收大段架构推导或方案比较。
+- 外部资料应尽量保留原始文件，并在分析文档中说明来源和处理方式。
+- 参考资料可以支持产品判断，但不能直接约束实现。
+- 稳定接口字典、配置字典、排障手册如果形成正式参考材料，也放入本目录。
