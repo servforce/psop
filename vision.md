@@ -24,9 +24,8 @@ PSOP 的正式业务资产包括：
 
 | 资产 | 定义 |
 | --- | --- |
-| `PSOP Skill` | 现实任务契约，描述目标、适用边界、步骤、证据、安全约束、异常恢复和完成标准。 |
-| `pskill` | Skill 的源码与结构化草稿表达，供构建、编译和版本管理使用。 |
-| `PSOP-EG` | 由 pskill 编译得到的 formal-v5 Execution Graph，是 runner 的正式输入。 |
+| `PSOP Skill` | 现实物理世界技能本体；描述目标、适用边界、步骤、证据、安全约束、异常恢复和完成标准。它同时覆盖源码、草稿、结构化契约和版本化发布形态。 |
+| `PSOP-EG` | 由 PSOP Skill 编译得到的 formal-v5 Execution Graph，是 runner 的正式输入。 |
 | `Run Package` | 一次运行产生的 terminal events、trace events、Session Token snapshots、附件与 replay 事实。 |
 | `Audit Report` | 对真实运行或测试运行的质量归因结果。 |
 | `Improvement Proposal` | 基于质量归因生成的 Skill、测试、prompt、工具、代码或发布改进提案。 |
@@ -45,7 +44,7 @@ PSOP 的正式智能体资产包括：
 
 ### 3.1 Skill 不是 prompt
 
-Skill 是现实任务契约，不是一次性提示词。
+PSOP Skill 是现实物理世界技能本体，不是一次性提示词。
 
 一个合格的 PSOP Skill 必须表达：
 
@@ -108,8 +107,8 @@ Build -> Compile -> Test -> Run -> Audit -> Eval -> Improve
 ```mermaid
 flowchart LR
     Raw[视频/文档/标准/历史经验] --> Builder[psop-builder]
-    Builder --> PSkill[pskill draft]
-    PSkill --> Compiler[psop-compiler]
+    Builder --> Skill[PSOP Skill draft]
+    Skill --> Compiler[psop-compiler]
     Compiler --> EG[PSOP-EG formal-v5]
     EG --> Tester[psop-tester]
     Tester --> TestRuns[测试 Run / 覆盖度 / 失败反馈]
@@ -128,8 +127,8 @@ flowchart LR
 
 | 智能体 | 职责 | 主要产物 |
 | --- | --- | --- |
-| `psop-builder` | 使用视频解析结果、关键帧、文字、行业标准、企业规范和历史经验构建 pskill draft。 | pskill draft、evidence map、missing questions、safety constraints。 |
-| `psop-compiler` | 将 pskill 编译为 formal-v5 PSOP-EG，并输出诊断与能力要求。 | EG artifact、compile diagnostics、graph summary、capability summary。 |
+| `psop-builder` | 使用视频解析结果、关键帧、文字、行业标准、企业规范和历史经验构建 PSOP Skill draft。 | PSOP Skill draft、evidence map、missing questions、safety constraints。 |
+| `psop-compiler` | 将 PSOP Skill 编译为 formal-v5 PSOP-EG，并输出诊断与能力要求。 | EG artifact、compile diagnostics、graph summary、capability summary。 |
 | `psop-tester` | 基于世界模型生成正例、反例和边界用例，调用 psop-runner 执行测试并输出反馈。 | test suite、scenario runs、coverage report、failure feedback。 |
 | `psop-runner` | 运行 PSOP-EG，管理真实现场状态、Session Token、terminal events、trace 与 replay。 | Run Package、final output、replay facts。 |
 | `psop-audit` | 基于真实 run 或测试 run 的持久化事实做执行审计与质量归因。 | audit report、deviation list、quality attribution、evidence refs。 |
@@ -195,7 +194,7 @@ MVP 阶段采用 `dev_open` profile，以闭环跑通为优先目标。
 
 ```text
 raw material summary + standard snippets
-  -> pskill draft
+  -> PSOP Skill draft
   -> PSOP-EG
   -> generated positive/negative tests
   -> runner execution
