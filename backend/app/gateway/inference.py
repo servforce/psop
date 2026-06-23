@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
+import json
 import logging
 import time
 from typing import Any, Protocol
@@ -30,6 +31,32 @@ class LlmCompletion:
 
 
 @dataclass(slots=True)
+class LlmToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(slots=True)
+class LlmChatMessage:
+    role: str
+    content: str | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
+    tool_calls: list[LlmToolCall] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class LlmChatCompletion:
+    message: LlmChatMessage
+    provider: str
+    model: str
+    raw_response: dict
+    usage: dict[str, int | dict[str, object]] = field(default_factory=dict)
+    request: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class LlmAttachment:
     filename: str
     media_type: str
@@ -50,6 +77,15 @@ class LlmModelCapability:
 
 class LlmInferenceGateway(Protocol):
     def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = TEXT_ROUTE_KEY) -> LlmCompletion:
+        ...
+
+    def complete_chat(
+        self,
+        *,
+        messages: list[LlmChatMessage],
+        tools: list[dict[str, Any]] | None = None,
+        route_key: str = TEXT_ROUTE_KEY,
+    ) -> LlmChatCompletion:
         ...
 
     def complete_multimodal(
@@ -308,6 +344,35 @@ class OpenAICompatibleInferenceGateway:
                 usage=usage,
                 request=request_snapshot,
             )
+
+    def complete_chat(
+        self,
+        *,
+        messages: list[LlmChatMessage],
+        tools: list[dict[str, Any]] | None = None,
+        route_key: str = TEXT_ROUTE_KEY,
+    ) -> LlmChatCompletion:
+        if not self.api_key:
+            raise SkillsConfigurationError("未配置 LLM API Key，无法执行真实运行链路。")
+
+        model = self._resolve_model(route_key)
+        payload: dict[str, object] = {
+            "model": model,
+            "messages": [_chat_message_to_openai_payload(message) for message in messages],
+            "temperature": 0.2,
+        }
+        if tools:
+            payload["tools"] = tools
+        self._apply_route_payload_options(payload, route_key)
+        request_snapshot = self._redacted_request_snapshot(payload=payload, route_key=route_key)
+        completion = self._post_tool_chat_completion(
+            payload=payload,
+            model=model,
+            route_key=route_key,
+            messages=messages,
+        )
+        completion.request = request_snapshot
+        return completion
 
     def complete_multimodal(
         self,
@@ -569,6 +634,110 @@ class OpenAICompatibleInferenceGateway:
                 usage=usage,
             )
 
+    def _post_tool_chat_completion(
+        self,
+        *,
+        payload: dict[str, object],
+        model: str,
+        route_key: str,
+        messages: list[LlmChatMessage],
+    ) -> LlmChatCompletion:
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        timeout = httpx.Timeout(self.timeout_seconds, connect=min(15.0, self.timeout_seconds))
+        started_at = time.perf_counter()
+        input_chars = sum(len(message.content or "") for message in messages)
+        with start_span(
+            "gateway.inference.chat",
+            provider=self.provider,
+            model=model,
+            route_key=route_key,
+            api_base_url=self.api_base_url,
+            llm_input_message_count=len(messages),
+            llm_input_content_length=input_chars,
+            llm_tool_count=len(payload.get("tools", []) if isinstance(payload.get("tools"), list) else []),
+        ) as span:
+            try:
+                with httpx.Client(timeout=timeout, headers=headers) as client:
+                    response = client.post(f"{self.api_base_url}/chat/completions", json=payload)
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                set_span_attributes(span, {"http.status_code": response.status_code, "duration_ms": elapsed_ms})
+            except httpx.HTTPError as exc:
+                error_type = exc.__class__.__name__
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                set_span_attributes(span, {"duration_ms": elapsed_ms, "error.type": error_type})
+                record_span_exception(span, exc)
+                raise SkillsGatewayError(
+                    f"调用 LLM Inference Gateway 失败：{error_type}。",
+                    details={
+                        "error_type": error_type,
+                        "error": str(exc),
+                        "provider": self.provider,
+                        "api_base_url": self.api_base_url,
+                        "model": model,
+                        "route_key": route_key,
+                        "timeout_seconds": self.timeout_seconds,
+                    },
+                ) from exc
+
+            if response.status_code >= 400:
+                span.add_event("llm.output", attributes={"llm.error_body": response.text})
+                raise SkillsGatewayError(
+                    "LLM Inference Gateway 返回错误响应。",
+                    details={
+                        "status_code": response.status_code,
+                        "body": response.text,
+                        "provider": self.provider,
+                        "api_base_url": self.api_base_url,
+                        "model": model,
+                        "route_key": route_key,
+                    },
+                )
+
+            data = response.json()
+            usage = _normalize_usage(data.get("usage"))
+            try:
+                raw_message = data["choices"][0]["message"]
+            except (KeyError, IndexError, TypeError) as exc:
+                raise SkillsGatewayError(
+                    "LLM Inference Gateway 响应缺少 message。",
+                    details={
+                        "provider": self.provider,
+                        "api_base_url": self.api_base_url,
+                        "model": model,
+                        "route_key": route_key,
+                    },
+                ) from exc
+            if not isinstance(raw_message, dict):
+                raise SkillsGatewayError(
+                    "LLM Inference Gateway message 必须是对象。",
+                    details={"provider": self.provider, "model": model, "route_key": route_key},
+                )
+            message = _chat_message_from_openai_payload(raw_message)
+            set_span_attributes(
+                span,
+                {
+                    "llm.output.content_length": len(message.content or ""),
+                    "llm.output.tool_call_count": len(message.tool_calls),
+                    "llm.usage.input_tokens": usage.get("input_tokens"),
+                    "llm.usage.output_tokens": usage.get("output_tokens"),
+                    "llm.usage.total_tokens": usage.get("total_tokens"),
+                },
+            )
+            span.add_event(
+                "llm.output",
+                attributes={
+                    "llm.content": message.content or "",
+                    "llm.tool_calls": ",".join(tool_call.name for tool_call in message.tool_calls),
+                },
+            )
+            return LlmChatCompletion(
+                message=message,
+                provider=self.provider,
+                model=model,
+                raw_response=data,
+                usage=usage,
+            )
+
 
 def _thinking_options(*, enabled: bool, budget: int | None) -> dict[str, object]:
     if not enabled:
@@ -609,6 +778,69 @@ def _coerce_int(value: object) -> int | None:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
+
+
+def _chat_message_to_openai_payload(message: LlmChatMessage) -> dict[str, Any]:
+    payload: dict[str, Any] = {"role": message.role}
+    if message.content is not None:
+        payload["content"] = message.content
+    if message.name:
+        payload["name"] = message.name
+    if message.tool_call_id:
+        payload["tool_call_id"] = message.tool_call_id
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.name,
+                    "arguments": json_dumps_compact(tool_call.arguments),
+                },
+            }
+            for tool_call in message.tool_calls
+        ]
+    return payload
+
+
+def _chat_message_from_openai_payload(payload: dict[str, Any]) -> LlmChatMessage:
+    content = payload.get("content")
+    if content is not None and not isinstance(content, str):
+        content = str(content)
+    return LlmChatMessage(
+        role=str(payload.get("role") or "assistant"),
+        content=content,
+        name=str(payload["name"]) if payload.get("name") is not None else None,
+        tool_call_id=str(payload["tool_call_id"]) if payload.get("tool_call_id") is not None else None,
+        tool_calls=[_tool_call_from_openai_payload(item) for item in payload.get("tool_calls") or [] if isinstance(item, dict)],
+    )
+
+
+def _tool_call_from_openai_payload(payload: dict[str, Any]) -> LlmToolCall:
+    function = payload.get("function") if isinstance(payload.get("function"), dict) else {}
+    raw_arguments = function.get("arguments") if isinstance(function, dict) else {}
+    arguments: dict[str, Any]
+    if isinstance(raw_arguments, dict):
+        arguments = dict(raw_arguments)
+    elif isinstance(raw_arguments, str) and raw_arguments.strip():
+        try:
+            parsed = json.loads(raw_arguments)
+            arguments = parsed if isinstance(parsed, dict) else {"value": parsed}
+        except json.JSONDecodeError:
+            arguments = {"raw": raw_arguments}
+    else:
+        arguments = {}
+    return LlmToolCall(
+        id=str(payload.get("id") or ""),
+        name=str(function.get("name") or ""),
+        arguments=arguments,
+    )
+
+
+def json_dumps_compact(value: dict[str, Any]) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _first_present(payload: dict[str, object], *keys: str) -> object:

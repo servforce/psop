@@ -23,6 +23,7 @@ tests/__pycache__/
 pytest-cache-files-*/
 
 .env
+.psop/
 .codex
 .generated/
 *.mp4

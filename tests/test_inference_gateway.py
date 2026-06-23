@@ -5,10 +5,14 @@ import pytest
 from app.domain.skills.exceptions import SkillsConfigurationError
 from app.gateway.inference import (
     LlmAttachment,
+    LlmChatCompletion,
+    LlmChatMessage,
+    LlmToolCall,
     LlmCompletion,
     MULTIMODAL_ROUTE_KEY,
     OpenAICompatibleInferenceGateway,
     TEXT_ROUTE_KEY,
+    _chat_message_from_openai_payload,
 )
 
 
@@ -182,3 +186,77 @@ def test_multimodal_completion_rejects_text_route() -> None:
             attachments=[],
             route_key=TEXT_ROUTE_KEY,
         )
+
+
+def test_chat_completion_passes_tools_and_redacts_request(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_post_tool_chat_completion(
+        self: OpenAICompatibleInferenceGateway,
+        *,
+        payload: dict[str, object],
+        model: str,
+        route_key: str,
+        messages: list[LlmChatMessage],
+    ) -> LlmChatCompletion:
+        captured.update({"payload": payload, "model": model, "route_key": route_key, "messages": messages})
+        return LlmChatCompletion(
+            message=LlmChatMessage(
+                role="assistant",
+                tool_calls=[LlmToolCall(id="call-1", name="demo_tool", arguments={"text": "ok"})],
+            ),
+            provider="test",
+            model=model,
+            raw_response={"id": "response-1"},
+        )
+
+    monkeypatch.setattr(OpenAICompatibleInferenceGateway, "_post_tool_chat_completion", fake_post_tool_chat_completion)
+    gateway = OpenAICompatibleInferenceGateway(
+        provider="test",
+        api_base_url="https://example.test/v1",
+        api_key="test-key",
+        text_model="qwen3.7-plus",
+        multimodal_model="qwen3.6-plus",
+    )
+
+    completion = gateway.complete_chat(
+        messages=[LlmChatMessage(role="user", content="run tool")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "demo_tool",
+                    "description": "Demo",
+                    "parameters": {"type": "object", "properties": {"text": {"type": "string"}}},
+                },
+            }
+        ],
+    )
+
+    assert captured["payload"]["tools"][0]["function"]["name"] == "demo_tool"
+    assert captured["payload"]["messages"] == [{"role": "user", "content": "run tool"}]
+    assert completion.message.tool_calls[0].arguments == {"text": "ok"}
+    assert completion.request["headers"]["Authorization"] == "Bearer [redacted]"
+    assert completion.request["body"]["tools"][0]["function"]["name"] == "demo_tool"
+
+
+def test_chat_completion_parses_openai_tool_calls() -> None:
+    message = _chat_message_from_openai_payload(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "demo_tool", "arguments": '{"text":"ok"}'},
+                }
+            ],
+        }
+    )
+
+    assert message.role == "assistant"
+    assert message.content is None
+    assert message.tool_calls[0].id == "call-1"
+    assert message.tool_calls[0].name == "demo_tool"
+    assert message.tool_calls[0].arguments == {"text": "ok"}

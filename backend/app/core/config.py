@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     runtime_job_lease_seconds: int = 60
     runtime_job_max_attempts: int = 3
     runtime_step_timeout_seconds: int = 120
+    agent_harness_enabled: bool = True
+    agent_harness_profile: str = "dev_open"
+    agent_harness_workspace_root: str = ".psop/agent-runs"
+    agent_harness_mcp_enabled: bool = False
 
     @property
     def repo_root(self) -> Path:
