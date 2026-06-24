@@ -1,3 +1,3 @@
-from app.agent_harness.runners.deepagents_runner import DeepAgentsRunner
+from app.agent_harness.runners.langchain_agent_executor import LangChainAgentExecutor
 
-__all__ = ["DeepAgentsRunner"]
+__all__ = ["LangChainAgentExecutor"]

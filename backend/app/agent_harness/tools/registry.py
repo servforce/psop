@@ -5,16 +5,20 @@ from typing import Any, Callable
 
 from app.agent_harness.events import AgentEventWriter
 from app.agent_harness.memory.store import MemoryStore
+from app.agent_harness.sandbox.base import AgentSandbox
+from app.agent_harness.skills.loader import SkillLoader
 from app.agent_harness.tools.spec import ToolSpec
-from app.agent_harness.workspace.manager import AgentWorkspace
 
 
 @dataclass(slots=True)
 class ToolExecutionContext:
-    workspace: AgentWorkspace
+    sandbox: AgentSandbox
     memory_store: MemoryStore
     memory_scope: str
     event_writer: AgentEventWriter
+    invocation_context: dict[str, Any]
+    skill_loader: SkillLoader | None = None
+    allowed_skill_names: set[str] | None = None
 
 
 ToolHandler = Callable[[dict[str, Any], ToolExecutionContext], dict[str, Any]]
@@ -44,17 +48,7 @@ class ToolRegistry:
 
     def execute(self, name: str, arguments: dict[str, Any], context: ToolExecutionContext) -> dict[str, Any]:
         definition = self.get(name)
-        context.event_writer.record("agent.tool.started", {"tool_name": name, "arguments": arguments})
-        try:
-            result = definition.handler(arguments, context)
-        except Exception as exc:
-            context.event_writer.record(
-                "agent.tool.failed",
-                {"tool_name": name, "error_type": exc.__class__.__name__, "error": str(exc)},
-            )
-            raise
-        context.event_writer.record("agent.tool.completed", {"tool_name": name, "result": _summarize_result(result)})
-        return result
+        return definition.handler(arguments, context)
 
     def openai_tools(self, names: list[str]) -> list[dict[str, Any]]:
         return [

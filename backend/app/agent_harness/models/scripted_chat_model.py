@@ -1,141 +1,132 @@
 from __future__ import annotations
 
-from app.gateway.inference import LlmChatCompletion, LlmChatMessage, LlmToolCall
+import json
+import re
+from typing import Any
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from pydantic import ConfigDict, Field
 
 
-class ScriptedToolCallingChatModel:
-    """Deterministic tool-calling model for local demo and CI."""
+class ScriptedToolCallingChatModel(BaseChatModel):
+    """Deterministic LangChain chat model for Agent Harness CI/demo tests."""
 
-    provider = "scripted"
-    model = "scripted-tool-calling"
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def __init__(self) -> None:
-        self.calls = 0
+    model_name: str = "scripted-tool-calling"
+    bound_tools: list[Any] = Field(default_factory=list)
 
-    def complete_chat(
+    @property
+    def _llm_type(self) -> str:
+        return "scripted-tool-calling"
+
+    def bind_tools(self, tools: list[Any], **kwargs: Any) -> "ScriptedToolCallingChatModel":
+        return self.model_copy(update={"bound_tools": list(tools)})
+
+    def _generate(
         self,
-        *,
-        messages: list[LlmChatMessage],
-        tools: list[dict] | None = None,
-        route_key: str = "text",
-    ) -> LlmChatCompletion:
-        self.calls += 1
-        tool_names = _tool_names(tools or [])
-        if self.calls == 1 and "demo_extract_check_items" in tool_names:
-            user_text = _latest_user_text(messages)
-            return _completion(
-                LlmChatMessage(
-                    role="assistant",
-                    tool_calls=[
-                        LlmToolCall(
-                            id="call_extract",
-                            name="demo_extract_check_items",
-                            arguments={"text": user_text},
-                        )
-                    ],
-                )
-            )
-        if self.calls == 2 and "demo_score_checklist" in tool_names:
-            items = _latest_tool_result_items(messages)
-            return _completion(
-                LlmChatMessage(
-                    role="assistant",
-                    tool_calls=[
-                        LlmToolCall(
-                            id="call_score",
-                            name="demo_score_checklist",
-                            arguments={"items": items},
-                        )
-                    ],
-                )
-            )
-        if self.calls == 3 and "memory_put" in tool_names:
-            return _completion(
-                LlmChatMessage(
-                    role="assistant",
-                    tool_calls=[
-                        LlmToolCall(
-                            id="call_memory",
-                            name="memory_put",
-                            arguments={"key": "last_demo_status", "value": "checklist_report_generated"},
-                        )
-                    ],
-                )
-            )
-        if self.calls == 4 and "write_demo_report" in tool_names:
-            item_count, risk_level = _latest_score(messages)
-            content = (
-                "# PSOP Harness Demo Report\n\n"
-                f"- 检查项数量：{item_count}\n"
-                f"- 风险等级：{risk_level}\n"
-                "- 状态：已完成 demo agent harness 验收。\n"
-            )
-            return _completion(
-                LlmChatMessage(
-                    role="assistant",
-                    tool_calls=[
-                        LlmToolCall(
-                            id="call_report",
-                            name="write_demo_report",
-                            arguments={"filename": "result.md", "content": content},
-                        )
-                    ],
-                )
-            )
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        tool_names = _tool_names(self.bound_tools or kwargs.get("tools") or [])
+        message = _next_message(messages, tool_names)
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+
+def _next_message(messages: list[BaseMessage], tool_names: set[str]) -> AIMessage:
+    if "load_skill" in tool_names and not _has_tool_result(messages, "load_skill"):
+        return _tool_call("call_load_skill", "load_skill", {"skill_name": "demo_psop_checklist"})
+    if "demo_extract_check_items" in tool_names and not _has_tool_result(messages, "demo_extract_check_items"):
+        return _tool_call("call_extract", "demo_extract_check_items", {"text": _latest_user_text(messages)})
+    if "demo_score_checklist" in tool_names and not _has_tool_result(messages, "demo_score_checklist"):
+        return _tool_call("call_score", "demo_score_checklist", {"items": _latest_tool_result_items(messages)})
+    if "memory_put" in tool_names and not _has_tool_result(messages, "memory_put"):
+        return _tool_call("call_memory", "memory_put", {"key": "last_demo_status", "value": "checklist_report_generated"})
+    if "write_demo_report" in tool_names and not _has_tool_result(messages, "write_demo_report"):
         item_count, risk_level = _latest_score(messages)
-        return _completion(
-            LlmChatMessage(
-                role="assistant",
-                content=(
-                    f"已完成检查清单生成，共识别 {item_count} 个检查项，"
-                    f"风险等级 {risk_level}，报告已写入 workspace/result.md。"
-                ),
-            )
+        content = (
+            "# PSOP Harness Demo Report\n\n"
+            f"- 检查项数量：{item_count}\n"
+            f"- 风险等级：{risk_level}\n"
+            "- 状态：已完成 demo agent harness 验收。\n"
         )
-
-
-def _completion(message: LlmChatMessage) -> LlmChatCompletion:
-    return LlmChatCompletion(
-        message=message,
-        provider=ScriptedToolCallingChatModel.provider,
-        model=ScriptedToolCallingChatModel.model,
-        raw_response={"scripted": True},
-        usage={},
+        return _tool_call("call_report", "write_demo_report", {"filename": "result.md", "content": content})
+    item_count, risk_level = _latest_score(messages)
+    return AIMessage(
+        content=(
+            f"已完成检查清单生成，共识别 {item_count} 个检查项，"
+            f"风险等级 {risk_level}，报告已写入 /mnt/psop/workspace/result.md。"
+        ),
+        usage_metadata={"input_tokens": 12, "output_tokens": 24, "total_tokens": 36},
     )
 
 
-def _tool_names(tools: list[dict]) -> set[str]:
+def _tool_call(call_id: str, name: str, args: dict[str, Any]) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[{"id": call_id, "name": name, "args": args}],
+        usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    )
+
+
+def _tool_names(tools: list[Any]) -> set[str]:
     names: set[str] = set()
     for tool in tools:
-        function = tool.get("function") if isinstance(tool.get("function"), dict) else {}
-        if function.get("name"):
-            names.add(str(function["name"]))
+        name = getattr(tool, "name", None)
+        if not name and isinstance(tool, dict):
+            name = tool.get("name") or (tool.get("function") or {}).get("name")
+        if name:
+            names.add(str(name))
     return names
 
 
-def _latest_user_text(messages: list[LlmChatMessage]) -> str:
+def _has_tool_result(messages: list[BaseMessage], tool_name: str) -> bool:
+    return any(isinstance(message, ToolMessage) and message.name == tool_name for message in messages)
+
+
+def _latest_user_text(messages: list[BaseMessage]) -> str:
     for message in reversed(messages):
-        if message.role == "user" and message.content:
-            return message.content
+        if isinstance(message, HumanMessage):
+            return str(message.content or "")
     return ""
 
 
-def _latest_tool_result_items(messages: list[LlmChatMessage]) -> list[str]:
-    import json
+def _latest_tool_result_items(messages: list[BaseMessage]) -> list[str]:
+    payload = _latest_tool_payload(messages, "demo_extract_check_items")
+    items = payload.get("items") if isinstance(payload, dict) else None
+    return [str(item) for item in items] if isinstance(items, list) else []
 
+
+def _latest_score(messages: list[BaseMessage]) -> tuple[int, str]:
+    payload = _latest_tool_payload(messages, "demo_score_checklist")
+    if not isinstance(payload, dict):
+        return 0, "low"
+    return int(payload.get("item_count") or 0), str(payload.get("risk_level") or "low")
+
+
+def _latest_tool_payload(messages: list[BaseMessage], tool_name: str) -> dict[str, Any]:
     for message in reversed(messages):
-        if message.role == "tool" and message.name == "demo_extract_check_items" and message.content:
-            payload = json.loads(message.content)
-            items = payload.get("items")
-            return [str(item) for item in items] if isinstance(items, list) else []
-    return []
+        if not isinstance(message, ToolMessage) or message.name != tool_name:
+            continue
+        content = message.content
+        if isinstance(content, str):
+            return _parse_jsonish(content)
+    return {}
 
 
-def _latest_score(messages: list[LlmChatMessage]) -> tuple[int, str]:
-    import json
-
-    for message in reversed(messages):
-        if message.role == "tool" and message.name == "demo_score_checklist" and message.content:
-            payload = json.loads(message.content)
-            return int(payload.get("item_count") or 0), str(payload.get("risk_level") or "low")
-    return 0, "low"
+def _parse_jsonish(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", value, re.DOTALL)
+        if not match:
+            return {}
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return {}
+    return parsed if isinstance(parsed, dict) else {}

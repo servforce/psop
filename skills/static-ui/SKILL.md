@@ -1,3 +1,9 @@
+---
+name: static-ui
+description: 维护和扩展 PSOP 静态前端 UI，遵守本地资源、TailwindCSS v4、Alpine.js 和应用壳约束。
+allowed-tools: []
+---
+
 # Static UI 维护/扩展 Skill（static/）
 
 你是一个资深前端/全栈工程师，需要在本项目中维护/扩展“静态前端 UI”（位于项目根目录 `static/`）。要求可私有化部署（禁止外部 CDN），运行时不依赖 Node；但允许在开发/构建阶段使用 Node（安装依赖与编译 Tailwind）。

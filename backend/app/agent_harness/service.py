@@ -1,65 +1,90 @@
 from __future__ import annotations
 
 import traceback
+from typing import Any
 
-import yaml
-
+from app.agent_harness.context import AgentBuildContext
+from app.agent_harness.definitions import FileAgentDefinitionRegistry, default_agent_registry
 from app.agent_harness.events import AgentEventWriter
-from app.agent_harness.runners.deepagents_runner import DeepAgentsRunner
-from app.agent_harness.schemas import AgentDefinition, AgentInvocation, AgentResult
+from app.agent_harness.memory.file_store import FileMemoryStore
+from app.agent_harness.models.factory import ChatModelFactory
+from app.agent_harness.runners.langchain_agent_executor import LangChainAgentExecutor
+from app.agent_harness.sandbox.base import AgentSandboxProvider
+from app.agent_harness.sandbox.provider import build_sandbox_provider
+from app.agent_harness.schemas import AgentInvocation, AgentResult
 from app.agent_harness.skills.loader import SkillLoader
-from app.agent_harness.tools.builtin import register_builtin_tools
-from app.agent_harness.tools.registry import ToolRegistry
-from app.agent_harness.workspace.manager import WorkspaceManager
 from app.core.config import Settings
-from app.gateway.inference import LlmInferenceGateway
 
 
 class AgentHarnessService:
-    def __init__(self, *, settings: Settings, inference_gateway: LlmInferenceGateway) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        registry: FileAgentDefinitionRegistry | None = None,
+        sandbox_provider: AgentSandboxProvider | None = None,
+        chat_model_factory: ChatModelFactory | None = None,
+        inference_gateway: Any | None = None,
+    ) -> None:
         self.settings = settings
+        self.registry = registry or default_agent_registry(settings.backend_root)
+        self.sandbox_provider = sandbox_provider or build_sandbox_provider(settings)
+        self.chat_model_factory = chat_model_factory
         self.inference_gateway = inference_gateway
-        self.workspace_manager = WorkspaceManager(settings)
-        self.demo_root = settings.backend_root / "app" / "agent_harness" / "demo"
 
     def invoke(self, invocation: AgentInvocation) -> AgentResult:
         if not self.settings.agent_harness_enabled:
             raise RuntimeError("Agent Harness 当前未启用。")
-        definition = self._load_definition(invocation.agent_key)
-        workspace = self.workspace_manager.create(
-            agent_run_id=invocation.workspace_id,
+        package = self.registry.load(invocation.agent_key)
+        definition = package.definition
+        sandbox = self.sandbox_provider.acquire(
+            agent_run_id=invocation.agent_run_id or invocation.workspace_id,
             input_payload=invocation.model_dump(mode="json"),
         )
-        event_writer = AgentEventWriter(workspace.events_path)
+        event_writer = AgentEventWriter(sandbox.events_path)
         event_writer.record(
             "agent.run.started",
             {
                 "agent_key": definition.agent_key,
                 "agent_version": definition.version,
-                "runner": definition.runner,
+                "runner": definition.runner_kind,
                 "profile": self.settings.agent_harness_profile,
+                "sandbox_id": sandbox.sandbox_id,
             },
         )
         try:
-            skills = [
-                SkillLoader(self.demo_root / "skills").load(skill_name, event_writer)
-                for skill_name in definition.skills
-            ]
-            registry = ToolRegistry()
-            register_builtin_tools(registry)
-            result = DeepAgentsRunner(self.inference_gateway).invoke(
+            skill_loader = SkillLoader(self.settings.repo_root / "skills")
+            skill_metadata = [skill_loader.load_metadata(skill_name) for skill_name in definition.skills]
+            memory_scope = invocation.memory_scope or definition.memory_scope or definition.agent_key
+            memory_store = FileMemoryStore(sandbox.memory_path)
+            memory_payload = memory_store.read(memory_scope)
+            event_writer.record("agent.memory.read", {"scope": memory_scope, "keys": sorted(memory_payload.keys())})
+            context = AgentBuildContext(
+                settings=self.settings,
                 invocation=invocation,
                 definition=definition,
-                system_prompt=self._read_demo_file("system.md"),
-                memory_text=self._read_demo_file("AGENTS.md"),
-                skills=skills,
-                tool_registry=registry,
-                workspace=workspace,
+                system_prompt=package.read_system_prompt(),
+                memory_prompt=package.read_memory_prompt(),
+                skill_metadata=skill_metadata,
+                sandbox=sandbox,
+                event_writer=event_writer,
+                memory_store=memory_store,
+                memory_scope=memory_scope,
+                memory_payload=memory_payload,
+                skill_loader=skill_loader,
+                chat_model_factory=self.chat_model_factory,
+            )
+            agent = package.load_factory()(context)
+            result = LangChainAgentExecutor().invoke(
+                agent=agent,
+                invocation=invocation,
+                definition=definition,
+                sandbox=sandbox,
                 event_writer=event_writer,
             )
             event_writer.record("agent.run.completed", {"status": result.status})
             result.events = event_writer.events
-            workspace.write_output(result.model_dump(mode="json"))
+            sandbox.write_output(result.model_dump(mode="json"))
             return result
         except Exception as exc:
             event_writer.record(
@@ -67,28 +92,23 @@ class AgentHarnessService:
                 {"error_type": exc.__class__.__name__, "error": str(exc), "traceback": traceback.format_exc()},
             )
             result = AgentResult(
-                agent_run_id=workspace.agent_run_id,
+                agent_run_id=sandbox.agent_run_id,
                 agent_key=definition.agent_key,
                 status="failed",
                 final_output="",
                 error_message=str(exc),
                 events=event_writer.events,
-                workspace_path=str(workspace.workspace_path),
+                sandbox_path=str(sandbox.root_path),
+                workspace_path=str(sandbox.workspace_path),
             )
-            workspace.write_output(result.model_dump(mode="json"))
+            sandbox.write_output(result.model_dump(mode="json"))
             return result
-
-    def _load_definition(self, agent_key: str) -> AgentDefinition:
-        if agent_key != "demo.psop_harness_agent":
-            raise FileNotFoundError(f"未找到 AgentDefinition：{agent_key}")
-        payload = yaml.safe_load((self.demo_root / "agent.yaml").read_text(encoding="utf-8")) or {}
-        if not isinstance(payload, dict):
-            raise ValueError("agent.yaml 顶层必须是对象。")
-        return AgentDefinition.model_validate(payload)
-
-    def _read_demo_file(self, filename: str) -> str:
-        return (self.demo_root / filename).read_text(encoding="utf-8")
+        finally:
+            self.sandbox_provider.release(sandbox.sandbox_id)
 
 
-def build_agent_harness_service(settings: Settings, inference_gateway: LlmInferenceGateway) -> AgentHarnessService:
+def build_agent_harness_service(
+    settings: Settings,
+    inference_gateway: Any | None = None,
+) -> AgentHarnessService:
     return AgentHarnessService(settings=settings, inference_gateway=inference_gateway)

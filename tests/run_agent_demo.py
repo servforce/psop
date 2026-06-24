@@ -15,7 +15,6 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.agent_harness.schemas import AgentInvocation
 from app.agent_harness.service import AgentHarnessService
 from app.core.config import Settings
-from app.gateway.inference import OpenAICompatibleInferenceGateway
 
 
 def main() -> int:
@@ -28,10 +27,7 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = Settings()
-    service = AgentHarnessService(
-        settings=settings,
-        inference_gateway=OpenAICompatibleInferenceGateway.from_settings(settings),
-    )
+    service = AgentHarnessService(settings=settings)
     result = service.invoke(
         AgentInvocation(
             agent_key="demo.psop_harness_agent",

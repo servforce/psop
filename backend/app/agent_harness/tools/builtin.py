@@ -4,6 +4,7 @@ import re
 import json
 from typing import Any
 
+from app.agent_harness.sandbox.base import PSOP_WORKSPACE_VIRTUAL_ROOT
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
 from app.agent_harness.tools.spec import ToolSpec
 
@@ -120,12 +121,10 @@ def _memory_get(arguments: dict[str, Any], context: ToolExecutionContext) -> dic
 def _write_demo_report(arguments: dict[str, Any], context: ToolExecutionContext) -> dict[str, Any]:
     filename = _require_str(arguments, "filename")
     content = _require_str(arguments, "content")
-    path = context.workspace.resolve_workspace_file(filename)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    relative_path = path.relative_to(context.workspace.workspace_path)
-    context.event_writer.record("agent.file.written", {"path": str(relative_path)})
-    return {"path": str(relative_path), "bytes": len(content.encode("utf-8"))}
+    virtual_path = filename if filename.startswith("/mnt/psop/") else f"{PSOP_WORKSPACE_VIRTUAL_ROOT}/{filename}"
+    written_path = context.sandbox.write_text(virtual_path, content)
+    context.event_writer.record("agent.file.written", {"path": written_path})
+    return {"path": written_path, "bytes": len(content.encode("utf-8"))}
 
 
 def _require_str(arguments: dict[str, Any], key: str) -> str:

@@ -8,13 +8,13 @@
 
 # 一、当前代码基线判断
 
-当前 PSOP 后端已经是 Python 3.11+，但依赖里还没有 LangChain、LangGraph、DeepAgents；`pyproject.toml` 目前主要包含 FastAPI、SQLAlchemy、Pydantic Settings、PyYAML、对象存储、多模态处理等依赖。
+当前 PSOP 后端已经是 Python 3.11+；Agent Harness 依赖 LangChain、LangGraph 和 LangChain OpenAI-compatible provider，`pyproject.toml` 还包含 FastAPI、SQLAlchemy、Pydantic Settings、PyYAML、对象存储、多模态处理等依赖。
 
 现有 README 已经把 `backend/app/agent_harness/` 标为目标模块，但代码中尚未实现该模块；当前 MVP 主链路仍是 `Skills -> Publish -> Auto Compile -> Invocation -> Runtime -> Replay / Observability`。
 
 现有编译智能体 `SkillCompileAgent` 的实现方式仍是 Prompt Pack + Domain Pack + JSON payload 组装，然后直接调用 `LlmInferenceGateway.complete()`，再解析模型返回 JSON。 当前 runtime 的 LLM 节点也是直接渲染 prompt 后调用 `complete()` 或 `complete_multimodal()`；tool 节点目前只支持内置 demo tool。
 
-还有一个关键点：当前 `LlmInferenceGateway` 只定义了 `complete()`、`complete_multimodal()`、`list_model_capabilities()`，并没有 tool-calling chat API；当前 OpenAI-compatible gateway 发送的 payload 也只有 `model/messages/temperature`，没有 `tools`、`tool_choice`、`tool_calls` 的处理。  这意味着如果要让 DeepAgents/LangChain 真正执行工具调用，必须补一个 **tool-calling model adapter**，否则只能做普通文本调用。
+Agent Harness 的 LLM 层参考 deer-flow：通过 LangChain model factory 直接构造 `BaseChatModel`，再交给 LangChain `create_agent`。`LlmInferenceGateway` 仍可服务 Runtime、Compiler、素材分析等既有链路，但不再是 Harness 的强制出口。
 
 所以本计划的核心策略是：
 
@@ -22,8 +22,8 @@
 不要先改造 psop-runner runtime。
 不要先做完整 builder/compiler/tester/audit/eval。
 先新增 agent_harness 底座，并用 demo agent 证明：
-  1. DeepAgents 能接入；
-  2. PSOP Gateway 能作为 LangChain ChatModel 使用；
+  1. LangChain `create_agent` 能接入；
+  2. LangChain model factory 能创建真实 ChatModel；
   3. tool / skill / memory / event 机制能跑通；
   4. 后续智能体可以复用同一套 harness。
 ```
@@ -38,7 +38,7 @@
 AgentHarnessRunner
 ```
 
-内部默认使用 DeepAgents，不单独暴露 `LangGraphRunner`。DeepAgents 本身就是 LangChain 生态中的 agent harness，并基于 LangGraph runtime；它内置 planning、filesystem、tools、skills、memory、subagents、human-in-the-loop 等能力。([LangChain 文档][1]) LangGraph 则作为 DeepAgents 底层 runtime 存在，保留以后写 custom graph 的能力即可，不要在 MVP 阶段增加第二套 runner 概念。([LangChain 文档][2])
+内部默认使用 LangChain `create_agent`，不单独暴露 `LangGraphRunner`。LangGraph 作为 LangChain agent 的底层 runtime 存在，保留以后写 custom graph 的能力即可。PSOP 的 sandbox、tools、skills、memory、middleware 由 Agent Harness 自己治理，避免与 batteries-included harness 的默认能力重叠。
 
 依赖建议：
 
@@ -46,14 +46,12 @@ AgentHarnessRunner
 dependencies = [
   ...
   "langchain>=1.2,<2.0",
-  "langgraph>=1.0,<2.0",
-  "deepagents>=0.6,<0.7",
-  "langchain-core>=1.2,<2.0",
-  "langchain-mcp-adapters>=0.1,<1.0",
+  "langgraph>=1.2,<2.0",
+  "langchain-core>=1.2.22,<2.0",
+  "langchain-openai>=1.3,<2.0",
+  "langchain-mcp-adapters>=0.3,<1.0",
 ]
 ```
-
-`deepagents 0.6.11` 是 2026-06-18 发布的版本，要求 Python `>=3.11,<4.0`，与当前 PSOP 后端 Python 3.11 基线匹配。([PyPI][3])
 
 ---
 
@@ -72,13 +70,26 @@ backend/app/agent_harness/
 
   runners/
     __init__.py
-    deepagents_runner.py
+    langchain_agent_executor.py
     scripted_runner.py
 
   models/
     __init__.py
-    psop_gateway_chat_model.py
+    factory.py
     scripted_chat_model.py
+
+  middlewares/
+    __init__.py
+    dangling_tool_call.py
+    model_events.py
+    token_usage.py
+    tool_calls.py
+
+  sandbox/
+    __init__.py
+    base.py
+    provider.py
+    local.py
 
   tools/
     __init__.py
@@ -98,22 +109,27 @@ backend/app/agent_harness/
     store.py
     file_store.py
 
-  workspace/
-    __init__.py
-    manager.py
-
   persistence/
     __init__.py
     models.py
     repository.py
 
-  demo/
-    agent.yaml
-    system.md
-    AGENTS.md
-    skills/
-      demo_psop_checklist/
-        SKILL.md
+  agents/
+    demo/
+      psop_harness_agent/
+        agent.py
+        prompt.py
+        agent.yaml
+        system.md
+        AGENTS.md
+```
+
+Agent Skill 源目录统一位于仓库根目录：
+
+```text
+skills/
+  demo_psop_checklist/
+    SKILL.md
 ```
 
 新增脚本：
@@ -149,7 +165,8 @@ backend/app/core/config.py
 ```python
 agent_harness_enabled: bool = True
 agent_harness_profile: str = "dev_open"
-agent_harness_workspace_root: str = ".psop/agent-runs"
+agent_harness_sandbox_provider: str = "local"
+agent_harness_sandbox_root: str = ".psop/agent-runs"
 agent_harness_mcp_enabled: bool = False
 ```
 
@@ -161,7 +178,7 @@ MVP 默认使用：
 PSOP_AGENT_HARNESS_PROFILE=dev_open
 ```
 
-该 profile 允许 demo agent 使用文件 workspace、内置 tools、mock model；后续再扩展到真实 MCP、sandbox、approval。
+该 profile 允许 demo agent 使用 local sandbox 和内置 tools；后续再扩展到真实 MCP、远程 sandbox、approval。
 
 ---
 
@@ -175,8 +192,7 @@ class AgentInvocation(BaseModel):
     input: dict[str, Any]
     context: dict[str, Any] = {}
     memory_scope: str | None = None
-    workspace_id: str | None = None
-    use_mock_model: bool = False
+    agent_run_id: str | None = None
 
 
 class AgentResult(BaseModel):
@@ -186,7 +202,7 @@ class AgentResult(BaseModel):
     final_output: str
     structured_output: dict[str, Any] = {}
     events: list[AgentEvent] = []
-    workspace_path: str | None = None
+    sandbox_path: str | None = None
 
 
 class AgentEvent(BaseModel):
@@ -214,22 +230,24 @@ agent.run.failed
 
 ---
 
-## Step 3：实现 WorkspaceManager
+## Step 3：实现 Local Sandbox
 
 新增：
 
 ```text
-backend/app/agent_harness/workspace/manager.py
+backend/app/agent_harness/sandbox/base.py
+backend/app/agent_harness/sandbox/provider.py
+backend/app/agent_harness/sandbox/local.py
 ```
 
 职责：
 
 ```text
-1. 为每次 agent run 创建 workspace。
+1. 为每次 agent run 创建 local sandbox。
 2. 写入 input.json。
 3. 写入 events.jsonl。
 4. 写入 output.json。
-5. 为 file tools、memory、skills 提供工作目录。
+5. 为 file tools、memory、skills 提供受控虚拟路径。
 ```
 
 路径建议：
@@ -242,9 +260,10 @@ backend/app/agent_harness/workspace/manager.py
   memory.json
   workspace/
     result.md
+  outputs/
 ```
 
-MVP 不直接暴露 repo 根目录写入权限。DeepAgents 支持虚拟文件系统、`read_file`、`write_file`、`edit_file`、`glob`、`grep`，以及在 sandbox backend 下暴露 `execute` shell tool；它也支持用 permission rules 限制读写路径。([LangChain 文档][1]) MVP 先限定在 agent workspace，可以同时满足“前期不复杂”和“不要污染工程目录”。
+MVP 不直接暴露 repo 根目录写入权限。工具只使用 `/mnt/psop/workspace`、`/mnt/psop/outputs` 虚拟路径，local sandbox 负责映射到 `.psop/agent-runs/{agent_run_id}`。首版不提供 shell/bash。
 
 ---
 
@@ -272,7 +291,7 @@ memory_scope = "demo.psop_harness_agent"
 .psop/agent-runs/{agent_run_id}/memory.json
 ```
 
-DeepAgents 文档中 memory 是 context management 的一部分，可持久化跨会话偏好、规范和项目约定。([LangChain 文档][1]) 但 PSOP MVP 不要一开始做向量库、长期记忆或跨用户记忆，只要能证明 memory 组件可以被 tool 和 agent runner 调用即可。
+LangChain agent 的状态与 store 能承载会话内外上下文，但 PSOP MVP 不要一开始做向量库、长期记忆或跨用户记忆，只要能证明 memory 组件可以被 tool 和 agent runner 调用即可。([LangChain 文档][1])
 
 ---
 
@@ -307,7 +326,7 @@ memory_get(key: str) -> dict
 write_demo_report(filename: str, content: str) -> dict
 ```
 
-LangChain 的 tools 本质是带有清晰输入输出的 callable functions，模型根据上下文决定何时调用；官方建议通过类型标注定义 schema，并用 docstring 描述工具用途。([LangChain 文档][4])
+LangChain 的 tools 本质是带有清晰输入输出的 callable functions，模型根据上下文决定何时调用；官方建议通过类型标注定义 schema，并用 docstring 描述工具用途。([LangChain 文档][3])
 
 每个 tool wrapper 必须做三件事：
 
@@ -326,7 +345,7 @@ McpToolProvider
   - to_langchain_tools()
 ```
 
-MVP 不要求真实连接 MCP server，但接口要留好。MCP tool 本身有 name、description、inputSchema、outputSchema，并通过 `tools/list`、`tools/call` 暴露和调用；客户端应验证工具结果并记录工具调用。([Model Context Protocol][5]) ([Model Context Protocol][5])
+MVP 不要求真实连接 MCP server，但接口要留好。MCP tool 本身有 name、description、inputSchema、outputSchema，并通过 `tools/list`、`tools/call` 暴露和调用；客户端应验证工具结果并记录工具调用。([Model Context Protocol][4])
 
 ---
 
@@ -343,7 +362,7 @@ backend/app/agent_harness/skills/registry.py
 MVP skill 目录结构：
 
 ```text
-backend/app/agent_harness/demo/skills/demo_psop_checklist/
+skills/demo_psop_checklist/
   SKILL.md
 ```
 
@@ -353,9 +372,10 @@ backend/app/agent_harness/demo/skills/demo_psop_checklist/
 ---
 name: demo_psop_checklist
 description: 将一段现场作业描述拆解为检查项，并生成简体中文检查报告。
-tools:
+allowed-tools:
   - demo_extract_check_items
   - demo_score_checklist
+  - memory_put
   - write_demo_report
 ---
 
@@ -364,7 +384,8 @@ tools:
 你负责把用户输入的现场作业描述转换为检查清单。
 必须调用 demo_extract_check_items。
 必须调用 demo_score_checklist。
-最后将报告写入 result.md。
+必须调用 memory_put。
+最后将报告写入 /mnt/psop/workspace/result.md。
 ```
 
 实现策略：
@@ -373,10 +394,11 @@ tools:
 1. 解析 SKILL.md frontmatter。
 2. 记录 agent.skill.loaded event。
 3. 将 skill instruction 拼接进 system prompt。
-4. 将 skill 声明的 tools 加入 ToolRegistry。
+4. 将 skill 声明的 allowed-tools 作为权限收缩，不允许提升 agent.yaml 的工具授权。
+5. 当前阶段只从仓库根目录 `skills/` 加载 Agent Skill，不支持 agent 私有 skills。
 ```
 
-DeepAgents 的 skills 机制是按需加载专业工作流、领域知识和说明，技能目录包含 `SKILL.md`，也可以包含脚本、模板、参考文档；它采用 progressive disclosure，启动时读取 frontmatter，需要时再读取完整内容。([LangChain 文档][1])
+Agent Skill 采用 progressive disclosure：启动时只读取 `SKILL.md` frontmatter，需要时再通过 `load_skill` 读取完整内容。Skill 目录可以包含脚本、模板和参考文档。
 
 MVP 可以先不做完整 progressive disclosure，只做：
 
@@ -400,92 +422,49 @@ load selected skill at run start
 
 ---
 
-## Step 7：扩展 LLM Gateway 支持 Tool Calling
+## Step 7：实现 Harness Model Factory
 
 这是整个计划的关键改造点。
 
-当前 `LlmInferenceGateway` 不支持 tool calling；如果直接把 DeepAgents 接上现有 gateway，模型无法返回 `tool_calls`，也就无法形成真正的工具调用 loop。现有 gateway 只返回 `content/provider/model/raw_response/usage/request`，并只解析 message content。
-
-建议新增协议，不破坏旧接口：
-
-```python
-@dataclass(slots=True)
-class LlmToolCall:
-    id: str
-    name: str
-    arguments: dict[str, Any]
-
-
-@dataclass(slots=True)
-class LlmChatMessage:
-    role: str
-    content: str | None = None
-    tool_call_id: str | None = None
-    name: str | None = None
-    tool_calls: list[LlmToolCall] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class LlmChatCompletion:
-    message: LlmChatMessage
-    provider: str
-    model: str
-    raw_response: dict
-    usage: dict[str, Any] = field(default_factory=dict)
-    request: dict[str, Any] = field(default_factory=dict)
-
-
-class LlmInferenceGateway(Protocol):
-    ...
-    def complete_chat(
-        self,
-        *,
-        messages: list[LlmChatMessage],
-        tools: list[dict[str, Any]] | None = None,
-        route_key: str = TEXT_ROUTE_KEY,
-    ) -> LlmChatCompletion:
-        ...
-```
-
-`OpenAICompatibleInferenceGateway.complete_chat()` 负责：
-
-```text
-1. messages -> OpenAI-compatible messages
-2. tools -> OpenAI-compatible tools schema
-3. response.choices[0].message.tool_calls -> LlmToolCall
-4. usage/provider/model/request redaction 保持一致
-```
-
-旧的 `complete()` 和 `complete_multimodal()` 继续保留，以免影响 compiler/runtime 现有逻辑。
-
----
-
-## Step 8：实现 PsopGatewayChatModel
+Agent Harness 参考 deer-flow，不再要求 LLM 调用经过 `LlmInferenceGateway`，而是通过 LangChain model factory 直接构造 `BaseChatModel`。Runtime、Compiler 等既有链路可继续使用 `LlmInferenceGateway`。
 
 新增：
 
 ```text
-backend/app/agent_harness/models/psop_gateway_chat_model.py
+backend/app/agent_harness/models/factory.py
+```
+
+职责：
+
+```text
+1. 从 Settings 的 PSOP_LLM_* 生成默认 HarnessModelConfig。
+2. 解析 use=module:Class 的 LangChain provider。
+3. 构造 BaseChatModel。
+4. 支持 thinking_enabled / when_thinking_enabled / when_thinking_disabled。
+```
+
+默认 provider 使用 `langchain_openai:ChatOpenAI`。
+
+---
+
+## Step 8：实现 Scripted ChatModel
+
+新增：
+
+```text
+backend/app/agent_harness/models/scripted_chat_model.py
 ```
 
 职责：
 
 ```text
 LangChain BaseChatModel
-  -> 调用 LlmInferenceGateway.complete_chat()
   -> 支持 bind_tools()
-  -> 将 AIMessage.tool_calls 转回 LangChain 标准结构
+  -> 固定触发 demo tool_calls
+  -> 输出 usage_metadata，覆盖 token middleware
 ```
 
-这一步的价值是：后续所有 PSOP agent 都可以使用 DeepAgents/LangChain 的 tool loop，但模型出口仍然经过 PSOP 的 `LlmInferenceGateway`，符合 README 里“大模型调用必须经过 LLM Inference Gateway”的平台约束。
-
-同时新增：
-
-```text
-backend/app/agent_harness/models/scripted_chat_model.py
-```
-
-用于测试和 demo：
+用于测试：
 
 ```text
 ScriptedToolCallingChatModel
@@ -504,46 +483,28 @@ ScriptedToolCallingChatModel
 
 ---
 
-## Step 9：实现 DeepAgents Runner
+## Step 9：实现 Agent Factory + LangChain Executor
 
 新增：
 
 ```text
-backend/app/agent_harness/runners/deepagents_runner.py
+backend/app/agent_harness/agents/demo/psop_harness_agent/agent.py
+backend/app/agent_harness/agents/demo/psop_harness_agent/prompt.py
+backend/app/agent_harness/runners/langchain_agent_executor.py
 ```
 
 核心逻辑：
 
 ```python
-class DeepAgentsRunner:
-    def invoke(self, invocation: AgentInvocation) -> AgentResult:
-        run = create_agent_run()
-        workspace = workspace_manager.create(run.id)
-        memory = memory_store.read(invocation.memory_scope)
-
-        tools = tool_registry.resolve(...)
-        skills = skill_loader.load(...)
-
-        agent = create_deep_agent(
-            model=model,
-            tools=tools,
-            system_prompt=render_system_prompt(...),
-            # 后续再接 permissions/backend/checkpointer
-        )
-
-        result = agent.invoke({
-            "messages": [
-                {"role": "user", "content": invocation.input["text"]}
-            ]
-        })
-
-        persist_output()
-        return AgentResult(...)
+def make_demo_agent(context: AgentBuildContext):
+    model = context.create_model()
+    tools = resolve_tools(...)
+    middleware = build_middlewares(...)
+    system_prompt = apply_prompt_template(...)
+    return create_agent(model=model, tools=tools, middleware=middleware, system_prompt=system_prompt)
 ```
 
-DeepAgents 的 quickstart 就是通过 `create_deep_agent(model=..., tools=..., system_prompt=...)` 创建 agent，然后调用 `agent.invoke(...)`。([LangChain 文档][1])
-
-MVP 暂时不启用复杂 subagents，不做 LangSmith，不做 human approval，不做长期 store backend。只要把主 agent、skill、tool、memory 跑通。
+MVP 暂时不启用 subagents，不做 LangSmith，不做 human approval，不做长期 store backend。只要把主 agent、skill 渐进式披露、tool、memory 跑通。
 
 ---
 
@@ -570,8 +531,8 @@ class AgentHarnessService:
 2. 初始化 event writer。
 3. 初始化 workspace。
 4. 加载 agent definition。
-5. 调用 DeepAgentsRunner。
-6. 返回 AgentResult。
+5. 调用 agent factory 创建可执行 agent。
+6. 通过 LangChainAgentExecutor 执行 agent 并归一化 AgentResult。
 ```
 
 同时新增 FastAPI dependency，但不强制改造现有 compiler/runtime：
@@ -592,9 +553,9 @@ def get_agent_harness_service(request: Request) -> AgentHarnessService:
 新增：
 
 ```text
-backend/app/agent_harness/demo/agent.yaml
-backend/app/agent_harness/demo/system.md
-backend/app/agent_harness/demo/AGENTS.md
+backend/app/agent_harness/agents/demo/psop_harness_agent/agent.yaml
+backend/app/agent_harness/agents/demo/psop_harness_agent/system.md
+backend/app/agent_harness/agents/demo/psop_harness_agent/AGENTS.md
 ```
 
 `agent.yaml`：
@@ -602,9 +563,15 @@ backend/app/agent_harness/demo/AGENTS.md
 ```yaml
 agent_key: demo.psop_harness_agent
 version: v1
-runner: deepagents
+runner_kind: langchain_agent
+factory: make_demo_agent
 route_key: text
-description: Demo agent for validating PSOP agent harness tools, skills, and memory.
+description: Demo agent for validating PSOP agent harness tools, skills, memory, sandbox, and middleware.
+model:
+  name: default
+  thinking_enabled: false
+system_prompt_file: system.md
+memory_file: AGENTS.md
 skills:
   - demo_psop_checklist
 tools:
@@ -656,9 +623,9 @@ PYTHONPATH=backend backend/.venv/bin/python tests/run_agent_demo.py \
   --input "进入泵房前检查 PPE，确认阀门关闭，记录压力表读数。"
 ```
 
-默认使用真实 LLM，并读取 `PSOP_LLM_*` 配置。
+默认使用真实 LLM，并读取 `PSOP_LLM_*` 配置，通过 LangChain model factory 创建模型。
 
-本地测试如需使用 mock model，应在测试代码中显式传入 `AgentInvocation(use_mock_model=True)`，不要再通过环境变量切换。
+pytest 中使用 `ScriptedToolCallingChatModel` 作为 fake `BaseChatModel` 注入，但仍必须经过 LangChain `create_agent`。
 
 ```bash
 PSOP_LLM_API_KEY=... \
@@ -672,8 +639,8 @@ PYTHONPATH=backend backend/.venv/bin/python tests/run_agent_demo.py \
 {
   "agent_key": "demo.psop_harness_agent",
   "status": "succeeded",
-  "final_output": "已完成检查清单生成，共识别 3 个检查项，风险等级 medium，报告已写入 workspace/result.md。",
-  "workspace_path": ".psop/agent-runs/<agent_run_id>/workspace",
+  "final_output": "已完成检查清单生成，共识别 3 个检查项，风险等级 medium，报告已写入 /mnt/psop/workspace/result.md。",
+  "sandbox_path": ".psop/agent-runs/<agent_run_id>",
   "events": [
     {"event_type": "agent.run.started"},
     {"event_type": "agent.skill.loaded"},
@@ -779,7 +746,7 @@ README 里已经把该命令作为后端测试方式。
 
 ## 1. 不改 RuntimeService 主流程
 
-当前 `RuntimeService` 是 psop-runner-agent 的正式运行环境，会创建 `SkillInvocation`、`Run`、`TerminalSession`、`SessionTokenSnapshot` 和 `RuntimeJob`。 它的状态主权仍应保留，不在本次 MVP 中接入 DeepAgents。
+当前 `RuntimeService` 是 psop-runner-agent 的正式运行环境，会创建 `SkillInvocation`、`Run`、`TerminalSession`、`SessionTokenSnapshot` 和 `RuntimeJob`。 它的状态主权仍应保留，不在本次 MVP 中接入 Agent Harness。
 
 ## 2. 暂不替换 SkillCompileAgent
 
@@ -811,8 +778,9 @@ job_type = "agent_run"
 ## Commit 1：依赖和配置
 
 ```text
-- pyproject.toml 增加 langchain/langgraph/deepagents/langchain-mcp-adapters
+- pyproject.toml 增加 langchain/langgraph/langchain-mcp-adapters
 - Settings 增加 agent_harness_* 配置
+- 增加 langchain-openai 作为默认 OpenAI-compatible model provider
 ```
 
 ## Commit 2：Harness core
@@ -820,7 +788,7 @@ job_type = "agent_run"
 ```text
 - schemas.py
 - events.py
-- workspace manager
+- local sandbox
 - memory store
 - AgentHarnessService skeleton
 ```
@@ -834,19 +802,20 @@ job_type = "agent_run"
 - demo skill
 ```
 
-## Commit 4：Model adapter + Runner
+## Commit 4：Model factory + Middlewares + Agent factory
 
 ```text
-- LlmGateway complete_chat 扩展
-- PsopGatewayChatModel
+- LangChain model factory
+- Agent Harness middlewares
 - ScriptedToolCallingChatModel
-- DeepAgentsRunner
+- demo agent.py / prompt.py
+- LangChainAgentExecutor
 ```
 
 ## Commit 5：Demo script + tests
 
 ```text
-- demo agent.yaml/system.md/AGENTS.md
+- demo agents/demo/psop_harness_agent/agent.yaml/system.md/AGENTS.md
 - tests/run_agent_demo.py
 - pytest e2e
 ```
@@ -858,14 +827,14 @@ job_type = "agent_run"
 本计划完成后，应满足以下验收条件：
 
 ```text
-1. backend/app/agent_harness/ 模块存在，并包含 tools、skills、memory、runner、model adapter、workspace 基础组件。
-2. 项目依赖中已引入 langchain、langgraph、deepagents。
+1. backend/app/agent_harness/ 模块存在，并包含 tools、skills、memory、runner、model factory、sandbox、middlewares 基础组件。
+2. 项目依赖中已引入 langchain、langgraph、langchain-openai。
 3. 存在 demo.psop_harness_agent。
 4. 可以通过 Python 脚本运行 demo agent。
 5. demo 运行过程中能加载至少一个 skill。
 6. demo 运行过程中能执行至少两个 tools。
 7. demo 运行过程中能写入 memory。
-8. demo 运行过程中能写入 workspace 文件。
+8. demo 运行过程中能写入 sandbox workspace 文件。
 9. demo 输出 AgentResult。
 10. demo 产生 events.jsonl，可看到 skill/tool/memory/run 全链路事件。
 11. pytest 中存在不依赖真实 LLM 的端到端测试。
@@ -883,15 +852,14 @@ job_type = "agent_run"
 2. psop-compiler 接入 AgentHarnessService
 3. psop-tester 接入 AgentHarnessService
 4. MCP provider 接入真实 MCP server
-5. workspace shell/file tools 升级为 sandbox backend
+5. local sandbox 扩展为可替换的远程 sandbox provider
 6. agent_run / agent_event 持久化到数据库
 7. agent events 投影到 PSOP observability/replay
 ```
 
 这个顺序可以保证第一步就有一个可运行的智能体底座，同时不会破坏当前 PSOP 最重要的 runtime/publish/compile 主链路。
 
-[1]: https://docs.langchain.com/oss/python/deepagents/overview "Deep Agents overview - Docs by LangChain"
+[1]: https://docs.langchain.com/oss/python/langchain/agents "Agents - Docs by LangChain"
 [2]: https://docs.langchain.com/oss/python/langgraph/overview "LangGraph overview - Docs by LangChain"
-[3]: https://pypi.org/project/deepagents/ "deepagents · PyPI"
-[4]: https://docs.langchain.com/oss/python/langchain/tools "Tools - Docs by LangChain"
-[5]: https://modelcontextprotocol.io/docs/concepts/tools "Tools - Model Context Protocol"
+[3]: https://docs.langchain.com/oss/python/langchain/tools "Tools - Docs by LangChain"
+[4]: https://modelcontextprotocol.io/docs/concepts/tools "Tools - Model Context Protocol"

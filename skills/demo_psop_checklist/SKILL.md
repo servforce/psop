@@ -1,9 +1,10 @@
 ---
 name: demo_psop_checklist
 description: 将一段现场作业描述拆解为检查项，并生成简体中文检查报告。
-tools:
+allowed-tools:
   - demo_extract_check_items
   - demo_score_checklist
+  - memory_put
   - write_demo_report
 ---
 
@@ -13,4 +14,5 @@ tools:
 
 必须调用 demo_extract_check_items。
 必须调用 demo_score_checklist。
-最后将报告写入 result.md。
+必须调用 memory_put。
+最后将报告写入 /mnt/psop/workspace/result.md。

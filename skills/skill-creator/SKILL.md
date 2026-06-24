@@ -1,3 +1,9 @@
+---
+name: skill-creator
+description: 通过多轮需求澄清生成一个完整可审阅的 Skill 草稿目录。
+allowed-tools: []
+---
+
 # Skill Creator
 
 `skill-creator` 用于在 VS Code Codex 中，通过多轮需求澄清，生成一个完整可审阅的 Skill 草稿目录。

@@ -1,6 +1,7 @@
 ---
 name: job-system-design
 description: "Use when designing or implementing database-backed job systems, worker pools, schedulers, leases, retries, recovery, and background execution topology for PSOP."
+allowed-tools: []
 ---
 
 # Job System Design

@@ -1,3 +1,9 @@
+---
+name: skill-compiler
+description: 将一个标准 Skill 目录编译成可被 Run Server 消费的最小运行产物，并输出结构化构建报告。
+allowed-tools: []
+---
+
 # Skill Compiler
 
 `skill-compiler` 用于把一个标准 Skill 目录编译成可被 `Run Server` 直接消费的最小运行产物，并输出结构化构建报告。

@@ -34,8 +34,8 @@ PSOP 采用确定性 Runtime 与受治理 Agent Harness 结合的架构。
 4. `RuntimeService` 是 `psop-runner-agent` 的正式治理环境。
 5. `terminal_event` 是终端输入输出的 append-only 事实源。
 6. `trace_event`、`session_token_snapshot`、`terminal_event`、`artifact_object` 是 Replay、Audit、Eval 的事实基础。
-7. LLM 调用必须经过 `LlmInferenceGateway` 或其受控适配器。
-8. Agent Harness 负责 builder、compiler、tester、audit、eval 的统一定义、运行、tools、MCP、Agent Skills、memory、workspace、事件与产物治理。
+7. 既有 Runtime/Domain 服务可继续使用 `LlmInferenceGateway`；Agent Harness 使用 LangChain model factory 直接构造受治理模型。
+8. Agent Harness 负责 builder、compiler、tester、audit、eval 的统一定义、运行、tools、MCP、Agent Skills、memory、sandbox、事件与产物治理。
 
 ## 3. 当前系统基线
 
@@ -275,7 +275,7 @@ flowchart TB
 
     subgraph Gateway[Gateways]
         GitLab[GitLab]
-        LLM[LlmInferenceGateway]
+        LLM[LlmInferenceGateway / LangChain Model Factory]
         ASR[ASR]
     end
 
@@ -341,7 +341,7 @@ implementation: RuntimeService
 state_authority: SessionTokenSnapshot
 ```
 
-DeepAgents / LangGraph 不接管 runner 的正式状态。后续 Runtime 中的 LLM 节点可以通过 Agent Harness 执行，但输出仍以 observation 形式回到 RuntimeService merge。
+LangChain Agent / LangGraph 不接管 runner 的正式状态。后续 Runtime 中的 LLM 节点可以通过 Agent Harness 执行，但输出仍以 observation 形式回到 RuntimeService merge。
 
 ## 7. Agent Harness 架构
 
@@ -365,11 +365,11 @@ AgentHarnessRunner
 
 内部策略：
 
-- DeepAgents-first。
-- LangGraph 作为内部能力，不作为业务层 runner 分类。
+- LangChain `create_agent` first。
+- LangGraph 作为 LangChain agent 底层能力，不作为业务层 runner 分类。
 - Skills-first，Subagents-later。
 - dev_open profile 优先跑通闭环。
-- LLM 通过 `PsopGatewayChatModel` 回到 `LlmInferenceGateway`。
+- Runtime 等既有域服务可继续使用 `LlmInferenceGateway`；Agent Harness 使用 LangChain `BaseChatModel` factory。
 
 ### 7.2 模块目录
 
@@ -378,13 +378,24 @@ backend/app/agent_harness/
   definitions.py
   context.py
   runner.py
-  deepagent_factory.py
+  factory.py
   schemas.py
   events.py
 
   models/
-    psop_gateway_chat_model.py
+    factory.py
     model_router.py
+
+  middlewares/
+    dangling_tool_call.py
+    model_events.py
+    token_usage.py
+    tool_calls.py
+
+  sandbox/
+    base.py
+    provider.py
+    local.py
 
   skills/
     loader.py
@@ -394,7 +405,6 @@ backend/app/agent_harness/
     base.py
     registry.py
     workspace_tools.py
-    shell_tool.py
     mcp_tools.py
     psop_skill_tools.py
     psop_compiler_tools.py
@@ -414,36 +424,43 @@ backend/app/agent_harness/
     service.py
 
   agents/
+    builder/agent.py
+    builder/prompt.py
     builder/agent.yaml
-    builder/SKILL.md
+    compiler/agent.py
+    compiler/prompt.py
     compiler/agent.yaml
-    compiler/SKILL.md
+    tester/agent.py
+    tester/prompt.py
     tester/agent.yaml
-    tester/SKILL.md
+    audit/agent.py
+    audit/prompt.py
     audit/agent.yaml
-    audit/SKILL.md
+    eval/agent.py
+    eval/prompt.py
     eval/agent.yaml
-    eval/SKILL.md
 ```
+
+Agent Skill 源统一放在仓库根目录 `skills/`。`backend/app/agent_harness/skills/` 只包含加载、解析和治理代码，不存放具体 Skill 内容。
 
 ### 7.3 AgentDefinition
 
 ```yaml
 agent_key: psop-builder
 version: v1
-runner_kind: deep_agent
+runner_kind: langchain_agent
+factory: make_builder_agent
 profile: dev_open
 purpose: Build PSOP Skill drafts from raw materials and standards.
 model:
-  route_key: text
-  multimodal_route_key: multimodal
+  name: default
+  thinking_enabled: false
 skills:
   - builder/core/v1
   - builder/evidence_mapping/v1
 tools:
   - workspace.read_file
   - workspace.write_file
-  - workspace.shell
   - psop.raw_material.read
   - psop.standard.search
   - psop.skill.write_draft
@@ -464,7 +481,7 @@ output_schema_ref: psop-builder.output.v1
 ```text
 resolve AgentDefinition
 create AgentRun
-prepare workspace
+prepare sandbox
 load Agent Skills
 resolve tools and MCP tools
 create DeepAgent
@@ -480,8 +497,9 @@ return AgentResult
 
 | 命名空间 | 职责 |
 | --- | --- |
-| `workspace.*` | 文件读写、目录、grep、glob。 |
-| `shell.*` | workspace 内 shell 执行。 |
+| `workspace.*` | sandbox 虚拟 workspace 文件读写、目录、grep、glob。 |
+| `outputs.*` | sandbox 虚拟 outputs 产物写入与登记。 |
+| `shell.*` | 后续可选能力；首版不开放 shell/bash。 |
 | `mcp.*` | MCP tools adapter。 |
 | `psop.raw_material.*` | 素材、关键帧、ASR/OCR、分析结果读取。 |
 | `psop.skill.*` | PSOP Skill source / draft 读写。 |
@@ -491,19 +509,20 @@ return AgentResult
 | `psop.audit.*` | replay facts、quality attribution artifact。 |
 | `psop.eval.*` | proposal、patch draft、test plan。 |
 
-首版默认开启 workspace、shell 和 MCP，但只允许在 agent workspace 内写入，并记录 `agent_event`。
+首版默认只开启 local sandbox 和内置工具，工具只暴露 `/mnt/psop/workspace`、`/mnt/psop/outputs` 虚拟路径；MCP 保留 skeleton，不默认连接真实 server；首版不开放 shell/bash。所有工具调用通过 middleware 记录 `agent_event`。
 
 ### 7.6 Agent Skills
 
 Agent Skill 目录结构：
 
 ```text
-SKILL.md
-schemas/
-templates/
-scripts/
-examples/
-references/
+skills/<skill-name>/
+  SKILL.md
+  schemas/
+  templates/
+  scripts/
+  examples/
+  references/
 ```
 
 用途：
@@ -521,7 +540,7 @@ Agent Skill 与 PSOP Skill 是不同对象。
 
 首版：
 
-- workspace memory：agent run 内文件和中间产物。
+- sandbox workspace memory：agent run 内文件和中间产物。
 - artifact memory：历史 audit/test/eval artifact 摘要。
 
 后续：
@@ -534,12 +553,12 @@ Agent Skill 与 PSOP Skill 是不同对象。
 
 | 智能体 | runner_kind | 输入 | 输出 | 首版工具 |
 | --- | --- | --- | --- | --- |
-| `psop-builder` | `deep_agent` | raw material、keyframes、transcript、standards、user goal | PSOP Skill draft、evidence map、missing questions、safety constraints | raw_material、standard、skill draft、workspace、shell、MCP |
-| `psop-compiler` | `deep_agent` | PSOP Skill、manifest、domain pack、allowed runtime | PSOP-EG、compile diagnostics、summary | skill read、formal-v5 validate、artifact write、workspace |
-| `psop-tester` | `deep_agent` | PSOP Skill、PSOP-EG、world model | test suite、scenario runs、coverage、feedback | test scenario、runtime invocation、terminal event、replay、judge |
+| `psop-builder` | `langchain_agent` | raw material、keyframes、transcript、standards、user goal | PSOP Skill draft、evidence map、missing questions、safety constraints | raw_material、standard、skill draft、workspace、MCP skeleton |
+| `psop-compiler` | `langchain_agent` | PSOP Skill、manifest、domain pack、allowed runtime | PSOP-EG、compile diagnostics、summary | skill read、formal-v5 validate、artifact write、workspace |
+| `psop-tester` | `langchain_agent` | PSOP Skill、PSOP-EG、world model | test suite、scenario runs、coverage、feedback | test scenario、runtime invocation、terminal event、replay、judge |
 | `psop-runner` | `psop_runtime` | invocation、PSOP-EG、terminal events | Run Package、Replay、final output | RuntimeService 内置 actor/tool |
-| `psop-audit` | `deep_agent` | replay、trace、terminal events、PSOP Skill、EG、test report | audit report、quality attribution、evidence refs | replay read、trace read、skill/EG read、workspace |
-| `psop-eval` | `deep_agent` | audit reports、test reports、diagnostics、prompt/code history | improvement proposal、patch draft、test plan、release checklist | audit/test read、prompt draft、skill patch、workspace、shell、MCP |
+| `psop-audit` | `langchain_agent` | replay、trace、terminal events、PSOP Skill、EG、test report | audit report、quality attribution、evidence refs | replay read、trace read、skill/EG read、workspace |
+| `psop-eval` | `langchain_agent` | audit reports、test reports、diagnostics、prompt/code history | improvement proposal、patch draft、test plan、release checklist | audit/test read、prompt draft、skill patch、workspace、MCP skeleton |
 
 ## 9. 数据模型
 
@@ -563,7 +582,7 @@ Agent Skill 与 PSOP Skill 是不同对象。
 | `id` | Agent Run ID |
 | `agent_key` | 智能体 key |
 | `agent_version` | 智能体版本 |
-| `runner_kind` | `deep_agent` / `psop_runtime` |
+| `runner_kind` | `langchain_agent` / `psop_runtime` |
 | `profile` | `dev_open` / `prod_guarded` |
 | `status` | pending / running / succeeded / failed / cancelled |
 | `parent_agent_run_id` | 父 Agent Run |
@@ -573,7 +592,7 @@ Agent Skill 与 PSOP Skill 是不同对象。
 | `related_runtime_run_id` | 关联 Runtime Run |
 | `input_payload` | 输入摘要 |
 | `output_payload` | 输出摘要 |
-| `workspace_path` | workspace 路径 |
+| `sandbox_path` | sandbox 根路径 |
 | `model_provider` | 模型 provider |
 | `model_name` | 模型名 |
 | `token_usage` | token usage |
@@ -693,32 +712,33 @@ agent_audit
 agent_eval
 ```
 
-## 12. Workspace 与工具执行
+## 12. Sandbox 与工具执行
 
-每个 AgentRun 创建独立 workspace：
+每个 AgentRun 创建独立 local sandbox：
 
 ```text
-.data/agent-runs/{agent_run_id}/workspace/
+.psop/agent-runs/{agent_run_id}/
 ```
 
 目录：
 
 ```text
-input/
-output/
-scratch/
-artifacts/
-logs/
+input.json
+output.json
+events.jsonl
+memory.json
+workspace/
+outputs/
 ```
 
 `dev_open` 规则：
 
-- 默认允许读写 workspace。
-- shell cwd 固定为 workspace。
-- 输入材料复制或挂载到 `input/`。
-- 输出产物写入 `output/` 或 `artifacts/`。
+- 默认允许工具读写 `/mnt/psop/workspace` 与 `/mnt/psop/outputs` 对应的 sandbox 内目录。
+- 首版 local sandbox 不是安全隔离边界，不开放 shell/bash。
+- 输入材料通过 `input.json` 或后续 provider 挂载进入 sandbox。
+- 输出产物写入 `workspace/` 或 `outputs/`。
 - 禁止默认写项目根目录、`.env`、数据库文件、对象存储根路径。
-- stdout/stderr tail 写入 `agent_event`。
+- 禁止 host 绝对路径、`..` 和越界 symlink。
 - 重要输出登记为 `agent_artifact`。
 
 ## 13. Observability 与 Replay
@@ -780,7 +800,7 @@ Eval proposal
 | 页面 | 说明 |
 | --- | --- |
 | Agent Runs | 查看 AgentRun 列表、状态、输入输出摘要。 |
-| Agent Run Detail | 查看 AgentEvent timeline、workspace artifact、错误信息。 |
+| Agent Run Detail | 查看 AgentEvent timeline、sandbox artifact、错误信息。 |
 | Build Workspace | 触发 builder，查看 PSOP Skill draft、evidence map、missing questions。 |
 | Test Feedback | 查看 tester 生成的测试、执行结果和覆盖度。 |
 | Audit Reports | 查看质量归因。 |
@@ -795,14 +815,13 @@ Eval proposal
 范围：
 
 - `backend/app/agent_harness/` 基础模块。
-- DeepAgents-based `AgentHarnessRunner`。
-- `PsopGatewayChatModel`。
+- LangChain `create_agent` based `AgentHarnessRunner`。
+- LangChain model factory。
 - AgentDefinition YAML loader。
 - AgentRun / AgentEvent / AgentArtifact 持久化。
 - Agent Skills loader。
-- workspace file tools。
-- shell tool。
-- MCP adapter MVP。
+- sandbox file tools。
+- MCP adapter skeleton。
 - `psop-builder` MVP。
 - `psop-compiler` MVP。
 - `psop-tester` MVP。
@@ -827,7 +846,7 @@ raw material summary + standard snippets
 - audit report schema。
 - `psop-eval` MVP。
 - improvement proposal schema。
-- workspace patch draft。
+- sandbox patch draft。
 - 测试运行能力。
 
 验收链路：
@@ -864,7 +883,7 @@ run replay/test report
 
 1. 新增 Agent Harness 基础模块。
 2. 接入 AgentRun / AgentEvent / AgentArtifact。
-3. 新增 workspace、shell、MCP adapter MVP。
+3. 新增 sandbox file tools 与 MCP adapter skeleton。
 4. 迁移 compiler 到 `psop-compiler` agent，保留 formal-v5 validator 和现有 artifact 写入。
 5. 实现 builder。
 6. 实现 tester，并调用现有 RuntimeService 执行测试。
@@ -880,7 +899,7 @@ run replay/test report
 - 生产级 MCP security scanner。
 - 自动 merge / deploy。
 - 大规模 subagent 自治协作。
-- 用 DeepAgents 替换 RuntimeService。
+- 用 Agent Harness 替换 RuntimeService。
 - 将 Agent Skill 与 PSOP Skill 合并为同一对象。
 
 ## 18. 架构结论
