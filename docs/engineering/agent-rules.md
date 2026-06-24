@@ -14,7 +14,7 @@
 - `Session Token` 是唯一正式状态对象，禁止引入并行“第二状态源”。
 - `Runtime Kernel` 是唯一正式状态提交边界；agent、tool、worker、sandbox 都不是状态主权者。
 - `MCP Gateway` 负责受控接入 MCP server/tool；禁止在业务代码中直接把 reference server 当平台内核。
-- `LLM Inference Gateway` 负责 provider 抽象、路由、回退、配额与结构化输出；禁止节点实现直连具体模型厂商。
+- LLM 调用必须经过平台认可的受治理入口。既有 Runtime/Domain 服务可继续使用 `LlmInferenceGateway`；Agent Harness 使用 `backend/app/agent_harness/models/` 中的 model factory。禁止业务节点自行直连具体模型厂商。
 - `Capability Host` 负责把 harness 的能力建议变成正式执行绑定；禁止绕过策略裁决直接执行高风险能力。
 
 ## 3. 模块与目录规则

@@ -112,9 +112,11 @@ PSOP 的运行、测试、审计和演进必须基于持久化事实。
 
 已发生事实不得就地改写，只能通过追加事件、追加诊断或生成新版本表达新的结论。
 
-### 5.5 LLM 调用必须经过平台网关
+### 5.5 LLM 调用必须经过受治理入口
 
-生产链路中的模型调用必须经过 `LlmInferenceGateway` 或其受控适配器。Agent Harness 不应绕过平台模型配置、日志、usage、trace 和 redaction 机制直接调用外部模型。
+生产链路中的模型调用必须经过平台认可的受治理入口，避免业务代码分散直连具体模型厂商。
+
+当前实现中，既有 Runtime、Compiler、素材分析等域服务仍可继续使用 `LlmInferenceGateway`；Agent Harness 使用 `backend/app/agent_harness/models/` 中的 model factory 构造 LangChain `BaseChatModel`。因此 `LlmInferenceGateway` 不再是唯一的大模型调用入口。
 
 ## 6. 北极星闭环
 
