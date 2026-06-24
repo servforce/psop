@@ -256,7 +256,7 @@ flowchart TB
 
     subgraph Harness[Agent Harness]
         Def[AgentDefinition]
-        AgentRunner[AgentHarnessRunner]
+        AgentService[AgentHarnessService]
         AgentSkills[Agent Skills]
         ToolRegistry[Tool Registry]
         Workspace[Workspace / Shell]
@@ -360,7 +360,7 @@ psop-eval
 顶层只暴露一个：
 
 ```text
-AgentHarnessRunner
+AgentHarnessService
 ```
 
 内部策略：
@@ -375,16 +375,17 @@ AgentHarnessRunner
 
 ```text
 backend/app/agent_harness/
-  definitions.py
-  context.py
-  runner.py
-  factory.py
   schemas.py
+  service.py
   events.py
+  errors.py
+
+  runners/
+    langchain_agent_executor.py
 
   models/
     factory.py
-    model_router.py
+    scripted_chat_model.py
 
   middlewares/
     dangling_tool_call.py
@@ -424,6 +425,9 @@ backend/app/agent_harness/
     service.py
 
   agents/
+    context.py
+    factory.py
+    registry.py
     builder/agent.py
     builder/prompt.py
     builder/agent.yaml
@@ -474,7 +478,7 @@ input_schema_ref: psop-builder.input.v1
 output_schema_ref: psop-builder.output.v1
 ```
 
-### 7.4 AgentHarnessRunner
+### 7.4 AgentHarnessService
 
 调用流程：
 
@@ -482,9 +486,10 @@ output_schema_ref: psop-builder.output.v1
 resolve AgentDefinition
 create AgentRun
 prepare sandbox
-load Agent Skills
-resolve tools and MCP tools
-create DeepAgent
+load Agent Skill metadata
+call agent factory
+resolve tools, middleware, model and prompt
+create LangChain agent
 invoke agent
 record AgentEvents
 persist AgentArtifacts
@@ -815,7 +820,7 @@ Eval proposal
 范围：
 
 - `backend/app/agent_harness/` 基础模块。
-- LangChain `create_agent` based `AgentHarnessRunner`。
+- LangChain `create_agent` based agent factory and executor。
 - LangChain model factory。
 - AgentDefinition YAML loader。
 - AgentRun / AgentEvent / AgentArtifact 持久化。

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import traceback
-from typing import Any
 
-from app.agent_harness.context import AgentBuildContext
-from app.agent_harness.definitions import FileAgentDefinitionRegistry, default_agent_registry
+from app.agent_harness.agents.context import AgentBuildContext
+from app.agent_harness.agents.registry import FileAgentDefinitionRegistry, default_agent_registry
 from app.agent_harness.events import AgentEventWriter
 from app.agent_harness.memory.file_store import FileMemoryStore
 from app.agent_harness.models.factory import ChatModelFactory
@@ -24,13 +23,11 @@ class AgentHarnessService:
         registry: FileAgentDefinitionRegistry | None = None,
         sandbox_provider: AgentSandboxProvider | None = None,
         chat_model_factory: ChatModelFactory | None = None,
-        inference_gateway: Any | None = None,
     ) -> None:
         self.settings = settings
         self.registry = registry or default_agent_registry(settings.backend_root)
         self.sandbox_provider = sandbox_provider or build_sandbox_provider(settings)
         self.chat_model_factory = chat_model_factory
-        self.inference_gateway = inference_gateway
 
     def invoke(self, invocation: AgentInvocation) -> AgentResult:
         if not self.settings.agent_harness_enabled:
@@ -107,8 +104,5 @@ class AgentHarnessService:
             self.sandbox_provider.release(sandbox.sandbox_id)
 
 
-def build_agent_harness_service(
-    settings: Settings,
-    inference_gateway: Any | None = None,
-) -> AgentHarnessService:
-    return AgentHarnessService(settings=settings, inference_gateway=inference_gateway)
+def build_agent_harness_service(settings: Settings) -> AgentHarnessService:
+    return AgentHarnessService(settings=settings)

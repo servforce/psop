@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent_harness.definitions import FileAgentDefinitionRegistry, default_agent_registry
+from app.agent_harness.agents.registry import FileAgentDefinitionRegistry, default_agent_registry
 from app.core.config import Settings
 
 

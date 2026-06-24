@@ -2,13 +2,11 @@ agent_key: demo.psop_harness_agent
 version: v1
 runner_kind: langchain_agent
 factory: make_demo_agent
-route_key: text
 description: Demo agent for validating PSOP agent harness tools, skills, memory, sandbox, and middleware.
 model:
   name: default
   thinking_enabled: false
 system_prompt_file: system.md
-memory_file: AGENTS.md
 skills:
   - demo_psop_checklist
 tools:

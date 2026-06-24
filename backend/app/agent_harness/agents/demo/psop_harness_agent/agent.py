@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from app.agent_harness.agents.demo.psop_harness_agent.prompt import apply_prompt_template
-from app.agent_harness.context import AgentBuildContext
-from app.agent_harness.factory import create_psop_agent
+from app.agent_harness.agents.context import AgentBuildContext
+from app.agent_harness.agents.factory import create_psop_agent
 from app.agent_harness.middlewares import build_middlewares
 from app.agent_harness.tools.builtin import register_builtin_tools
 from app.agent_harness.tools.framework import LOAD_SKILL_TOOL_NAME, register_framework_tools

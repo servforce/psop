@@ -24,6 +24,8 @@ class AgentPackage:
         return self._read_optional_text(self.definition.system_prompt_file)
 
     def read_memory_prompt(self) -> str:
+        if not self.definition.memory_file:
+            return ""
         return self._read_optional_text(self.definition.memory_file)
 
     def load_factory(self) -> Callable[..., Any]:

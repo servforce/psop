@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from app.agent_harness.agents.demo.psop_harness_agent.agent import make_demo_agent
-from app.agent_harness.context import AgentBuildContext
-from app.agent_harness.definitions import default_agent_registry
+from app.agent_harness.agents.context import AgentBuildContext
+from app.agent_harness.agents.registry import default_agent_registry
 from app.agent_harness.events import AgentEventWriter
-from app.agent_harness.factory import create_psop_agent
+from app.agent_harness.agents.factory import create_psop_agent
 from app.agent_harness.memory.file_store import FileMemoryStore
 from app.agent_harness.models.scripted_chat_model import ScriptedToolCallingChatModel
 from app.agent_harness.sandbox.local import LocalAgentSandboxProvider

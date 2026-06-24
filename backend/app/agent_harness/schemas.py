@@ -36,11 +36,10 @@ class AgentDefinition(BaseModel):
     version: str = "v1"
     runner_kind: str = Field(default="langchain_agent", validation_alias=AliasChoices("runner_kind", "runner"))
     factory: str = "make_agent"
-    route_key: str = "text"
     description: str = ""
     model: AgentModelRef | None = None
     system_prompt_file: str = "system.md"
-    memory_file: str = "AGENTS.md"
+    memory_file: str | None = None
     skills: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
     memory_scope: str | None = None
