@@ -23,11 +23,11 @@ It does not call a hidden `codex.generate_wireframe(...)` function. Instead, it 
 ## Usage
 
 ```powershell
-python ./tools/image-wireframe/scripts/generate_wireframe.py `
-  --input ./png/png1.png `
-  --output ./derived/png1.codex-wireframe.png `
-  --workdir . `
-  --overwrite `
+python ./tools/image-wireframe/scripts/generate_wireframe.py \
+  --input ./png/png1.png \
+  --output ./derived/png1.codex-wireframe.png \
+  --workdir . \
+  --overwrite \
   --codex-arg=--sandbox=workspace-write
 ```
 
