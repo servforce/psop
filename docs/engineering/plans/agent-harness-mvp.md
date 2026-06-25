@@ -1,8 +1,30 @@
-# Agent Harness MVP 实施计划
+# Agent Harness MVP 实施计划（已完成）
 
 本文是阶段性实施计划，不是长期架构事实源。Agent Harness 的系统边界和长期架构以 [系统架构设计](../../architecture/system-architecture.md) 为准。
 
-下面是基于 `issue-1-psop-mvp` 当前代码现状制定的 **Agent Harness MVP 实施计划**。这个计划的目标不是一次性完成完整多智能体治理平台，而是先在现有代码上建立一个可运行、可测试、可扩展的 `agent_harness` 底座，并通过一个 demo 智能体验收：**Python 脚本可调用，运行过程中包含 skill 激活、tool 调用、memory 读写，并产出可审计的 agent events。**
+本文记录 `issue-1-psop-mvp` 分支上的 **Agent Harness MVP 实施计划与完成状态**。这个计划的目标不是一次性完成完整多智能体治理平台，而是先在现有代码上建立一个可运行、可测试、可扩展的 `agent_harness` 底座，并通过一个 demo 智能体验收：**Python 脚本可调用，运行过程中包含 skill 激活、tool 调用、memory 读写，并产出可审计的 agent events。**
+
+## 状态
+
+```text
+状态：已完成
+完成日期：2026-06-25
+完成范围：Agent Harness MVP demo 底座
+验收方式：
+  - PYTHONPATH=backend backend/.venv/bin/python -m pytest -q
+  - PYTHONPATH=backend backend/.venv/bin/python tests/run_agent_demo.py --input "进入泵房前检查 PPE，确认阀门关闭，记录压力表读数。"
+```
+
+当前已完成：
+
+```text
+1. backend/app/agent_harness/ 已包含 agents、models、middlewares、sandbox、tools、skills、memory、runners、service、schemas、events 等基础组件。
+2. demo.psop_harness_agent 已可通过 tests/run_agent_demo.py 运行。
+3. demo 运行链路已覆盖 load_skill、demo_extract_check_items、demo_score_checklist、memory_put、write_demo_report。
+4. demo 运行会生成 AgentResult、events.jsonl、memory.json、workspace/result.md。
+5. pytest 中存在不依赖真实 LLM 的 scripted model 端到端测试。
+6. RuntimeService、CompilerService、SkillTestService 等既有主流程未迁移，状态主权仍保持不变。
+```
 
 ---
 
@@ -10,18 +32,18 @@
 
 当前 PSOP 后端已经是 Python 3.11+；Agent Harness 依赖 LangChain、LangGraph 和 LangChain OpenAI-compatible provider，`pyproject.toml` 还包含 FastAPI、SQLAlchemy、Pydantic Settings、PyYAML、对象存储、多模态处理等依赖。
 
-现有 README 已经把 `backend/app/agent_harness/` 标为目标模块，但代码中尚未实现该模块；当前 MVP 主链路仍是 `Skills -> Publish -> Auto Compile -> Invocation -> Runtime -> Replay / Observability`。
+`backend/app/agent_harness/` 模块已经实现 MVP demo 底座。当前 PSOP 主链路仍是 `Skills -> Publish -> Auto Compile -> Invocation -> Runtime -> Replay / Observability`；Agent Harness MVP 没有替换既有 Runtime/Compiler/SkillTest 主流程。
 
 现有编译智能体 `SkillCompileAgent` 的实现方式仍是 Prompt Pack + Domain Pack + JSON payload 组装，然后直接调用 `LlmInferenceGateway.complete()`，再解析模型返回 JSON。 当前 runtime 的 LLM 节点也是直接渲染 prompt 后调用 `complete()` 或 `complete_multimodal()`；tool 节点目前只支持内置 demo tool。
 
 Agent Harness 的 LLM 层参考 deer-flow：通过 LangChain model factory 直接构造 `BaseChatModel`，再交给 LangChain `create_agent`。`LlmInferenceGateway` 仍可服务 Runtime、Compiler、素材分析等既有链路，但不再是 Harness 的强制出口。
 
-所以本计划的核心策略是：
+本计划已按以下核心策略完成：
 
 ```text
 不要先改造 psop-runner runtime。
 不要先做完整 builder/compiler/tester/audit/eval。
-先新增 agent_harness 底座，并用 demo agent 证明：
+已新增 agent_harness 底座，并用 demo agent 证明：
   1. LangChain `create_agent` 能接入；
   2. LangChain model factory 能创建真实 ChatModel；
   3. tool / skill / memory / event 机制能跑通；
@@ -817,7 +839,7 @@ job_type = "agent_run"
 
 # 十、最终验收标准
 
-本计划完成后，应满足以下验收条件：
+本计划当前已满足以下验收条件：
 
 ```text
 1. backend/app/agent_harness/ 模块存在，并包含 tools、skills、memory、runner、model factory、sandbox、middlewares 基础组件。
@@ -838,7 +860,7 @@ job_type = "agent_run"
 
 # 十一、后续演进路径
 
-完成 demo harness 后，再进入第二阶段：
+Demo harness 已完成，后续进入第二阶段：
 
 ```text
 1. psop-builder 接入 AgentHarnessService
@@ -850,7 +872,7 @@ job_type = "agent_run"
 7. agent events 投影到 PSOP observability/replay
 ```
 
-这个顺序可以保证第一步就有一个可运行的智能体底座，同时不会破坏当前 PSOP 最重要的 runtime/publish/compile 主链路。
+这个顺序可以在已完成的 demo 底座上逐步迁移真实业务智能体，同时继续避免破坏当前 PSOP 最重要的 runtime/publish/compile 主链路。
 
 [1]: https://docs.langchain.com/oss/python/langchain/agents "Agents - Docs by LangChain"
 [2]: https://docs.langchain.com/oss/python/langgraph/overview "LangGraph overview - Docs by LangChain"
