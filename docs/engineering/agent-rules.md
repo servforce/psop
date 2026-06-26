@@ -40,7 +40,7 @@
 ## 6. 前端与交互规则
 
 - `Skill Studio`、`Publish & Diagnostics`、`Runtime Monitor`、`Replay`、`Observability`、`Gateway Console` 是产品规划中的控制台能力面；当前静态控制台入口以 `Skills`、`智能体`、`任务` 和 deep link 页面为准。
-- UI 实现优先复用 `skills/static-ui/` 中的组织方式、构建方式与样式约束。
+- UI 实现优先复用 `.agents/skills/static-ui/` 中的组织方式、构建方式与样式约束。
 - 关键页面必须能追溯到 `skill / skill_version / compile_artifact / invocation / run / trace`。
 
 ## 7. 可观测与审计规则
