@@ -1,6 +1,6 @@
 ---
 name: job-system-design
-description: "Use when designing or implementing database-backed job systems, worker pools, schedulers, leases, retries, recovery, and background execution topology for PSOP."
+description: "用于为 PSOP 设计或实现基于数据库的后台任务系统、worker 池、调度器、租约、重试、恢复和后台执行拓扑。"
 allowed-tools: []
 ---
 

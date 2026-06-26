@@ -1,6 +1,6 @@
 ---
 name: python-web-refactor
-description: "Use when refactoring FastAPI and SQLAlchemy based backend code in PSOP, especially for package boundaries, domain layering, router/service/repository separation, and long-term maintainability."
+description: "用于重构 PSOP 中基于 FastAPI 和 SQLAlchemy 的后端代码，尤其适用于包边界、领域分层、router/service/repository 分离和长期可维护性。"
 allowed-tools: []
 ---
 
