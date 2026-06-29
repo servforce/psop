@@ -450,32 +450,35 @@ Agent Skill 源统一放在仓库根目录 `skills/`。`backend/app/agent_harnes
 ### 7.3 AgentDefinition
 
 ```yaml
-agent_key: psop-builder
+agent_key: psop.builder
 version: v1
 runner_kind: langchain_agent
 factory: make_builder_agent
 profile: dev_open
-purpose: Build PSOP Skill drafts from raw materials and standards.
+purpose: Build PSOP Skill draft candidates from raw materials and standards.
 model:
   name: default
   thinking_enabled: false
 skills:
-  - builder/core/v1
-  - builder/evidence_mapping/v1
+  - psop-builder-core
+  - psop-builder-evidence-mapping
+  - psop-builder-quality-review
 tools:
-  - workspace.read_file
-  - workspace.write_file
-  - psop.raw_material.read
+  - workspace.read_text
+  - workspace.write_text
+  - workspace.list
+  - psop.builder.read_current_source
+  - psop.builder.list_materials
+  - psop.builder.read_material_analysis
+  - psop.builder.list_reference_assets
   - psop.standard.search
-  - psop.skill.write_draft
+  - psop.builder.submit_candidate
 mcp:
-  enabled: true
+  enabled: false
   servers: []
-memory:
-  read_scopes: []
-  write_scopes: []
-input_schema_ref: psop-builder.input.v1
-output_schema_ref: psop-builder.output.v1
+memory_scope: psop.builder
+input_schema_ref: psop.builder.input.v1
+output_schema_ref: psop.builder.output.v1
 ```
 
 ### 7.4 AgentHarnessService
@@ -558,7 +561,7 @@ Agent Skill 与 PSOP Skill 是不同对象。
 
 | 智能体 | runner_kind | 输入 | 输出 | 首版工具 |
 | --- | --- | --- | --- | --- |
-| `psop-builder` | `langchain_agent` | raw material、keyframes、transcript、standards、user goal | PSOP Skill draft、evidence map、missing questions、safety constraints | raw_material、standard、skill draft、workspace、MCP skeleton |
+| `psop-builder` | `langchain_agent` | raw material、keyframes、transcript、LightRAG standards、user goal | PSOP Skill draft candidate、evidence map、standard usage、missing questions、safety constraints | raw_material read、reference assets read、standard search、builder candidate、workspace |
 | `psop-compiler` | `langchain_agent` | PSOP Skill、manifest、domain pack、allowed runtime | PSOP-EG、compile diagnostics、summary | skill read、formal-v5 validate、artifact write、workspace |
 | `psop-tester` | `langchain_agent` | PSOP Skill、PSOP-EG、world model | test suite、scenario runs、coverage、feedback | test scenario、runtime invocation、terminal event、replay、judge |
 | `psop-runner` | `psop_runtime` | invocation、PSOP-EG、terminal events | Run Package、Replay、final output | RuntimeService 内置 actor/tool |
