@@ -1,26 +1,14 @@
 # psop-builder 智能体详细设计
 
-本文是 `psop-builder` 的阶段性详细设计文档，不是长期架构事实源。Agent Harness 的系统边界、对象模型和长期迁移路径以 [系统架构设计](../../architecture/system-architecture.md) 为准。
+本文是 `psop-builder` 的详细设计文档，作为 PSOP Builder Agent 的架构事实源。Agent Harness 的系统边界、对象模型和通用运行约束以 [系统架构设计](system-architecture.md) 为准。
 
-本文目标是把现有 `skill_creation.conversational_draft` 能力迁移为受 Agent Harness 治理的 `psop.builder` 智能体，用于根据用户输入、当前 Skill source、素材解析结果和候选参考资产生成可人工审阅的 PSOP Skill draft。
-
-## 状态
-
-```text
-状态：设计草案
-目标范围：psop-builder MVP
-建议实现顺序：Agent Harness MVP 之后，psop-compiler / psop-tester 之前
-兼容入口：
-  - POST /api/v1/skills/{skill_id}/raw-materials/generate-skill-draft
-  - job_type = skill_raw_material_generation
-  - SkillRawMaterialGenerationResponse
-```
+`psop-builder` 的系统键为 `psop.builder`。它替代旧的 `skill_creation.conversational_draft` 能力，由 Agent Harness 治理，根据用户输入、当前 Skill source、素材解析结果、候选参考资产和行业标准参考，生成可人工审阅并可由平台提交的 PSOP Skill draft candidate。
 
 ## 一、核心纲领：语义化定义与工作流程
 
 ### 1. 基本定位
 
-`psop-builder` 是 PSOP Skill 构建智能体。它面向的不是一次性文本生成任务，而是“把现实世界作业知识构建为可编译、可审阅、可运行的 PSOP Skill draft”的系统能力。它处在 PSOP 主链路的最前端，承接用户目标、素材解析结果、现场证据、行业标准和已有 Skill source，输出供人类审阅和后续 compiler 消费的 Skill 源码草稿。
+`psop-builder` 是 PSOP Skill 构建智能体。它面向的不是一次性文本生成任务，而是“把现实世界作业知识构建为可编译、可审阅、可运行的 PSOP Skill draft”的系统能力。它处在 PSOP 主链路的最前端，承接用户目标、素材解析结果、现场证据、行业标准和已有 Skill source，输出供人类审阅和 compiler 消费的 Skill 源码草稿。
 
 ### 2. 系统语义边界
 
@@ -61,7 +49,7 @@ psop-builder =
 - `safety_constraints`，把安全要求绑定到具体阶段、动作、停止条件或恢复路径。
 - `selected_reference_assets`，选择真正支持运行时协作的参考帧，并保证文档引用一致。
 - `industry_standard_usage`，说明检索到哪些行业标准、哪些条款被采纳、采纳到哪个步骤或安全约束中。
-- `material_usage` 和 `review_notes`，为审阅、回放和后续改进保留可追溯说明。
+- `material_usage` 和 `review_notes`，为审阅、回放和持续改进保留可追溯说明。
 
 ### 6. 标准工作流程
 
@@ -103,9 +91,9 @@ psop-builder =
    - 校验通过后，平台复制参考资产并提交 GitLab draft。
    - 平台更新 draft version snapshot、generation 记录和 job 状态。
 
-8. 审阅与后续链路
+8. 审阅与编译链路
    - 人类在 Web IDE 审阅 Skill draft。
-   - 后续由 `psop-compiler` 消费 PSOP Skill source，生成 formal-v5 PSOP-EG。
+   - `psop-compiler` 消费 PSOP Skill source，生成 formal-v5 PSOP-EG。
 ```
 
 ### 7. 实现约束
@@ -114,7 +102,7 @@ psop-builder =
 
 ## 二、设计边界
 
-`psop-builder` 首版应保持单智能体实现，不引入 subagents 或独立 workflow orchestration。它的职责是构建 PSOP Skill draft candidate，不负责发布、不负责编译、不替代 Runtime，也不直接提交 GitLab。
+`psop-builder` 保持单智能体实现，不引入 subagents 或独立 workflow orchestration。它的职责是构建 PSOP Skill draft candidate，不负责发布、不负责编译、不替代 Runtime，也不直接提交 GitLab。
 
 核心边界：
 
@@ -133,7 +121,7 @@ Harness / 应用代码负责：
   - 更新 SkillRawMaterialGeneration、RuntimeJob 和 draft version snapshot。
 ```
 
-迁移后的主链路：
+系统主链路：
 
 ```text
 Skill generation job
@@ -149,9 +137,9 @@ Skill generation job
 
 ## 三、AgentDefinition
 
-当前 `FileAgentDefinitionRegistry` 要求 agent key 至少包含一个命名空间段，因此实现层建议使用 `psop.builder`，产品和文档中可继续称为 `psop-builder`。
+`FileAgentDefinitionRegistry` 要求 agent key 至少包含一个命名空间段，因此实现层使用 `psop.builder`，产品和文档中可继续称为 `psop-builder`。
 
-建议目录：
+标准目录：
 
 ```text
 backend/app/agent_harness/agents/psop/builder/
@@ -161,7 +149,7 @@ backend/app/agent_harness/agents/psop/builder/
   system.md
 ```
 
-建议定义：
+标准定义：
 
 ```yaml
 agent_key: psop.builder
@@ -190,7 +178,7 @@ tools:
 memory_scope: psop.builder
 ```
 
-不建议直接复用现有 `skills/skill-creator` 作为 builder 核心 Skill。它面向 Codex 多轮创建通用 Agent Skill，并会生成 `skill.yaml`；而 PSOP builder 的旧链路明确禁止模型生成 `skill.yaml`，由平台从 README/SKILL 重建 manifest。可以借鉴其目录完整性和审阅草稿思路，但应新增 PSOP 专用 Agent Skills。
+不得直接复用现有 `skills/skill-creator` 作为 builder 核心 Skill。它面向 Codex 多轮创建通用 Agent Skill，并会生成 `skill.yaml`；而 PSOP builder 禁止模型生成 `skill.yaml`，由平台从 README/SKILL 重建 manifest。可以借鉴其目录完整性和审阅草稿思路，但必须使用 PSOP 专用 Agent Skills。
 
 ## 四、输入与输出契约
 
@@ -198,7 +186,7 @@ memory_scope: psop.builder
 
 `SkillsService` 负责准备 builder 输入，避免模型直接读取数据库或 GitLab。`AgentInvocation.input.text` 放任务摘要和输出要求，完整上下文放入 `AgentInvocation.context`，由工具按需读取。
 
-建议结构：
+输入结构：
 
 ```json
 {
@@ -340,11 +328,11 @@ prompt_metadata.reference_files <- resolved selected reference files
 committed_commit_sha <- GitLab draft commit sha
 ```
 
-扩展字段先放入 `raw_response.parsed` 或 `prompt_metadata.builder_artifacts`，后续再决定是否进入正式 API schema。
+扩展字段放入 `raw_response.parsed` 或 `prompt_metadata.builder_artifacts`。正式 API schema 是否提升这些字段，由 API 设计文档另行约束。
 
 ## 五、核心循环
 
-首版复用现有 `AgentHarnessService` 和 LangChain `create_agent`：
+`psop-builder` 复用 `AgentHarnessService` 和 LangChain `create_agent`：
 
 ```text
 1. SkillsService 创建 SkillRawMaterialGeneration 和 runtime_job。
@@ -371,7 +359,7 @@ committed_commit_sha <- GitLab draft commit sha
 
 ## 六、工具与权限
 
-首版工具必须窄化，不开放 shell/bash，不开放 open-world web search，不允许模型直接提交 GitLab。
+工具必须窄化，不开放 shell/bash，不开放 open-world web search，不允许模型直接提交 GitLab。
 
 ### 1. Tool Registry 设计原则
 
@@ -395,7 +383,7 @@ audit_event
 error_types
 ```
 
-当前代码里的 `ToolSpec` 只包含 `name`、`description`、`input_schema`、`output_schema` 和 `source`。因此首版实现可以先把 `risk_class`、`resource_scope`、`timeout_seconds`、`max_result_chars` 等作为 handler 旁路元数据或注册表扩展字段落地，但不能只写在 prompt 中。
+当前代码里的 `ToolSpec` 只包含 `name`、`description`、`input_schema`、`output_schema` 和 `source`。实现必须把 `risk_class`、`resource_scope`、`timeout_seconds`、`max_result_chars` 等作为 handler 旁路元数据或注册表扩展字段落地，不能只写在 prompt 中。
 
 所有工具 schema 必须使用严格 JSON Schema：必填字段显式声明，`additionalProperties=false`，枚举值用 `enum`，文件路径、material id、asset id 等字段使用 typed string，不接受自由文本指令替代结构化参数。
 
@@ -622,9 +610,9 @@ truncated
 
 ### 5. LightRAG 行业标准工具
 
-`psop.standard.search` 是 builder 访问行业标准的唯一首版入口。它由 Agent Harness tool handler 调用平台配置的 LightRAG HTTP 服务，模型不能直接访问 LightRAG URL、token 或底层 HTTP 客户端。
+`psop.standard.search` 是 builder 访问行业标准的唯一入口。它由 Agent Harness tool handler 调用平台配置的 LightRAG HTTP 服务，模型不能直接访问 LightRAG URL、token 或底层 HTTP 客户端。
 
-建议输入 schema：
+输入 schema：
 
 ```json
 {
@@ -646,7 +634,7 @@ truncated
 }
 ```
 
-建议输出 schema：
+输出 schema：
 
 ```json
 {
@@ -795,7 +783,7 @@ handler 必须执行以下校验：
 }
 ```
 
-`submit_candidate` 的成功不表示 draft 已发布，只表示 builder candidate 通过第一层结构校验。后续仍必须由 `SkillsService` 做 reference asset resolution、source conflict check、兼容解析和 GitLab draft commit。
+`submit_candidate` 的成功不表示 draft 已发布，只表示 builder candidate 通过第一层结构校验。仍必须由 `SkillsService` 做 reference asset resolution、source conflict check、兼容解析和 GitLab draft commit。
 
 ## 七、Agent Skills
 
@@ -803,7 +791,7 @@ handler 必须执行以下校验：
 
 PSOP builder 的 Agent Skills 用于承载可复用的构建方法，不用于授予额外权限。`system.md` 只保留稳定身份、工具协议、输出要求和信任边界；具体工作方法通过 `load_skill` 渐进加载，避免把全部规则塞入 system prompt。
 
-首版新增三个 Markdown-only Agent Skills：
+`psop-builder` 定义三个 Markdown-only Agent Skills：
 
 ```text
 skills/psop-builder-core/SKILL.md
@@ -819,11 +807,11 @@ skills/psop-builder-quality-review/SKILL.md
 visible business tools = AgentDefinition.tools ∩ union(all declared skills.allowed-tools)
 ```
 
-如果某个 Skill 在 `allowed-tools` 中声明了 AgentDefinition 未授权的工具，factory 必须失败；如果三个 Skill 的 `allowed-tools` 并集漏掉必要工具，builder 不应通过验收。
+如果某个 Skill 在 `allowed-tools` 中声明了 AgentDefinition 未授权的工具，factory 必须失败；如果三个 Skill 的 `allowed-tools` 并集漏掉必要工具，则 `psop.builder` 定义无效。
 
 ### 2. `psop-builder-core`
 
-建议 frontmatter：
+frontmatter：
 
 ```yaml
 ---
@@ -870,7 +858,7 @@ allowed-tools:
 
 ### 3. `psop-builder-evidence-mapping`
 
-建议 frontmatter：
+frontmatter：
 
 ```yaml
 ---
@@ -915,7 +903,7 @@ allowed-tools:
 - 如果标准片段只是背景知识，不应写成强制操作步骤。
 - 如果标准和素材存在冲突，builder 不得自行裁决，必须进入 `missing_questions` 或 `review_notes`。
 
-建议中间产物：
+中间产物：
 
 ```text
 workspace/evidence-map-draft.md
@@ -927,7 +915,7 @@ workspace/standard-usage-draft.md
 
 ### 4. `psop-builder-quality-review`
 
-建议 frontmatter：
+frontmatter：
 
 ```yaml
 ---
@@ -972,15 +960,15 @@ allowed-tools:
 - 把素材中不确定或被遮挡的动作写成确定事实。
 - 产物中出现“待补充”“TODO”“根据实际情况”等未审阅占位内容。
 
-### 5. Skill 验收要求
+### 5. Skill 加载与治理要求
 
-新增 builder Agent Skills 后，至少需要以下验证：
+builder Agent Skills 必须满足以下治理要求：
 
 - `SkillLoader.load_metadata()` 能读取三个 Skill 的 `name`、`description`、`allowed-tools`。
 - `filter_tools_by_skill_allowed_tools()` 对三个 Skill 的 allowed-tools 并集不会报未授权工具。
 - `psop.builder` 启动后的 tool list 包含 `load_skill` 和 AgentDefinition 中的九个业务工具。
-- scripted model 或 fake model 的端到端测试能看到三次 `agent.skill.loaded` 事件。
-- 未调用 `load_skill` 就直接提交 candidate 的 scripted 流程应被测试覆盖并视为不合格。
+- builder run 必须记录三个 `agent.skill.loaded` 事件。
+- 未调用 `load_skill` 就直接提交 candidate 的流程不符合 builder 运行契约。
 - Skill 描述触发范围必须足够窄，不应在 compiler、tester、audit 或通用聊天任务中误触发。
 
 ## 八、校验与提交
@@ -1039,7 +1027,7 @@ allowed-tools:
 
 不要把 request id、job id、时间戳、sandbox path 等易变字段放入稳定 prompt 前部。token usage、cached tokens、model/provider、tool count、validation failures 应进入 AgentEvent 或 job metrics。
 
-首版不需要实现长期语义记忆。`memory_scope=psop.builder` 只用于记录轻量过程偏好或历史失败摘要；不能把 memory 当作正式 Skill 事实源。
+`memory_scope=psop.builder` 只用于记录轻量过程偏好或历史失败摘要；不能把 memory 当作正式 Skill 事实源。
 
 LightRAG 检索结果属于动态上下文，必须后置于稳定 prompt 和 Agent Skill 元信息。工具结果进入模型上下文前应裁剪为短片段和 source refs；完整响应可作为 artifact 或工具事件摘要保存。
 
@@ -1062,7 +1050,7 @@ agent.run.completed
 agent.run.failed
 ```
 
-平台校验和 GitLab draft commit 也必须进入同一条可审计链路。建议事件类型：
+平台校验和 GitLab draft commit 也必须进入同一条可审计链路。事件类型：
 
 ```text
 agent.validation.started
@@ -1107,7 +1095,7 @@ LightRAG 标准检索工具事件至少记录：
 
 ### AgentRun / AgentEvent / AgentArtifact 持久化策略
 
-`psop-builder` MVP 必须把 Agent Harness 运行元数据持久化到系统事实链中，不能只依赖 sandbox 文件。文件系统仍可保存大 payload，但数据库记录是查询、审计和前端 timeline 的入口。
+`psop-builder` 必须把 Agent Harness 运行元数据持久化到系统事实链中，不能只依赖 sandbox 文件。文件系统仍可保存大 payload，但数据库记录是查询、审计和 timeline 的入口。
 
 最低持久化要求：
 
@@ -1124,12 +1112,7 @@ LightRAG 标准检索工具事件至少记录：
 - `agent_event.payload` 只记录摘要、ID、hash 和安全字段，不保存隐藏推理或大段素材原文。
 - `SkillRawMaterialGeneration.prompt_metadata.agent_run_id` 必须指向对应 `agent_run.id`。
 
-如果首个实现 PR 暂时无法引入完整表结构，必须在设计实现说明中明确“临时 filesystem-only 模式”，并满足两个降级条件：
-
-- `SkillRawMaterialGeneration.prompt_metadata` 必须记录 `agent_run_id`、`events_path`、`builder_artifact_path` 和 content hash。
-- 后续迁移到数据库持久化时，sandbox run 目录必须可回填为 `agent_run`、`agent_event`、`agent_artifact`。
-
-`SkillRawMaterialGeneration.prompt_metadata` 建议记录：
+`SkillRawMaterialGeneration.prompt_metadata` 记录：
 
 ```json
 {
@@ -1149,7 +1132,7 @@ LightRAG 标准检索工具事件至少记录：
 }
 ```
 
-`raw_response` 建议记录：
+`raw_response` 记录：
 
 ```json
 {
@@ -1167,128 +1150,3 @@ LightRAG 标准检索工具事件至少记录：
 ```
 
 不要记录隐藏推理内容；只记录 operational events、tool args 摘要、工具结果摘要、校验结果、错误类型和产物引用。
-
-## 十一、API 与前端兼容
-
-首版不要求新增前端页面。现有 Skill 详情页“基于素材生成源码草稿”继续调用：
-
-```text
-POST /api/v1/skills/{skill_id}/raw-materials/generate-skill-draft
-```
-
-返回仍为 `SkillRawMaterialGenerationResponse`。当 job 异步执行时，现有任务页继续通过：
-
-```text
-job_type = skill_raw_material_generation
-```
-
-追踪状态。
-
-后续 Agent Run 页面落地后，可在生成结果中增加 `agent_run_id` deep link，用于查看 builder timeline、sandbox artifact、events 和 validation report。
-
-## 十二、最小实施路径
-
-### Step 1：补齐 Harness 输入与 artifact 能力
-
-- 扩展 `LangChainAgentExecutor`，支持结构化 `AgentInvocation.input` 渲染，不只读取 `input.text`。
-- 泛化 artifact 收集，从 `outputs/` 收集 `builder-result.json`，不再只收 demo 的 `workspace/result.md`。
-- 增加 `agent_run`、`agent_event`、`agent_artifact` 持久化入口；如果首个 PR 使用临时 filesystem-only 模式，必须记录可回填字段和 content hash。
-- 验证：现有 demo 测试仍通过，新增结构化输入单测。
-
-### Step 2：新增通用 workspace tools
-
-- 新增 `workspace.read_text`、`workspace.write_text`、`workspace.list`。
-- 复用 sandbox 虚拟路径和越界保护。
-- 验证：路径穿越、host 绝对路径、未授权虚拟根都失败。
-
-### Step 3：新增 builder 领域工具
-
-- 新增 `psop.builder.read_current_source`。
-- 新增 `psop.builder.list_materials`。
-- 新增 `psop.builder.read_material_analysis`。
-- 新增 `psop.builder.list_reference_assets`。
-- 新增 `psop.standard.search`，封装 LightRAG HTTP 服务。
-- 新增 `psop.builder.submit_candidate`。
-- 验证：builder 领域工具只读 invocation context，不能写数据库或 GitLab；`psop.standard.search` 只能访问配置的 LightRAG HTTP 服务；`submit_candidate` 必须校验 files、industry_standard_usage、evidence_map、missing_questions、safety_constraints、workflow_step_candidates 和 expected_evidence_requirements。
-
-### Step 4：新增 Agent Skills 与 agent package
-
-- 新增 `skills/psop-builder-core`。
-- 新增 `skills/psop-builder-evidence-mapping`。
-- 新增 `skills/psop-builder-quality-review`。
-- 新增 `backend/app/agent_harness/agents/psop/builder/`。
-- 验证：registry 能加载 `psop.builder`，agent factory 能创建 LangChain agent。
-
-### Step 5：替换旧 skill_creation 调用
-
-- 在 `SkillsService._run_skill_raw_material_generation()` 中调用 `AgentHarnessService.invoke()`。
-- 保留 `SkillRawMaterialGeneration`、`RuntimeJob` 和现有 API 响应。
-- 保留 `base_commit_sha` 冲突检查。
-- 复用 `parse_generated_skill_draft()`、`_resolve_selected_reference_assets()`、`_commit_generated_skill_files()`。
-- 在平台校验、source conflict 和 GitLab commit 前后写入审计事件。
-- 把 LightRAG 检索状态、标准引用摘要和工具失败信息写入 prompt_metadata / raw_response。
-
-### Step 6：补测试与回归
-
-- 编写 scripted model 的 builder e2e 测试。
-- 编写 candidate validation 单测。
-- 编写 `psop.standard.search` 工具单测，覆盖成功、无结果、超时、鉴权失败和结果裁剪。
-- 编写 SkillsService job 集成测试。
-- 保持现有 raw material generation 前端测试通过。
-
-## 十三、验收标准
-
-后端验收：
-
-```bash
-PYTHONPATH=backend backend/.venv/bin/python -m pytest -q
-```
-
-前端回归：
-
-```bash
-cd static && npm test -- --runInBand
-```
-
-功能验收：
-
-- 现有 Skill 详情页生成入口无需改动即可触发 builder。
-- builder 使用 Agent Harness model factory，不再走旧 `skill_creation` Prompt Pack。
-- 模型不能直接提交 GitLab。
-- 生成结果仍提交到 GitLab draft。
-- `draft_version.source_commit_sha`、`manifest_snapshot`、`runtime_policy_snapshot` 正确更新。
-- `SkillRawMaterialGeneration` 记录 `agent_run_id`、builder artifact、reference files、material usage 和错误信息。
-- `SkillRawMaterialGeneration` 记录 LightRAG 标准检索状态和被采纳的标准引用摘要。
-- builder run 具备可审计 `events.jsonl`。
-- builder run 具备 `agent_run`、`agent_event`、`agent_artifact` 查询入口，或在临时 filesystem-only 模式下具备可回填 metadata。
-- 平台校验和 GitLab draft commit 具备应用层审计事件，source conflict 不会提交 draft。
-
-质量验收：
-
-- 生成的 `SKILL.md` 是现实世界协作执行契约，不是教程、素材摘要或聊天 prompt。
-- 每个关键物理阶段都有 evidence gate、wait checkpoint 或明确继续/暂停/终止条件。
-- 安全约束绑定到具体阶段或动作。
-- 素材明确事实、必要推断和人工确认点可追溯。
-- 行业标准引用可追溯到 LightRAG 返回的 `standard_ref` / `clause_ref`；未检索到或工具不可用时，不得伪造标准依据。
-- 参考图选择与文档引用一致。
-- 缺口和不确定性进入 `review_notes` 或 `missing_questions`，不被写成确定事实。
-
-## 十四、非目标
-
-首版不实现：
-
-- 多 builder subagents。
-- 自动发布、自动编译、自动运行。
-- 生产级 MCP 连接。
-- LightRAG 标准库写入、重建索引、标准全文治理或标准有效性判定。
-- shell/bash 或任意代码执行。
-- 长期语义记忆。
-- 自动修复 compiler/tester 反馈。
-- Agent Run 前端完整详情页。
-- 将 Agent Skill 与 PSOP Skill 合并为同一对象。
-
-## 十五、已知文档冲突
-
-当前 `backend/README.md` 和 `static/README.md` 仍描述“只保留 scaffold / 移除业务模块”，但当前代码已经包含 Skills、Runtime、Agent Harness、静态 Skill 页面等实现。本文设计以根目录 `README.md`、`docs/architecture/system-architecture.md`、`docs/overview/vision.md` 和当前代码事实为准。后续实施时应顺手修正这两个 README，避免新成员误判当前系统状态。
-
-系统架构文档早期示例中曾出现 `psop.skill.write_draft` 作为 builder 工具。该语义不符合本文核心纲领：builder 只能提交 candidate artifact，不能直接写正式 Skill draft。当前设计已将正式工具语义收敛为 `psop.builder.submit_candidate`，再由 `SkillsService` 完成校验和 GitLab draft commit；后续实现和文档更新不得重新引入模型直写 draft 的工具。

@@ -8,6 +8,8 @@
   - 当前系统架构基线，覆盖后端、前端、Runtime、Agent Harness、数据模型、API 与迁移策略。
 - [execution-graph-formal-v5.md](execution-graph-formal-v5.md)
   - `PSOP-EG` 与 `Session Token` 的形式定义和运行语义。
+- [psop-builder-agent-design.md](psop-builder-agent-design.md)
+  - `psop.builder` 智能体的职责边界、核心循环、工具、Agent Skills、校验、上下文和审计设计。
 
 ## 维护原则
 
