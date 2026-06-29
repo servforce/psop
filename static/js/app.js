@@ -201,7 +201,7 @@
     }
 
     if (window.location.port === "4173") {
-      return "http://127.0.0.1:8001/api/v1";
+      return "http://127.0.0.1:8011/api/v1";
     }
 
     return "/api/v1";

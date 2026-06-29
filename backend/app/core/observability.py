@@ -242,12 +242,18 @@ def _instrument_fastapi(app: Any) -> None:
     if app_id in _FASTAPI_INSTRUMENTED_IDS:
         return
     try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
 
-        FastAPIInstrumentor.instrument_app(app)
+        app.add_middleware(OpenTelemetryMiddleware, default_span_details=_safe_asgi_span_details)
         _FASTAPI_INSTRUMENTED_IDS.add(app_id)
     except Exception as exc:
-        LOGGER.warning("FastAPI OpenTelemetry instrumentation skipped: %s", exc)
+        LOGGER.warning("ASGI OpenTelemetry instrumentation skipped: %s", exc)
+
+
+def _safe_asgi_span_details(scope: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    method = str(scope.get("method") or "").strip() or "HTTP"
+    path = str(scope.get("path") or "").strip() or "/"
+    return f"{method} {path}", {}
 
 
 def _instrument_httpx() -> None:

@@ -94,14 +94,6 @@ def create_app(
     app.state.inference_gateway = inference_gateway or OpenAICompatibleInferenceGateway.from_settings(resolved_settings)
     app.state.asr_gateway = asr_gateway or HttpAsrGateway.from_settings(resolved_settings)
     app.state.object_store = object_store or ObjectStoreService.from_settings(resolved_settings)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=resolved_settings.cors_allow_origins,
-        allow_credentials="*" not in resolved_settings.cors_allow_origins,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
     @app.exception_handler(SkillsError)
     async def handle_skills_error(_, exc: SkillsError) -> JSONResponse:
         return JSONResponse(
@@ -121,5 +113,14 @@ def create_app(
         app=app,
         settings=resolved_settings,
         engine=app.state.db_manager.engine,
+    )
+    # Keep CORS outside framework instrumentation so browser preflight requests
+    # are answered by Starlette before observability middleware inspects routing.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=resolved_settings.cors_allow_origins,
+        allow_credentials="*" not in resolved_settings.cors_allow_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     return app

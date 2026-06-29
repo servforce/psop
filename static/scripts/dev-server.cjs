@@ -6,7 +6,7 @@ const rootDir = path.resolve(__dirname, "..");
 const host = process.env.HOST || process.env.PSOP_WEB_HOST || "0.0.0.0";
 const port = Number(process.env.PORT || process.env.PSOP_WEB_PORT || 4173);
 const apiBaseUrl = process.env.PSOP_WEB_API_BASE_URL || "";
-const serverPort = String(process.env.PSOP_SERVER_PORT || 8001);
+const serverPort = String(process.env.PSOP_SERVER_PORT || 8011);
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",

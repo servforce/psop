@@ -34,7 +34,7 @@ ws(s)://<psop-host>/ws/runs/{run_id}
 
 说明：
 
-- 本地开发环境常见 REST 地址为 `http://127.0.0.1:8001/api/v1`。
+- 本地开发环境常见 REST 地址为 `http://127.0.0.1:8011/api/v1`。
 - 当前服务也注册了 `/api/v1/ws/runs/{run_id}`，但推荐使用根路径 `/ws/runs/{run_id}`。
 - 鉴权由部署方统一处理。终端客户端按实际部署要求携带网关 token、cookie 或其他认证信息。
 

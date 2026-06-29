@@ -579,8 +579,9 @@
       async apiRequest(pathname, options) {
         const requestOptions = options || {};
         const isFormData = requestOptions.body instanceof FormData;
+        const hasBody = requestOptions.body !== undefined && requestOptions.body !== null;
         const headers = {
-          ...(isFormData ? {} : { "Content-Type": "application/json" }),
+          ...(hasBody && !isFormData ? { "Content-Type": "application/json" } : {}),
           ...(requestOptions.headers || {})
         };
         let response;

@@ -123,7 +123,7 @@ scripts/dev/start.sh
 scripts/dev/start-background.sh
 ```
 
-默认情况下，后端运行在 `http://127.0.0.1:8001`，Web IDE 运行在 `http://127.0.0.1:4173`。
+默认情况下，后端运行在 `http://127.0.0.1:8011`，Web IDE 运行在 `http://127.0.0.1:4173`。
 
 ## 配置说明
 
