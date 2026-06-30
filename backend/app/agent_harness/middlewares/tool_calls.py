@@ -43,9 +43,20 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
         except GraphBubbleUp:
             raise
         except Exception as exc:
-            self.event_writer.record(
-                "agent.tool.failed",
-                {**payload, "duration_ms": _elapsed_ms(started_at), "error_type": exc.__class__.__name__, "error": str(exc)},
+            failed_payload = {
+                **payload,
+                "duration_ms": _elapsed_ms(started_at),
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+            }
+            self.event_writer.record("agent.tool.failed", failed_payload)
+            self._check_error_budget(
+                {
+                    **failed_payload,
+                    "result_status": "error",
+                    "result_type": exc.__class__.__name__,
+                    "result_message": str(exc),
+                }
             )
             return _error_tool_message(request, exc)
         completed_payload = {**payload, **_tool_result_payload(result), "duration_ms": _elapsed_ms(started_at)}
@@ -67,9 +78,20 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
         except GraphBubbleUp:
             raise
         except Exception as exc:
-            self.event_writer.record(
-                "agent.tool.failed",
-                {**payload, "duration_ms": _elapsed_ms(started_at), "error_type": exc.__class__.__name__, "error": str(exc)},
+            failed_payload = {
+                **payload,
+                "duration_ms": _elapsed_ms(started_at),
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+            }
+            self.event_writer.record("agent.tool.failed", failed_payload)
+            self._check_error_budget(
+                {
+                    **failed_payload,
+                    "result_status": "error",
+                    "result_type": exc.__class__.__name__,
+                    "result_message": str(exc),
+                }
             )
             return _error_tool_message(request, exc)
         completed_payload = {**payload, **_tool_result_payload(result), "duration_ms": _elapsed_ms(started_at)}

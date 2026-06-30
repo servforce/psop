@@ -27,6 +27,23 @@ ALLOWED_EVIDENCE_SOURCE_TYPES = {
     "builder_inference",
     "human_confirmation_required",
 }
+EVIDENCE_SOURCE_TYPE_ALIASES = {
+    "material": "material_analysis",
+    "raw_material": "material_analysis",
+    "material_result": "material_analysis",
+    "material_analysis_result": "material_analysis",
+    "keyframe": "reference_asset",
+    "key_frame": "reference_asset",
+    "reference": "reference_asset",
+    "asset": "reference_asset",
+    "standard": "industry_standard",
+    "industry": "industry_standard",
+    "user": "user_description",
+}
+UUID_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:[#:/].+)?$",
+    re.IGNORECASE,
+)
 PLACEHOLDER_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
@@ -195,23 +212,31 @@ def _validate_workflow(workflow_steps: list[dict[str, Any]], evidence_requiremen
     if not evidence_requirements:
         raise ValueError("expected_evidence_requirements 必须非空。")
     skill_text = skill_md.lower()
+    normalized_skill_text = _normalize_match_text(skill_md)
     for item in workflow_steps:
         step_ref = str(item.get("step_id") or item.get("stage_id") or item.get("title") or item.get("stage_title") or "").strip()
         if not step_ref:
             raise ValueError("workflow_step_candidates 每项必须包含阶段编号或标题。")
-        if step_ref.lower() not in skill_text:
+        if step_ref.lower() not in skill_text and _normalize_match_text(step_ref) not in normalized_skill_text:
             raise ValueError(f"workflow_step_candidates 阶段未能在 SKILL.md 中找到对应内容：{step_ref}")
     for item in evidence_requirements:
         if not item.get("evidence_type") or not item.get("completion_criteria"):
             raise ValueError("expected_evidence_requirements 每项必须包含 evidence_type 和 completion_criteria。")
 
 
+def _normalize_match_text(value: str) -> str:
+    return re.sub(r"[\s\u3000:：\-—_/、，,。.\(\)（）]+", "", value.lower())
+
+
 def _validate_reference_paths_used(items: list[dict[str, Any]], files: dict[str, str]) -> None:
+    skill_md = files.get("SKILL.md", "")
     docs = "\n".join(files.get(path, "") for path in ("SKILL.md", "references/README.md"))
     for item in items:
         reference_path = str(item.get("reference_path") or "").strip()
+        if reference_path and reference_path not in skill_md:
+            raise ValueError(f"选中的 reference_path 未被 SKILL.md 流程内容引用：{reference_path}")
         if reference_path and reference_path not in docs:
-            raise ValueError(f"选中的 reference_path 未被 SKILL.md 或 references/README.md 引用：{reference_path}")
+            raise ValueError(f"选中的 reference_path 未被候选文档引用：{reference_path}")
 
 
 def _reject_placeholder_text(path: str, content: str) -> None:
@@ -222,8 +247,20 @@ def _reject_placeholder_text(path: str, content: str) -> None:
 
 def _source_type(value: Any) -> str:
     if isinstance(value, dict):
-        return str(value.get("source_type") or value.get("type") or "").strip()
-    return str(value).split(":", 1)[0].strip()
+        return _normalize_source_type(str(value.get("source_type") or value.get("type") or "").strip())
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    if raw.startswith("references/") or "#keyframe" in raw.lower():
+        return "reference_asset"
+    if UUID_PATTERN.match(raw):
+        return "material_analysis"
+    return _normalize_source_type(raw.split(":", 1)[0].strip())
+
+
+def _normalize_source_type(value: str) -> str:
+    normalized = value.strip().lower().replace("-", "_")
+    return EVIDENCE_SOURCE_TYPE_ALIASES.get(normalized, normalized)
 
 
 def _validation_error_message(exc: ValidationError) -> str:

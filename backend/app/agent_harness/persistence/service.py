@@ -46,5 +46,9 @@ class AgentHarnessPersistenceService:
         record.sandbox_path = result.sandbox_path or ""
         record.model_info = model_info or {}
         record.error_message = result.error_message
+        session.flush()
+        self.repository.delete_events(session, agent_run_id=result.agent_run_id)
+        self.repository.delete_artifacts(session, agent_run_id=result.agent_run_id)
+        session.flush()
         self.repository.add_events(session, agent_run_id=result.agent_run_id, events=result.events)
         self.repository.add_artifacts(session, agent_run_id=result.agent_run_id, artifacts=result.artifacts)

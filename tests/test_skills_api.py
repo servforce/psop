@@ -12,16 +12,18 @@ from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilder
 from app.agent_harness.service import AgentHarnessService
 from app.app import create_app
 from app.core.config import Settings
+from app.domain.jobs.models import RuntimeJob
 from app.domain.skills import raw_materials
 from app.domain.skills import video_analysis
 from app.domain.skills import service as skills_service_module
-from app.domain.skills.models import SkillRawMaterial, SkillRawMaterialAnalysis
+from app.domain.skills.models import SkillDefinition, SkillRawMaterial, SkillRawMaterialAnalysis, SkillRawMaterialGeneration
 from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
 from app.gateway.asr import AsrTranscription
 from app.gateway.inference import LlmAttachment, LlmCompletion
 from app.infra.object_store import StoredObject
 from app.gateway.gitlab import GitLabProjectInfo, RepositoryFile, RepositoryTreeEntry, SkillSourceBundle
+from app.infra.database import DatabaseManager
 
 
 @dataclass
@@ -736,6 +738,75 @@ def create_test_client() -> tuple[TestClient, FakeGitLabGateway, FakeInferenceGa
     return client, fake_gateway, fake_inference
 
 
+def test_process_skill_raw_material_generation_job_rolls_back_before_marking_failed(monkeypatch) -> None:
+    settings = create_test_settings()
+    manager = DatabaseManager(settings.sqlalchemy_database_url)
+    manager.create_schema()
+    service = skills_service_module.SkillsService(
+        settings=settings,
+        gitlab_gateway=FakeGitLabGateway(),
+        inference_gateway=FakeInferenceGateway(),
+        asr_gateway=FakeAsrGateway(),
+        object_store=FakeObjectStore(),
+    )
+
+    with manager.session() as session:
+        definition = SkillDefinition(
+            key="rollback-builder",
+            name="Rollback Builder",
+            gitlab_project_id="rollback-project",
+            repository_url="https://gitlab.example.local/skills/rollback-builder",
+        )
+        session.add(definition)
+        session.flush()
+        generation = SkillRawMaterialGeneration(
+            skill_definition_id=definition.id,
+            material_ids=[],
+            user_description="触发失败。",
+            status="pending",
+            raw_response={"request": {}},
+        )
+        session.add(generation)
+        session.flush()
+        job = RuntimeJob(
+            job_type=skills_service_module.SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE,
+            status="pending",
+            payload=service._skill_generation_job_payload(
+                skill_definition_id=definition.id,
+                generation_id=generation.id,
+                material_ids=[],
+                base_commit_sha=None,
+                current_stage="queued",
+            ),
+            dedupe_key=f"skill-raw-material-generation:{generation.id}",
+        )
+        session.add(job)
+        session.commit()
+
+        def broken_run(active_session, **_kwargs):
+            active_session.add(
+                RuntimeJob(
+                    id=job.id,
+                    job_type="duplicate",
+                    status="pending",
+                    payload={},
+                    dedupe_key="duplicate-runtime-job",
+                )
+            )
+            active_session.flush()
+
+        monkeypatch.setattr(service, "_run_skill_raw_material_generation", broken_run)
+
+        result = service.process_skill_raw_material_generation_job(session, job.id)
+
+        stored_job = session.get(RuntimeJob, job.id)
+        assert result.status == "failed"
+        assert result.error_message
+        assert stored_job.status == "failed"
+        assert stored_job.last_error
+        assert (stored_job.payload or {})["current_stage"] == "failed"
+
+
 def test_parse_generated_skill_draft_handles_outer_fence_and_inner_markdown_fences() -> None:
     content = json.dumps(
         {
@@ -1243,7 +1314,7 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert payload["prompt_metadata"]["reference_files"] == [
         f"references/video-keyframes/{video_material_id}/000000000.jpg",
     ]
-    assert payload["prompt_metadata"]["embedded_reference_image_count"] >= 2
+    assert payload["prompt_metadata"]["materialized_reference_image_count"] == 1
     assert [item["reference_path"] for item in payload["prompt_metadata"]["selected_reference_assets"]] == [
         f"references/video-keyframes/{video_material_id}/000000000.jpg",
     ]
@@ -1262,24 +1333,25 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert fake_gateway.projects[created["gitlab_project_id"]].files[
         f"references/video-keyframes/{video_material_id}/000000000.jpg"
     ] == b"fake-keyframe-0"
-    embedded_image = "data:image/jpeg;base64,ZmFrZS1rZXlmcmFtZS0w"
     skill_md = fake_gateway.projects[created["gitlab_project_id"]].files["SKILL.md"]
     references_md = fake_gateway.projects[created["gitlab_project_id"]].files["references/README.md"]
     reference_path = f"references/video-keyframes/{video_material_id}/000000000.jpg"
-    assert embedded_image in skill_md
-    assert embedded_image in references_md
-    assert reference_path not in skill_md
-    assert reference_path not in references_md
+    assert "data:image/" not in skill_md
+    assert "data:image/" not in references_md
+    assert reference_path in skill_md
+    assert reference_path in references_md
+    assert f"]({reference_path})" in skill_md
     assert "## 嵌入参考图片" not in skill_md
     assert "## 嵌入参考图片" not in references_md
-    assert skill_md.index("### 阶段 1：PPE 与进入条件确认") < skill_md.index(embedded_image) < skill_md.index("### 阶段 2：阀门与压力表确认")
+    assert skill_md.index("### 阶段 1：PPE 与进入条件确认") < skill_md.index(f"]({reference_path})") < skill_md.index("### 阶段 2：阀门与压力表确认")
     assert "should-be-ignored" not in fake_gateway.projects[created["gitlab_project_id"]].files["skill.yaml"]
     assert detail_response.json()["latest_draft_head_sha"] == payload["committed_commit_sha"]
     assert detail_response.json()["updated_at"] != created["updated_at"]
     prompt_material = detail_response.json()["current_draft_version"]["manifest_snapshot"]["prompt_material"]
     assert prompt_material["readme"].startswith("# 泵房进入前安全检查")
     assert prompt_material["skill_md"].startswith("# 泵房进入前安全检查")
-    assert embedded_image in prompt_material["skill_md"]
+    assert "data:image/" not in prompt_material["skill_md"]
+    assert reference_path in prompt_material["skill_md"]
     assert source_response.json()["head_commit_sha"] == payload["committed_commit_sha"]
     assert publishes_response.json() == []
     assert not any("generate_psop_skill_source_from_raw_materials" in call["user_prompt"] for call in fake_inference.calls)

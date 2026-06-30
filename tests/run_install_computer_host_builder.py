@@ -127,7 +127,7 @@ def _generation_summary(payload: dict[str, Any]) -> dict[str, Any]:
             "events_path": metadata.get("events_path"),
             "builder_artifact_path": metadata.get("builder_artifact_path"),
             "builder_files_path": metadata.get("builder_files_path"),
-            "embedded_reference_image_count": metadata.get("embedded_reference_image_count"),
+            "materialized_reference_image_count": metadata.get("materialized_reference_image_count"),
             "standard_search_summary": metadata.get("standard_search_summary"),
         },
         "selected_reference_assets": metadata.get("selected_reference_assets"),
@@ -203,13 +203,24 @@ def _validate_result(payload: dict[str, Any]) -> int:
         print(f"PSOP Builder 测试失败：events.jsonl 不存在：{events_path}", file=sys.stderr)
         return 1
 
-    if int(metadata.get("embedded_reference_image_count") or 0) > 0:
-        if "data:image/" not in skill_md:
-            print("PSOP Builder 测试失败：metadata 显示已内嵌图片，但 SKILL.md 未包含 data:image。", file=sys.stderr)
+    reference_files = [str(item) for item in metadata.get("reference_files") or []]
+    if int(metadata.get("materialized_reference_image_count") or 0) > 0:
+        if "data:image/" in skill_md:
+            print("PSOP Builder 测试失败：SKILL.md 不应包含 base64 data:image。", file=sys.stderr)
             return 1
         if "## 嵌入参考图片" in skill_md:
             print("PSOP Builder 测试失败：参考图片不应集中追加到文档底部。", file=sys.stderr)
             return 1
+        missing_links = [path for path in reference_files if path not in skill_md]
+        if missing_links:
+            print(f"PSOP Builder 测试失败：SKILL.md 缺少参考图片相对路径：{missing_links}", file=sys.stderr)
+            return 1
+        if sandbox_path:
+            files_root = Path(sandbox_path) / "outputs" / "skill-draft"
+            missing_files = [path for path in reference_files if not (files_root / path).is_file()]
+            if missing_files:
+                print(f"PSOP Builder 测试失败：sandbox skill-draft 缺少参考图片文件：{missing_files}", file=sys.stderr)
+                return 1
 
     print("PSOP Builder 智能体测试通过。")
     return 0

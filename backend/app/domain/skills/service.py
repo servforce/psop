@@ -1053,12 +1053,23 @@ class SkillsService:
             )
             return generation
         except Exception as exc:
+            session.rollback()
+            generation = self.repository.get_raw_material_generation(session, generation_id)
+            job = self.job_repository.get_runtime_job(session, job_id)
+            if not generation or not job:
+                LOGGER.exception(
+                    "skill raw material generation failed and state reload failed",
+                    extra={"generation_id": generation_id, "job_id": job_id},
+                )
+                raise
             generation.status = "failed"
             generation.error_message = str(exc)
+            error_details = self._exception_details(exc)
             generation.raw_response = {
                 **(generation.raw_response or {}),
                 "error": str(exc),
                 "error_type": exc.__class__.__name__,
+                "error_details": error_details,
             }
             job.status = "failed"
             job.last_error = str(exc)
@@ -1192,12 +1203,12 @@ class SkillsService:
             material_generation_context=material_generation_context,
         )
         generated = self._read_builder_materialized_draft_files(agent_result, generated)
-        embedded_reference_image_count = int(generated.raw_parsed.get("embedded_reference_image_count") or 0)
+        materialized_reference_image_count = int(generated.raw_parsed.get("materialized_reference_image_count") or 0)
         prompt_metadata = {
             **prompt_metadata,
             "selected_reference_assets": selected_reference_assets,
             "reference_files": reference_files,
-            "embedded_reference_image_count": embedded_reference_image_count,
+            "materialized_reference_image_count": materialized_reference_image_count,
         }
         generation.prompt_metadata = prompt_metadata
         job.payload = self._set_skill_generation_job_stage(job.payload, "committing_source", "running")
@@ -1258,9 +1269,18 @@ class SkillsService:
             project_id=definition.gitlab_project_id,
             branch=draft_version.source_ref,
             files=files_to_commit,
-            binary_files=reference_binary_files or {},
+            binary_files={},
             commit_message="Generate skill draft from raw materials via PSOP WEB IDE",
         )
+        reference_files = reference_binary_files or {}
+        for index, (file_path, content) in enumerate(sorted(reference_files.items()), start=1):
+            new_commit_sha = self.gitlab_gateway.commit_repository_files(
+                project_id=definition.gitlab_project_id,
+                branch=draft_version.source_ref,
+                files={},
+                binary_files={file_path: content},
+                commit_message=f"Add skill reference image {index}/{len(reference_files)} via PSOP WEB IDE",
+            )
         draft_version.source_commit_sha = new_commit_sha
         draft_version.manifest_snapshot = manifest_snapshot(document)
         draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)
@@ -1439,9 +1459,9 @@ class SkillsService:
                 "video_reference_policy": (
                     f"必须从 candidate_reference_assets 中选择 1 到 {MAX_SKILL_REFERENCE_ASSETS} 张最适合 Skill 运行时参考的关键帧，"
                     "输出到 selected_reference_assets。每一个 selected_reference_assets.reference_path 都必须至少被 "
-                    "SKILL.md 或 references/README.md 引用一次；SKILL.md、references/README.md、examples/ 和 tests/ "
-                    "不得引用未出现在 selected_reference_assets 中的 reference_path。最终提交前平台会将已选参考图片内容内嵌到 Markdown，"
-                    "不要要求用户打开图片链接。"
+                    "SKILL.md 的对应流程步骤用 Markdown 图片语法引用一次；SKILL.md、references/README.md、examples/ 和 tests/ "
+                    "不得引用未出现在 selected_reference_assets 中的 reference_path。最终提交前平台会把已选参考图片原图提交到 references 目录，"
+                    "不要使用 base64 data URI，也不要要求用户打开外部图片链接。"
                 ),
                 "material_analysis_policy": (
                     "material_analysis_results 是素材证据包，不是任务拆解；"
@@ -1515,11 +1535,11 @@ class SkillsService:
                 "README.md describes purpose, scope, inputs, outputs, and maintenance notes without implementation leakage.",
                 "SKILL.md includes a complete staged workflow with prerequisites, actions, evidence, wait points, safety constraints, recovery paths, and completion criteria.",
                 "examples/expected-output.md uses the same stage numbering and behavior as SKILL.md.",
-                "builder candidate references/README.md and SKILL.md use exact reference_path values from selected_reference_assets so the platform can resolve assets.",
-                "Final persisted Markdown embeds selected reference image content instead of asking users to open image links.",
+                "builder candidate SKILL.md uses Markdown image links with exact reference_path values from selected_reference_assets in the workflow step where each image is needed.",
+                "Final persisted draft keeps selected reference image files under references/ and displays them through relative Markdown image links, never base64 data URIs.",
                 "No generated text contains TODO, placeholder paths, ellipsis reference paths, or unsupported future-hardware claims.",
                 "review_notes explicitly lists material gaps, uncertain assumptions, or items requiring human confirmation.",
-                "Every selected_reference_assets/reference_files path is used by SKILL.md or references/README.md, and no document references an unselected reference_path.",
+                "Every selected_reference_assets/reference_files path is used by SKILL.md workflow content, and no document references an unselected reference_path.",
             ],
         }
 
@@ -2342,4 +2362,3 @@ class SkillsService:
             "message": str(exc),
             **details,
         }
-

@@ -67,3 +67,13 @@ class AgentHarnessRepository:
                     status="draft",
                 )
             )
+
+    def delete_events(self, session: Session, *, agent_run_id: str) -> None:
+        session.query(AgentEventRecord).filter(AgentEventRecord.agent_run_id == agent_run_id).delete(
+            synchronize_session=False
+        )
+
+    def delete_artifacts(self, session: Session, *, agent_run_id: str) -> None:
+        session.query(AgentArtifactRecord).filter(AgentArtifactRecord.agent_run_id == agent_run_id).delete(
+            synchronize_session=False
+        )

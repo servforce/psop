@@ -10,6 +10,7 @@ from app.agent_harness.skills.spec import AgentSkill
 from app.agent_harness.tools.builtin import register_builtin_tools
 from app.agent_harness.tools.builtin.workspace import register_workspace_tools
 from app.agent_harness.tools.framework import register_framework_tools
+from app.agent_harness.tools.langchain import to_langchain_tools
 from app.agent_harness.tools.policy import filter_tools_by_skill_allowed_tools
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
 from app.agent_harness.tools.spec import ToolSpec
@@ -56,6 +57,31 @@ def test_tool_spec_has_governance_metadata_defaults() -> None:
     assert spec.permission_policy == "allow"
     assert spec.retry_policy == {}
     assert spec.error_types == []
+
+
+def test_langchain_tool_args_schema_rejects_string_for_array(tmp_path) -> None:
+    registry, context, _ = _context(tmp_path)
+    registry.register(
+        ToolSpec(
+            name="array_tool",
+            description="测试数组参数工具。",
+            input_schema={
+                "type": "object",
+                "required": ["items"],
+                "properties": {
+                    "items": {"type": "array", "items": {"type": "object"}},
+                },
+            },
+        ),
+        lambda arguments, _context: {"status": "success", "items": arguments["items"]},
+    )
+    tool = to_langchain_tools(tool_names=["array_tool"], registry=registry, context=context)[0]
+
+    with pytest.raises(Exception):
+        tool.args_schema.model_validate({"items": '[{"value": 1}]'})
+
+    parsed = tool.args_schema.model_validate({"items": [{"value": 1}]})
+    assert parsed.items == [{"value": 1}]
 
 
 def test_tool_registry_raises_handler_error(tmp_path) -> None:

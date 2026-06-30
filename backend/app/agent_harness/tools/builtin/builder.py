@@ -113,7 +113,7 @@ def register_builder_tools(registry: ToolRegistry) -> None:
                     "material_id": {"type": "string", "minLength": 1, "maxLength": 128},
                     "asset_kinds": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["keyframe", "image", "clip", "document_excerpt"]},
+                        "items": {"type": "string", "enum": ["keyframe", "video_keyframe", "image", "clip", "document_excerpt"]},
                         "maxItems": 8,
                     },
                     "max_items": {"type": "integer", "minimum": 1, "maximum": 100},
@@ -191,14 +191,14 @@ def _read_current_source(arguments: dict[str, Any], context: ToolExecutionContex
 def _list_materials(arguments: dict[str, Any], context: ToolExecutionContext) -> dict[str, Any]:
     analyses = _material_analyses(context)
     material_ids = [str(item) for item in _input(context).get("material_ids") or []]
-    kinds = set(str(item) for item in arguments.get("material_kinds") or [])
-    statuses = set(str(item) for item in arguments.get("analysis_status") or [])
+    kinds = {_normalize_material_kind(item) for item in arguments.get("material_kinds") or []}
+    statuses = {_normalize_analysis_status(item) for item in arguments.get("analysis_status") or []}
     max_items = _bounded_int(arguments.get("max_items"), default=100, minimum=1, maximum=100)
     items = []
     for index, analysis in enumerate(analyses):
         material_id = _material_id(analysis, material_ids, index)
-        kind = str(analysis.get("kind") or analysis.get("material_kind") or analysis.get("source_type") or "other")
-        status = str(analysis.get("analysis_status") or analysis.get("status") or "succeeded")
+        kind = _analysis_material_kind(analysis)
+        status = _normalize_analysis_status(analysis.get("analysis_status") or analysis.get("status") or "succeeded")
         if kinds and kind not in kinds:
             continue
         if statuses and status not in statuses:
@@ -222,6 +222,60 @@ def _list_materials(arguments: dict[str, Any], context: ToolExecutionContext) ->
         "truncated": len(items) >= max_items,
         "next_valid_actions": ["psop.builder.read_material_analysis", "psop.builder.list_reference_assets"],
     }
+
+
+def _analysis_material_kind(analysis: dict[str, Any]) -> str:
+    source = analysis.get("source") if isinstance(analysis.get("source"), dict) else {}
+    mime_type = str(analysis.get("mime_type") or source.get("mime_type") or "")
+    return _normalize_material_kind(
+        analysis.get("kind")
+        or analysis.get("material_kind")
+        or analysis.get("material_type")
+        or source.get("material_kind")
+        or source.get("source_type")
+        or _kind_from_mime_type(mime_type)
+        or "other"
+    )
+
+
+def _kind_from_mime_type(mime_type: str) -> str:
+    if mime_type.startswith("video/"):
+        return "video"
+    if mime_type.startswith("image/"):
+        return "image"
+    if mime_type.startswith("audio/"):
+        return "audio"
+    if mime_type in {"application/pdf", "text/markdown", "text/plain"}:
+        return "document"
+    return ""
+
+
+def _normalize_material_kind(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    aliases = {
+        "视频": "video",
+        "video_keyframe": "video",
+        "keyframe": "video",
+        "image_keyframe": "image",
+        "图片": "image",
+        "图像": "image",
+        "音频": "audio",
+        "文档": "document",
+        "文本": "text",
+    }
+    return aliases.get(text, text or "other")
+
+
+def _normalize_analysis_status(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    aliases = {
+        "ready": "succeeded",
+        "success": "succeeded",
+        "done": "succeeded",
+        "已完成": "succeeded",
+        "完成": "succeeded",
+    }
+    return aliases.get(text, text or "succeeded")
 
 
 def _read_material_analysis(arguments: dict[str, Any], context: ToolExecutionContext) -> dict[str, Any]:
@@ -258,12 +312,13 @@ def _read_material_analysis(arguments: dict[str, Any], context: ToolExecutionCon
 def _list_reference_assets(arguments: dict[str, Any], context: ToolExecutionContext) -> dict[str, Any]:
     assets = _candidate_reference_assets(context)
     material_id = str(arguments.get("material_id") or "").strip()
-    kinds = set(str(item) for item in arguments.get("asset_kinds") or [])
+    kinds = {_normalize_asset_kind(str(item)) for item in arguments.get("asset_kinds") or []}
     max_items = _bounded_int(arguments.get("max_items"), default=100, minimum=1, maximum=100)
     items = []
     for asset in assets:
         asset_material_id = str(asset.get("material_id") or "")
-        asset_kind = str(asset.get("asset_kind") or asset.get("kind") or "keyframe")
+        source_asset_kind = str(asset.get("asset_kind") or asset.get("kind") or "keyframe")
+        asset_kind = _normalize_asset_kind(source_asset_kind)
         if material_id and asset_material_id != material_id:
             continue
         if kinds and asset_kind not in kinds:
@@ -274,6 +329,7 @@ def _list_reference_assets(arguments: dict[str, Any], context: ToolExecutionCont
                 "asset_id": str(asset.get("asset_id") or asset.get("id") or ""),
                 "material_id": asset_material_id,
                 "asset_kind": asset_kind,
+                "source_asset_kind": source_asset_kind,
                 "reference_path": str(asset.get("reference_path") or ""),
                 "timestamp_ms": asset.get("timestamp_ms"),
                 "observation_summary": _truncate("; ".join(str(item) for item in observations) or str(asset.get("label") or ""), 1000),
@@ -295,9 +351,7 @@ def _list_reference_assets(arguments: dict[str, Any], context: ToolExecutionCont
 
 
 def _submit_candidate(arguments: dict[str, Any], context: ToolExecutionContext) -> dict[str, Any]:
-    reference_assets = context.invocation_context.get(_REFERENCE_ASSETS_CONTEXT_KEY)
-    if not isinstance(reference_assets, list) or not reference_assets:
-        reference_assets = _candidate_reference_assets(context)
+    reference_assets = _reference_assets_for_validation(context)
     standard_results = context.invocation_context.get(_STANDARD_RESULTS_CONTEXT_KEY)
     if not isinstance(standard_results, list):
         standard_results = []
@@ -311,20 +365,26 @@ def _submit_candidate(arguments: dict[str, Any], context: ToolExecutionContext) 
         return _submit_candidate_error_result(context, str(exc), "schema_validation")
     payload = candidate.model_dump(mode="json")
     try:
-        embedded_files, embedded_image_count, embedded_images = _embed_reference_images_in_files(
+        linked_files, linked_images = _link_reference_images_in_files(
             files=candidate.files,
             selected_reference_assets=candidate.selected_reference_assets,
+        )
+        materialized_reference_images = _write_reference_asset_files(
+            selected_reference_assets=candidate.selected_reference_assets,
             reference_asset_files=_reference_asset_files(context),
+            context=context,
             require_available=BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY in context.invocation_context,
         )
     except ValueError as exc:
-        return _submit_candidate_error_result(context, str(exc), "reference_image_embedding")
-    payload["embedded_reference_image_count"] = embedded_image_count
-    payload["embedded_reference_images"] = embedded_images
+        return _submit_candidate_error_result(context, str(exc), "reference_image_materialization")
+    payload["materialized_reference_image_count"] = len(materialized_reference_images)
+    payload["materialized_reference_images"] = materialized_reference_images
+    payload["linked_reference_images"] = linked_images
     content = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     context.sandbox.write_text(BUILDER_RESULT_VIRTUAL_PATH, content)
-    materialized_files = _write_candidate_files(embedded_files, context)
+    materialized_files = _write_candidate_files(linked_files, context)
+    materialized_files.extend(materialized_reference_images)
     files_hash = _hash_materialized_files(materialized_files)
     context.event_writer.record(
         "agent.artifact.created",
@@ -353,7 +413,7 @@ def _submit_candidate(arguments: dict[str, Any], context: ToolExecutionContext) 
         "validation_summary": {
             "file_count": len(candidate.files),
             "reference_asset_count": len(candidate.selected_reference_assets),
-            "embedded_reference_image_count": embedded_image_count,
+            "materialized_reference_image_count": len(materialized_reference_images),
             "standard_usage_count": len(candidate.industry_standard_usage),
             "warning_count": len(candidate.review_notes),
         },
@@ -376,7 +436,61 @@ def _write_candidate_files(files: dict[str, str], context: ToolExecutionContext)
     return materialized
 
 
-def _hash_materialized_files(files: list[dict[str, str]]) -> str:
+def _write_reference_asset_files(
+    *,
+    selected_reference_assets: list[dict[str, Any]],
+    reference_asset_files: list[dict[str, Any]],
+    context: ToolExecutionContext,
+    require_available: bool,
+) -> list[dict[str, Any]]:
+    file_by_asset_id = {
+        str(item.get("asset_id") or "").strip(): item
+        for item in reference_asset_files
+        if str(item.get("asset_id") or "").strip()
+    }
+    file_by_reference_path = {
+        str(item.get("reference_path") or "").strip(): item
+        for item in reference_asset_files
+        if str(item.get("reference_path") or "").strip()
+    }
+    materialized: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for item in selected_reference_assets:
+        asset_id = str(item.get("asset_id") or "").strip()
+        reference_path = str(item.get("reference_path") or "").strip()
+        if not reference_path or reference_path in seen_paths:
+            continue
+        file_payload = file_by_asset_id.get(asset_id) or file_by_reference_path.get(reference_path)
+        if file_payload is None:
+            if require_available and _looks_like_image_reference(reference_path):
+                raise ValueError(f"缺少可物化参考图片内容：{reference_path}")
+            continue
+        mime_type = str(file_payload.get("mime_type") or _mime_type_from_path(reference_path)).strip()
+        content_base64 = str(file_payload.get("content_base64") or "").strip()
+        if not mime_type.startswith("image/") or not content_base64:
+            continue
+        try:
+            content = base64.b64decode(content_base64, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError(f"参考图片内容不是合法 base64：{reference_path}") from exc
+        virtual_path = f"{BUILDER_DRAFT_FILES_VIRTUAL_ROOT}/{reference_path}"
+        resolved_path = context.sandbox.resolve_virtual_path(virtual_path)
+        resolved_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_path.write_bytes(content)
+        seen_paths.add(reference_path)
+        materialized.append(
+            {
+                "path": reference_path,
+                "artifact_ref": f"sandbox://outputs/skill-draft/{reference_path}",
+                "content_hash": hashlib.sha256(content).hexdigest(),
+                "mime_type": mime_type,
+                "size_bytes": len(content),
+            }
+        )
+    return materialized
+
+
+def _hash_materialized_files(files: list[dict[str, Any]]) -> str:
     digest = hashlib.sha256()
     for item in files:
         digest.update(str(item.get("path") or "").encode("utf-8"))
@@ -400,9 +514,35 @@ def _candidate_reference_assets(context: ToolExecutionContext) -> list[dict[str,
     return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
 
 
+def _normalize_asset_kind(value: str) -> str:
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized in {"video_keyframe", "key_frame", "keyframe_image"}:
+        return "keyframe"
+    return normalized or "keyframe"
+
+
 def _reference_asset_files(context: ToolExecutionContext) -> list[dict[str, Any]]:
     raw = context.invocation_context.get(BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY)
     return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+def _reference_assets_for_validation(context: ToolExecutionContext) -> list[dict[str, Any]]:
+    assets: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for source in (context.invocation_context.get(_REFERENCE_ASSETS_CONTEXT_KEY), _candidate_reference_assets(context)):
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            asset_id = str(item.get("asset_id") or item.get("id") or "").strip()
+            reference_path = str(item.get("reference_path") or "").strip()
+            key = (asset_id, reference_path)
+            if key in seen:
+                continue
+            seen.add(key)
+            assets.append(item)
+    return assets
 
 
 def _material_id(analysis: dict[str, Any], material_ids: list[str], index: int) -> str:
@@ -458,106 +598,60 @@ def _truncate(value: str, max_chars: int) -> str:
     return value[: max_chars - 20].rstrip() + "\n...[truncated]"
 
 
-def _embed_reference_images_in_files(
+def _link_reference_images_in_files(
     *,
     files: dict[str, str],
     selected_reference_assets: list[dict[str, Any]],
-    reference_asset_files: list[dict[str, Any]],
-    require_available: bool,
-) -> tuple[dict[str, str], int, list[dict[str, Any]]]:
-    image_refs = _build_image_refs(
-        selected_reference_assets=selected_reference_assets,
-        reference_asset_files=reference_asset_files,
-        require_available=require_available,
-    )
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    image_refs = _build_markdown_image_refs(selected_reference_assets)
     if not image_refs:
-        return dict(files), 0, []
+        return dict(files), []
 
-    embedded_files: dict[str, str] = {}
-    total_count = 0
-    embedded_images: list[dict[str, Any]] = []
+    linked_files: dict[str, str] = {}
+    linked_images: list[dict[str, Any]] = []
     for path, content in files.items():
-        updated, count_by_reference_path = _embed_reference_images_in_markdown(content, image_refs)
-        embedded_files[path] = updated
-        total_count += sum(count_by_reference_path.values())
+        updated, count_by_reference_path = _link_reference_images_in_markdown(content, image_refs)
+        linked_files[path] = updated
         for reference_path, count in count_by_reference_path.items():
             if count:
-                embedded_images.append({"file_path": path, "reference_path": reference_path, "embed_count": count})
-    return embedded_files, total_count, embedded_images
+                linked_images.append({"file_path": path, "reference_path": reference_path, "link_count": count})
+    return linked_files, linked_images
 
 
-def _build_image_refs(
-    *,
-    selected_reference_assets: list[dict[str, Any]],
-    reference_asset_files: list[dict[str, Any]],
-    require_available: bool,
-) -> list[dict[str, str]]:
-    file_by_asset_id = {
-        str(item.get("asset_id") or "").strip(): item
-        for item in reference_asset_files
-        if str(item.get("asset_id") or "").strip()
-    }
-    file_by_reference_path = {
-        str(item.get("reference_path") or "").strip(): item
-        for item in reference_asset_files
-        if str(item.get("reference_path") or "").strip()
-    }
+def _build_markdown_image_refs(selected_reference_assets: list[dict[str, Any]]) -> list[dict[str, str]]:
     image_refs: list[dict[str, str]] = []
     for index, item in enumerate(selected_reference_assets, start=1):
-        asset_id = str(item.get("asset_id") or "").strip()
         reference_path = str(item.get("reference_path") or "").strip()
-        file_payload = file_by_asset_id.get(asset_id) or file_by_reference_path.get(reference_path)
-        if file_payload is None:
-            if require_available and _looks_like_image_reference(reference_path):
-                raise ValueError(f"缺少可内嵌参考图片内容：{reference_path}")
+        if not _looks_like_image_reference(reference_path):
             continue
-        mime_type = str(file_payload.get("mime_type") or _mime_type_from_path(reference_path)).strip()
-        content_base64 = str(file_payload.get("content_base64") or "").strip()
-        if not mime_type.startswith("image/") or not content_base64:
-            continue
-        try:
-            base64.b64decode(content_base64, validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise ValueError(f"参考图片内容不是合法 base64：{reference_path}") from exc
         image_refs.append(
             {
                 "reference_path": reference_path,
-                "data_uri": f"data:{mime_type};base64,{content_base64}",
                 "label": _reference_image_label(index, str(item.get("reason") or item.get("asset_id") or reference_path)),
             }
         )
     return image_refs
 
 
-def _embed_reference_images_in_markdown(content: str, image_refs: list[dict[str, str]]) -> tuple[str, dict[str, int]]:
-    updated = content
+def _link_reference_images_in_markdown(content: str, image_refs: list[dict[str, str]]) -> tuple[str, dict[str, int]]:
     count_by_reference_path = {item["reference_path"]: 0 for item in image_refs}
-    for item in image_refs:
-        updated, markdown_image_count = _replace_markdown_image_target(
-            updated,
-            item["reference_path"],
-            item["data_uri"],
-            item["label"],
-        )
-        count_by_reference_path[item["reference_path"]] += markdown_image_count
-
-    lines = updated.splitlines()
-    trailing_newline = updated.endswith("\n")
+    lines = content.splitlines()
+    trailing_newline = content.endswith("\n")
     output: list[str] = []
     for line in lines:
         matched_refs: list[dict[str, str]] = []
-        updated_line = line
         for item in image_refs:
             reference_path = item["reference_path"]
-            if reference_path not in updated_line:
+            if reference_path not in line:
                 continue
-            updated_line = updated_line.replace(f"`{reference_path}`", item["label"])
-            updated_line = updated_line.replace(reference_path, item["label"])
+            if _line_has_markdown_image_for_reference(line, reference_path):
+                count_by_reference_path[reference_path] += 1
+                continue
             matched_refs.append(item)
-        output.append(updated_line)
+        output.append(line)
         for item in matched_refs:
             output.append("")
-            output.append(f"![{item['label']}]({item['data_uri']})")
+            output.append(f"![{item['label']}]({item['reference_path']})")
             count_by_reference_path[item["reference_path"]] += 1
 
     result = "\n".join(output)
@@ -566,18 +660,13 @@ def _embed_reference_images_in_markdown(content: str, image_refs: list[dict[str,
     return result, count_by_reference_path
 
 
-def _replace_markdown_image_target(content: str, reference_path: str, data_uri: str, fallback_label: str) -> tuple[str, int]:
+def _line_has_markdown_image_for_reference(line: str, reference_path: str) -> bool:
     pattern = re.compile(
         r"!\[([^\]]*)\]\(\s*<?"
         + re.escape(reference_path)
         + r">?\s*(?:\"[^\"]*\"|'[^']*')?\)"
     )
-
-    def replace(match: re.Match[str]) -> str:
-        alt = match.group(1).strip() or fallback_label
-        return f"![{alt}]({data_uri})"
-
-    return pattern.subn(replace, content)
+    return bool(pattern.search(line))
 
 
 def _reference_image_label(index: int, value: str) -> str:

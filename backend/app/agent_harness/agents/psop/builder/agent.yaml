@@ -30,5 +30,5 @@ middleware:
   - name: tool_calls
     config:
       max_error_counts:
-        psop.builder.submit_candidate: 2
+        psop.builder.submit_candidate: 3
 memory_scope: psop.builder

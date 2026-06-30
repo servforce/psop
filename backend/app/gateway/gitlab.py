@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+import hashlib
 import logging
 import time
 from typing import Protocol
@@ -14,6 +15,12 @@ from app.core.observability import record_span_exception, set_span_attributes, s
 from app.domain.skills.exceptions import SkillsConfigurationError, SkillsGatewayError
 
 LOGGER = logging.getLogger(__name__)
+GITLAB_READ_MAX_ATTEMPTS = 3
+GITLAB_READ_RETRY_DELAY_SECONDS = 0.25
+
+
+def _is_retryable_gitlab_status(status_code: int) -> bool:
+    return status_code == 429 or status_code >= 500
 
 
 @dataclass(slots=True)
@@ -158,43 +165,78 @@ class HttpGitLabSkillSourceGateway:
         json: dict[str, object] | None = None,
     ) -> dict | list:
         url = f"{self.api_base_url}{path}"
+        max_attempts = GITLAB_READ_MAX_ATTEMPTS if method.upper() == "GET" else 1
 
-        started_at = time.perf_counter()
-        try:
-            with start_span("gateway.gitlab", http_method=method, gitlab_path=path, api_base_url=self.api_base_url) as span:
-                with httpx.Client(timeout=self.timeout_seconds, headers=self._headers()) as client:
-                    response = client.request(method, url, params=params, json=json)
+        for attempt in range(1, max_attempts + 1):
+            started_at = time.perf_counter()
+            try:
+                with start_span(
+                    "gateway.gitlab",
+                    http_method=method,
+                    gitlab_path=path,
+                    api_base_url=self.api_base_url,
+                    attempt=attempt,
+                ) as span:
+                    with httpx.Client(timeout=self.timeout_seconds, headers=self._headers()) as client:
+                        response = client.request(method, url, params=params, json=json)
+                    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                    set_span_attributes(span, {"http.status_code": response.status_code, "duration_ms": elapsed_ms})
+                    LOGGER.info(
+                        "GitLab request completed",
+                        extra={
+                            "http_method": method,
+                            "gitlab_path": path,
+                            "status_code": response.status_code,
+                            "duration_ms": elapsed_ms,
+                            "attempt": attempt,
+                        },
+                    )
+            except httpx.HTTPError as exc:
                 elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-                set_span_attributes(span, {"http.status_code": response.status_code, "duration_ms": elapsed_ms})
-                LOGGER.info(
-                    "GitLab request completed",
+                if attempt < max_attempts:
+                    LOGGER.warning(
+                        "GitLab read request failed; retrying",
+                        extra={
+                            "http_method": method,
+                            "gitlab_path": path,
+                            "error_type": exc.__class__.__name__,
+                            "duration_ms": elapsed_ms,
+                            "attempt": attempt,
+                        },
+                    )
+                    time.sleep(GITLAB_READ_RETRY_DELAY_SECONDS * attempt)
+                    continue
+                with start_span(
+                    "gateway.gitlab.error",
+                    http_method=method,
+                    gitlab_path=path,
+                    api_base_url=self.api_base_url,
+                    duration_ms=elapsed_ms,
+                ) as span:
+                    record_span_exception(span, exc)
+                LOGGER.warning(
+                    "GitLab request failed",
                     extra={
                         "http_method": method,
                         "gitlab_path": path,
-                        "status_code": response.status_code,
+                        "error_type": exc.__class__.__name__,
                         "duration_ms": elapsed_ms,
                     },
                 )
-        except httpx.HTTPError as exc:
-            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-            with start_span(
-                "gateway.gitlab.error",
-                http_method=method,
-                gitlab_path=path,
-                api_base_url=self.api_base_url,
-                duration_ms=elapsed_ms,
-            ) as span:
-                record_span_exception(span, exc)
+                raise SkillsGatewayError("访问 GitLab 失败。", details={"error": str(exc)}) from exc
+
+            if response.status_code < 400 or not _is_retryable_gitlab_status(response.status_code) or attempt >= max_attempts:
+                break
             LOGGER.warning(
-                "GitLab request failed",
+                "GitLab read request returned retryable response; retrying",
                 extra={
                     "http_method": method,
                     "gitlab_path": path,
-                    "error_type": exc.__class__.__name__,
-                    "duration_ms": elapsed_ms,
+                    "status_code": response.status_code,
+                    "attempt": attempt,
                 },
             )
-            raise SkillsGatewayError("访问 GitLab 失败。", details={"error": str(exc)}) from exc
+            time.sleep(GITLAB_READ_RETRY_DELAY_SECONDS * attempt)
 
         if response.status_code >= 400:
             LOGGER.warning(
@@ -318,7 +360,7 @@ class HttpGitLabSkillSourceGateway:
 
         return str(payload["id"])
 
-    def _get_file_content(self, project_id: str, ref: str, file_path: str) -> str:
+    def _get_file_payload(self, project_id: str, ref: str, file_path: str) -> dict:
         payload = self._request(
             "GET",
             f"/projects/{quote(project_id, safe='')}/repository/files/{quote(file_path, safe='')}",
@@ -326,7 +368,10 @@ class HttpGitLabSkillSourceGateway:
         )
         if not isinstance(payload, dict) or "content" not in payload:
             raise SkillsGatewayError("GitLab 文件读取响应格式错误。", details={"file_path": file_path})
+        return payload
 
+    def _get_file_content(self, project_id: str, ref: str, file_path: str) -> str:
+        payload = self._get_file_payload(project_id, ref, file_path)
         try:
             return base64.b64decode(str(payload["content"])).decode("utf-8")
         except Exception as exc:  # pragma: no cover - defensive decode guard
@@ -420,11 +465,22 @@ class HttpGitLabSkillSourceGateway:
         commit_message: str,
     ) -> str:
         actions = []
+        expected_contents: dict[str, bytes] = {}
         for file_path, content in files.items():
-            action = "update" if self._repository_file_exists(project_id, branch, file_path) else "create"
+            existing_payload = self._repository_file_payload_or_none(project_id, branch, file_path)
+            if existing_payload is not None and self._file_payload_matches_bytes(
+                existing_payload,
+                content.encode("utf-8"),
+            ):
+                continue
+            action = "update" if existing_payload is not None else "create"
             actions.append({"action": action, "file_path": file_path, "content": content})
+            expected_contents[file_path] = content.encode("utf-8")
         for file_path, content in (binary_files or {}).items():
-            action = "update" if self._repository_file_exists(project_id, branch, file_path) else "create"
+            existing_payload = self._repository_file_payload_or_none(project_id, branch, file_path)
+            if existing_payload is not None and self._file_payload_matches_bytes(existing_payload, content):
+                continue
+            action = "update" if existing_payload is not None else "create"
             actions.append(
                 {
                     "action": action,
@@ -433,29 +489,58 @@ class HttpGitLabSkillSourceGateway:
                     "encoding": "base64",
                 }
             )
-        self._request(
-            "POST",
-            f"/projects/{quote(project_id, safe='')}/repository/commits",
-            json={
-                "branch": branch,
-                "commit_message": commit_message,
-                "actions": actions,
-            },
-        )
+            expected_contents[file_path] = content
+        if not actions:
+            return self.get_branch_head(project_id, branch)
+        try:
+            self._request(
+                "POST",
+                f"/projects/{quote(project_id, safe='')}/repository/commits",
+                json={
+                    "branch": branch,
+                    "commit_message": commit_message,
+                    "actions": actions,
+                },
+            )
+        except SkillsGatewayError:
+            if self._repository_files_match(project_id, branch, expected_contents):
+                return self.get_branch_head(project_id, branch)
+            raise
         return self.get_branch_head(project_id, branch)
 
     def _repository_file_exists(self, project_id: str, ref: str, file_path: str) -> bool:
+        return self._repository_file_payload_or_none(project_id, ref, file_path) is not None
+
+    def _repository_file_payload_or_none(self, project_id: str, ref: str, file_path: str) -> dict | None:
         try:
-            self._request(
-                "GET",
-                f"/projects/{quote(project_id, safe='')}/repository/files/{quote(file_path, safe='')}",
-                params={"ref": ref},
-            )
-            return True
+            return self._get_file_payload(project_id, ref, file_path)
         except SkillsGatewayError as exc:
             if exc.details.get("status_code") == 404:
-                return False
+                return None
             raise
+
+    @staticmethod
+    def _file_payload_matches_bytes(payload: dict, content: bytes) -> bool:
+        content_sha256 = payload.get("content_sha256")
+        if isinstance(content_sha256, str) and content_sha256:
+            return content_sha256 == hashlib.sha256(content).hexdigest()
+        encoded_content = payload.get("content")
+        if not isinstance(encoded_content, str):
+            return False
+        try:
+            return base64.b64decode(encoded_content) == content
+        except Exception:
+            return False
+
+    def _repository_files_match(self, project_id: str, ref: str, expected_contents: dict[str, bytes]) -> bool:
+        for file_path, content in expected_contents.items():
+            try:
+                payload = self._get_file_payload(project_id, ref, file_path)
+            except SkillsGatewayError:
+                return False
+            if not self._file_payload_matches_bytes(payload, content):
+                return False
+        return True
 
     def commit_skill_source(
         self,

@@ -64,7 +64,7 @@ def _python_type_from_json_schema(schema: dict[str, Any]) -> Any:
         return bool
     if schema_type == "array":
         item_schema = schema.get("items") if isinstance(schema.get("items"), dict) else {}
-        return list[_python_type_from_json_schema(item_schema)] | str
+        return list[_python_type_from_json_schema(item_schema)]
     if schema_type == "object":
         return dict[str, Any]
     return Any

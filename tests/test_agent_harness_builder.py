@@ -82,6 +82,47 @@ def test_psop_builder_scripted_run_creates_candidate_artifact(tmp_path) -> None:
     )
 
 
+def test_list_materials_filters_nested_video_material_kind(tmp_path) -> None:
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        agent_harness_sandbox_root=str(tmp_path / "agent-runs"),
+    )
+    sandbox = LocalAgentSandboxProvider(settings).acquire(input_payload={})
+    registry = ToolRegistry()
+    register_builder_tools(registry)
+    context = ToolExecutionContext(
+        sandbox=sandbox,
+        memory_store=FileMemoryStore(sandbox.memory_path),
+        memory_scope="psop.builder",
+        event_writer=AgentEventWriter(sandbox.events_path),
+        invocation_input={"material_ids": ["material-1"]},
+        invocation_context={
+            "material_analysis_results": [
+                {
+                    "schema_version": "1.0",
+                    "material_type": "video",
+                    "source": {
+                        "material_id": "material-1",
+                        "material_kind": "video",
+                        "filename": "install.mp4",
+                        "mime_type": "video/mp4",
+                    },
+                    "status": "ready",
+                    "summary": {"text": "装机视频解析摘要"},
+                }
+            ]
+        },
+    )
+
+    result = registry.execute("psop.builder.list_materials", {"material_kinds": ["video"]}, context)
+
+    assert result["status"] == "success"
+    assert result["summary"] == "列出 1 个可用素材。"
+    assert result["items"][0]["material_id"] == "material-1"
+    assert result["items"][0]["kind"] == "video"
+    assert result["items"][0]["analysis_status"] == "succeeded"
+
+
 def test_submit_candidate_materializes_reference_images_at_usage_site(tmp_path) -> None:
     settings = Settings(
         database_url="sqlite+pysqlite:///:memory:",
@@ -125,16 +166,18 @@ def test_submit_candidate_materializes_reference_images_at_usage_site(tmp_path) 
 
     materialized_skill = (sandbox.outputs_path / "skill-draft" / "SKILL.md").read_text(encoding="utf-8")
     builder_result = json.loads((sandbox.outputs_path / "builder-result.json").read_text(encoding="utf-8"))
-    embedded_image = "data:image/jpeg;base64,ZmFrZS1pbWFnZQ=="
+    materialized_image = sandbox.outputs_path / "skill-draft" / reference_path
 
     assert result["status"] == "success"
-    assert result["validation_summary"]["embedded_reference_image_count"] == 2
-    assert builder_result["embedded_reference_image_count"] == 2
+    assert result["validation_summary"]["materialized_reference_image_count"] == 1
+    assert builder_result["materialized_reference_image_count"] == 1
     assert reference_path in builder_result["files"]["SKILL.md"]
-    assert reference_path not in materialized_skill
-    assert embedded_image in materialized_skill
+    assert reference_path in materialized_skill
+    assert f"]({reference_path})" in materialized_skill
+    assert "data:image/" not in materialized_skill
+    assert materialized_image.read_bytes() == b"fake-image"
     assert "## 嵌入参考图片" not in materialized_skill
-    assert materialized_skill.index("### 阶段 1") < materialized_skill.index(embedded_image) < materialized_skill.index("### 阶段 2")
+    assert materialized_skill.index("### 阶段 1") < materialized_skill.index(f"]({reference_path})") < materialized_skill.index("### 阶段 2")
 
 
 def test_submit_candidate_invalid_payload_returns_auditable_repair_hint(tmp_path) -> None:
@@ -205,6 +248,144 @@ def test_read_material_analysis_clamps_out_of_range_max_chars(tmp_path) -> None:
     assert "raw_analysis" in result
     assert len(result["raw_analysis"]) > 900
     assert result["truncated"] is True
+
+
+def test_list_reference_assets_normalizes_video_keyframe_kind(tmp_path) -> None:
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        agent_harness_sandbox_root=str(tmp_path / "agent-runs"),
+    )
+    sandbox = LocalAgentSandboxProvider(settings).acquire(input_payload={})
+    registry = ToolRegistry()
+    register_builder_tools(registry)
+    context = ToolExecutionContext(
+        sandbox=sandbox,
+        memory_store=FileMemoryStore(sandbox.memory_path),
+        memory_scope="psop.builder",
+        event_writer=AgentEventWriter(sandbox.events_path),
+        invocation_context={
+            "candidate_reference_assets": [
+                {
+                    "id": "asset-1",
+                    "material_id": "material-1",
+                    "asset_kind": "video_keyframe",
+                    "reference_path": "references/video-keyframes/material-1/000001.jpg",
+                    "label": "CPU 安装关键帧。",
+                }
+            ]
+        },
+    )
+
+    result = registry.execute(
+        "psop.builder.list_reference_assets",
+        {"material_id": "material-1", "asset_kinds": ["keyframe"], "max_items": 10},
+        context,
+    )
+
+    assert result["status"] == "success"
+    assert result["items"][0]["asset_id"] == "asset-1"
+    assert result["items"][0]["asset_kind"] == "keyframe"
+    assert result["items"][0]["source_asset_kind"] == "video_keyframe"
+
+
+def test_submit_candidate_accepts_full_candidate_asset_after_truncated_list(tmp_path) -> None:
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        agent_harness_sandbox_root=str(tmp_path / "agent-runs"),
+    )
+    sandbox = LocalAgentSandboxProvider(settings).acquire(input_payload={})
+    registry = ToolRegistry()
+    register_builder_tools(registry)
+    first_path = "references/video-keyframes/material-1/000001.jpg"
+    second_path = "references/video-keyframes/material-1/000002.jpg"
+    context = ToolExecutionContext(
+        sandbox=sandbox,
+        memory_store=FileMemoryStore(sandbox.memory_path),
+        memory_scope="psop.builder",
+        event_writer=AgentEventWriter(sandbox.events_path),
+        invocation_context={
+            "candidate_reference_assets": [
+                {
+                    "id": "asset-1",
+                    "material_id": "material-1",
+                    "asset_kind": "video_keyframe",
+                    "reference_path": first_path,
+                    "label": "第一个候选帧。",
+                },
+                {
+                    "id": "asset-2",
+                    "material_id": "material-1",
+                    "asset_kind": "video_keyframe",
+                    "reference_path": second_path,
+                    "label": "第二个候选帧。",
+                },
+            ],
+            BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY: [
+                {
+                    "asset_id": "asset-2",
+                    "reference_path": second_path,
+                    "mime_type": "image/jpeg",
+                    "content_base64": "ZmFrZS1pbWFnZQ==",
+                }
+            ],
+        },
+    )
+    registry.execute(
+        "psop.builder.list_reference_assets",
+        {"material_id": "material-1", "asset_kinds": ["keyframe"], "max_items": 1},
+        context,
+    )
+    payload = _builder_candidate_payload(second_path)
+    payload["selected_reference_assets"][0]["asset_id"] = "asset-2"
+    payload["selected_reference_assets"][0]["reference_path"] = second_path
+    payload["evidence_map"][0]["source_refs"][0]["asset_id"] = "asset-2"
+
+    result = registry.execute("psop.builder.submit_candidate", payload, context)
+
+    assert result["status"] == "success"
+    assert result["validation_summary"]["reference_asset_count"] == 1
+
+
+def test_builder_candidate_accepts_common_evidence_source_aliases() -> None:
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    payload = _builder_candidate_payload(reference_path)
+    payload["evidence_map"][0]["source_refs"] = [
+        {"source_type": "material", "material_id": "material-1"},
+        "875f7af3-8bad-40e1-a23b-56e7dcdc47d0#keyframe-10",
+    ]
+
+    validate_builder_candidate(
+        payload,
+        candidate_reference_assets=[
+            {
+                "id": "asset-1",
+                "material_id": "material-1",
+                "asset_kind": "video_keyframe",
+                "reference_path": reference_path,
+            }
+        ],
+        standard_search_results=[],
+    )
+
+
+def test_builder_candidate_matches_workflow_step_with_normalized_spacing() -> None:
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    payload = _builder_candidate_payload(reference_path)
+    payload["files"]["SKILL.md"] += "\n### 首次点亮与 BIOS 配置\n确认 BIOS 设置。\n"
+    payload["workflow_step_candidates"].append({"title": "首次点亮与BIOS配置"})
+
+    validate_builder_candidate(
+        payload,
+        candidate_reference_assets=[
+            {
+                "id": "asset-1",
+                "material_id": "material-1",
+                "asset_kind": "video_keyframe",
+                "reference_path": reference_path,
+            }
+        ],
+        standard_search_results=[],
+    )
 
 
 def test_standard_search_uses_lightrag_query_endpoint_and_api_key(monkeypatch, tmp_path) -> None:

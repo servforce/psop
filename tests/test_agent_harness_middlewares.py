@@ -78,6 +78,29 @@ def test_tool_call_middleware_records_structured_error_and_stops_after_limit(tmp
     assert writer.events[-1].payload["tool_name"] == "psop.builder.submit_candidate"
 
 
+def test_tool_call_middleware_counts_failed_tool_errors_for_limit(tmp_path) -> None:
+    writer = AgentEventWriter(tmp_path / "events.jsonl")
+    middleware = ToolCallMiddleware(writer, max_error_counts={"psop.builder.submit_candidate": 2})
+    request = ToolCallRequest(
+        tool_call={"name": "psop.builder.submit_candidate", "id": "call-1", "args": {"review_notes": "bad"}},
+        tool=None,
+        state={},
+        runtime=None,
+    )
+
+    first = middleware.wrap_tool_call(request, lambda _: (_ for _ in ()).throw(ValueError("数组字段类型错误")))
+
+    assert isinstance(first, ToolMessage)
+    assert first.status == "error"
+    assert writer.events[-1].event_type == "agent.tool.failed"
+
+    with pytest.raises(AgentBudgetExceededError):
+        middleware.wrap_tool_call(request, lambda _: (_ for _ in ()).throw(ValueError("数组字段类型错误")))
+
+    assert writer.events[-1].event_type == "agent.budget.exceeded"
+    assert writer.events[-1].payload["last_error_type"] == "ValueError"
+
+
 def test_model_call_event_middleware_records_model_lifecycle(tmp_path) -> None:
     writer = AgentEventWriter(tmp_path / "events.jsonl")
     middleware = ModelCallEventMiddleware(writer)

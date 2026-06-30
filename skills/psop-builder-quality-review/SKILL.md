@@ -23,7 +23,7 @@ allowed-tools:
 - `SKILL.md` 包含阶段化 workflow、证据门、等待条件、安全停止和恢复路径。
 - `prompts/system.md` 只包含运行时必要系统提示，不混入 builder 工作日志。
 - `references/README.md` 能说明参考资产和行业标准的用途。
-- 候选文档中引用参考图片时必须使用可解析的 `reference_path`；哪个流程步骤使用该图片，就必须在该步骤附近引用。`submit_candidate` 物化最终 PSOP Skill Markdown 时会把该位置就地替换为内嵌图片，不能要求用户打开图片链接，也不能把参考图片集中放在文档底部。
+- 候选文档中引用参考图片时必须使用可解析的 `reference_path`；哪个流程步骤使用该图片，就必须在该步骤附近用 Markdown 图片语法引用相对路径，例如 `![CPU 安装参考](references/video-keyframes/.../000950504.jpg)`。`submit_candidate` 会把选中的原图文件物化到最终 PSOP Skill draft 的 `references/` 目录，不能使用 base64 data URI，不能要求用户打开外部图片链接，也不能把参考图片集中放在文档底部。
 - `examples/input.md` 与 `examples/expected-output.md` 展示典型调用和期望行为。
 - `tests/checklist.md` 覆盖 happy path、缺失证据、风险停止、标准引用和人工确认。
 - `evidence_map` 中每个关键 claim 都有合法 source refs。
@@ -47,7 +47,7 @@ allowed-tools:
 
 - `files` 中必须有所有必需 Markdown 文件的完整内容。
 - `directory_tree`、`generation_reason`、`material_usage`、`evidence_map`、`safety_constraints`、`workflow_step_candidates`、`expected_evidence_requirements` 必须同时提交。
-- `selected_reference_assets` 最多 12 项，并且每个 `reference_path` 必须在 `SKILL.md` 的使用步骤附近或 `references/README.md` 中出现。
+- `selected_reference_assets` 最多 12 项，并且每个 `reference_path` 必须在 `SKILL.md` 的使用步骤附近以 Markdown 图片链接形式出现。
 - 如果 LightRAG 检索失败，不要伪造行业标准；在 `review_notes` 中说明失败状态，并保持 `industry_standard_usage` 为空数组或只写可追溯的 `reference_only` 项。
 
 不得把 workspace 中的 `submit-params.json`、证据映射草稿或参考资产选择草稿当作最终候选产物。
