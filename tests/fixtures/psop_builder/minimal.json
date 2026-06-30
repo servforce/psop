@@ -66,15 +66,6 @@
       "required_for_builder": true,
       "max_results": 3,
       "trust_level": "semi_trusted_reference"
-    },
-    "psop_skill_form_definition": {
-      "formal_revision": "psop-eg-formal/v5"
-    },
-    "physical_world_skill_guidance": {
-      "modeling_frame": "Physical-world skills should be modeled as state progression with evidence gates and safety stops."
-    },
-    "publishable_document_skill_standard": {
-      "status_target": "draft suitable for human publish review"
     }
   }
 }

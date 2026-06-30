@@ -1310,9 +1310,6 @@ class SkillsService:
                     "max_results": self.settings.standard_lightrag_max_results,
                     "trust_level": "semi_trusted_reference",
                 },
-                "psop_skill_form_definition": prompt_payload.get("psop_skill_form_definition") or {},
-                "physical_world_skill_guidance": prompt_payload.get("physical_world_skill_guidance") or {},
-                "publishable_document_skill_standard": prompt_payload.get("publishable_document_skill_standard") or {},
             },
         )
 
@@ -1430,9 +1427,6 @@ class SkillsService:
                 "SKILL.md": source_bundle.skill_md_content,
             },
             "user_description": user_description,
-            "psop_skill_form_definition": self._skill_creation_form_definition_context(),
-            "physical_world_skill_guidance": self._physical_world_skill_guidance_context(),
-            "publishable_document_skill_standard": self._publishable_document_skill_standard_context(),
             "material_analysis_results": material_generation_context["material_analysis_results"],
             "candidate_reference_assets": material_generation_context["candidate_reference_assets"],
             "output_contract": {
@@ -1472,75 +1466,6 @@ class SkillsService:
                     "避开 Logo、片头、转场、纯水印、重复画面和低信息帧。"
                 ),
             },
-        }
-
-    @staticmethod
-    def _skill_creation_form_definition_context() -> dict:
-        return {
-            "definition": "PSOP Skill is a source-level contract for a real task. The platform compiles Skills into EG Compile Artifacts.",
-            "formal_revision": "psop-eg-formal/v5",
-            "core_constraints": [
-                "WEB IDE users author Skills; the system compiles and executes EG.",
-                "SKILL.md is the source contract for task workflow, evidence, safety, recovery, and completion criteria.",
-                "A publishable document Skill must be self-contained enough for compilation from README.md and SKILL.md.",
-                "Runtime execution must preserve explicit wait checkpoints and evidence requirements instead of silently advancing.",
-            ],
-            "minimum_contract_sections": [
-                "goal",
-                "applicability",
-                "inputs",
-                "outputs",
-                "workflow_steps",
-                "wait_checkpoints",
-                "expected_evidence",
-                "safety_constraints",
-                "recovery_paths",
-                "completion_criteria",
-            ],
-            "file_role_constraints": {
-                "README.md": "review-facing overview",
-                "SKILL.md": "canonical source contract",
-                "prompts/system.md": "runtime behavior guidance only; must not contain core contract absent from SKILL.md",
-                "references/README.md": "runtime reference knowledge and exact reference paths",
-                "examples": "contract-aligned sample interactions",
-                "tests/checklist.md": "release review and regression checklist",
-            },
-        }
-
-    @staticmethod
-    def _physical_world_skill_guidance_context() -> dict:
-        return {
-            "modeling_frame": "Physical-world skills should be modeled as state progression with evidence gates and safety stops.",
-            "required_reasoning": [
-                "Identify the real-world object state before and after each phase.",
-                "Separate instructions, user evidence, completion judgment, and failure recovery.",
-                "Make irreversible or hazardous actions explicit before the action is taken.",
-                "Ask for photos or explicit confirmation at high-risk checkpoints.",
-                "Stop or request evidence when the user skips prerequisites or reports an unsafe state.",
-            ],
-            "anti_patterns": [
-                "turning a long video transcript into a generic article",
-                "placing core runtime behavior only in prompts/system.md",
-                "using placeholder image paths such as references/.../file.jpg",
-                "mixing sponsor chatter, branding, or future predictions into the task contract",
-                "advancing through multiple physical phases without evidence gates",
-            ],
-        }
-
-    @staticmethod
-    def _publishable_document_skill_standard_context() -> dict:
-        return {
-            "status_target": "draft suitable for human publish review",
-            "must_pass": [
-                "README.md describes purpose, scope, inputs, outputs, and maintenance notes without implementation leakage.",
-                "SKILL.md includes a complete staged workflow with prerequisites, actions, evidence, wait points, safety constraints, recovery paths, and completion criteria.",
-                "examples/expected-output.md uses the same stage numbering and behavior as SKILL.md.",
-                "builder candidate SKILL.md uses Markdown image links with exact reference_path values from selected_reference_assets in the workflow step where each image is needed.",
-                "Final persisted draft keeps selected reference image files under references/ and displays them through relative Markdown image links, never base64 data URIs.",
-                "No generated text contains TODO, placeholder paths, ellipsis reference paths, or unsupported future-hardware claims.",
-                "review_notes explicitly lists material gaps, uncertain assumptions, or items requiring human confirmation.",
-                "Every selected_reference_assets/reference_files path is used by SKILL.md workflow content, and no document references an unselected reference_path.",
-            ],
         }
 
     def _collect_generation_material_context(

@@ -27,7 +27,7 @@
 - 失败、异常、证据不足、用户跳步时应如何恢复或暂停。
 - 最终输出、完成标准和验收证据是什么。
 
-prompt payload 中的 psop_skill_form_definition、physical_world_skill_guidance 和 publishable_document_skill_standard 是构建约束事实源，必须与用户目标和素材证据一起使用。
+PSOP Skill 形式定义、物理世界任务建模原则和发布审阅标准是构建约束事实源，必须与用户目标和素材证据一起使用。
 
 ## 3. 物理世界 Skill 的建模要求
 

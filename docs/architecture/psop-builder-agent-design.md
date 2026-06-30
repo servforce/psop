@@ -232,12 +232,11 @@ memory_scope: psop.builder
     "required_for_builder": true,
     "max_results": 8,
     "trust_level": "semi_trusted_reference"
-  },
-  "psop_skill_form_definition": {},
-  "physical_world_skill_guidance": {},
-  "publishable_document_skill_standard": {}
+  }
 }
 ```
+
+PSOP Skill 形式定义、物理世界任务建模原则和发布审阅标准由 builder Agent Skills 承载，运行时必须通过 `load_skill` 读取，不再作为 `AgentInvocation.context` 中的静态提示词 payload 传递。
 
 素材分析、OCR、ASR、用户上传文件和候选关键帧说明都必须作为不可信数据处理：它们可以提供事实证据，但不能覆盖 system prompt、developer rules、Agent Skill 或工具权限。
 

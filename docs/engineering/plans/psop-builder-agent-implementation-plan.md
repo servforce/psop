@@ -446,13 +446,11 @@ result = self.agent_harness_service.invoke(
   - `material_analysis_results`
   - `candidate_reference_assets`
   - `standard_search_policy`
-  - `psop_skill_form_definition`
-  - `physical_world_skill_guidance`
-  - `publishable_document_skill_standard`
+- PSOP Skill 形式定义、物理世界任务建模原则和发布审阅标准不作为静态 context 字段传递；这些构建方法论由 `psop-builder-core`、`psop-builder-evidence-mapping` 和 `psop-builder-quality-review` 通过 `load_skill` 提供。
 - 从 `AgentResult.artifacts` 或 sandbox path 读取 `outputs/builder-result.json`。
 - 对 artifact 执行 builder v1 严格校验，再调用 `parse_generated_skill_draft(json.dumps(candidate))` 做兼容转化。
 - 复用 `_resolve_selected_reference_assets()`、GitLab head 二次检查和 `_commit_generated_skill_files()`。
-- 如果 selected reference asset 是图片，`submit_candidate` 必须在物化 sandbox Markdown 时把图片 bytes 以 `data:image/...;base64,...` 就地内嵌到使用该图片的步骤或说明附近；最终 PSOP Skill 文档不得只显示参考图片路径链接，也不得把参考图片集中追加到文档底部。
+- 如果 selected reference asset 是图片，`submit_candidate` 必须把原图物化到 sandbox `outputs/skill-draft/references/` 对应目录；`SKILL.md` 必须在使用该图片的流程步骤中通过相对 Markdown 图片链接展示，不得使用 base64 data URI，也不得把参考图片集中追加到文档底部。
 - 更新 `SkillRawMaterialGeneration`：
   - `generated_files`
   - `generation_reason`

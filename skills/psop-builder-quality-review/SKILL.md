@@ -30,6 +30,19 @@ allowed-tools:
 - `workflow_step_candidates` 和 `expected_evidence_requirements` 能对应 `SKILL.md` 的阶段。
 - `industry_standard_usage` 中的标准引用可追溯，没有被写成未受支持的强制要求。
 
+## 发布审阅标准
+
+候选产物的目标状态是“可进入人工发布审阅的 draft”，提交前必须满足：
+
+- `README.md` 描述目的、范围、输入、输出和维护注意事项，不暴露 builder 实现细节。
+- `SKILL.md` 包含完整阶段化 workflow、前置条件、动作、证据、等待点、安全约束、恢复路径和完成标准。
+- `examples/expected-output.md` 与 `SKILL.md` 使用一致的阶段编号、阶段名称和协作行为。
+- `SKILL.md` 在使用参考图片的具体流程步骤中引用 `selected_reference_assets.reference_path`，并使用相对 Markdown 图片链接。
+- 最终 draft 的参考图片文件保存在 `references/` 目录，通过相对链接展示，不能使用 base64 data URI。
+- 不出现 TODO、占位路径、省略号路径、无法证实的硬件规格或未来能力承诺。
+- `review_notes` 明确列出素材缺口、不确定推断和需要人工确认的事项。
+- 所有 `selected_reference_assets.reference_path` 都必须在 `SKILL.md` 流程内容中出现，文档不得引用未选中的参考资产路径。
+
 ## 反模式
 
 - 把 PSOP Skill 写成操作说明书摘要，没有运行时判断条件。
@@ -38,6 +51,9 @@ allowed-tools:
 - 只选择漂亮关键帧，不选择能支撑运行时判断的关键帧。
 - 把素材中不确定或被遮挡的动作写成确定事实。
 - 产物中出现 `TODO`、`待补充`、`根据实际情况` 等未审阅占位内容。
+- 把核心运行时行为只放在 `prompts/system.md`，而 `SKILL.md` 中缺少对应契约。
+- 将素材转写成长篇教程、营销文案、品牌口播或普通文章。
+- 用户未提供关键证据时，workflow 仍一次性推进多个物理阶段。
 
 ## 提交要求
 
