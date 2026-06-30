@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from app.agent_harness.events import AgentEventWriter
@@ -17,6 +17,8 @@ class ToolExecutionContext:
     memory_scope: str
     event_writer: AgentEventWriter
     invocation_context: dict[str, Any]
+    invocation_input: dict[str, Any] = field(default_factory=dict)
+    settings: Any | None = None
     skill_loader: SkillLoader | None = None
     allowed_skill_names: set[str] | None = None
 

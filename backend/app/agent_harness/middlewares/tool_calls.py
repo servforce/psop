@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import json
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, override
@@ -11,13 +13,21 @@ from langgraph.errors import GraphBubbleUp
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
+from app.agent_harness.errors import AgentBudgetExceededError
 from app.agent_harness.events import AgentEventWriter
 
 
 class ToolCallMiddleware(AgentMiddleware[AgentState]):
-    def __init__(self, event_writer: AgentEventWriter) -> None:
+    def __init__(
+        self,
+        event_writer: AgentEventWriter,
+        *,
+        max_error_counts: dict[str, int] | None = None,
+    ) -> None:
         super().__init__()
         self.event_writer = event_writer
+        self.max_error_counts = max_error_counts or {}
+        self._error_counts: dict[str, int] = {}
 
     @override
     def wrap_tool_call(
@@ -38,7 +48,9 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
                 {**payload, "duration_ms": _elapsed_ms(started_at), "error_type": exc.__class__.__name__, "error": str(exc)},
             )
             return _error_tool_message(request, exc)
-        self.event_writer.record("agent.tool.completed", {**payload, "duration_ms": _elapsed_ms(started_at)})
+        completed_payload = {**payload, **_tool_result_payload(result), "duration_ms": _elapsed_ms(started_at)}
+        self.event_writer.record("agent.tool.completed", completed_payload)
+        self._check_error_budget(completed_payload)
         return result
 
     @override
@@ -60,8 +72,35 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
                 {**payload, "duration_ms": _elapsed_ms(started_at), "error_type": exc.__class__.__name__, "error": str(exc)},
             )
             return _error_tool_message(request, exc)
-        self.event_writer.record("agent.tool.completed", {**payload, "duration_ms": _elapsed_ms(started_at)})
+        completed_payload = {**payload, **_tool_result_payload(result), "duration_ms": _elapsed_ms(started_at)}
+        self.event_writer.record("agent.tool.completed", completed_payload)
+        self._check_error_budget(completed_payload)
         return result
+
+    def _check_error_budget(self, payload: dict[str, Any]) -> None:
+        tool_name = str(payload.get("tool_name") or "")
+        limit = self.max_error_counts.get(tool_name)
+        if not limit or payload.get("result_status") != "error":
+            if tool_name:
+                self._error_counts[tool_name] = 0
+            return
+        current = self._error_counts.get(tool_name, 0) + 1
+        self._error_counts[tool_name] = current
+        if current < limit:
+            return
+        self.event_writer.record(
+            "agent.budget.exceeded",
+            {
+                "budget_type": "tool_errors",
+                "tool_name": tool_name,
+                "limit": limit,
+                "actual": current,
+                "last_error_type": payload.get("result_type") or "",
+                "last_error_message": payload.get("result_message") or "",
+                "message": f"{tool_name} 连续返回错误次数达到限制：{limit}。",
+            },
+        )
+        raise AgentBudgetExceededError(f"{tool_name} 连续返回错误次数达到限制：{limit}。")
 
 
 def _tool_payload(request: ToolCallRequest) -> dict[str, Any]:
@@ -72,6 +111,64 @@ def _tool_payload(request: ToolCallRequest) -> dict[str, Any]:
         "tool_call_id": str(tool_call.get("id") or ""),
         "argument_keys": sorted(args.keys()),
     }
+
+
+def _tool_result_payload(result: ToolMessage | Command) -> dict[str, Any]:
+    if not isinstance(result, ToolMessage):
+        return {"result_kind": result.__class__.__name__}
+    payload = _parse_tool_content(result.content)
+    if not isinstance(payload, dict):
+        content = str(result.content or "")
+        return {
+            "result_status": str(getattr(result, "status", None) or "success"),
+            "result_summary": _truncate(content, 240),
+        }
+    summary: dict[str, Any] = {
+        "result_status": str(payload.get("status") or getattr(result, "status", None) or "success"),
+        "result_keys": sorted(str(key) for key in payload.keys())[:20],
+    }
+    for source_key, target_key in (
+        ("type", "result_type"),
+        ("message", "result_message"),
+        ("summary", "result_summary"),
+        ("artifact_ref", "result_artifact_ref"),
+        ("files_root_ref", "result_files_root_ref"),
+    ):
+        value = payload.get(source_key)
+        if isinstance(value, (str, int, float, bool)) and value != "":
+            summary[target_key] = _truncate(str(value), 500)
+    if isinstance(payload.get("items"), list):
+        summary["result_item_count"] = len(payload["items"])
+    if isinstance(payload.get("materialized_files"), list):
+        summary["result_materialized_file_count"] = len(payload["materialized_files"])
+    validation_summary = payload.get("validation_summary")
+    if isinstance(validation_summary, dict):
+        summary["validation_summary"] = {
+            str(key): value
+            for key, value in validation_summary.items()
+            if isinstance(value, (str, int, float, bool)) or value is None
+        }
+    return summary
+
+
+def _parse_tool_content(content: Any) -> Any:
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, list):
+        return {"content_parts": len(content)}
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    try:
+        return ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return None
 
 
 def _error_tool_message(request: ToolCallRequest, exc: Exception) -> ToolMessage:
@@ -91,3 +188,9 @@ def _error_tool_message(request: ToolCallRequest, exc: Exception) -> ToolMessage
 
 def _elapsed_ms(started_at: float) -> int:
     return int((time.perf_counter() - started_at) * 1000)
+
+
+def _truncate(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 3].rstrip() + "..."

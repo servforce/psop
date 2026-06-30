@@ -1,0 +1,80 @@
+{
+  "agent_key": "psop.builder",
+  "input": {
+    "text": "基于素材生成泵房进入前安全检查 Skill draft。",
+    "task": "generate_psop_skill_source_from_raw_materials",
+    "skill": {
+      "id": "skill-pump-room-check",
+      "key": "pump-room-entry-check",
+      "name": "泵房进入前安全检查",
+      "description": "进入泵房前完成 PPE、阀门和压力表检查。",
+      "draft_version_id": "draft-version-1",
+      "source_ref": "draft",
+      "source_commit_sha": "base-sha-1"
+    },
+    "user_description": "进入泵房前检查 PPE，确认阀门关闭，记录压力表读数。",
+    "current_source": {
+      "README.md": "# 泵房进入前安全检查\n\n当前为空白草稿，需要根据素材生成。\n",
+      "SKILL.md": "# 泵房进入前安全检查\n\n当前为空白草稿。\n"
+    },
+    "material_ids": ["material-pump-room-video"],
+    "output_contract": {
+      "required_files": [
+        "README.md",
+        "SKILL.md",
+        "prompts/system.md",
+        "references/README.md",
+        "examples/input.md",
+        "examples/expected-output.md",
+        "tests/checklist.md"
+      ],
+      "forbidden_files": ["skill.yaml"]
+    }
+  },
+  "context": {
+    "material_analysis_results": [
+      {
+        "material_id": "material-pump-room-video",
+        "analysis_id": "analysis-1",
+        "kind": "video",
+        "filename": "pump-room-entry.mp4",
+        "analysis_status": "succeeded",
+        "summary": "视频展示操作员进入泵房前检查 PPE、确认阀门关闭并记录压力表读数。",
+        "observed_actions": ["检查 PPE", "确认阀门关闭", "记录压力表读数"],
+        "observed_states": ["泵房入口可见", "阀门处于关闭状态", "压力表读数需要记录"],
+        "detected_risks": ["PPE 缺失风险", "压力异常风险"],
+        "uncertainties": ["具体适用的行业标准条款需要人工确认"],
+        "evidence_candidates": ["PPE 照片或明确确认", "阀门关闭状态", "压力表读数"]
+      }
+    ],
+    "candidate_reference_assets": [
+      {
+        "id": "asset-pump-room-1",
+        "asset_id": "asset-pump-room-1",
+        "material_id": "material-pump-room-video",
+        "analysis_id": "analysis-1",
+        "asset_kind": "keyframe",
+        "timestamp_ms": 12000,
+        "label": "泵房入口与压力表关键帧",
+        "observations": ["画面包含泵房入口", "可见压力表区域", "适合作为运行时参考图"],
+        "reference_path": "references/keyframes/pump-room-pressure.jpg",
+        "confidence": 0.82
+      }
+    ],
+    "standard_search_policy": {
+      "enabled": true,
+      "required_for_builder": true,
+      "max_results": 3,
+      "trust_level": "semi_trusted_reference"
+    },
+    "psop_skill_form_definition": {
+      "formal_revision": "psop-eg-formal/v5"
+    },
+    "physical_world_skill_guidance": {
+      "modeling_frame": "Physical-world skills should be modeled as state progression with evidence gates and safety stops."
+    },
+    "publishable_document_skill_standard": {
+      "status_target": "draft suitable for human publish review"
+    }
+  }
+}

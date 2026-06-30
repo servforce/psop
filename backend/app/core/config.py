@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     llm_multimodal_enable_thinking: bool = True
     llm_multimodal_thinking_budget: int | None = 8192
     llm_timeout_seconds: float = 600.0
+    standard_lightrag_base_url: str = "http://10.0.0.20:9621"
+    standard_lightrag_api_key: str = "servforce"
+    standard_lightrag_timeout_seconds: float = 20.0
+    standard_lightrag_max_results: int = 8
     asr_api_base_url: str = "http://10.0.0.20:12302"
     asr_language: str | None = "zh"
     asr_timeout_seconds: float = 600.0

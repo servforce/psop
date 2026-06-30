@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from app.agent_harness.tools.builtin.builder import BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY
+from app.agent_harness.schemas import AgentInvocation, AgentResult
+from app.agent_harness.service import AgentHarnessService, build_agent_harness_service
 from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
 from app.domain.skills.exceptions import (
     SkillsError,
     SkillConflictError,
+    SkillsGatewayError,
     SkillNotFoundError,
     SkillSourceConflictError,
     SkillValidationError,
@@ -109,6 +115,7 @@ class SkillsService:
         agent_prompt_service: AgentPromptService | None = None,
         repository: SkillsRepository | None = None,
         job_repository: JobRepository | None = None,
+        agent_harness_service: AgentHarnessService | None = None,
     ) -> None:
         self.settings = settings
         self.gitlab_gateway = gitlab_gateway
@@ -119,6 +126,7 @@ class SkillsService:
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
         self.repository = repository or SkillsRepository()
         self.job_repository = job_repository or JobRepository()
+        self.agent_harness_service = agent_harness_service
 
     def list_skills(
         self,
@@ -1099,11 +1107,6 @@ class SkillsService:
                 details={"expected": base_commit_sha, "actual": source_bundle.head_commit_sha},
             )
 
-        prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
-            session,
-            usage_key="default.skill_creation_agent",
-            fallback_ref="skill_creation/conversational_draft/v1",
-        )
         prompt_payload = self._build_skill_generation_prompt_payload(
             definition=definition,
             draft_version=draft_version,
@@ -1112,41 +1115,89 @@ class SkillsService:
             user_description=generation.user_description,
             material_generation_context=material_generation_context,
         )
-        system_prompt = prompt_pack.system_prompt
-        user_prompt = json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True, indent=2)
-        prompt_hash = hashlib.sha256(f"{system_prompt}\n{user_prompt}".encode("utf-8")).hexdigest()
+        builder_reference_asset_files = self._build_builder_reference_asset_file_payloads(
+            session,
+            material_generation_context=material_generation_context,
+        )
+        builder_invocation = self._build_psop_builder_invocation(
+            prompt_payload=prompt_payload,
+            material_ids=material_ids,
+        )
+        runtime_builder_invocation = builder_invocation.model_copy(deep=True)
+        runtime_builder_invocation.context[BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY] = builder_reference_asset_files
+        builder_invocation_payload = builder_invocation.model_dump(mode="json")
+        prompt_hash = hashlib.sha256(
+            json.dumps(builder_invocation_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
         prompt_metadata = {
-            **prompt_pack.metadata(),
+            "agent_key": "psop.builder",
             "job_id": job.id,
             "job_type": SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE,
             "candidate_reference_asset_count": len(material_generation_context["candidate_reference_assets"]),
+            "reference_asset_file_count": len(builder_reference_asset_files),
             "reference_files": [],
         }
         generation.prompt_hash = prompt_hash
         generation.prompt_metadata = prompt_metadata
-        generation.raw_response = {"request": {"prompt_payload": prompt_payload, "agent_prompt": prompt_metadata}}
+        generation.raw_response = {"request": {"agent_invocation": builder_invocation_payload, "agent_prompt": prompt_metadata}}
         job.payload = self._set_skill_generation_job_stage(job.payload, "calling_model", "running")
         session.commit()
 
-        completion = self.inference_gateway.complete(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            route_key=prompt_pack.route_key,
+        agent_result = self._agent_harness_service().invoke(
+            runtime_builder_invocation,
+            persistence_session=session,
+            persistence_context={
+                "related_skill_definition_id": definition.id,
+                "related_generation_id": generation.id,
+                "related_job_id": job.id,
+            },
         )
-        self.job_repository.accumulate_llm_usage(job, completion.usage)
+        self.job_repository.accumulate_llm_usage(job, self._agent_token_usage(agent_result))
+        candidate_content = ""
+        builder_artifact_path = ""
+        prompt_metadata = {
+            **prompt_metadata,
+            "agent_run_id": agent_result.agent_run_id,
+            "sandbox_path": agent_result.sandbox_path or "",
+            "events_path": str(Path(agent_result.sandbox_path) / "events.jsonl") if agent_result.sandbox_path else "",
+            "standard_search_summary": self._agent_standard_search_summary(agent_result),
+            "selected_reference_assets": [],
+            "builder_artifact_path": "",
+            "builder_files_path": self._agent_artifact_path(agent_result, "skill_draft_files"),
+        }
+        generation.prompt_metadata = prompt_metadata
+        generation.raw_response = {
+            "request": {"agent_invocation": builder_invocation_payload, "agent_prompt": prompt_metadata},
+            "agent_result": self._agent_result_summary(agent_result),
+        }
+        session.commit()
+        if agent_result.status != "succeeded":
+            raise SkillsGatewayError(
+                "PSOP builder 智能体运行失败。",
+                details={"agent_run_id": agent_result.agent_run_id, "error": agent_result.error_message},
+            )
+        candidate_content, builder_artifact_path = self._read_builder_candidate_artifact(agent_result)
+        prompt_metadata = {
+            **prompt_metadata,
+            "builder_artifact_path": builder_artifact_path,
+        }
+        generation.prompt_metadata = prompt_metadata
         job.payload = self._set_skill_generation_job_stage(job.payload, "resolving_references", "running")
         session.commit()
 
-        generated = parse_generated_skill_draft(completion.content)
+        generated = parse_generated_skill_draft(candidate_content)
         reference_binary_files, selected_reference_assets, reference_files = self._resolve_selected_reference_assets(
             session,
             selected_reference_assets=generated.selected_reference_assets,
             material_generation_context=material_generation_context,
         )
+        generated = self._read_builder_materialized_draft_files(agent_result, generated)
+        embedded_reference_image_count = int(generated.raw_parsed.get("embedded_reference_image_count") or 0)
         prompt_metadata = {
             **prompt_metadata,
             "selected_reference_assets": selected_reference_assets,
             "reference_files": reference_files,
+            "embedded_reference_image_count": embedded_reference_image_count,
         }
         generation.prompt_metadata = prompt_metadata
         job.payload = self._set_skill_generation_job_stage(job.payload, "committing_source", "running")
@@ -1167,11 +1218,10 @@ class SkillsService:
         )
         generation.status = "succeeded"
         generation.raw_response = {
-            "request": {"prompt_payload": prompt_payload, "agent_prompt": prompt_metadata},
-            "content": completion.content,
+            "request": {"agent_invocation": builder_invocation_payload, "agent_prompt": prompt_metadata},
+            "content": candidate_content,
             "parsed": generated.raw_parsed,
-            "usage": completion.usage,
-            "raw": completion.raw_response,
+            "agent_result": self._agent_result_summary(agent_result),
         }
         generation.generated_files = generated.files
         generation.prompt_metadata = prompt_metadata
@@ -1216,6 +1266,123 @@ class SkillsService:
         draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)
         definition.updated_at = now_utc()
         return new_commit_sha
+
+    def _build_psop_builder_invocation(self, *, prompt_payload: dict, material_ids: list[str]) -> AgentInvocation:
+        output_contract = dict(prompt_payload.get("output_contract") or {})
+        return AgentInvocation(
+            agent_key="psop.builder",
+            input={
+                "text": str(prompt_payload.get("user_description") or "").strip()
+                or f"基于素材生成 {((prompt_payload.get('skill') or {}).get('name') or 'PSOP Skill')} draft。",
+                "task": prompt_payload.get("task"),
+                "skill": prompt_payload.get("skill") or {},
+                "user_description": prompt_payload.get("user_description") or "",
+                "current_source": prompt_payload.get("current_source") or {},
+                "material_ids": material_ids,
+                "output_contract": output_contract,
+            },
+            context={
+                "material_analysis_results": prompt_payload.get("material_analysis_results") or [],
+                "candidate_reference_assets": prompt_payload.get("candidate_reference_assets") or [],
+                "standard_search_policy": {
+                    "enabled": True,
+                    "required_for_builder": False,
+                    "max_results": self.settings.standard_lightrag_max_results,
+                    "trust_level": "semi_trusted_reference",
+                },
+                "psop_skill_form_definition": prompt_payload.get("psop_skill_form_definition") or {},
+                "physical_world_skill_guidance": prompt_payload.get("physical_world_skill_guidance") or {},
+                "publishable_document_skill_standard": prompt_payload.get("publishable_document_skill_standard") or {},
+            },
+        )
+
+    def _read_builder_candidate_artifact(self, agent_result: AgentResult) -> tuple[str, str]:
+        artifact_ref = ""
+        for artifact in agent_result.artifacts:
+            if artifact.artifact_type == "skill_draft_candidate":
+                artifact_ref = artifact.path or ""
+                break
+        candidates: list[Path] = []
+        if artifact_ref.startswith("sandbox://") and agent_result.sandbox_path:
+            relative = artifact_ref.removeprefix("sandbox://").lstrip("/")
+            if relative:
+                candidates.append(Path(agent_result.sandbox_path) / relative)
+        elif artifact_ref.startswith("/"):
+            candidates.append(Path(artifact_ref))
+        if agent_result.sandbox_path:
+            candidates.append(Path(agent_result.sandbox_path) / "outputs" / "builder-result.json")
+        for candidate_path in candidates:
+            if candidate_path.exists():
+                return candidate_path.read_text(encoding="utf-8"), artifact_ref or "sandbox://outputs/builder-result.json"
+        raise SkillsGatewayError(
+            "PSOP builder 未生成 builder-result.json。",
+            details={"agent_run_id": agent_result.agent_run_id, "artifact_ref": artifact_ref},
+        )
+
+    @staticmethod
+    def _agent_token_usage(agent_result: AgentResult) -> dict[str, int]:
+        usage_event_count = 0
+        latest_total: dict | None = None
+        for event in agent_result.events:
+            if event.event_type != "agent.token.usage":
+                continue
+            usage_event_count += 1
+            total = event.payload.get("total")
+            if isinstance(total, dict):
+                latest_total = total
+        if not latest_total:
+            return {}
+        usage = {
+            "input_tokens": int(latest_total.get("input_tokens") or 0),
+            "output_tokens": int(latest_total.get("output_tokens") or 0),
+            "total_tokens": int(latest_total.get("total_tokens") or 0),
+        }
+        if usage_event_count:
+            usage["llm_calls"] = usage_event_count
+        return usage
+
+    @staticmethod
+    def _agent_standard_search_summary(agent_result: AgentResult) -> dict:
+        summaries = [
+            event.payload
+            for event in agent_result.events
+            if event.event_type == "agent.tool.standard_search" and isinstance(event.payload, dict)
+        ]
+        if not summaries:
+            return {"called": False, "result_count": 0, "standard_refs": []}
+        latest = summaries[-1]
+        return {
+            "called": True,
+            "status": latest.get("status") or "",
+            "error_type": latest.get("error_type") or "",
+            "result_count": latest.get("result_count") or 0,
+            "standard_refs": latest.get("standard_refs") or [],
+        }
+
+    @staticmethod
+    def _agent_result_summary(agent_result: AgentResult) -> dict:
+        return {
+            "agent_run_id": agent_result.agent_run_id,
+            "agent_key": agent_result.agent_key,
+            "status": agent_result.status,
+            "error_message": agent_result.error_message,
+            "final_output": agent_result.final_output,
+            "sandbox_path": agent_result.sandbox_path,
+            "artifacts": [artifact.model_dump(mode="json") for artifact in agent_result.artifacts],
+            "event_count": len(agent_result.events),
+        }
+
+    @staticmethod
+    def _agent_artifact_path(agent_result: AgentResult, artifact_type: str) -> str:
+        for artifact in agent_result.artifacts:
+            if artifact.artifact_type == artifact_type:
+                return artifact.path or ""
+        return ""
+
+    def _agent_harness_service(self) -> AgentHarnessService:
+        if self.agent_harness_service is None:
+            self.agent_harness_service = build_agent_harness_service(self.settings)
+        return self.agent_harness_service
 
     def _build_skill_generation_prompt_payload(
         self,
@@ -1273,7 +1440,8 @@ class SkillsService:
                     f"必须从 candidate_reference_assets 中选择 1 到 {MAX_SKILL_REFERENCE_ASSETS} 张最适合 Skill 运行时参考的关键帧，"
                     "输出到 selected_reference_assets。每一个 selected_reference_assets.reference_path 都必须至少被 "
                     "SKILL.md 或 references/README.md 引用一次；SKILL.md、references/README.md、examples/ 和 tests/ "
-                    "不得引用未出现在 selected_reference_assets 中的 reference_path。"
+                    "不得引用未出现在 selected_reference_assets 中的 reference_path。最终提交前平台会将已选参考图片内容内嵌到 Markdown，"
+                    "不要要求用户打开图片链接。"
                 ),
                 "material_analysis_policy": (
                     "material_analysis_results 是素材证据包，不是任务拆解；"
@@ -1347,7 +1515,8 @@ class SkillsService:
                 "README.md describes purpose, scope, inputs, outputs, and maintenance notes without implementation leakage.",
                 "SKILL.md includes a complete staged workflow with prerequisites, actions, evidence, wait points, safety constraints, recovery paths, and completion criteria.",
                 "examples/expected-output.md uses the same stage numbering and behavior as SKILL.md.",
-                "references/README.md and SKILL.md use exact reference_path values from selected_reference_assets.",
+                "builder candidate references/README.md and SKILL.md use exact reference_path values from selected_reference_assets so the platform can resolve assets.",
+                "Final persisted Markdown embeds selected reference image content instead of asking users to open image links.",
                 "No generated text contains TODO, placeholder paths, ellipsis reference paths, or unsupported future-hardware claims.",
                 "review_notes explicitly lists material gaps, uncertain assumptions, or items requiring human confirmation.",
                 "Every selected_reference_assets/reference_files path is used by SKILL.md or references/README.md, and no document references an unselected reference_path.",
@@ -1403,6 +1572,57 @@ class SkillsService:
             "material_analysis_results": material_analysis_results,
             "candidate_reference_assets": candidate_reference_assets,
         }
+
+    def _build_builder_reference_asset_file_payloads(
+        self,
+        session: Session,
+        *,
+        material_generation_context: dict,
+    ) -> list[dict[str, object]]:
+        candidate_assets = material_generation_context.get("candidate_reference_assets")
+        if not isinstance(candidate_assets, list):
+            return []
+
+        payloads: list[dict[str, object]] = []
+        seen_reference_paths: set[str] = set()
+        for candidate in candidate_assets:
+            if not isinstance(candidate, dict):
+                continue
+            asset_id = str(candidate.get("id") or candidate.get("asset_id") or "").strip()
+            reference_path = str(candidate.get("reference_path") or "").strip()
+            if not asset_id or not reference_path or reference_path in seen_reference_paths:
+                continue
+            try:
+                asset = self.repository.get_derived_asset(session, asset_id)
+                if not asset:
+                    continue
+                artifact_object = session.get(ArtifactObject, asset.artifact_object_id)
+                if not artifact_object:
+                    continue
+                content = self.object_store.download_bytes(
+                    bucket=artifact_object.bucket,
+                    object_key=artifact_object.object_key,
+                )
+            except Exception:
+                LOGGER.warning(
+                    "failed to prepare builder reference asset file",
+                    extra={"asset_id": asset_id, "reference_path": reference_path},
+                    exc_info=True,
+                )
+                continue
+
+            payloads.append(
+                {
+                    "asset_id": asset_id,
+                    "reference_path": reference_path,
+                    "mime_type": asset.mime_type,
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                    "content_sha256": hashlib.sha256(content).hexdigest(),
+                    "size_bytes": len(content),
+                }
+            )
+            seen_reference_paths.add(reference_path)
+        return payloads
 
     def _resolve_selected_reference_assets(
         self,
@@ -1472,12 +1692,45 @@ class SkillsService:
                 "analysis_id": candidate.get("analysis_id", asset.analysis_id),
                 "timestamp_ms": asset.timestamp_ms,
                 "reference_path": reference_path,
+                "mime_type": asset.mime_type,
                 "reason": str(item.get("reason") or "").strip(),
             }
             selected_payloads.append(selected_payload)
             reference_files.append(reference_path)
             seen_asset_ids.add(asset_id)
         return binary_files, selected_payloads, reference_files
+
+    @staticmethod
+    def _read_builder_materialized_draft_files(agent_result: AgentResult, generated: GeneratedSkillDraft) -> GeneratedSkillDraft:
+        if not agent_result.sandbox_path:
+            return generated
+        root = Path(agent_result.sandbox_path) / "outputs" / "skill-draft"
+        if not root.exists():
+            return generated
+        resolved_root = root.resolve()
+        materialized_files: dict[str, str] = {}
+        for relative_path in generated.files:
+            target = (resolved_root / relative_path).resolve()
+            try:
+                target.relative_to(resolved_root)
+            except ValueError as exc:
+                raise SkillValidationError("生成文件路径非法。", details={"path": relative_path}) from exc
+            if not target.exists():
+                raise SkillValidationError("builder 未物化生成文件。", details={"path": relative_path})
+            materialized_files[relative_path] = target.read_text(encoding="utf-8")
+
+        raw_parsed = dict(generated.raw_parsed or {})
+        raw_parsed["files"] = materialized_files
+        return GeneratedSkillDraft(
+            files=materialized_files,
+            generation_reason=generated.generation_reason,
+            review_notes=generated.review_notes,
+            material_usage=generated.material_usage,
+            selected_reference_assets=generated.selected_reference_assets,
+            directory_tree=generated.directory_tree,
+            raw_parsed=raw_parsed,
+        )
+
 
     @staticmethod
     def _truncate_prompt_text(value: str, limit: int = 40_000) -> str:
@@ -2089,3 +2342,4 @@ class SkillsService:
             "message": str(exc),
             **details,
         }
+

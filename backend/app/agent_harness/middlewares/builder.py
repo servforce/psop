@@ -19,29 +19,64 @@ DEFAULT_MIDDLEWARE_ORDER = [
 
 
 def build_middlewares(definition: AgentDefinition, event_writer: AgentEventWriter) -> list[AgentMiddleware]:
-    configured = _enabled_middleware_names(definition)
+    configured = _enabled_middleware(definition)
     middlewares: list[AgentMiddleware] = []
-    for name in configured:
+    for name, config in configured:
         if name == "dangling_tool_call":
             middlewares.append(DanglingToolCallMiddleware())
         elif name == "model_events":
-            middlewares.append(ModelCallEventMiddleware(event_writer))
+            middlewares.append(
+                ModelCallEventMiddleware(
+                    event_writer,
+                    max_model_calls=_optional_positive_int(config.get("max_model_calls")),
+                )
+            )
         elif name == "token_usage":
             middlewares.append(TokenUsageMiddleware(event_writer))
         elif name == "tool_calls":
-            middlewares.append(ToolCallMiddleware(event_writer))
+            middlewares.append(
+                ToolCallMiddleware(
+                    event_writer,
+                    max_error_counts=_tool_error_limits(config.get("max_error_counts")),
+                )
+            )
         else:
             raise ValueError(f"不支持的 Agent Harness middleware：{name}")
     return middlewares
 
 
 def _enabled_middleware_names(definition: AgentDefinition) -> list[str]:
+    return [name for name, _config in _enabled_middleware(definition)]
+
+
+def _enabled_middleware(definition: AgentDefinition) -> list[tuple[str, dict]]:
     if not definition.middleware:
-        return list(DEFAULT_MIDDLEWARE_ORDER)
-    names: list[str] = []
+        return [(name, {}) for name in DEFAULT_MIDDLEWARE_ORDER]
+    items: list[tuple[str, dict]] = []
     for item in definition.middleware:
         if isinstance(item, str):
-            names.append(item)
+            items.append((item, {}))
         elif item.enabled:
-            names.append(item.name)
-    return names
+            items.append((item.name, dict(item.config or {})))
+    return items
+
+
+def _optional_positive_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _tool_error_limits(value: object) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    limits: dict[str, int] = {}
+    for tool_name, raw_limit in value.items():
+        limit = _optional_positive_int(raw_limit)
+        if limit:
+            limits[str(tool_name)] = limit
+    return limits

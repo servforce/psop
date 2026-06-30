@@ -5,6 +5,7 @@ from collections.abc import Generator
 from fastapi import Request
 from sqlalchemy.orm import Session
 
+from app.agent_harness.service import AgentHarnessService
 from app.core.config import Settings
 from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.compiler.service import CompilerService
@@ -43,6 +44,10 @@ def get_object_store(request: Request) -> ObjectStoreService:
     return request.app.state.object_store  # type: ignore[return-value]
 
 
+def get_agent_harness_service(request: Request) -> AgentHarnessService | None:
+    return request.app.state.agent_harness_service  # type: ignore[return-value]
+
+
 def get_db_session(request: Request) -> Generator[Session, None, None]:
     database_manager: DatabaseManager = get_database_manager(request)
     with database_manager.session() as session:
@@ -63,6 +68,7 @@ def get_skills_service(request: Request) -> SkillsService:
         asr_gateway=get_asr_gateway(request),
         object_store=get_object_store(request),
         agent_prompt_service=get_agent_prompt_service(request),
+        agent_harness_service=get_agent_harness_service(request),
     )
 
 

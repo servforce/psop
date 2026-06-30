@@ -8,18 +8,22 @@ from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelCallResult, ModelRequest, ModelResponse
 
+from app.agent_harness.errors import AgentBudgetExceededError
 from app.agent_harness.events import AgentEventWriter
 
 
 class ModelCallEventMiddleware(AgentMiddleware[AgentState]):
-    def __init__(self, event_writer: AgentEventWriter) -> None:
+    def __init__(self, event_writer: AgentEventWriter, *, max_model_calls: int | None = None) -> None:
         super().__init__()
         self.event_writer = event_writer
+        self.max_model_calls = max_model_calls
+        self._model_call_count = 0
 
     @override
     def wrap_model_call(self, request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]) -> ModelCallResult:
         started_at = time.perf_counter()
-        payload = _request_payload(request)
+        payload = self._request_payload(request)
+        self._check_model_budget(payload)
         self.event_writer.record("agent.model.started", payload)
         try:
             result = handler(request)
@@ -39,7 +43,8 @@ class ModelCallEventMiddleware(AgentMiddleware[AgentState]):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelCallResult:
         started_at = time.perf_counter()
-        payload = _request_payload(request)
+        payload = self._request_payload(request)
+        self._check_model_budget(payload)
         self.event_writer.record("agent.model.started", payload)
         try:
             result = await handler(request)
@@ -51,6 +56,24 @@ class ModelCallEventMiddleware(AgentMiddleware[AgentState]):
             raise
         self.event_writer.record("agent.model.completed", {**payload, "duration_ms": _elapsed_ms(started_at)})
         return result
+
+    def _request_payload(self, request: ModelRequest) -> dict[str, Any]:
+        self._model_call_count += 1
+        return {**_request_payload(request), "model_call_index": self._model_call_count}
+
+    def _check_model_budget(self, payload: dict[str, Any]) -> None:
+        if self.max_model_calls is None or self._model_call_count <= self.max_model_calls:
+            return
+        self.event_writer.record(
+            "agent.budget.exceeded",
+            {
+                "budget_type": "model_calls",
+                "limit": self.max_model_calls,
+                "actual": self._model_call_count,
+                "message": f"模型调用次数超过限制：{self.max_model_calls}。",
+            },
+        )
+        raise AgentBudgetExceededError(f"模型调用次数超过限制：{self.max_model_calls}。")
 
 
 def _request_payload(request: ModelRequest) -> dict[str, Any]:

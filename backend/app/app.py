@@ -16,6 +16,7 @@ from app.api.routes.system import root_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.observability import configure_observability
+from app.agent_harness.service import AgentHarnessService
 from app.domain.skills.exceptions import SkillsError
 from app.domain.jobs.worker import RuntimeJobWorker
 from app.gateway.asr import AsrGateway, HttpAsrGateway
@@ -77,6 +78,7 @@ def create_app(
     inference_gateway: LlmInferenceGateway | None = None,
     asr_gateway: AsrGateway | None = None,
     object_store: ObjectStoreService | None = None,
+    agent_harness_service: AgentHarnessService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings.log_level, log_format=resolved_settings.log_format)
@@ -94,6 +96,7 @@ def create_app(
     app.state.inference_gateway = inference_gateway or OpenAICompatibleInferenceGateway.from_settings(resolved_settings)
     app.state.asr_gateway = asr_gateway or HttpAsrGateway.from_settings(resolved_settings)
     app.state.object_store = object_store or ObjectStoreService.from_settings(resolved_settings)
+    app.state.agent_harness_service = agent_harness_service
     @app.exception_handler(SkillsError)
     async def handle_skills_error(_, exc: SkillsError) -> JSONResponse:
         return JSONResponse(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import re
 import json
+import re
 from typing import Any
 
 from app.agent_harness.sandbox.base import PSOP_WORKSPACE_VIRTUAL_ROOT
@@ -13,55 +13,70 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
     registry.register(
         ToolSpec(
             name="demo_extract_check_items",
-            description="Extract checklist items from a field operation description.",
+            description="从现场作业描述中提取检查项。",
+            purpose="用于 Agent Harness demo，将一段现场作业描述拆成检查清单条目。",
             input_schema={
                 "type": "object",
                 "properties": {"text": {"type": "string"}},
                 "required": ["text"],
+                "additionalProperties": False,
             },
+            max_result_chars=8000,
         ),
         _demo_extract_check_items,
     )
     registry.register(
         ToolSpec(
             name="demo_score_checklist",
-            description="Score extracted checklist items and return a simple risk level.",
+            description="为检查项计算简单风险等级。",
+            purpose="用于 Agent Harness demo，根据检查项数量和关键词返回低/中/高风险。",
             input_schema={
                 "type": "object",
                 "properties": {"items": {"type": "array", "items": {"type": "string"}}},
                 "required": ["items"],
+                "additionalProperties": False,
             },
+            max_result_chars=12000,
         ),
         _demo_score_checklist,
     )
     registry.register(
         ToolSpec(
             name="memory_put",
-            description="Write a key/value pair to the current agent memory scope.",
+            description="向当前 agent memory scope 写入一个键值。",
+            purpose="用于 demo 或测试验证 Agent Harness memory 写入链路。",
             input_schema={
                 "type": "object",
                 "properties": {"key": {"type": "string"}, "value": {"type": "string"}},
                 "required": ["key", "value"],
+                "additionalProperties": False,
             },
+            side_effect_class="write_memory",
+            audit_event="agent.memory.write",
+            max_result_chars=2000,
         ),
         _memory_put,
     )
     registry.register(
         ToolSpec(
             name="memory_get",
-            description="Read a value from the current agent memory scope.",
+            description="读取当前 agent memory scope 中的一个键值。",
+            purpose="用于 demo 或测试验证 Agent Harness memory 读取链路。",
             input_schema={
                 "type": "object",
                 "properties": {"key": {"type": "string"}},
                 "required": ["key"],
+                "additionalProperties": False,
             },
+            max_result_chars=4000,
         ),
         _memory_get,
     )
     registry.register(
         ToolSpec(
             name="write_demo_report",
-            description="Write a demo markdown report into the agent workspace.",
+            description="把 demo Markdown 报告写入 agent workspace。",
+            purpose="用于 Agent Harness demo 写入 /mnt/psop/workspace/result.md。",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -69,7 +84,13 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
                     "content": {"type": "string"},
                 },
                 "required": ["filename", "content"],
+                "additionalProperties": False,
             },
+            risk_class="write_local",
+            side_effect_class="write_sandbox_file",
+            resource_scope="sandbox_workspace",
+            audit_event="agent.file.written",
+            max_result_chars=4000,
         ),
         _write_demo_report,
     )

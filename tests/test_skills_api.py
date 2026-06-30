@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
+from app.agent_harness.service import AgentHarnessService
 from app.app import create_app
 from app.core.config import Settings
 from app.domain.skills import raw_materials
@@ -707,6 +709,8 @@ def create_test_settings() -> Settings:
         database_auto_create_schema=True,
         gitlab_skills_group_path="skills",
         runtime_worker_enabled=False,
+        standard_lightrag_base_url="",
+        standard_lightrag_api_key="",
     )
 
 
@@ -715,13 +719,18 @@ def create_test_client() -> tuple[TestClient, FakeGitLabGateway, FakeInferenceGa
     fake_inference = FakeInferenceGateway()
     fake_asr = FakeAsrGateway()
     fake_object_store = FakeObjectStore()
+    settings = create_test_settings()
     client = TestClient(
         create_app(
-            create_test_settings(),
+            settings,
             gitlab_gateway=fake_gateway,
             inference_gateway=fake_inference,
             asr_gateway=fake_asr,
             object_store=fake_object_store,
+            agent_harness_service=AgentHarnessService(
+                settings=settings,
+                chat_model_factory=lambda _definition: ScriptedBuilderChatModel(),
+            ),
         )
     )
     return client, fake_gateway, fake_inference
@@ -1225,13 +1234,18 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert payload["status"] == "succeeded"
     assert payload["material_ids"] == [video_material_id, material_id]
     assert payload["committed_commit_sha"].startswith("commit-")
+    assert payload["prompt_metadata"]["agent_key"] == "psop.builder"
+    assert payload["prompt_metadata"]["agent_run_id"]
+    assert payload["prompt_metadata"]["builder_artifact_path"] == "sandbox://outputs/builder-result.json"
+    assert payload["prompt_metadata"]["builder_files_path"] == "sandbox://outputs/skill-draft"
+    assert payload["prompt_metadata"]["events_path"].endswith("/events.jsonl")
+    assert payload["prompt_metadata"]["standard_search_summary"]["called"] is True
     assert payload["prompt_metadata"]["reference_files"] == [
         f"references/video-keyframes/{video_material_id}/000000000.jpg",
-        f"references/video-keyframes/{video_material_id}/000030000.jpg",
     ]
+    assert payload["prompt_metadata"]["embedded_reference_image_count"] >= 2
     assert [item["reference_path"] for item in payload["prompt_metadata"]["selected_reference_assets"]] == [
         f"references/video-keyframes/{video_material_id}/000000000.jpg",
-        f"references/video-keyframes/{video_material_id}/000030000.jpg",
     ]
     assert set(payload["generated_files"]) >= {
         "README.md",
@@ -1244,27 +1258,31 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     }
     assert "skill.yaml" not in payload["generated_files"]
     assert payload["material_usage"][0]["material_id"] == video_material_id
-    assert fake_gateway.projects[created["gitlab_project_id"]].files["README.md"].startswith("# Generated Skill")
+    assert fake_gateway.projects[created["gitlab_project_id"]].files["README.md"].startswith("# 泵房进入前安全检查")
     assert fake_gateway.projects[created["gitlab_project_id"]].files[
         f"references/video-keyframes/{video_material_id}/000000000.jpg"
     ] == b"fake-keyframe-0"
+    embedded_image = "data:image/jpeg;base64,ZmFrZS1rZXlmcmFtZS0w"
+    skill_md = fake_gateway.projects[created["gitlab_project_id"]].files["SKILL.md"]
+    references_md = fake_gateway.projects[created["gitlab_project_id"]].files["references/README.md"]
+    reference_path = f"references/video-keyframes/{video_material_id}/000000000.jpg"
+    assert embedded_image in skill_md
+    assert embedded_image in references_md
+    assert reference_path not in skill_md
+    assert reference_path not in references_md
+    assert "## 嵌入参考图片" not in skill_md
+    assert "## 嵌入参考图片" not in references_md
+    assert skill_md.index("### 阶段 1：PPE 与进入条件确认") < skill_md.index(embedded_image) < skill_md.index("### 阶段 2：阀门与压力表确认")
     assert "should-be-ignored" not in fake_gateway.projects[created["gitlab_project_id"]].files["skill.yaml"]
     assert detail_response.json()["latest_draft_head_sha"] == payload["committed_commit_sha"]
     assert detail_response.json()["updated_at"] != created["updated_at"]
     prompt_material = detail_response.json()["current_draft_version"]["manifest_snapshot"]["prompt_material"]
-    assert prompt_material["readme"].startswith("# Generated Skill")
-    assert prompt_material["skill_md"].startswith("# Generated Skill")
+    assert prompt_material["readme"].startswith("# 泵房进入前安全检查")
+    assert prompt_material["skill_md"].startswith("# 泵房进入前安全检查")
+    assert embedded_image in prompt_material["skill_md"]
     assert source_response.json()["head_commit_sha"] == payload["committed_commit_sha"]
     assert publishes_response.json() == []
-    generation_call = next(
-        call for call in fake_inference.calls if "generate_psop_skill_source_from_raw_materials" in call["user_prompt"]
-    )
-    generation_prompt = json.loads(generation_call["user_prompt"])
-    assert generation_call["route_key"] == "text"
-    assert "psop_skill_form_definition" in generation_prompt
-    assert "physical_world_skill_guidance" in generation_prompt
-    assert "publishable_document_skill_standard" in generation_prompt
-    assert len(generation_prompt["material_analysis_results"]) == 2
+    assert not any("generate_psop_skill_source_from_raw_materials" in call["user_prompt"] for call in fake_inference.calls)
 
 
 def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch) -> None:

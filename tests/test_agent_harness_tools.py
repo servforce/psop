@@ -8,9 +8,11 @@ from app.agent_harness.sandbox.local import LocalAgentSandboxProvider
 from app.agent_harness.skills.loader import SkillLoader
 from app.agent_harness.skills.spec import AgentSkill
 from app.agent_harness.tools.builtin import register_builtin_tools
+from app.agent_harness.tools.builtin.workspace import register_workspace_tools
 from app.agent_harness.tools.framework import register_framework_tools
 from app.agent_harness.tools.policy import filter_tools_by_skill_allowed_tools
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
+from app.agent_harness.tools.spec import ToolSpec
 from app.core.config import Settings
 
 
@@ -43,6 +45,17 @@ def test_tool_registry_executes_builtin_tool(tmp_path) -> None:
 
     assert result["item_count"] == 3
     assert writer.events == []
+
+
+def test_tool_spec_has_governance_metadata_defaults() -> None:
+    spec = ToolSpec(name="demo", description="测试工具。")
+
+    assert spec.risk_class == "read_only"
+    assert spec.side_effect_class == "none"
+    assert spec.resource_scope == "agent_run"
+    assert spec.permission_policy == "allow"
+    assert spec.retry_policy == {}
+    assert spec.error_types == []
 
 
 def test_tool_registry_raises_handler_error(tmp_path) -> None:
@@ -83,6 +96,20 @@ def test_workspace_write_tool_writes_virtual_workspace_path(tmp_path) -> None:
     assert result["path"] == "/mnt/psop/workspace/result.md"
     assert context.sandbox.read_text("/mnt/psop/workspace/result.md") == "ok"
     assert writer.events[-1].event_type == "agent.file.written"
+
+
+def test_workspace_builtin_tools_reject_outputs_write(tmp_path) -> None:
+    registry, context, _ = _context(tmp_path)
+    register_workspace_tools(registry)
+
+    result = registry.execute(
+        "workspace.write_text",
+        {"path": "/mnt/psop/outputs/builder-result.json", "content": "bad"},
+        context,
+    )
+
+    assert result["status"] == "error"
+    assert "outputs" in result["message"]
 
 
 def test_tool_policy_intersects_agent_tools_with_skill_allowed_tools() -> None:

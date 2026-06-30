@@ -1,19 +1,23 @@
 from __future__ import annotations
 
-from app.agent_harness.agents.demo.psop_harness_agent.prompt import apply_prompt_template
 from app.agent_harness.agents.context import AgentBuildContext
 from app.agent_harness.agents.factory import create_psop_agent
+from app.agent_harness.agents.psop.builder.prompt import apply_prompt_template
 from app.agent_harness.middlewares import build_middlewares
-from app.agent_harness.tools.builtin import register_builtin_tools
+from app.agent_harness.tools.builtin.builder import register_builder_tools
+from app.agent_harness.tools.builtin.standard import register_standard_tools
+from app.agent_harness.tools.builtin.workspace import register_workspace_tools
 from app.agent_harness.tools.framework import LOAD_SKILL_TOOL_NAME, register_framework_tools
 from app.agent_harness.tools.langchain import to_langchain_tools
 from app.agent_harness.tools.policy import filter_tools_by_skill_allowed_tools
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
 
 
-def make_demo_agent(context: AgentBuildContext):
+def make_builder_agent(context: AgentBuildContext):
     registry = ToolRegistry()
-    register_builtin_tools(registry)
+    register_builder_tools(registry)
+    register_standard_tools(registry)
+    register_workspace_tools(registry)
     register_framework_tools(registry)
 
     business_tool_names = filter_tools_by_skill_allowed_tools(
