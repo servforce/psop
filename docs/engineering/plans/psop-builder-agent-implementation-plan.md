@@ -1,6 +1,12 @@
-# PSOP Builder Agent 实施计划（已实施，验收口径已同步）
+# PSOP Builder Agent 实施计划（已完成）
 
 本文是阶段性实施计划和当前验收口径记录，不是长期架构事实源。`psop.builder` 的职责、工具、Agent Skills、输入输出、校验与审计约束以 [PSOP Builder Agent 详细设计](../../architecture/psop-builder-agent-design.md) 为准；Agent Harness 总体边界以 [系统架构设计](../../architecture/system-architecture.md) 为准。
+
+> 状态：已完成（2026-07-01）。
+>
+> 完成依据：第 8 节完成定义已满足；`psop.builder` scripted e2e run 已能加载 memory、三个 builder Agent Skills、关键 tools，并写出 `builder-result.json` 与 `outputs/skill-draft/` 物化文件。当前验收口径以最终物化文件为准，不要求 `builder-result.json.files` 与 `outputs/skill-draft/` 字节级一致。
+>
+> 说明：第 2、3 节保留实施前基线和实施步骤记录，其中部分“当前基线”表述不再代表当前代码状态。后续长期约束以架构设计文档和当前实现为准。
 
 ## 1. 目标与验收标准
 
@@ -619,7 +625,7 @@ PYTHONPATH=backend backend/.venv/bin/python tests/run_psop_builder_agent.py --fi
 
 ## 8. 完成定义
 
-本计划完成时应满足：
+本计划完成时应满足（截至 2026-07-01 已满足）：
 
 ```text
 1. psop.builder AgentDefinition 可以被 FileAgentDefinitionRegistry 加载。
