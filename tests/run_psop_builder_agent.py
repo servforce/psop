@@ -12,7 +12,7 @@ BACKEND_ROOT = REPO_ROOT / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.agent_harness.agents.psop.builder.schemas import validate_builder_candidate
+from app.agent_harness.agents.psop.builder.schemas import REQUIRED_BUILDER_FILES, validate_builder_candidate
 from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
 from app.agent_harness.schemas import AgentInvocation
 from app.agent_harness.service import AgentHarnessService
@@ -62,14 +62,16 @@ def main() -> int:
     if files_root is None or not files_root.is_dir():
         print("未找到 skill-draft 文件目录。", file=sys.stderr)
         return 1
-    for relative_path, content in (candidate.get("files") or {}).items():
-        file_path = files_root / str(relative_path)
-        if not file_path.exists():
-            print(f"缺少物化文件：{relative_path}", file=sys.stderr)
-            return 1
-        if file_path.read_text(encoding="utf-8") != str(content):
-            print(f"物化文件内容不匹配：{relative_path}", file=sys.stderr)
-            return 1
+    materialized_error = _validate_materialized_skill_draft(candidate, files_root)
+    if materialized_error:
+        print(materialized_error, file=sys.stderr)
+        return 1
+    required_artifacts = {"skill_draft_candidate", "skill_draft_files"}
+    artifact_types = {artifact.artifact_type for artifact in result.artifacts}
+    missing_artifacts = sorted(required_artifacts - artifact_types)
+    if missing_artifacts:
+        print(f"缺少必要 artifact：{missing_artifacts}", file=sys.stderr)
+        return 1
     event_types = [event.event_type for event in result.events]
     loaded_skills = [
         event.payload.get("skill_name")
@@ -118,6 +120,79 @@ def _skill_draft_files_root(sandbox_path: str | None) -> Path | None:
     if not sandbox_path:
         return None
     return Path(sandbox_path) / "outputs" / "skill-draft"
+
+
+def _validate_materialized_skill_draft(candidate: dict, files_root: Path) -> str:
+    files = candidate.get("files") if isinstance(candidate.get("files"), dict) else {}
+    for relative_path in REQUIRED_BUILDER_FILES:
+        if relative_path not in files:
+            return f"candidate 缺少必需文件：{relative_path}"
+    for relative_path in files:
+        file_path = files_root / str(relative_path)
+        try:
+            file_path.resolve().relative_to(files_root.resolve())
+        except ValueError:
+            return f"物化文件路径越界：{relative_path}"
+        if not file_path.is_file():
+            return f"缺少物化文件：{relative_path}"
+        if not file_path.read_text(encoding="utf-8").strip():
+            return f"物化文件内容为空：{relative_path}"
+
+    skill_md_path = files_root / "SKILL.md"
+    skill_md = skill_md_path.read_text(encoding="utf-8")
+    if "data:image/" in skill_md:
+        return "SKILL.md 不应包含 base64 data:image。"
+    for heading in ("## 嵌入参考图片", "## 参考图片汇总", "## Reference Images"):
+        if heading in skill_md:
+            return f"SKILL.md 不应包含集中追加的参考图片段落：{heading}"
+
+    for reference_path in _selected_image_reference_paths(candidate):
+        if reference_path not in skill_md:
+            return f"SKILL.md 缺少参考图片相对路径：{reference_path}"
+        if not _has_markdown_image_link(skill_md, reference_path):
+            return f"SKILL.md 未使用 Markdown 图片语法引用参考图片：{reference_path}"
+
+    for item in candidate.get("materialized_reference_images") or []:
+        if not isinstance(item, dict):
+            continue
+        reference_path = str(item.get("path") or "").strip()
+        if not reference_path:
+            continue
+        file_path = files_root / reference_path
+        try:
+            file_path.resolve().relative_to(files_root.resolve())
+        except ValueError:
+            return f"参考图片物化路径越界：{reference_path}"
+        if not file_path.is_file() or file_path.stat().st_size <= 0:
+            return f"参考图片文件未正确物化：{reference_path}"
+
+    return ""
+
+
+def _selected_image_reference_paths(candidate: dict) -> list[str]:
+    paths = []
+    for item in candidate.get("selected_reference_assets") or []:
+        if not isinstance(item, dict):
+            continue
+        reference_path = str(item.get("reference_path") or "").strip()
+        if reference_path and _looks_like_image_reference(reference_path):
+            paths.append(reference_path)
+    return paths
+
+
+def _looks_like_image_reference(path: str) -> bool:
+    return path.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+
+
+def _has_markdown_image_link(markdown: str, reference_path: str) -> bool:
+    import re
+
+    pattern = re.compile(
+        r"!\[[^\]]*\]\(\s*<?"
+        + re.escape(reference_path)
+        + r">?\s*(?:\"[^\"]*\"|'[^']*')?\)"
+    )
+    return bool(pattern.search(markdown))
 
 
 def _result_summary(result) -> dict:

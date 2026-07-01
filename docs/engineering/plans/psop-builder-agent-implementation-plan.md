@@ -1,6 +1,6 @@
-# PSOP Builder Agent 实施计划（待实施）
+# PSOP Builder Agent 实施计划（已实施，验收口径已同步）
 
-本文是阶段性实施计划，不是长期架构事实源。`psop.builder` 的职责、工具、Agent Skills、输入输出、校验与审计约束以 [PSOP Builder Agent 详细设计](../../architecture/psop-builder-agent-design.md) 为准；Agent Harness 总体边界以 [系统架构设计](../../architecture/system-architecture.md) 为准。
+本文是阶段性实施计划和当前验收口径记录，不是长期架构事实源。`psop.builder` 的职责、工具、Agent Skills、输入输出、校验与审计约束以 [PSOP Builder Agent 详细设计](../../architecture/psop-builder-agent-design.md) 为准；Agent Harness 总体边界以 [系统架构设计](../../architecture/system-architecture.md) 为准。
 
 ## 1. 目标与验收标准
 
@@ -31,7 +31,8 @@ PYTHONPATH=backend backend/.venv/bin/python tests/run_psop_builder_agent.py --fi
 - events 中包含三个 `agent.skill.loaded`：`psop-builder-core`、`psop-builder-evidence-mapping`、`psop-builder-quality-review`。
 - events 中包含关键 tool calls：`psop.builder.read_current_source`、`psop.builder.list_materials`、`psop.builder.read_material_analysis`、`psop.builder.list_reference_assets`、`psop.standard.search`、`psop.builder.submit_candidate`。
 - sandbox 中存在 `/mnt/psop/outputs/builder-result.json`。
-- sandbox 中存在 `/mnt/psop/outputs/skill-draft/`，且 `builder-result.json.files` 中的 PSOP Skill 文件已按相对路径物化为具体 Markdown 文件。
+- sandbox 中存在 `/mnt/psop/outputs/skill-draft/`，且所有 candidate 必需文件已按相对路径物化为非空 Markdown 文件。最终可提交的 PSOP Skill 文件以 `outputs/skill-draft/` 为准，不要求与 `builder-result.json.files` 字节级一致。
+- 如 candidate 选择了图片参考资产，物化后的 `SKILL.md` 必须在使用该图片的流程步骤中通过相对 Markdown 图片链接展示，不得使用 base64 data URI，也不得把参考图片集中追加到文档底部。
 - `builder-result.json` 通过 builder v1 candidate 严格校验，且包含所有必需文件和追溯字段。
 
 ## 2. 当前基线与差异
@@ -46,7 +47,7 @@ PYTHONPATH=backend backend/.venv/bin/python tests/run_psop_builder_agent.py --fi
 需要在实施中明确处理两处文档/代码差异：
 
 - `system-architecture.md` 中早期目录示例写过 `backend/app/agent_harness/agents/builder/`，但当前 `FileAgentDefinitionRegistry` 以 agent key segment 映射目录，且 builder 详细设计要求 `psop.builder`，因此实现目录应为 `backend/app/agent_harness/agents/psop/builder/`。
-- 当前 `ToolSpec` 只有 `name`、`description`、`input_schema`、`output_schema`、`source`，还没有 builder 设计要求的 `risk_class`、`side_effect_class`、`resource_scope`、`permission_policy`、`timeout_seconds`、`max_result_chars`、`retry_policy`、`audit_event`、`error_types` 等治理元数据。
+- 实施前 `ToolSpec` 只有 `name`、`description`、`input_schema`、`output_schema`、`source`，还没有 builder 设计要求的 `risk_class`、`side_effect_class`、`resource_scope`、`permission_policy`、`timeout_seconds`、`max_result_chars`、`retry_policy`、`audit_event`、`error_types` 等治理元数据。本计划的 builder 验收只要求这些字段完成建模并供工具声明使用；统一运行时强制策略属于 Agent Harness tools 领域的后续增强，不作为 builder agent 首版完成阻塞。
 
 额外实施约定：
 
@@ -462,7 +463,7 @@ result = self.agent_harness_service.invoke(
   - `prompt_metadata.sandbox_path`
   - `prompt_metadata.builder_artifact_path`
   - `prompt_metadata.events_path`
-  - `prompt_metadata.standard_search`
+  - `prompt_metadata.standard_search_summary`
   - `prompt_metadata.selected_reference_assets`
   - `raw_response.agent_result`
   - `raw_response.parsed`
@@ -551,7 +552,7 @@ sandbox://outputs/skill-draft
   "sandbox_path": "...",
   "builder_artifact_path": "sandbox://outputs/builder-result.json",
   "events_path": "...",
-  "standard_search": {
+  "standard_search_summary": {
     "attempted": true,
     "status": "success",
     "result_count": 3,
@@ -628,5 +629,5 @@ PYTHONPATH=backend backend/.venv/bin/python tests/run_psop_builder_agent.py --fi
 5. AgentResult.artifacts 包含 skill_draft_candidate 和 skill_draft_files。
 6. SkillRawMaterialGeneration 可通过 AgentHarnessService artifact 完成 draft commit。
 7. pytest 全量通过。
-8. tests/run_psop_builder_agent.py --fixture tests/fixtures/psop_builder/minimal.json --scripted 退出码为 0。
+8. tests/run_psop_builder_agent.py --fixture tests/fixtures/psop_builder/minimal.json --scripted 退出码为 0，并验证最终物化文件和参考图片链接策略。
 ```
