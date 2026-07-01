@@ -966,7 +966,11 @@ class SkillsService:
             material_ids=material_ids,
             user_description=payload.user_description,
             status="pending",
-            prompt_metadata={"reference_files": []},
+            prompt_metadata={
+                "agent_key": "psop.builder",
+                "agent_run_id": "",
+                "reference_files": [],
+            },
             raw_response={
                 "request": {
                     "material_ids": material_ids,
@@ -977,6 +981,10 @@ class SkillsService:
         )
         session.add(generation)
         session.flush()
+        generation.prompt_metadata = {
+            **(generation.prompt_metadata or {}),
+            "agent_run_id": generation.id,
+        }
 
         job = RuntimeJob(
             job_type=SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE,
@@ -1133,6 +1141,7 @@ class SkillsService:
         builder_invocation = self._build_psop_builder_invocation(
             prompt_payload=prompt_payload,
             material_ids=material_ids,
+            agent_run_id=generation.id,
         )
         runtime_builder_invocation = builder_invocation.model_copy(deep=True)
         runtime_builder_invocation.context[BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY] = builder_reference_asset_files
@@ -1142,6 +1151,7 @@ class SkillsService:
         ).hexdigest()
         prompt_metadata = {
             "agent_key": "psop.builder",
+            "agent_run_id": generation.id,
             "job_id": job.id,
             "job_type": SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE,
             "candidate_reference_asset_count": len(material_generation_context["candidate_reference_assets"]),
@@ -1287,10 +1297,17 @@ class SkillsService:
         definition.updated_at = now_utc()
         return new_commit_sha
 
-    def _build_psop_builder_invocation(self, *, prompt_payload: dict, material_ids: list[str]) -> AgentInvocation:
+    def _build_psop_builder_invocation(
+        self,
+        *,
+        prompt_payload: dict,
+        material_ids: list[str],
+        agent_run_id: str | None = None,
+    ) -> AgentInvocation:
         output_contract = dict(prompt_payload.get("output_contract") or {})
         return AgentInvocation(
             agent_key="psop.builder",
+            agent_run_id=agent_run_id,
             input={
                 "text": str(prompt_payload.get("user_description") or "").strip()
                 or f"基于素材生成 {((prompt_payload.get('skill') or {}).get('name') or 'PSOP Skill')} draft。",

@@ -1306,7 +1306,8 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert payload["material_ids"] == [video_material_id, material_id]
     assert payload["committed_commit_sha"].startswith("commit-")
     assert payload["prompt_metadata"]["agent_key"] == "psop.builder"
-    assert payload["prompt_metadata"]["agent_run_id"]
+    assert payload["prompt_metadata"]["agent_run_id"] == payload["id"]
+    assert payload["job_id"] == payload["prompt_metadata"]["job_id"]
     assert payload["prompt_metadata"]["builder_artifact_path"] == "sandbox://outputs/builder-result.json"
     assert payload["prompt_metadata"]["builder_files_path"] == "sandbox://outputs/skill-draft"
     assert payload["prompt_metadata"]["events_path"].endswith("/events.jsonl")

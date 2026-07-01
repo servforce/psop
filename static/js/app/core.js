@@ -446,6 +446,10 @@
         if (this.route.name !== "tasks-list") {
           this.stopTaskPolling?.();
         }
+        if (this.route.name !== "skill-detail" || this.activeDetailTab !== "materials") {
+          this.stopBuilderAgentStreaming?.();
+          this.stopBuilderAgentElapsedTimer?.();
+        }
         if (!["compiler-artifact", "skill-compiler-artifact"].includes(this.route.name)) {
           this.destroyCompilerArtifactViewer();
           this.compilerArtifact = null;

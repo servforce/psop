@@ -3,18 +3,19 @@ from __future__ import annotations
 import traceback
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.agent_harness.agents.context import AgentBuildContext
 from app.agent_harness.agents.registry import FileAgentDefinitionRegistry, default_agent_registry
 from app.agent_harness.events import AgentEventWriter
 from app.agent_harness.memory.file_store import FileMemoryStore
 from app.agent_harness.models.factory import ChatModelFactory
+from app.agent_harness.persistence.models import AgentEventRecord
 from app.agent_harness.persistence.service import AgentHarnessPersistenceService
 from app.agent_harness.runners.langchain_agent_executor import LangChainAgentExecutor
 from app.agent_harness.sandbox.base import AgentSandboxProvider
 from app.agent_harness.sandbox.provider import build_sandbox_provider
-from app.agent_harness.schemas import AgentInvocation, AgentResult
+from app.agent_harness.schemas import AgentEvent, AgentInvocation, AgentResult
 from app.agent_harness.skills.loader import SkillLoader
 from app.core.config import Settings
 
@@ -50,7 +51,19 @@ class AgentHarnessService:
             agent_run_id=invocation.agent_run_id or invocation.workspace_id,
             input_payload=invocation.model_dump(mode="json"),
         )
-        event_writer = AgentEventWriter(sandbox.events_path)
+        self._start_live_run(
+            persistence_session=persistence_session,
+            definition_version=definition.version,
+            invocation=invocation,
+            persistence_context=persistence_context,
+            agent_run_id=sandbox.agent_run_id,
+            agent_key=definition.agent_key,
+            sandbox_path=str(sandbox.root_path),
+        )
+        event_writer = AgentEventWriter(
+            sandbox.events_path,
+            on_event=self._live_event_sink(persistence_session, sandbox.agent_run_id),
+        )
         event_writer.record(
             "agent.run.started",
             {
@@ -129,6 +142,56 @@ class AgentHarnessService:
         finally:
             self.sandbox_provider.release(sandbox.sandbox_id)
 
+    def _start_live_run(
+        self,
+        *,
+        persistence_session: Session | None,
+        definition_version: str,
+        invocation: AgentInvocation,
+        persistence_context: dict[str, str] | None,
+        agent_run_id: str,
+        agent_key: str,
+        sandbox_path: str,
+    ) -> None:
+        if persistence_session is None:
+            return
+        context = persistence_context or {}
+        self.persistence_service.start_run(
+            persistence_session,
+            agent_run_id=agent_run_id,
+            agent_key=agent_key,
+            agent_version=definition_version,
+            related_skill_definition_id=context.get("related_skill_definition_id", ""),
+            related_generation_id=context.get("related_generation_id", ""),
+            related_job_id=context.get("related_job_id", ""),
+            input_summary=_invocation_summary(invocation),
+            sandbox_path=sandbox_path,
+            model_info={"agent_key": agent_key},
+        )
+        persistence_session.commit()
+
+    @staticmethod
+    def _live_event_sink(persistence_session: Session | None, agent_run_id: str):
+        if persistence_session is None:
+            return None
+        bind = persistence_session.get_bind()
+        live_session_factory = sessionmaker(bind=bind, autoflush=False, autocommit=False, expire_on_commit=False)
+
+        def persist(event: AgentEvent) -> None:
+            with live_session_factory() as live_session:
+                live_session.add(
+                    AgentEventRecord(
+                        agent_run_id=agent_run_id,
+                        seq_no=event.seq_no,
+                        event_type=event.event_type,
+                        payload=event.payload,
+                        occurred_at=event.occurred_at,
+                    )
+                )
+                live_session.commit()
+
+        return persist
+
     def _persist_result(
         self,
         *,
@@ -150,6 +213,7 @@ class AgentHarnessService:
             related_job_id=context.get("related_job_id", ""),
             input_summary=_invocation_summary(invocation),
             model_info={"agent_key": result.agent_key},
+            replace_events=False,
         )
 
 

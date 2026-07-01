@@ -164,6 +164,7 @@
           user_description: ""
         };
         this.rawMaterialGenerationResult = null;
+        this.resetBuilderAgentPanel();
         this.closeRawMaterialImagePreview();
         this.publishRecordsLoadedSkillId = null;
         this.publishRecords = [];
@@ -619,18 +620,22 @@
           this.showCenterToast("error", "请至少上传一个已分析完成的视频素材。");
           return;
         }
+        this.rawMaterialGenerateModalOpen = false;
+        this.builderAgentPanel.open = true;
+        this.builderAgentPanel.status = "loading_latest";
+        this.builderAgentPanel.errorMessage = "";
+        this.builderAgentPanel.userInput = "";
         this.rawMaterialGenerateForm = {
-          user_description: ""
+          user_description: this.builderAgentPanel.userInput
         };
-        this.rawMaterialGenerationResult = null;
-        this.rawMaterialGenerateModalOpen = true;
+        this.loadLatestBuilderAgentRun();
       },
 
 
       closeRawMaterialGenerateModal() {
-        if (this.busy.rawMaterialGenerate) {
-          return;
-        }
+        this.stopBuilderAgentStreaming();
+        this.stopBuilderAgentElapsedTimer();
+        this.builderAgentPanel.open = false;
         this.rawMaterialGenerateModalOpen = false;
       },
 
@@ -639,55 +644,475 @@
         if (!this.currentSkill || !this.canGenerateSkillDraftFromRawMaterials()) {
           return;
         }
-        if (!this.rawMaterialGenerateForm.user_description.trim()) {
+        const userDescription = (
+          this.builderAgentPanel.userInput ||
+          this.rawMaterialGenerateForm.user_description ||
+          ""
+        ).trim();
+        if (!userDescription) {
           this.showCenterToast("error", "请输入生成描述。");
           return;
         }
 
         this.busy.rawMaterialGenerate = true;
+        let keepRunning = false;
         this.clearNotice();
         try {
           const skillId = this.currentSkill.id;
+          this.stopBuilderAgentStreaming();
+          this.builderAgentPanel = {
+            ...this.builderAgentPanel,
+            open: true,
+            status: "submitting",
+            userInput: "",
+            submittedInput: userDescription,
+            generationId: "",
+            jobId: "",
+            agentRunId: "",
+            startedAt: new Date().toISOString(),
+            elapsedMs: 0,
+            processExpanded: true,
+            timeline: null,
+            steps: [],
+            result: null,
+            errorMessage: "",
+            sseConnected: false,
+            usingPolling: false,
+            lastEventAt: "",
+            resultRefreshed: false
+          };
+          this.rawMaterialGenerateForm = { user_description: "" };
+          this.startBuilderAgentElapsedTimer();
           const result = await this.apiRequest(`/skills/${skillId}/raw-materials/generate-skill-draft`, {
             method: "POST",
             body: JSON.stringify({
-              user_description: this.rawMaterialGenerateForm.user_description.trim(),
+              user_description: userDescription,
               base_commit_sha: this.currentSkill.latest_draft_head_sha
             })
           });
           this.rawMaterialGenerationResult = result;
-          if (result.status === "succeeded") {
-            this.sourceLoadedSkillId = null;
-            this.repositoryLoadedSkillId = null;
-            this.currentSkill = await this.apiRequest(`/skills/${skillId}`);
-            await this.loadRawMaterials(skillId, true);
-            this.rawMaterialGenerateModalOpen = false;
-            this.showCenterToast("success", "Skill 草稿已生成。");
-            this.showNotice("success", "Skill 草稿已生成并提交到 GitLab draft。");
-          } else if (result.status === "failed") {
-            this.showCenterToast("error", result.error_message || "生成 Skill 草稿失败。");
+          const agentRunId = result.prompt_metadata?.agent_run_id || result.id || "";
+          this.builderAgentPanel.generationId = result.id || "";
+          this.builderAgentPanel.jobId = result.job_id || result.prompt_metadata?.job_id || "";
+          this.builderAgentPanel.agentRunId = agentRunId;
+          this.builderAgentPanel.status = result.status || "pending";
+          if (agentRunId) {
+            await this.loadBuilderAgentTimeline(agentRunId);
+            if (!this.isBuilderAgentTerminalStatus(this.builderAgentPanel.status)) {
+              keepRunning = true;
+              this.subscribeBuilderAgentEvents(agentRunId);
+            }
+          } else if (result.status === "succeeded" || result.status === "failed") {
+            this.applyRawMaterialGenerationAsBuilderResult(result);
           } else {
-            const jobId = result.job_id || result.prompt_metadata?.job_id || result.id;
-            this.rawMaterialGenerateModalOpen = false;
-            this.taskFilters = {
-              job_type: "skill_raw_material_generation",
-              status: "",
-              q: jobId || "",
-              created_from: "",
-              created_to: ""
-            };
-            await this.navigate("/admin/tasks");
-            this.showCenterToast("success", "Skill 生成任务已提交。");
-            this.showNotice(
-              "success",
-              jobId ? `Skill 生成任务已提交：${this.formatShortId(jobId)}` : "Skill 生成任务已提交。"
-            );
+            keepRunning = true;
+            this.startBuilderAgentPolling(agentRunId);
           }
         } catch (error) {
+          this.builderAgentPanel.status = "failed";
+          this.builderAgentPanel.errorMessage = error.message || "生成 Skill 草稿失败。";
+          this.builderAgentPanel.processExpanded = true;
           this.showCenterToast("error", error.message || "生成 Skill 草稿失败。");
         } finally {
-          this.busy.rawMaterialGenerate = false;
+          if (!keepRunning && !this.isBuilderAgentRunning()) {
+            this.busy.rawMaterialGenerate = false;
+            this.stopBuilderAgentElapsedTimer();
+          }
         }
+      },
+
+
+      defaultBuilderAgentUserInput() {
+        return "";
+      },
+
+
+      resetBuilderAgentPanel(options = {}) {
+        this.stopBuilderAgentStreaming();
+        this.stopBuilderAgentElapsedTimer();
+        const userInput = options.userInput || (options.keepInput ? this.builderAgentPanel?.userInput : "") || this.defaultBuilderAgentUserInput();
+        this.rawMaterialGenerateModalOpen = false;
+        this.rawMaterialGenerateForm = { user_description: userInput };
+        this.rawMaterialGenerationResult = null;
+        this.builderAgentPanel = {
+          open: Boolean(options.open),
+          status: "idle",
+          userInput,
+          submittedInput: "",
+          generationId: "",
+          jobId: "",
+          agentRunId: "",
+          startedAt: "",
+          elapsedMs: 0,
+          processExpanded: true,
+          timeline: null,
+          steps: [],
+          result: null,
+          errorMessage: "",
+          sseConnected: false,
+          usingPolling: false,
+          lastEventAt: "",
+          resultRefreshed: false
+        };
+      },
+
+
+      async loadLatestBuilderAgentRun() {
+        if (!this.currentSkill?.id) {
+          this.resetBuilderAgentPanel({ open: true });
+          return;
+        }
+        try {
+          const params = new URLSearchParams({
+            agent_key: "psop.builder",
+            related_skill_definition_id: this.currentSkill.id
+          });
+          const timeline = await this.apiRequest(`/agents/runs/latest?${params}`);
+          this.applyBuilderAgentTimeline(timeline, { fromLatest: true });
+          if (this.isBuilderAgentTerminalStatus(timeline.status)) {
+            this.stopBuilderAgentStreaming();
+            this.stopBuilderAgentElapsedTimer();
+            return;
+          }
+          this.busy.rawMaterialGenerate = true;
+          this.startBuilderAgentElapsedTimer();
+          this.subscribeBuilderAgentEvents(timeline.agent_run_id);
+        } catch (error) {
+          if (error.payload?.code === "skill_not_found") {
+            this.resetBuilderAgentPanel({ open: true });
+            return;
+          }
+          this.builderAgentPanel.status = "idle";
+          this.builderAgentPanel.errorMessage = error.message || "读取 Builder Agent 运行记录失败。";
+          this.showCenterToast("error", this.builderAgentPanel.errorMessage);
+        }
+      },
+
+
+      async loadBuilderAgentTimeline(agentRunId) {
+        if (!agentRunId) {
+          return;
+        }
+        const timeline = await this.apiRequest(`/agents/runs/${encodeURIComponent(agentRunId)}/timeline`);
+        this.applyBuilderAgentTimeline(timeline);
+      },
+
+
+      subscribeBuilderAgentEvents(agentRunId) {
+        if (!agentRunId) {
+          return;
+        }
+        this.stopBuilderAgentStreaming();
+        if (typeof EventSource === "undefined") {
+          this.startBuilderAgentPolling(agentRunId);
+          return;
+        }
+        const source = new EventSource(`${this.apiBaseUrl}/agents/runs/${encodeURIComponent(agentRunId)}/events`);
+        this.builderAgentEventSource = source;
+        this.builderAgentPanel.sseConnected = true;
+        this.builderAgentPanel.usingPolling = false;
+        const applyTimelineEvent = (event) => {
+          const payload = this.parseBuilderAgentEventPayload(event);
+          if (!payload) {
+            return;
+          }
+          this.builderAgentPanel.lastEventAt = new Date().toISOString();
+          this.applyBuilderAgentTimeline(payload);
+        };
+        source.addEventListener("snapshot", applyTimelineEvent);
+        source.addEventListener("progress", applyTimelineEvent);
+        source.addEventListener("final", applyTimelineEvent);
+        source.addEventListener("error", (event) => {
+          const payload = this.parseBuilderAgentEventPayload(event);
+          if (payload?.agent_run_id) {
+            applyTimelineEvent(event);
+            return;
+          }
+          this.builderAgentPanel.sseConnected = false;
+          if (!this.isBuilderAgentTerminalStatus(this.builderAgentPanel.status)) {
+            this.startBuilderAgentPolling(agentRunId);
+          }
+        });
+      },
+
+
+      parseBuilderAgentEventPayload(event) {
+        const data = event?.data || "";
+        if (!data) {
+          return null;
+        }
+        try {
+          return JSON.parse(data);
+        } catch {
+          return null;
+        }
+      },
+
+
+      startBuilderAgentPolling(agentRunId = this.builderAgentPanel.agentRunId) {
+        if (!agentRunId) {
+          return;
+        }
+        if (this.builderAgentEventSource) {
+          this.builderAgentEventSource.close();
+          this.builderAgentEventSource = null;
+        }
+        if (this.builderAgentPollTimer && typeof window !== "undefined") {
+          window.clearInterval(this.builderAgentPollTimer);
+        }
+        this.builderAgentPanel.sseConnected = false;
+        this.builderAgentPanel.usingPolling = true;
+        this.pollBuilderAgentTimeline(agentRunId);
+        if (typeof window === "undefined") {
+          return;
+        }
+        this.builderAgentPollTimer = window.setInterval(() => {
+          this.pollBuilderAgentTimeline(agentRunId);
+        }, 2000);
+      },
+
+
+      async pollBuilderAgentTimeline(agentRunId = this.builderAgentPanel.agentRunId) {
+        if (!agentRunId) {
+          return;
+        }
+        try {
+          await this.loadBuilderAgentTimeline(agentRunId);
+          if (this.isBuilderAgentTerminalStatus(this.builderAgentPanel.status)) {
+            this.stopBuilderAgentStreaming();
+          }
+        } catch (error) {
+          this.builderAgentPanel.errorMessage = error.message || "读取 Builder Agent 运行状态失败。";
+        }
+      },
+
+
+      stopBuilderAgentStreaming() {
+        if (this.builderAgentEventSource) {
+          this.builderAgentEventSource.close();
+        }
+        this.builderAgentEventSource = null;
+        if (this.builderAgentPollTimer && typeof window !== "undefined") {
+          window.clearInterval(this.builderAgentPollTimer);
+        }
+        this.builderAgentPollTimer = null;
+        if (this.builderAgentPanel) {
+          this.builderAgentPanel.sseConnected = false;
+          this.builderAgentPanel.usingPolling = false;
+        }
+      },
+
+
+      startBuilderAgentElapsedTimer() {
+        if (!this.builderAgentPanel.startedAt) {
+          this.builderAgentPanel.startedAt = new Date().toISOString();
+        }
+        if (typeof window === "undefined") {
+          return;
+        }
+        if (this.builderAgentElapsedTimer && typeof window !== "undefined") {
+          window.clearInterval(this.builderAgentElapsedTimer);
+        }
+        this.builderAgentElapsedTimer = window.setInterval(() => {
+          if (this.builderAgentPanel.timeline?.elapsed_ms !== null && this.builderAgentPanel.timeline?.elapsed_ms !== undefined) {
+            this.builderAgentPanel.elapsedMs = this.builderAgentPanel.timeline.elapsed_ms;
+            return;
+          }
+          this.builderAgentPanel.elapsedMs = Math.max(
+            0,
+            Date.now() - new Date(this.builderAgentPanel.startedAt).getTime()
+          );
+        }, 1000);
+      },
+
+
+      stopBuilderAgentElapsedTimer() {
+        if (this.builderAgentElapsedTimer && typeof window !== "undefined") {
+          window.clearInterval(this.builderAgentElapsedTimer);
+        }
+        this.builderAgentElapsedTimer = null;
+      },
+
+
+      applyBuilderAgentTimeline(timeline, options = {}) {
+        if (!timeline?.agent_run_id) {
+          return;
+        }
+        const status = timeline.status || "pending";
+        const submittedInput = timeline.user_description || this.builderAgentPanel.submittedInput || this.builderAgentPanel.userInput;
+        const userInput = this.builderAgentPanel.userInput || "";
+        const terminal = this.isBuilderAgentTerminalStatus(status);
+        this.builderAgentPanel = {
+          ...this.builderAgentPanel,
+          open: true,
+          status,
+          submittedInput,
+          userInput,
+          generationId: timeline.related_generation_id || this.builderAgentPanel.generationId,
+          jobId: timeline.related_job_id || this.builderAgentPanel.jobId,
+          agentRunId: timeline.agent_run_id,
+          timeline,
+          steps: Array.isArray(timeline.steps) ? timeline.steps : [],
+          result: terminal ? timeline.final : this.builderAgentPanel.result,
+          errorMessage: timeline.error_message || this.builderAgentPanel.errorMessage,
+          elapsedMs: timeline.elapsed_ms ?? this.builderAgentPanel.elapsedMs,
+          processExpanded: terminal && status === "succeeded" ? false : this.builderAgentPanel.processExpanded,
+          lastEventAt: new Date().toISOString()
+        };
+        this.rawMaterialGenerateForm = { user_description: this.builderAgentPanel.userInput || "" };
+        if (timeline.created_at && !this.builderAgentPanel.startedAt) {
+          this.builderAgentPanel.startedAt = timeline.created_at;
+        }
+        if (terminal) {
+          this.busy.rawMaterialGenerate = false;
+          this.stopBuilderAgentStreaming();
+          this.stopBuilderAgentElapsedTimer();
+          if (status === "succeeded") {
+            this.refreshAfterBuilderAgentSuccess().catch((error) => {
+              this.showNotice("error", error.message || "刷新 Skill 失败。");
+            });
+          }
+        } else if (options.fromLatest || status === "pending" || status === "running") {
+          this.busy.rawMaterialGenerate = true;
+        }
+      },
+
+
+      applyRawMaterialGenerationAsBuilderResult(result) {
+        const status = result.status || "pending";
+        this.builderAgentPanel.status = status;
+        this.builderAgentPanel.result = {
+          generation_reason: result.generation_reason || "",
+          review_notes: result.review_notes || [],
+          generated_file_paths: Object.keys(result.generated_files || {}).sort(),
+          reference_files: result.prompt_metadata?.reference_files || [],
+          committed_commit_sha: result.committed_commit_sha || "",
+          standard_search_summary: result.prompt_metadata?.standard_search_summary || {}
+        };
+        this.builderAgentPanel.errorMessage = result.error_message || "";
+        this.builderAgentPanel.processExpanded = status !== "succeeded";
+        if (status === "succeeded") {
+          this.refreshAfterBuilderAgentSuccess().catch((error) => {
+            this.showNotice("error", error.message || "刷新 Skill 失败。");
+          });
+        }
+      },
+
+
+      async refreshAfterBuilderAgentSuccess() {
+        if (!this.currentSkill?.id || this.builderAgentPanel.resultRefreshed) {
+          return;
+        }
+        this.builderAgentPanel.resultRefreshed = true;
+        const skillId = this.currentSkill.id;
+        this.sourceLoadedSkillId = null;
+        this.repositoryLoadedSkillId = null;
+        this.currentSkill = await this.apiRequest(`/skills/${skillId}`);
+        await this.loadRawMaterials(skillId, true);
+        this.showCenterToast("success", "Skill 草稿已生成。");
+        this.showNotice("success", "Skill 草稿已生成并提交到 GitLab draft。");
+      },
+
+
+      restartBuilderAgentPanel() {
+        this.resetBuilderAgentPanel({ open: true, userInput: "" });
+      },
+
+
+      isBuilderAgentTerminalStatus(status) {
+        return ["succeeded", "failed", "cancelled", "canceled", "deadletter", "dead_letter"].includes(status || "");
+      },
+
+
+      isBuilderAgentRunning() {
+        return ["loading_latest", "submitting", "pending", "running"].includes(this.builderAgentPanel.status || "");
+      },
+
+
+      builderAgentWorkLabel() {
+        const prefix = this.isBuilderAgentTerminalStatus(this.builderAgentPanel.status) ? "Worked for" : "Working for";
+        const duration = this.formatDuration(this.builderAgentPanel.elapsedMs || 0);
+        return `${prefix} ${duration === "N/A" ? "0 s" : duration}`;
+      },
+
+
+      builderAgentCurrentStageLabel() {
+        if (this.builderAgentPanel.status === "loading_latest") {
+          return "读取最近运行记录";
+        }
+        if (this.builderAgentPanel.status === "submitting") {
+          return "提交 Builder Agent 请求";
+        }
+        return this.builderAgentPanel.timeline?.progress?.label || this.formatStatus(this.builderAgentPanel.status);
+      },
+
+
+      builderAgentProgressPercent() {
+        const percent = Number(this.builderAgentPanel.timeline?.progress?.percent);
+        if (Number.isFinite(percent)) {
+          return Math.min(100, Math.max(0, percent));
+        }
+        if (this.builderAgentPanel.status === "succeeded" || this.builderAgentPanel.status === "failed") {
+          return 100;
+        }
+        if (this.isBuilderAgentRunning()) {
+          return 35;
+        }
+        return 0;
+      },
+
+
+      builderAgentStepIcon(step) {
+        if (step?.status === "failed") {
+          return "error";
+        }
+        if (step?.status === "running") {
+          return "progress_activity";
+        }
+        if (step?.status === "succeeded") {
+          return "check_circle";
+        }
+        return "radio_button_unchecked";
+      },
+
+
+      builderAgentStepTone(step) {
+        if (step?.status === "failed") {
+          return "border-rose-500/30 bg-rose-500/10 text-rose-100";
+        }
+        if (step?.status === "running") {
+          return "border-orange-500/30 bg-orange-500/10 text-orange-100";
+        }
+        if (step?.status === "succeeded") {
+          return "border-emerald-500/25 bg-emerald-500/10 text-emerald-100";
+        }
+        return "border-slate-800 bg-slate-900/40 text-slate-300";
+      },
+
+
+      builderAgentFinalGeneratedFiles() {
+        return this.builderAgentPanel.result?.generated_file_paths || [];
+      },
+
+
+      builderAgentFinalReferenceFiles() {
+        return this.builderAgentPanel.result?.reference_files || [];
+      },
+
+
+      builderAgentReviewNotes() {
+        return this.builderAgentPanel.result?.review_notes || [];
+      },
+
+
+      builderAgentStandardSearchSummaryText() {
+        const summary = this.builderAgentPanel.result?.standard_search_summary;
+        if (!summary || typeof summary !== "object" || Object.keys(summary).length === 0) {
+          return "无标准检索摘要";
+        }
+        const count = summary.result_count ?? summary.count ?? "";
+        const status = summary.status || "";
+        return [status, count !== "" ? `${count} 条结果` : ""].filter(Boolean).join("，") || "已记录标准检索摘要";
       },
 
 
@@ -1358,6 +1783,10 @@
 
       async selectDetailTab(tabName) {
         this.activeDetailTab = tabName;
+        if (tabName !== "materials") {
+          this.stopBuilderAgentStreaming();
+          this.stopBuilderAgentElapsedTimer();
+        }
         if (!this.currentSkill) {
           return;
         }

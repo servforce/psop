@@ -6,6 +6,7 @@ from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.agent_harness.service import AgentHarnessService
+from app.agent_harness.persistence.query_service import AgentRunQueryService
 from app.core.config import Settings
 from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.compiler.service import CompilerService
@@ -90,6 +91,10 @@ def get_runtime_service(request: Request) -> RuntimeService:
 
 def get_job_query_service(_: Request) -> JobQueryService:
     return JobQueryService()
+
+
+def get_agent_run_query_service(_: Request) -> AgentRunQueryService:
+    return AgentRunQueryService()
 
 
 def get_skill_test_service(request: Request) -> SkillTestService:
