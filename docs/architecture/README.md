@@ -13,7 +13,7 @@
 - [psop-compiler-agent-design.md](psop-compiler-agent-design.md)
   - `psop.compiler` 智能体的职责边界、核心循环、工具、Agent Skills、formal-v5 校验、上下文和审计设计。
 - [psop-runner-agent-design.md](psop-runner-agent-design.md)
-  - `psop.runner` 智能体的职责边界、RuntimeService 接入方式、终端协作、证据评估、工具、Agent Skills、校验、可观测性和上线门槛设计。
+  - `psop.runner` 智能体的职责边界、RuntimeService 接入方式、终端协作、证据评估、参考图片输出、工具、Agent Skills、校验和可观测性设计。
 
 ## 维护原则
 
