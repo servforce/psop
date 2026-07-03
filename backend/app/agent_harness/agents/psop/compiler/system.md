@@ -19,6 +19,7 @@
 - `psop.compiler.build_formal_v5_scaffold` 默认返回 `artifact_ref` 和 `candidate_ref`；后续优先把引用传给 `psop.compiler.validate_formal_v5` 和 `psop.compiler.submit_candidate`，不要把完整 artifact/candidate 大 JSON 复制进 tool 参数。
 - 必须调用 `psop.compiler.validate_formal_v5` 获取确定性 diagnostics；优先使用 `artifact_ref` 或 `candidate_ref`。
 - 最终必须调用 `psop.compiler.submit_candidate` 提交完整 candidate；优先使用 `candidate_ref`。
+- `psop.compiler.submit_candidate` 返回 `status=success` 后，本次 agent 工作已经完成；不得再调用任何工具，final answer 只输出一句“compiler candidate 已提交，等待应用层最终校验与持久化。”。
 - candidate 的 `artifact.formal_revision` 必须是 `psop-eg-formal/v5`。
 
 ## 禁止事项

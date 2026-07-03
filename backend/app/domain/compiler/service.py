@@ -1127,6 +1127,8 @@ class CompilerService:
         for item in items:
             if not isinstance(item, dict):
                 continue
+            if _is_standard_search_availability_diagnostic(item):
+                continue
             diagnostics.append(
                 FormalDiagnostic(
                     severity=str(item.get("severity") or "warning"),
@@ -1347,6 +1349,30 @@ class CompilerService:
             created_at=artifact.created_at,
             artifact=artifact_object.content_json if include_payload and artifact_object else None,
         )
+
+
+def _is_standard_search_availability_diagnostic(item: dict[str, Any]) -> bool:
+    text = json.dumps(item, ensure_ascii=False, default=str).lower()
+    standard_search_terms = (
+        "行业标准检索",
+        "标准检索",
+        "lightrag",
+        "standard search",
+    )
+    availability_terms = (
+        "不可用",
+        "暂时不可用",
+        "连接拒绝",
+        "拒绝连接",
+        "连接失败",
+        "连接错误",
+        "unavailable",
+        "connection refused",
+        "connection error",
+        "connect error",
+        "refused",
+    )
+    return any(term in text for term in standard_search_terms) and any(term in text for term in availability_terms)
 
 
 def _domain_pack_ref(document: SkillDocument) -> str | None:

@@ -199,6 +199,36 @@ def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
         database_manager.dispose()
 
 
+def test_compiler_candidate_diagnostics_filters_standard_search_availability_notes() -> None:
+    diagnostics = CompilerService._candidate_diagnostics(
+        [
+            {"message": "行业标准检索服务不可用，compiler 不因此阻塞。"},
+            {"message": "LightRAG connection refused while checking standard search."},
+            {"message": "standard search unavailable: connection refused."},
+            {
+                "severity": "warning",
+                "code": "compile.agent.candidate_diagnostic",
+                "message": "source_map 缺少 completion criteria 的明确来源。",
+            },
+            {
+                "severity": "info",
+                "code": "compile.agent.standard_reference",
+                "message": "frozen source 已固化 GB/T 相关安全引用，可作为 source evidence。",
+            },
+            {"message": "workspace read connection refused, unrelated external endpoint."},
+        ]
+    )
+
+    messages = [item.message for item in diagnostics]
+    assert messages == [
+        "source_map 缺少 completion criteria 的明确来源。",
+        "frozen source 已固化 GB/T 相关安全引用，可作为 source evidence。",
+        "workspace read connection refused, unrelated external endpoint.",
+    ]
+    assert diagnostics[0].severity == "warning"
+    assert diagnostics[1].severity == "info"
+
+
 def test_compiler_records_diagnostics_for_unsupported_formal_revision(runtime_stack) -> None:
     database_manager, gitlab_gateway, _, compiler_service, skills_service, _ = runtime_stack
 
