@@ -449,7 +449,7 @@ Agent Skill 源统一放在仓库根目录 `skills/`。`backend/app/agent_harnes
 
 ### 7.3 AgentDefinition
 
-`psop.builder` 的详细职责、工具、Agent Skills、输入输出、校验和审计约束见 [PSOP Builder Agent 详细设计](psop-builder-agent-design.md)。`psop.compiler` 的详细职责、工具、Agent Skills、formal-v5 校验、输入输出和审计约束见 [PSOP Compiler Agent 详细设计](psop-compiler-agent-design.md)。
+`psop.builder` 的详细职责、工具、Agent Skills、输入输出、校验和审计约束见 [PSOP Builder Agent 详细设计](psop-builder-agent-design.md)。`psop.compiler` 的详细职责、工具、Agent Skills、formal-v5 校验、输入输出和审计约束见 [PSOP Compiler Agent 详细设计](psop-compiler-agent-design.md)。`psop.runner` 的详细职责、RuntimeService 接入方式、终端协作、证据评估、输出 observation 和上线门槛见 [PSOP Runner Agent 详细设计](psop-runner-agent-design.md)。
 
 ```yaml
 agent_key: psop.builder
