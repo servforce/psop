@@ -69,6 +69,36 @@ REQUIRED_ARTIFACTS_BY_AGENT = {
             "不要回复自然语言说明，不要只说将要补齐。"
         ),
     ),
+    "psop.runner": RequiredArtifactContract(
+        artifact_type="runner_observation",
+        artifact_ref="sandbox://outputs/runner-observation.json",
+        continuation_prompt=(
+            "你还没有生成必需产物 sandbox://outputs/runner-observation.json。"
+            "现在必须立即调用 psop.runner.submit_observation，参数必须是完整 RunnerObservation。"
+            "不要回复自然语言说明，不要只说将要提交。"
+        ),
+        required_skill_names=(
+            "psop-runner-core",
+            "psop-runner-terminal-guidance",
+            "psop-runner-evidence-evaluation",
+        ),
+        required_tool_names=(
+            "psop.runner.read_prompt_view",
+            "psop.runner.read_runtime_contract",
+            "psop.runner.read_current_checkpoint",
+            "psop.runner.list_step_reference_images",
+            "psop.runner.list_terminal_events",
+            "psop.runner.read_latest_evidence",
+            "psop.runner.submit_observation",
+        ),
+        missing_interactions_prompt=(
+            "你已经生成 RunnerObservation，但尚未完成 psop.runner 的必需上下文读取或提交步骤。"
+            "现在必须补齐缺失的 load_skill / psop.runner tool 调用。"
+            "如果补齐后发现 observation 需要调整，必须重新调用 psop.runner.submit_observation 覆盖 sandbox output；"
+            "如果无需调整，完成缺失调用后即可结束。"
+            "不要回复自然语言说明，不要只说将要补齐。"
+        ),
+    ),
 }
 
 
@@ -215,6 +245,15 @@ def _collect_artifacts(sandbox: AgentSandbox) -> list[AgentArtifact]:
                 provenance=provenance,
             )
         )
+    runner_observation = _resolve_optional(sandbox, "/mnt/psop/outputs/runner-observation.json")
+    if runner_observation is not None and runner_observation.exists():
+        artifacts.append(
+            AgentArtifact(
+                artifact_type="runner_observation",
+                path="sandbox://outputs/runner-observation.json",
+                provenance=_runner_observation_provenance(runner_observation),
+            )
+        )
     skill_draft_root = _resolve_optional(sandbox, "/mnt/psop/outputs/skill-draft")
     if skill_draft_root is not None and skill_draft_root.is_dir():
         file_paths = sorted(path for path in skill_draft_root.rglob("*") if path.is_file())
@@ -323,6 +362,22 @@ def _json_file_provenance(path) -> dict[str, Any]:
         workflow_steps = runtime_contract.get("workflow_steps") if isinstance(runtime_contract, dict) else None
         if isinstance(workflow_steps, list):
             provenance["workflow_step_count"] = len(workflow_steps)
+    return provenance
+
+
+def _runner_observation_provenance(path) -> dict[str, Any]:
+    provenance: dict[str, Any] = {"content_hash": hashlib.sha256(path.read_bytes()).hexdigest()}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return provenance
+    if isinstance(payload, dict):
+        provenance["schema"] = str(payload.get("schema") or "")
+        provenance["node_id"] = str(payload.get("node_id") or "")
+        provenance["decision"] = str(payload.get("decision") or "")
+        reference_images = payload.get("reference_images")
+        if isinstance(reference_images, list):
+            provenance["reference_image_count"] = len(reference_images)
     return provenance
 
 

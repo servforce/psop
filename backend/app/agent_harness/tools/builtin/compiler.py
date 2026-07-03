@@ -29,6 +29,7 @@ GUARD_OPS = ["always", "phase_is", "field_exists", "field_equals", "all", "any",
 MERGE_OPS = ["set"]
 SCAFFOLD_ARTIFACT_VIRTUAL_PATH = "/mnt/psop/workspace/compiler-scaffold-artifact.json"
 SCAFFOLD_CANDIDATE_VIRTUAL_PATH = "/mnt/psop/workspace/compiler-scaffold-candidate.json"
+RUNNER_AGENT_BINDING = {"agent_key": "psop.runner", "output_schema": "psop.runner.observation.v1"}
 
 
 def register_compiler_tools(registry: ToolRegistry) -> None:
@@ -191,9 +192,21 @@ def allowed_runtime_snapshot() -> dict[str, Any]:
             "selection": "priority_then_order",
             "minimum_llm_calls": "2 * workflow_steps.length + 1",
         },
+        "node_extensions": {
+            "agent_binding": {
+                "allowed_on": {"kind": "llm", "actor.name": "agent.llm"},
+                "allowed_agent_keys": ["psop.runner"],
+                "allowed_output_schemas": ["psop.runner.observation.v1"],
+            }
+        },
         "formal_v5_contract": {
             "recommended_builder_tool": "psop.compiler.build_formal_v5_scaffold",
             "workflow_step_node_pattern": ["instruct_<step_id>", "evaluate_<step_id>"],
+            "workflow_step_reference_images": {
+                "field": "runtime_contract.workflow_steps[].reference_images",
+                "default": [],
+                "rule": "只允许 Runtime 在当前 workflow step 范围内暴露给 psop.runner。",
+            },
             "required_runtime_contract_fields": [
                 "execution_goal",
                 "applicability",
@@ -210,6 +223,7 @@ def allowed_runtime_snapshot() -> dict[str, Any]:
                 "每个 instruct_<step_id> 的 resume_phase 必须指向 evaluate_<step_id>。",
                 "每个 instruct/evaluate 节点必须把 observation 写入 observations.<node_id>。",
                 "每个 evaluate_<step_id> 必须是 llm 节点，interaction.evaluation=true，并包含 projection.user_template。",
+                "Runtime LLM 节点可携带 agent_binding，但只允许 psop.runner / psop.runner.observation.v1。",
                 "terminal(success) 前必须存在 final_verify。",
             ],
         },
@@ -661,6 +675,7 @@ def _normalize_scaffold_steps(raw_steps: list[Any]) -> list[dict[str, Any]]:
             "goal": _non_empty_text(raw_step.get("goal"), f"完成「{title}」并收集可验证现场证据。"),
             "source_evidence": source_evidence,
             "expected_evidence": expected_evidence,
+            "reference_images": _normalize_reference_images(raw_step.get("reference_images"), step_id),
             "source_file": _non_empty_text(raw_step.get("source_file"), "SKILL.md"),
         }
         for optional_key in ("preconditions", "completion_criteria", "stop_conditions", "recovery_path"):
@@ -698,6 +713,37 @@ def _normalize_expected_evidence(raw_value: Any) -> list[dict[str, Any]]:
         {"kind": "text", "event_kind": "terminal.text.input.v1", "description": "现场状态文字说明。"},
         {"kind": "image", "event_kind": "terminal.image.input.v1", "description": "关键步骤照片或截图。"},
     ]
+
+
+def _normalize_reference_images(raw_value: Any, step_id: str) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    used_refs: set[str] = set()
+    for index, item in enumerate(raw_value, start=1):
+        if not isinstance(item, dict):
+            continue
+        reference_image_ref = _non_empty_text(
+            item.get("reference_image_ref") or item.get("ref") or item.get("id"),
+            f"{step_id}:reference_image:{index}",
+        )
+        if reference_image_ref in used_refs:
+            continue
+        used_refs.add(reference_image_ref)
+        image: dict[str, Any] = {
+            "reference_image_ref": reference_image_ref,
+            "workflow_step_id": step_id,
+            "title": str(item.get("title") or item.get("name") or ""),
+            "caption": str(item.get("caption") or item.get("summary") or ""),
+            "source_ref": str(item.get("source_ref") or item.get("source") or ""),
+            "display_order": _safe_int(item.get("display_order"), index),
+        }
+        for optional_key in ("artifact_object_id", "mime_type", "size_bytes", "checksum", "metadata"):
+            value = item.get(optional_key)
+            if value not in (None, "", [], {}):
+                image[optional_key] = value
+        normalized.append(image)
+    return sorted(normalized, key=lambda image: (int(image.get("display_order") or 0), str(image.get("reference_image_ref") or "")))
 
 
 def _scaffold_artifact(
@@ -792,6 +838,7 @@ def _instruct_node(step: dict[str, Any]) -> dict[str, Any]:
         "kind": "llm",
         "guard": {"phase_is": node_id},
         "actor": {"name": "agent.llm"},
+        "agent_binding": dict(RUNNER_AGENT_BINDING),
         "interaction": {
             "output_to_terminal": True,
             "wait_after_output": True,
@@ -829,6 +876,7 @@ def _evaluate_node(step: dict[str, Any], next_phase: str) -> dict[str, Any]:
         "kind": "llm",
         "guard": {"phase_is": node_id},
         "actor": {"name": "agent.llm"},
+        "agent_binding": dict(RUNNER_AGENT_BINDING),
         "interaction": {"evaluation": True},
         "projection": {
             "system_template": "你是 PSOP Runtime 证据评估节点。只输出 JSON decision，字段包含 decision、next_phase、reason、terminal_message。",
@@ -856,6 +904,7 @@ def _final_verify_node() -> dict[str, Any]:
         "kind": "llm",
         "guard": {"phase_is": "final_verify"},
         "actor": {"name": "agent.llm"},
+        "agent_binding": dict(RUNNER_AGENT_BINDING),
         "interaction": {"evaluation": True},
         "projection": {
             "system_template": "你是 PSOP Runtime 最终验证节点 final_verify。只输出 JSON object，字段包含 decision、next_phase、reason、terminal_message。",
@@ -1057,6 +1106,13 @@ def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(maximum, parsed))
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _truncate(value: str, max_chars: int) -> str:

@@ -1,0 +1,167 @@
+{
+  "agent_key": "psop.runner",
+  "input": {
+    "text": "执行 Runtime 节点 instruct_collect_context。"
+  },
+  "context": {
+    "node": {
+      "id": "instruct_collect_context",
+      "kind": "llm",
+      "actor": {
+        "name": "agent.llm"
+      }
+    },
+    "prompt_view": {
+      "node_id": "instruct_collect_context",
+      "phase": "instruct_collect_context",
+      "status": "running",
+      "input": {
+        "user_input": "我需要完成现场检查。"
+      },
+      "facts": {},
+      "control": {},
+      "observations": {},
+      "terminal_cursor": 1
+    },
+    "runtime_contract": {
+      "execution_goal": "帮助用户完成现场检查。",
+      "workflow_steps": [
+        {
+          "id": "collect_context",
+          "title": "收集上下文",
+          "goal": "确认用户任务和现场约束。",
+          "source_evidence": "SKILL.md 要求先收集上下文。",
+          "reference_images": [
+            {
+              "reference_image_ref": "collect_context:ppe-example",
+              "workflow_step_id": "collect_context",
+              "title": "PPE 示例",
+              "caption": "用于提示用户提交同类现场照片。",
+              "source_ref": "skill-draft/assets/ppe-example.png",
+              "display_order": 1,
+              "artifact_object_id": "example-image-object",
+              "mime_type": "image/png"
+            }
+          ]
+        }
+      ],
+      "expected_evidence": {
+        "collect_context": [
+          {
+            "kind": "text",
+            "event_kind": "terminal.text.input.v1"
+          },
+          {
+            "kind": "image",
+            "event_kind": "terminal.image.input.v1"
+          }
+        ]
+      },
+      "safety_constraints": [
+        "证据不足时暂停。"
+      ],
+      "wait_checkpoints": [
+        {
+          "checkpoint_id": "collect_context_evidence",
+          "workflow_step_id": "collect_context",
+          "expected_inputs": [
+            {
+              "kind": "text"
+            },
+            {
+              "kind": "image"
+            }
+          ]
+        }
+      ],
+      "completion_criteria": [
+        "上下文和现场证据均已确认。"
+      ],
+      "recovery_paths": [
+        {
+          "when": "evidence_insufficient",
+          "action": "request_more_evidence"
+        }
+      ]
+    },
+    "current_checkpoint": {
+      "checkpoint_id": "collect_context_evidence",
+      "workflow_step_id": "collect_context",
+      "reason": "等待用户提交现场证据。",
+      "expected_inputs": [
+        {
+          "kind": "text"
+        },
+        {
+          "kind": "image"
+        }
+      ],
+      "resume_phase": "evaluate_collect_context"
+    },
+    "terminal_events": [
+      {
+        "id": "terminal-event-1",
+        "seq_no": 1,
+        "direction": "input",
+        "event_kind": "terminal.text.input.v1",
+        "mime_type": "text/plain",
+        "payload_inline": "现场环境已准备好。",
+        "parts": [
+          {
+            "part_id": "text_1",
+            "kind": "text",
+            "mime_type": "text/plain",
+            "text": "现场环境已准备好。"
+          }
+        ]
+      }
+    ],
+    "latest_evidence": {
+      "id": "terminal-event-1",
+      "seq_no": 1,
+      "direction": "input",
+      "event_kind": "terminal.text.input.v1",
+      "mime_type": "text/plain",
+      "text": "现场环境已准备好。"
+    },
+    "step_reference_images": [
+      {
+        "reference_image_ref": "collect_context:ppe-example",
+        "workflow_step_id": "collect_context",
+        "title": "PPE 示例",
+        "caption": "用于提示用户提交同类现场照片。",
+        "source_ref": "skill-draft/assets/ppe-example.png",
+        "display_order": 1,
+        "artifact_object_id": "example-image-object",
+        "mime_type": "image/png"
+      }
+    ],
+    "trace_summary": [],
+    "legal_phases": [
+      "instruct_collect_context",
+      "evaluate_collect_context",
+      "waiting",
+      "terminal"
+    ],
+    "allowed_runtime": {
+      "observation_schema": "psop.runner.observation.v1"
+    },
+    "output_contract": {
+      "schema": "psop.runner.observation.v1",
+      "allowed_decisions": [
+        "continue",
+        "need_more_evidence",
+        "retry",
+        "abort",
+        "complete"
+      ],
+      "allowed_next_phases": [
+        "waiting",
+        "evaluate_collect_context",
+        "terminal"
+      ],
+      "max_terminal_message_chars": 2000
+    },
+    "terminal_cursor": 1
+  }
+}

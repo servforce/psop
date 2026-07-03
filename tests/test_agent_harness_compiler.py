@@ -175,6 +175,15 @@ def test_compiler_build_formal_v5_scaffold_creates_valid_candidate(tmp_path) -> 
                     "expected_evidence": [
                         {"kind": "text", "event_kind": "terminal.text.input.v1", "description": "用户任务说明"}
                     ],
+                    "reference_images": [
+                        {
+                            "reference_image_ref": "collect_context:ppe-example",
+                            "title": "PPE 示例",
+                            "caption": "用于提示用户提交同类现场照片。",
+                            "source_ref": "skill-draft/assets/ppe-example.png",
+                            "display_order": 1,
+                        }
+                    ],
                     "source_file": "SKILL.md",
                 },
                 {
@@ -223,6 +232,18 @@ def test_compiler_build_formal_v5_scaffold_creates_valid_candidate(tmp_path) -> 
     assert validation.artifact is not None
     assert not validation.has_errors
     assert len(candidate["artifact"]["runtime_contract"]["workflow_steps"]) == 2
+    assert candidate["artifact"]["runtime_contract"]["workflow_steps"][0]["reference_images"][0]["reference_image_ref"] == (
+        "collect_context:ppe-example"
+    )
+    assert candidate["artifact"]["runtime_contract"]["workflow_steps"][1]["reference_images"] == []
+    assert all(
+        node.get("agent_binding") == {
+            "agent_key": "psop.runner",
+            "output_schema": "psop.runner.observation.v1",
+        }
+        for node in candidate["artifact"]["nodes"]
+        if node.get("kind") == "llm"
+    )
     node_ids = {node["id"] for node in candidate["artifact"]["nodes"]}
     assert "instruct_collect_context" in node_ids
     assert "evaluate_verify_result" in node_ids
@@ -265,6 +286,29 @@ def test_compiler_submit_candidate_rejects_invalid_payload(tmp_path) -> None:
     assert result["status"] == "error"
     assert result["type"] == "validation_failed"
     assert not sandbox.resolve_virtual_path("/mnt/psop/outputs").joinpath("compiler-result.json").exists()
+
+
+def test_formal_v5_validator_rejects_invalid_agent_binding() -> None:
+    non_llm = _minimal_artifact()
+    non_llm["nodes"][0]["agent_binding"] = {
+        "agent_key": "psop.runner",
+        "output_schema": "psop.runner.observation.v1",
+    }
+    assert validate_and_normalize_artifact(non_llm).has_errors
+
+    bad_agent = _minimal_artifact()
+    bad_agent["nodes"][1]["agent_binding"] = {
+        "agent_key": "psop.other",
+        "output_schema": "psop.runner.observation.v1",
+    }
+    assert validate_and_normalize_artifact(bad_agent).has_errors
+
+    bad_schema = _minimal_artifact()
+    bad_schema["nodes"][1]["agent_binding"] = {
+        "agent_key": "psop.runner",
+        "output_schema": "psop.runner.observation.v0",
+    }
+    assert validate_and_normalize_artifact(bad_schema).has_errors
 
 
 def _minimal_artifact() -> dict:

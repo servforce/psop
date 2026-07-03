@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
 from app.agent_harness.models.scripted_compiler_chat_model import ScriptedCompilerChatModel
+from app.agent_harness.models.scripted_runner_chat_model import ScriptedRunnerChatModel
 from app.agent_harness.service import AgentHarnessService
 from app.app import create_app
 from app.core.config import Settings
@@ -735,6 +736,8 @@ def create_test_client() -> tuple[TestClient, FakeGitLabGateway, FakeInferenceGa
                 chat_model_factory=lambda definition: (
                     ScriptedCompilerChatModel()
                     if definition.agent_key == "psop.compiler"
+                    else ScriptedRunnerChatModel()
+                    if definition.agent_key == "psop.runner"
                     else ScriptedBuilderChatModel()
                 ),
             ),
@@ -1811,9 +1814,9 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert run_payload["latest_trace_seq"] == 7
     assert len(run_payload["binding_summary"]) == 2
     assert "测试任务已完成" in run_payload["final_output"]
-    assert "final_verify" in fake_inference.calls[-1]["system_prompt"]
 
-    event_types = [event["event_type"] for event in trace_response.json()]
+    trace_events = trace_response.json()
+    event_types = [event["event_type"] for event in trace_events]
     assert event_types == [
         "binding.resolved",
         "runtime.start.completed",
@@ -1823,6 +1826,9 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         "gateway.inference.completed",
         "runtime.final.completed",
     ]
+    runner_events = [event for event in trace_events if event["event_type"] == "gateway.inference.completed"]
+    assert runner_events[-1]["phase"] == "final_verify"
+    assert all(event["payload"].get("agent_key") == "psop.runner" for event in runner_events)
 
     assert binding_requirements_response.status_code == 200
     assert {item["requirement_key"] for item in binding_requirements_response.json()} == {
@@ -2050,9 +2056,9 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
     assert "terminal-event-parts" not in latest_evidence["input_bundle"]["text"]
     assert "请结合现场图像" in final_token["input_envelope"]["user_input"]
 
-    multimodal_calls = [call for call in fake_inference.calls if call.get("attachments")]
-    assert multimodal_calls
-    assert any(call["attachments"] == "fault.png,clip.mp4,note.wav" for call in multimodal_calls)
+    runner_observation = final_token["observations"]["evaluate_collect_context"]
+    assert runner_observation["runner"]["agent_key"] == "psop.runner"
+    assert f"terminal_event:{appended_event['seq_no']}" in runner_observation["source_refs"]
 
     terminal_events = terminal_events_response.json()
     persisted_event = next(event for event in terminal_events if event["id"] == appended_event["id"])

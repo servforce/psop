@@ -87,6 +87,7 @@ def get_runtime_service(request: Request) -> RuntimeService:
         settings=get_app_settings(request),
         inference_gateway=get_inference_gateway(request),
         object_store=get_object_store(request),
+        agent_harness_service=get_agent_harness_service(request),
     )
 
 
