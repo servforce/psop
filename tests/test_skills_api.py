@@ -2064,12 +2064,21 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
 def test_terminal_file_upload_returns_json_error_when_object_store_unavailable() -> None:
     fake_gateway = FakeGitLabGateway()
     fake_inference = FakeInferenceGateway()
+    settings = create_test_settings()
     client = TestClient(
         create_app(
-            create_test_settings(),
+            settings,
             gitlab_gateway=fake_gateway,
             inference_gateway=fake_inference,
             object_store=FailingObjectStore(),
+            agent_harness_service=AgentHarnessService(
+                settings=settings,
+                chat_model_factory=lambda definition: (
+                    ScriptedCompilerChatModel()
+                    if definition.agent_key == "psop.compiler"
+                    else ScriptedBuilderChatModel()
+                ),
+            ),
         )
     )
 

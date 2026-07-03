@@ -1,8 +1,19 @@
-# PSOP Compiler Agent 实施计划
+# PSOP Compiler Agent 实施计划（已完成）
 
 本文是阶段性实施计划和验收口径记录，不是长期架构事实源。`psop.compiler` 的职责、工具、Agent Skill 包、输入输出、校验与审计约束以 [PSOP Compiler Agent 详细设计](../../architecture/psop-compiler-agent-design.md) 为准；Agent Harness 总体边界以 [系统架构设计](../../architecture/system-architecture.md) 为准。
 
-> 状态：待实施。
+> 状态：已完成。
+>
+> 完成日期：2026-07-03。
+>
+> 完成范围：`psop.compiler` Agent Harness 首版接入、compiler tools、`psop-compiler` Skill 包、scripted compiler model、runner artifact contract、CompilerService harness 编译路径、审计持久化关联和默认测试 scripted 验收。
+>
+> 验收方式：
+>
+> ```bash
+> PYTHONPATH=backend backend/.venv/bin/python -m pytest -q
+> PYTHONPATH=backend backend/.venv/bin/python tests/run_psop_compiler_agent.py --fixture tests/fixtures/psop_compiler/minimal.json --scripted
+> ```
 >
 > 目标：在现有 Agent Harness MVP 底座上实现 `psop.compiler`，替代旧的 `SkillCompileAgent` 直连模型编译链路，同时保持现有 Compiler API、发布流程、RuntimeJob 进度和 EG artifact 持久化语义不变。
 >
