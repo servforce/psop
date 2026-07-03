@@ -18,7 +18,6 @@ SUPPORTED_ACTORS = {
     "runtime.terminal",
 }
 SUPPORTED_TOOLS = {"psop.demo.inspect_input"}
-SUPPORTED_AGENT_BINDINGS = {"psop.runner": {"psop.runner.observation.v1"}}
 SCAFFOLD_NODE_IDS = {"start", "input", "llm", "tool", "terminal", "final", "finalize", "finish", "end"}
 DEFAULT_TOKEN_FIELDS = {
     "phase",
@@ -177,7 +176,6 @@ def validate_and_normalize_artifact(candidate: Any) -> FormalValidationResult:
                         location={"path": f"{path}.actor.tool_name"},
                     )
                 )
-        diagnostics.extend(_validate_agent_binding(node, kind, actor_name, path))
 
         guard = node.get("guard")
         if guard is None:
@@ -398,34 +396,6 @@ def _tool_name(actor: Any) -> str:
         if isinstance(value, str):
             return value
     return ""
-
-
-def _validate_agent_binding(node: dict[str, Any], kind: Any, actor_name: str, path: str) -> list[FormalDiagnostic]:
-    if "agent_binding" not in node:
-        return []
-    binding = node.get("agent_binding")
-    if kind != "llm" or actor_name != "agent.llm":
-        return [
-            _error(
-                "agent_binding 只允许出现在 kind=llm 且 actor.name=agent.llm 的节点上。",
-                f"{path}.agent_binding",
-            )
-        ]
-    if not isinstance(binding, dict):
-        return [_error("agent_binding 必须是对象。", f"{path}.agent_binding")]
-    agent_key = binding.get("agent_key")
-    output_schema = binding.get("output_schema")
-    diagnostics: list[FormalDiagnostic] = []
-    if agent_key not in SUPPORTED_AGENT_BINDINGS:
-        diagnostics.append(_error(f"不支持的 agent_binding.agent_key `{agent_key}`。", f"{path}.agent_binding.agent_key"))
-    elif output_schema not in SUPPORTED_AGENT_BINDINGS[agent_key]:
-        diagnostics.append(
-            _error(
-                f"不支持的 agent_binding.output_schema `{output_schema}`。",
-                f"{path}.agent_binding.output_schema",
-            )
-        )
-    return diagnostics
 
 
 def _validate_guard(guard: Any, token_fields: set[str], path: str) -> list[FormalDiagnostic]:

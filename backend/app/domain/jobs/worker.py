@@ -119,7 +119,6 @@ class RuntimeJobWorker:
                                 settings=self.settings,
                                 inference_gateway=self.inference_gateway,
                                 object_store=self.object_store,
-                                agent_harness_service=self.agent_harness_service,
                             )
                             runtime_service.process_run(session, job.run_id)
                         elif job_type == "skill_test_timeline_driver":

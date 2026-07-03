@@ -5,14 +5,10 @@ import hashlib
 import json
 import logging
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agent_harness.agents.psop.runner.schemas import validate_runner_observation
-from app.agent_harness.schemas import AgentInvocation, AgentResult
-from app.agent_harness.service import AgentHarnessService
 from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
@@ -78,7 +74,6 @@ class RuntimeService:
         job_repository: JobRepository | None = None,
         agent_prompt_service: AgentPromptService | None = None,
         object_store: ObjectStoreService | None = None,
-        agent_harness_service: AgentHarnessService | None = None,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
@@ -86,7 +81,6 @@ class RuntimeService:
         self.job_repository = job_repository or JobRepository()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
         self.object_store = object_store
-        self.agent_harness_service = agent_harness_service
 
     def create_invocation(self, session: Session, payload: CreateInvocationRequest) -> InvocationResponse:
         skill_definition = self.repository.get_skill_definition_by_key(session, payload.skill_key)
@@ -487,7 +481,6 @@ class RuntimeService:
                             )
                             observation = self._execute_node(
                                 session=session,
-                                run=run,
                                 node=node,
                                 token=token,
                                 artifact_payload=artifact_payload,
@@ -959,25 +952,6 @@ class RuntimeService:
         run.latest_snapshot_seq = next_seq
         run.runtime_phase = str(token.get("phase") or node["id"])
         trace_observation = self._observation_for_trace(observation)
-        runner_trace = trace_observation.get("runner") if isinstance(trace_observation.get("runner"), dict) else {}
-        trace_payload = {
-            "node_id": node.get("id"),
-            "node_kind": node.get("kind"),
-            "observation": trace_observation,
-            "summary": observation.get("summary") or observation.get("content") or observation.get("final_response") or "",
-        }
-        if runner_trace:
-            trace_payload.update(
-                {
-                    "agent_key": runner_trace.get("agent_key"),
-                    "agent_run_id": runner_trace.get("agent_run_id"),
-                    "runner_observation_ref": runner_trace.get("runner_observation_ref"),
-                    "decision": runner_trace.get("decision"),
-                    "source_refs": runner_trace.get("source_refs") or [],
-                    "reference_images": runner_trace.get("reference_images") or [],
-                    "token_usage": runner_trace.get("token_usage") or {},
-                }
-            )
         session.add(
             SessionTokenSnapshot(
                 run_id=run.id,
@@ -993,7 +967,12 @@ class RuntimeService:
             run=run,
             phase=str(node.get("id")),
             event_type=self._event_type_for_node(node),
-            payload=trace_payload,
+            payload={
+                "node_id": node.get("id"),
+                "node_kind": node.get("kind"),
+                "observation": trace_observation,
+                "summary": observation.get("summary") or observation.get("content") or observation.get("final_response") or "",
+            },
         )
         if node.get("kind") == "terminal" and observation.get("final_response"):
             terminal_session = self.repository.get_terminal_session_for_run(session, run.id)
@@ -1032,29 +1011,17 @@ class RuntimeService:
         if should_output and terminal_message:
             terminal_session = self.repository.get_terminal_session_for_run(session, run.id)
             if terminal_session and terminal_session.status == "open":
-                reference_images = observation.get("reference_images") if isinstance(observation.get("reference_images"), list) else []
-                emitted_multimodal = False
-                if reference_images:
-                    emitted_multimodal = self._append_runner_multimodal_output_event(
-                        session,
-                        run=run,
-                        terminal_session=terminal_session,
-                        node=node,
-                        terminal_message=terminal_message,
-                        reference_images=reference_images,
-                    )
-                if not emitted_multimodal:
-                    self._append_terminal_event(
-                        session,
-                        run=run,
-                        terminal_session=terminal_session,
-                        direction="output",
-                        event_kind=str(interaction.get("output_event_kind") or "terminal.text.output.v1"),
-                        mime_type=str(interaction.get("output_mime_type") or "text/markdown"),
-                        payload_inline=terminal_message,
-                        binding_id=None,
-                        source_ref={"kind": "runtime", "node_id": str(node.get("id"))},
-                    )
+                self._append_terminal_event(
+                    session,
+                    run=run,
+                    terminal_session=terminal_session,
+                    direction="output",
+                    event_kind=str(interaction.get("output_event_kind") or "terminal.text.output.v1"),
+                    mime_type=str(interaction.get("output_mime_type") or "text/markdown"),
+                    payload_inline=terminal_message,
+                    binding_id=None,
+                    source_ref={"kind": "runtime", "node_id": str(node.get("id"))},
+                )
 
         if self._node_is_evaluation(node):
             next_token.setdefault("control", {})["latest_evaluation"] = self._evaluation_summary(node, observation)
@@ -1095,80 +1062,6 @@ class RuntimeService:
             )
 
         return next_token, entered_wait
-
-    def _append_runner_multimodal_output_event(
-        self,
-        session: Session,
-        *,
-        run: Run,
-        terminal_session: TerminalSession,
-        node: dict[str, Any],
-        terminal_message: str,
-        reference_images: list[Any],
-    ) -> bool:
-        image_parts: list[TerminalEventPartInput] = []
-        unavailable_refs: list[str] = []
-        for image in sorted(
-            (item for item in reference_images if isinstance(item, dict)),
-            key=lambda item: (int(item.get("display_order") or 0), str(item.get("reference_image_ref") or "")),
-        ):
-            artifact_object_id = str(image.get("artifact_object_id") or "")
-            artifact_object = self.repository.get_artifact_object(session, artifact_object_id) if artifact_object_id else None
-            if not artifact_object:
-                unavailable_refs.append(str(image.get("reference_image_ref") or artifact_object_id or ""))
-                continue
-            image_parts.append(
-                TerminalEventPartInput(
-                    part_id=f"image_{len(image_parts) + 1}",
-                    kind="image",
-                    mime_type=str(image.get("mime_type") or artifact_object.media_type or "image/png"),
-                    artifact_object_id=artifact_object_id,
-                    size_bytes=int(image.get("size_bytes") or artifact_object.size_bytes or 0),
-                    checksum=str(image.get("checksum") or artifact_object.checksum or ""),
-                    metadata={
-                        "reference_image_ref": str(image.get("reference_image_ref") or ""),
-                        "title": str(image.get("title") or ""),
-                        "caption": str(image.get("caption") or ""),
-                        "source_ref": str(image.get("source_ref") or ""),
-                        "display_order": int(image.get("display_order") or len(image_parts) + 1),
-                    },
-                )
-            )
-        if unavailable_refs:
-            self._append_trace_event(
-                session,
-                run=run,
-                phase=str(node.get("id") or ""),
-                event_type="runtime.reference_image_unavailable",
-                payload={
-                    "node_id": str(node.get("id") or ""),
-                    "reference_image_refs": [item for item in unavailable_refs if item],
-                    "fallback": "terminal.text.output.v1" if not image_parts else "partial_multimodal",
-                },
-            )
-        if not image_parts:
-            return False
-        self._append_terminal_event(
-            session,
-            run=run,
-            terminal_session=terminal_session,
-            direction="output",
-            event_kind="terminal.multimodal.output.v1",
-            mime_type="multipart/mixed",
-            payload_inline={"summary": terminal_message, "reference_image_count": len(image_parts)},
-            parts=[
-                TerminalEventPartInput(
-                    part_id="text_1",
-                    kind="text",
-                    mime_type="text/markdown",
-                    text=terminal_message,
-                ),
-                *image_parts,
-            ],
-            binding_id=None,
-            source_ref={"kind": "runtime", "node_id": str(node.get("id")), "agent_key": "psop.runner"},
-        )
-        return True
 
     @staticmethod
     def _node_is_evaluation(node: dict[str, Any]) -> bool:
@@ -2122,7 +2015,6 @@ class RuntimeService:
         self,
         *,
         session: Session,
-        run: Run,
         node: dict[str, Any],
         token: dict[str, Any],
         artifact_payload: dict[str, Any],
@@ -2135,14 +2027,6 @@ class RuntimeService:
             user_input = self._extract_user_input(token.get("input_envelope", {}), artifact_payload)
             return {"user_input": user_input, "summary": "已接收用户输入。"}
         if kind == "llm" or actor_name == "agent.llm":
-            if self._node_uses_runner_agent(node) and self.agent_harness_service is not None:
-                return self._execute_runner_agent_node(
-                    session=session,
-                    run=run,
-                    node=node,
-                    token=token,
-                    artifact_payload=artifact_payload,
-                )
             system_prompt, user_prompt, prompt_metadata = self._render_llm_prompts(
                 session,
                 node,
@@ -2218,316 +2102,6 @@ class RuntimeService:
                 )
             return {"final_response": str(final_response), "summary": "Run 已完成。"}
         raise RuntimeError(f"Unsupported runtime node actor: {actor_name or kind}")
-
-    @staticmethod
-    def _node_uses_runner_agent(node: dict[str, Any]) -> bool:
-        binding = node.get("agent_binding")
-        return isinstance(binding, dict) and binding.get("agent_key") == "psop.runner"
-
-    def _execute_runner_agent_node(
-        self,
-        *,
-        session: Session,
-        run: Run,
-        node: dict[str, Any],
-        token: dict[str, Any],
-        artifact_payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        context = self._runner_invocation_context(
-            session=session,
-            run=run,
-            node=node,
-            token=token,
-            artifact_payload=artifact_payload,
-        )
-        node_id = str(node.get("id") or "")
-        invocation = AgentInvocation(
-            agent_key="psop.runner",
-            input={
-                "text": f"执行 Runtime 节点 {node_id}，读取上下文并提交 RunnerObservation。",
-                "node": {"id": node_id, "kind": node.get("kind")},
-                "output_contract": context["output_contract"],
-            },
-            context=context,
-            memory_scope="psop.runner",
-            workspace_id=run.id,
-            agent_run_id=f"runtime-{run.id}-{node_id}-{run.latest_snapshot_seq + 1}",
-        )
-        result = self.agent_harness_service.invoke(
-            invocation,
-            persistence_session=session,
-            persistence_context={
-                "related_skill_definition_id": run.skill_definition_id,
-                "related_job_id": f"job:runtime:{run.id}",
-            },
-        )
-        if result.status != "succeeded":
-            raise RuntimeError(f"psop.runner 执行失败：{result.error_message or result.final_output or result.status}")
-        usage = self._runner_token_usage_summary(result)
-        if usage:
-            budgets = token.setdefault("budgets", {})
-            budgets["llm_calls"] = int(budgets.get("llm_calls", 0)) + 1
-            self._accumulate_llm_usage(budgets, usage)
-        payload = self._read_runner_observation_payload(result)
-        return self._map_runner_observation(
-            payload,
-            result=result,
-            node=node,
-            context=context,
-        )
-
-    def _read_runner_observation_payload(self, result: AgentResult) -> dict[str, Any]:
-        has_artifact = any(artifact.artifact_type == "runner_observation" for artifact in result.artifacts)
-        sandbox_path = Path(result.sandbox_path or "")
-        observation_path = sandbox_path / "outputs" / "runner-observation.json"
-        if not has_artifact or not observation_path.exists():
-            raise RuntimeError("psop.runner 未生成必需 artifact：sandbox://outputs/runner-observation.json。")
-        try:
-            payload = json.loads(observation_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("psop.runner observation artifact 不是合法 JSON。") from exc
-        if not isinstance(payload, dict):
-            raise RuntimeError("psop.runner observation artifact 顶层必须是对象。")
-        return payload
-
-    def _map_runner_observation(
-        self,
-        payload: dict[str, Any],
-        *,
-        result: AgentResult,
-        node: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        observation_model = validate_runner_observation(
-            payload,
-            node_id=str(node.get("id") or ""),
-            output_contract=context.get("output_contract") if isinstance(context.get("output_contract"), dict) else {},
-            step_reference_images=context.get("step_reference_images") if isinstance(context.get("step_reference_images"), list) else [],
-            terminal_cursor=int(context.get("terminal_cursor") or 0),
-        )
-        observation = observation_model.model_dump(mode="json")
-        observation["reference_images"] = self._enrich_runner_reference_images(
-            observation.get("reference_images") if isinstance(observation.get("reference_images"), list) else [],
-            context.get("step_reference_images") if isinstance(context.get("step_reference_images"), list) else [],
-        )
-        observation["runner"] = {
-            "agent_key": result.agent_key,
-            "agent_run_id": result.agent_run_id,
-            "runner_observation_ref": "sandbox://outputs/runner-observation.json",
-            "decision": observation.get("decision"),
-            "source_refs": observation.get("source_refs") or [],
-            "reference_images": [
-                {
-                    "reference_image_ref": item.get("reference_image_ref"),
-                    "artifact_object_id": item.get("artifact_object_id"),
-                    "display_order": item.get("display_order"),
-                }
-                for item in observation.get("reference_images", [])
-                if isinstance(item, dict)
-            ],
-            "token_usage": self._runner_token_usage_summary(result),
-        }
-        observation["summary"] = f"Runner decision: {observation.get('decision')}"
-        return observation
-
-    @staticmethod
-    def _enrich_runner_reference_images(
-        selected_images: list[Any],
-        step_reference_images: list[Any],
-    ) -> list[dict[str, Any]]:
-        allowed = {
-            str(item.get("reference_image_ref") or ""): item
-            for item in step_reference_images
-            if isinstance(item, dict) and item.get("reference_image_ref")
-        }
-        enriched: list[dict[str, Any]] = []
-        for selected in selected_images:
-            if not isinstance(selected, dict):
-                continue
-            reference_image_ref = str(selected.get("reference_image_ref") or "")
-            source = allowed.get(reference_image_ref, {})
-            item = {**selected}
-            for key in ("artifact_object_id", "mime_type", "size_bytes", "checksum", "workflow_step_id", "metadata"):
-                value = source.get(key) if isinstance(source, dict) else None
-                if value not in (None, "", [], {}):
-                    item[key] = value
-            enriched.append(item)
-        return sorted(enriched, key=lambda item: (int(item.get("display_order") or 0), str(item.get("reference_image_ref") or "")))
-
-    @staticmethod
-    def _runner_token_usage_summary(result: AgentResult) -> dict[str, Any]:
-        usage: dict[str, Any] = {}
-        for event in result.events:
-            if event.event_type != "agent.token.usage":
-                continue
-            total = event.payload.get("total") if isinstance(event.payload, dict) else None
-            if isinstance(total, dict):
-                usage = {key: total.get(key) for key in ("input_tokens", "output_tokens", "total_tokens")}
-        return usage
-
-    def _runner_invocation_context(
-        self,
-        *,
-        session: Session,
-        run: Run,
-        node: dict[str, Any],
-        token: dict[str, Any],
-        artifact_payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        runtime_contract = artifact_payload.get("runtime_contract") if isinstance(artifact_payload.get("runtime_contract"), dict) else {}
-        current_checkpoint = self._current_runner_checkpoint(node=node, token=token)
-        step_reference_images = self._runner_step_reference_images(runtime_contract, current_checkpoint)
-        terminal_events = self._runner_terminal_events(token)
-        latest_evidence = self._runner_latest_evidence(token, terminal_events)
-        output_contract = self._runner_output_contract(artifact_payload, node)
-        terminal_cursor = int(_get_path(token, "metadata.terminal_cursor") or 0)
-        return {
-            "trust_labels": {
-                "prompt_view": "trusted_runtime_projection",
-                "runtime_contract": "trusted_compile_artifact",
-                "terminal_events": "untrusted_runtime_input",
-                "latest_evidence": "untrusted_runtime_input",
-            },
-            "node": {"id": str(node.get("id") or ""), "kind": node.get("kind"), "actor": node.get("actor")},
-            "prompt_view": self._runner_prompt_view(node=node, token=token),
-            "runtime_contract": runtime_contract,
-            "current_checkpoint": current_checkpoint,
-            "terminal_events": terminal_events,
-            "latest_evidence": latest_evidence,
-            "step_reference_images": step_reference_images,
-            "trace_summary": self._runner_trace_summary(session, run),
-            "legal_phases": self._legal_runtime_phases(artifact_payload),
-            "allowed_runtime": self._runner_allowed_runtime_snapshot(),
-            "output_contract": output_contract,
-            "terminal_cursor": terminal_cursor,
-            "run": {"id": run.id, "status": run.status, "runtime_phase": run.runtime_phase},
-        }
-
-    @staticmethod
-    def _runner_prompt_view(*, node: dict[str, Any], token: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "node_id": str(node.get("id") or ""),
-            "phase": str(token.get("phase") or ""),
-            "status": str(token.get("status") or ""),
-            "input": token.get("input_envelope") if isinstance(token.get("input_envelope"), dict) else {},
-            "facts": token.get("facts") if isinstance(token.get("facts"), dict) else {},
-            "control": token.get("control") if isinstance(token.get("control"), dict) else {},
-            "observations": RuntimeService._recent_observations(token),
-            "terminal_cursor": int(_get_path(token, "metadata.terminal_cursor") or 0),
-        }
-
-    @staticmethod
-    def _recent_observations(token: dict[str, Any], *, limit: int = 8) -> dict[str, Any]:
-        observations = token.get("observations") if isinstance(token.get("observations"), dict) else {}
-        items = list(observations.items())[-limit:]
-        return {str(key): value for key, value in items}
-
-    @staticmethod
-    def _current_runner_checkpoint(*, node: dict[str, Any], token: dict[str, Any]) -> dict[str, Any]:
-        control = token.get("control") if isinstance(token.get("control"), dict) else {}
-        wait = control.get("wait") if isinstance(control, dict) else None
-        if isinstance(wait, dict) and wait:
-            return dict(wait)
-        interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
-        if not interaction:
-            return {}
-        return {
-            "checkpoint_id": str(interaction.get("checkpoint_id") or f"{node.get('id')}:checkpoint"),
-            "workflow_step_id": str(interaction.get("workflow_step_id") or node.get("id") or ""),
-            "reason": str(interaction.get("wait_reason") or ""),
-            "expected_inputs": interaction.get("expected_inputs") if isinstance(interaction.get("expected_inputs"), list) else [],
-            "resume_phase": str(interaction.get("resume_phase") or ""),
-            "entered_by_node": str(node.get("id") or ""),
-        }
-
-    @staticmethod
-    def _runner_step_reference_images(runtime_contract: dict[str, Any], checkpoint: dict[str, Any]) -> list[dict[str, Any]]:
-        workflow_step_id = str(checkpoint.get("workflow_step_id") or "")
-        steps = runtime_contract.get("workflow_steps") if isinstance(runtime_contract.get("workflow_steps"), list) else []
-        for step in steps:
-            if not isinstance(step, dict) or str(step.get("id") or "") != workflow_step_id:
-                continue
-            images = step.get("reference_images") if isinstance(step.get("reference_images"), list) else []
-            return [
-                {**item, "workflow_step_id": workflow_step_id}
-                for item in images
-                if isinstance(item, dict) and item.get("reference_image_ref")
-            ]
-        return []
-
-    @staticmethod
-    def _runner_terminal_events(token: dict[str, Any], *, limit: int = 50) -> list[dict[str, Any]]:
-        terminal = token.get("terminal") if isinstance(token.get("terminal"), dict) else {}
-        events = terminal.get("events") if isinstance(terminal.get("events"), list) else []
-        return [event for event in events[-limit:] if isinstance(event, dict)]
-
-    @staticmethod
-    def _runner_latest_evidence(token: dict[str, Any], terminal_events: list[dict[str, Any]]) -> dict[str, Any]:
-        control = token.get("control") if isinstance(token.get("control"), dict) else {}
-        latest = control.get("latest_evidence") if isinstance(control, dict) else None
-        if isinstance(latest, dict):
-            return latest
-        for event in reversed(terminal_events):
-            if event.get("direction") == "input":
-                return event
-        return {}
-
-    @staticmethod
-    def _legal_runtime_phases(artifact_payload: dict[str, Any]) -> list[str]:
-        phases = {
-            str(node.get("id") or "")
-            for node in artifact_payload.get("nodes", [])
-            if isinstance(node, dict) and node.get("id")
-        }
-        phases.update({"waiting", "completed", "aborted", "failed"})
-        return sorted(phases)
-
-    @staticmethod
-    def _runner_output_contract(artifact_payload: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
-        interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
-        allowed_phases = RuntimeService._legal_runtime_phases(artifact_payload)
-        resume_phase = str(interaction.get("resume_phase") or "")
-        if resume_phase and resume_phase not in allowed_phases:
-            allowed_phases.append(resume_phase)
-        return {
-            "schema": "psop.runner.observation.v1",
-            "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
-            "allowed_next_phases": sorted(set(allowed_phases)),
-            "max_terminal_message_chars": 2000,
-            "expected_input_kinds": ["text", "image", "audio", "video"],
-            "artifact_ref": "sandbox://outputs/runner-observation.json",
-        }
-
-    @staticmethod
-    def _runner_allowed_runtime_snapshot() -> dict[str, Any]:
-        return {
-            "runner_scope": "read invocation context and write sandbox output only",
-            "observation_schema": "psop.runner.observation.v1",
-            "observation_artifact": "sandbox://outputs/runner-observation.json",
-            "decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
-        }
-
-    def _runner_trace_summary(self, session: Session, run: Run, *, limit: int = 10) -> list[dict[str, Any]]:
-        events = self.repository.list_trace_events(session, run.id)
-        return [
-            {
-                "seq_no": event.seq_no,
-                "phase": event.phase,
-                "event_type": event.event_type,
-                "summary": self._trace_event_summary(event.payload),
-            }
-            for event in events[-limit:]
-        ]
-
-    @staticmethod
-    def _trace_event_summary(payload: dict[str, Any]) -> str:
-        if not isinstance(payload, dict):
-            return ""
-        summary = payload.get("summary")
-        if summary:
-            return str(summary)[:500]
-        observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
-        return str(observation.get("summary") or observation.get("decision") or "")[:500]
 
     def _merge_observation(self, *, node: dict[str, Any], token: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
         next_token = json.loads(json.dumps(token, ensure_ascii=False))
