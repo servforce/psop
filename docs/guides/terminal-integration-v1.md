@@ -88,15 +88,16 @@ ws(s)://<psop-host>/ws/runs/{run_id}
 | --- | --- | --- |
 | `terminal.multimodal.input.v1` | input | 同一条用户输入气泡内展示文本、图片、音频、视频 part。 |
 | `terminal.text.output.v1` | output | 系统输出文本。 |
+| `terminal.multimodal.output.v1` | output | 同一条系统输出气泡内展示文本和参考图片 part。 |
 
-输入事件的正式内容优先读取 `parts[]`。`payload_inline` 只作为事件级摘要或小文本摘要，不应承载二进制内容、对象存储地址或 MinIO object key。
+多模态事件的正式内容优先读取 `parts[]`。`payload_inline` 只作为事件级摘要或小文本摘要，不应承载二进制内容、对象存储地址或 MinIO object key。
 
-输入 part 常见类型：
+part 常见类型：
 
 | part.kind | 内容来源 | 展示建议 |
 | --- | --- | --- |
 | `text` | `parts[].text` | 文本段落。 |
-| `image` | part content endpoint | 图片缩略图，可点击预览。 |
+| `image` | part content endpoint | 图片缩略图，可点击预览；对 output 事件通常是当前步骤参考图。 |
 | `audio` | part content endpoint | 音频播放器。 |
 | `video` | part content endpoint | 视频播放器。 |
 
@@ -388,10 +389,49 @@ GET /api/v1/terminal/sessions/{run_id}/events?from_seq=4&to_seq=12
     "terminal_session_id": "terminal-session-id",
     "run_id": "run-id",
     "direction": "output",
-    "event_kind": "terminal.text.output.v1",
-    "mime_type": "text/markdown",
-    "payload_inline": "请先确认电源线已断开，并上传当前机箱内部照片。",
-    "parts": [],
+    "event_kind": "terminal.multimodal.output.v1",
+    "mime_type": "multipart/mixed",
+    "payload_inline": {
+      "summary": "请先确认电源线已断开，并上传当前机箱内部照片。",
+      "reference_image_count": 1
+    },
+    "parts": [
+      {
+        "id": "terminal-event-part-output-text-1",
+        "terminal_event_id": "terminal-event-output-1",
+        "run_id": "run-id",
+        "artifact_object_id": null,
+        "part_id": "text_1",
+        "order_index": 1,
+        "kind": "text",
+        "mime_type": "text/markdown",
+        "text": "请先确认电源线已断开，并上传当前机箱内部照片。",
+        "size_bytes": 0,
+        "checksum": "",
+        "metadata": {},
+        "created_at": "2026-05-25T00:00:03Z"
+      },
+      {
+        "id": "terminal-event-part-reference-image-1",
+        "terminal_event_id": "terminal-event-output-1",
+        "run_id": "run-id",
+        "artifact_object_id": "reference-image-artifact-object-id",
+        "part_id": "image_1",
+        "order_index": 2,
+        "kind": "image",
+        "mime_type": "image/jpeg",
+        "text": "",
+        "size_bytes": 123456,
+        "checksum": "sha256:...",
+        "metadata": {
+          "title": "电源线断开参考图",
+          "caption": "请对照参考图确认电源线已完全断开。",
+          "source_ref": "runtime_contract.workflow_steps.power_off.reference_images.power-cable-off",
+          "reference_image_ref": "skill-reference://steps/power-off/power-cable-off"
+        },
+        "created_at": "2026-05-25T00:00:03Z"
+      }
+    ],
     "seq_no": 1,
     "external_event_id": null,
     "source_ref": {
@@ -469,8 +509,8 @@ GET /api/v1/terminal/sessions/{run_id}/events?from_seq=4&to_seq=12
 | `direction` | `input` 或 `output`。 |
 | `event_kind` | 事件类型。 |
 | `mime_type` | 内容 MIME。 |
-| `payload_inline` | 事件级摘要、小文本或结构化小 JSON；多模态输入不要依赖这里获取完整内容。 |
-| `parts` | 服务端生成的输入事件内容单元。纯文本输入通常包含一个 text part；多模态输入可同时包含 text、image、audio、video part。 |
+| `payload_inline` | 事件级摘要、小文本或结构化小 JSON；多模态事件不要依赖这里获取完整内容。 |
+| `parts` | 服务端生成的事件内容单元。纯文本输入通常包含一个 text part；多模态输入可同时包含 text、image、audio、video part；多模态输出通常包含 text 和当前步骤参考 image part。 |
 | `parts[].part_id` | 服务端生成的同一事件内稳定 part ID，用于构造内容读取 URL。 |
 | `parts[].kind` | 服务端根据文本字段或 MIME 推导出的 `text`、`image`、`audio` 或 `video`。 |
 | `parts[].mime_type` | 服务端保存的内容 MIME。 |
@@ -776,6 +816,7 @@ curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/events" \
 - 原始二进制不要通过 `payload_inline` 传输。
 - 上传失败或响应丢失后可以使用同一个 `Idempotency-Key` 和 `external_event_id` 重试，服务端会避免重复创建终端消息。
 - 终端展示媒体时调用 `/terminal/sessions/{run_id}/events/{event_id}/parts/{part_id}/content`，不要使用 `artifact_object_id` 拼接下载地址。
+- 终端展示 `terminal.multimodal.output.v1` 时，应在同一条系统消息内按 `order_index` 展示 text part 和参考图片 part；参考图片可使用 `metadata.title`、`metadata.caption` 作为辅助说明。
 
 ## 订阅 WebSocket
 
@@ -890,7 +931,7 @@ WebSocket 服务端消息统一外层结构：
 | `payload.event_kind` | 终端事件类型。 |
 | `payload.mime_type` | 内容 MIME。 |
 | `payload.payload_inline` | 事件级摘要、小文本或结构化小 JSON。 |
-| `payload.parts` | 服务端生成的输入事件 part 列表。 |
+| `payload.parts` | 服务端生成的事件 part 列表；output 事件可能包含当前步骤参考图片。 |
 | `payload.seq_no` | 服务端终端事件序号。 |
 | `payload.external_event_id` | 终端侧提交的幂等 ID。 |
 | `payload.source_ref` | 终端侧提交的来源信息。 |
