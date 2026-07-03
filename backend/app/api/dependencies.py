@@ -78,6 +78,7 @@ def get_compiler_service(request: Request) -> CompilerService:
         settings=get_app_settings(request),
         gitlab_gateway=get_gitlab_gateway(request),
         inference_gateway=get_inference_gateway(request),
+        agent_harness_service=get_agent_harness_service(request),
     )
 
 

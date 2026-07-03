@@ -1,0 +1,34 @@
+agent_key: psop.compiler
+version: v1
+runner_kind: langchain_agent
+factory: make_compiler_agent
+description: 将冻结的 PSOP Skill source 编译为 formal-v5 PSOP-EG candidate。
+model:
+  name: default
+  thinking_enabled: false
+system_prompt_file: system.md
+skills:
+  - psop-compiler
+tools:
+  - psop.compiler.read_skill_source
+  - psop.compiler.read_manifest_snapshot
+  - psop.compiler.read_allowed_runtime
+  - psop.compiler.read_domain_pack
+  - psop.compiler.build_formal_v5_scaffold
+  - psop.compiler.validate_formal_v5
+  - psop.compiler.submit_candidate
+  - workspace.read_text
+  - workspace.write_text
+  - workspace.list
+middleware:
+  - name: dangling_tool_call
+  - name: model_events
+    config:
+      max_model_calls: 14
+  - name: token_usage
+  - name: tool_calls
+    config:
+      max_error_counts:
+        psop.compiler.submit_candidate: 3
+        psop.compiler.validate_formal_v5: 3
+memory_scope: psop.compiler

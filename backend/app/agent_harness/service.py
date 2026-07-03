@@ -43,8 +43,6 @@ class AgentHarnessService:
         persistence_session: Session | None = None,
         persistence_context: dict[str, str] | None = None,
     ) -> AgentResult:
-        if not self.settings.agent_harness_enabled:
-            raise RuntimeError("Agent Harness 当前未启用。")
         package = self.registry.load(invocation.agent_key)
         definition = package.definition
         sandbox = self.sandbox_provider.acquire(

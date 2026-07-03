@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             inference_gateway=app.state.inference_gateway,
             asr_gateway=app.state.asr_gateway,
             object_store=app.state.object_store,
+            agent_harness_service=app.state.agent_harness_service,
         )
         worker_task = asyncio.create_task(worker.run_forever())
     try:
@@ -96,7 +97,7 @@ def create_app(
     app.state.inference_gateway = inference_gateway or OpenAICompatibleInferenceGateway.from_settings(resolved_settings)
     app.state.asr_gateway = asr_gateway or HttpAsrGateway.from_settings(resolved_settings)
     app.state.object_store = object_store or ObjectStoreService.from_settings(resolved_settings)
-    app.state.agent_harness_service = agent_harness_service
+    app.state.agent_harness_service = agent_harness_service or AgentHarnessService(settings=resolved_settings)
     @app.exception_handler(SkillsError)
     async def handle_skills_error(_, exc: SkillsError) -> JSONResponse:
         return JSONResponse(

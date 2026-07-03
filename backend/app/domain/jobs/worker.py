@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.agent_harness.service import AgentHarnessService
 from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
@@ -38,6 +39,7 @@ class RuntimeJobWorker:
         inference_gateway: LlmInferenceGateway,
         asr_gateway: AsrGateway,
         object_store: ObjectStoreService,
+        agent_harness_service: AgentHarnessService | None = None,
         poll_interval_seconds: float = 0.5,
     ) -> None:
         self.settings = settings
@@ -46,6 +48,7 @@ class RuntimeJobWorker:
         self.inference_gateway = inference_gateway
         self.asr_gateway = asr_gateway
         self.object_store = object_store
+        self.agent_harness_service = agent_harness_service
         self.poll_interval_seconds = poll_interval_seconds
         self.job_repository = JobRepository()
 
@@ -105,6 +108,7 @@ class RuntimeJobWorker:
                                 settings=self.settings,
                                 gitlab_gateway=self.gitlab_gateway,
                                 inference_gateway=self.inference_gateway,
+                                agent_harness_service=self.agent_harness_service,
                             )
                             compiler_service.process_compile_job(session, job_id)
                         elif job_type == "runtime":

@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
+from app.agent_harness.models.scripted_compiler_chat_model import ScriptedCompilerChatModel
 from app.agent_harness.service import AgentHarnessService
 from app.app import create_app
 from app.core.config import Settings
@@ -731,7 +732,11 @@ def create_test_client() -> tuple[TestClient, FakeGitLabGateway, FakeInferenceGa
             object_store=fake_object_store,
             agent_harness_service=AgentHarnessService(
                 settings=settings,
-                chat_model_factory=lambda _definition: ScriptedBuilderChatModel(),
+                chat_model_factory=lambda definition: (
+                    ScriptedCompilerChatModel()
+                    if definition.agent_key == "psop.compiler"
+                    else ScriptedBuilderChatModel()
+                ),
             ),
         )
     )

@@ -405,6 +405,7 @@ class AgentRunQueryService:
 def _tool_title(tool_name: str) -> str:
     labels = {
         "load_skill": "加载 Agent Skill",
+        "load_skill_resource": "加载 Agent Skill 资源",
         "psop.builder.read_current_source": "读取当前源码",
         "psop.builder.list_materials": "列出素材",
         "psop.builder.read_material_analysis": "读取素材解析",

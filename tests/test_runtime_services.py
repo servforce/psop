@@ -5,6 +5,8 @@ from collections.abc import Iterator
 
 import pytest
 
+from app.agent_harness.models.scripted_compiler_chat_model import ScriptedCompilerChatModel
+from app.agent_harness.service import AgentHarnessService
 from app.agents.registry import PromptRegistry
 from app.domain.compiler.service import CompilerService
 from app.domain.compiler.formal_v5 import validate_and_normalize_artifact
@@ -144,6 +146,57 @@ def test_compiler_emits_mvp_formal_v5_artifact(runtime_stack) -> None:
     assert artifact.capability_summary["tools"] == []
     assert any(item.code == "compile.agent.enabled" for item in diagnostics)
     assert any(item.code == "compile.agent.prompt_pack" for item in diagnostics)
+
+
+def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
+    settings = create_test_settings().model_copy(
+        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
+    )
+    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
+    database_manager.create_schema()
+    gitlab_gateway = FakeGitLabGateway()
+    agent_harness_service = AgentHarnessService(
+        settings=settings,
+        chat_model_factory=lambda _definition: ScriptedCompilerChatModel(),
+    )
+    compiler_service = CompilerService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=agent_harness_service,
+    )
+    skills_service = SkillsService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        compiler_service=compiler_service,
+    )
+
+    try:
+        with database_manager.session() as session:
+            skill = skills_service.create_skill(
+                session,
+                CreateSkillRequest(
+                    key="compiler-harness",
+                    name="Compiler Harness",
+                    description="Validate psop.compiler harness integration.",
+                ),
+            )
+            published = skills_service.publish_skill(
+                session,
+                skill_id=skill.id,
+                payload=PublishSkillRequest(publish_reason="Compile through harness"),
+            )
+            compiled = process_publish_job(session, compiler_service, published.compile_request.id)
+            artifact = compiler_service.get_artifact(session, compiled.artifact_id or "")
+            diagnostics = compiler_service.list_diagnostics(session, published.compile_request.id)
+
+        assert compiled.status == "succeeded"
+        assert artifact.formal_revision == "psop-eg-formal/v5"
+        assert artifact.artifact is not None
+        assert artifact.artifact["compiler_metadata"]["agent_prompt"]["agent_key"] == "psop.compiler"
+        assert any(item.code == "compile.agent.prompt_pack" for item in diagnostics)
+    finally:
+        database_manager.dispose()
 
 
 def test_compiler_records_diagnostics_for_unsupported_formal_revision(runtime_stack) -> None:

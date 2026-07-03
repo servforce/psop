@@ -640,6 +640,7 @@ class SkillsService:
                 settings=self.settings,
                 gitlab_gateway=self.gitlab_gateway,
                 inference_gateway=self.inference_gateway or OpenAICompatibleInferenceGateway.from_settings(self.settings),
+                agent_harness_service=self.agent_harness_service,
             )
             compile_request = compiler_service.create_compile_request_for_publish(
                 session,

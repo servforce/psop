@@ -187,14 +187,13 @@ backend/app/core/config.py
 新增配置：
 
 ```python
-agent_harness_enabled: bool = True
 agent_harness_profile: str = "dev_open"
 agent_harness_sandbox_provider: str = "local"
 agent_harness_sandbox_root: str = ".psop/agent-runs"
 agent_harness_mcp_enabled: bool = False
 ```
 
-理由：当前配置已集中在 `Settings` 中，LLM、对象存储、worker、runtime 等配置都在这里定义，所以 harness 配置也应走同一入口。
+理由：Agent Harness 是 PSOP 系统基础能力，启用不需要额外开关；这里只保留 profile、sandbox 和 MCP adapter 等运行参数。
 
 MVP 默认使用：
 

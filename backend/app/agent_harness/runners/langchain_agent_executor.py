@@ -2,11 +2,74 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from app.agent_harness.events import AgentEventWriter
 from app.agent_harness.sandbox.base import AgentSandbox
 from app.agent_harness.schemas import AgentArtifact, AgentDefinition, AgentInvocation, AgentResult
+
+
+@dataclass(frozen=True, slots=True)
+class RequiredArtifactContract:
+    artifact_type: str
+    artifact_ref: str
+    continuation_prompt: str
+    max_continuations: int = 2
+    required_skill_names: tuple[str, ...] = ()
+    required_skill_resources: tuple[tuple[str, str], ...] = ()
+    required_tool_names: tuple[str, ...] = ()
+    missing_interactions_prompt: str = ""
+
+
+REQUIRED_ARTIFACTS_BY_AGENT = {
+    "psop.builder": RequiredArtifactContract(
+        artifact_type="skill_draft_candidate",
+        artifact_ref="sandbox://outputs/builder-result.json",
+        continuation_prompt=(
+            "你还没有生成必需产物 sandbox://outputs/builder-result.json。"
+            "现在必须立即调用 psop.builder.submit_candidate，参数必须是完整 candidate。"
+            "不要回复自然语言说明，不要只说将要提交。"
+        ),
+    ),
+    "psop.compiler": RequiredArtifactContract(
+        artifact_type="eg_compile_candidate",
+        artifact_ref="sandbox://outputs/compiler-result.json",
+        continuation_prompt=(
+            "你还没有生成必需产物 sandbox://outputs/compiler-result.json。"
+            "现在必须立即调用 psop.compiler.submit_candidate。"
+            "如果已有 scaffold 返回的 candidate_ref，参数必须优先使用 {\"candidate_ref\":\"...\"}；"
+            "只有没有 candidate_ref 时才提供完整 candidate。"
+            "不要回复自然语言说明，不要只说将要提交。"
+        ),
+        required_skill_names=(
+            "psop-compiler",
+        ),
+        required_skill_resources=(
+            ("psop-compiler", "core/SKILL.md"),
+            ("psop-compiler", "contract/SKILL.md"),
+            ("psop-compiler", "mapping/SKILL.md"),
+            ("psop-compiler", "review/SKILL.md"),
+        ),
+        required_tool_names=(
+            "psop.compiler.read_skill_source",
+            "psop.compiler.read_manifest_snapshot",
+            "psop.compiler.read_allowed_runtime",
+            "psop.compiler.read_domain_pack",
+            "psop.compiler.build_formal_v5_scaffold",
+            "psop.compiler.validate_formal_v5",
+            "psop.compiler.submit_candidate",
+        ),
+        missing_interactions_prompt=(
+            "你已经生成 compiler candidate，但尚未完成 psop.compiler 的必需上下文或审查步骤。"
+            "现在必须补齐缺失的 load_skill / load_skill_resource / psop.compiler tool 调用。"
+            "如果补齐后发现 candidate 需要调整，必须重新调用 psop.compiler.validate_formal_v5 "
+            "和 psop.compiler.submit_candidate 覆盖 sandbox outputs；提交时优先使用 candidate_ref。"
+            "如果无需调整，完成缺失调用后即可结束。"
+            "不要回复自然语言说明，不要只说将要补齐。"
+        ),
+    ),
+}
 
 
 class LangChainAgentExecutor:
@@ -22,42 +85,54 @@ class LangChainAgentExecutor:
         messages: list[Any] = [{"role": "user", "content": str(invocation.input.get("text") or "")}]
         result = None
         artifacts: list[AgentArtifact] = []
+        required_artifact = _required_artifact_contract(definition)
         for continuation_index in range(_max_continuations(definition) + 1):
             result = agent.invoke(
                 {"messages": messages},
                 context={"agent_run_id": sandbox.agent_run_id, "sandbox_id": sandbox.sandbox_id},
             )
             artifacts = _collect_artifacts(sandbox)
-            if not _requires_skill_draft_candidate(definition) or _has_artifact(artifacts, "skill_draft_candidate"):
+            if required_artifact is None:
+                break
+            missing_interactions = _missing_required_interactions(event_writer.events, required_artifact)
+            if _has_artifact(artifacts, required_artifact.artifact_type) and not _has_missing_interactions(
+                missing_interactions
+            ):
                 break
             if continuation_index >= _max_continuations(definition):
                 break
             final_output = _extract_final_output(result)
-            event_writer.record(
-                "agent.required_artifact.missing",
-                {
-                    "artifact_type": "skill_draft_candidate",
-                    "artifact_ref": "sandbox://outputs/builder-result.json",
-                    "continuation_index": continuation_index + 1,
-                    "final_output": final_output[:1000],
-                },
-            )
+            if not _has_artifact(artifacts, required_artifact.artifact_type):
+                event_writer.record(
+                    "agent.required_artifact.missing",
+                    {
+                        "artifact_type": required_artifact.artifact_type,
+                        "artifact_ref": required_artifact.artifact_ref,
+                        "continuation_index": continuation_index + 1,
+                        "final_output": final_output[:1000],
+                    },
+                )
+                continuation_prompt = required_artifact.continuation_prompt
+            else:
+                event_writer.record(
+                    "agent.required_interaction.missing",
+                    {
+                        "artifact_type": required_artifact.artifact_type,
+                        "artifact_ref": required_artifact.artifact_ref,
+                        "missing_skills": missing_interactions["skills"],
+                        "missing_skill_resources": missing_interactions["skill_resources"],
+                        "missing_tools": missing_interactions["tools"],
+                        "continuation_index": continuation_index + 1,
+                        "final_output": final_output[:1000],
+                    },
+                )
+                continuation_prompt = _missing_interactions_prompt(required_artifact, missing_interactions)
             messages = _messages_from_result(result) or messages
-            messages = [
-                *messages,
-                {
-                    "role": "user",
-                    "content": (
-                        "你还没有生成必需产物 sandbox://outputs/builder-result.json。"
-                        "现在必须立即调用 psop.builder.submit_candidate，参数必须是完整 candidate。"
-                        "不要回复自然语言说明，不要只说将要提交。"
-                    ),
-                },
-            ]
+            messages = [*messages, {"role": "user", "content": continuation_prompt}]
         if result is None:
             result = {}
         final_output = _extract_final_output(result)
-        if _requires_skill_draft_candidate(definition) and not _has_artifact(artifacts, "skill_draft_candidate"):
+        if required_artifact is not None and not _has_artifact(artifacts, required_artifact.artifact_type):
             return AgentResult(
                 agent_run_id=sandbox.agent_run_id,
                 agent_key=definition.agent_key,
@@ -68,7 +143,28 @@ class LangChainAgentExecutor:
                 artifacts=artifacts,
                 sandbox_path=str(sandbox.root_path),
                 workspace_path=str(sandbox.workspace_path),
-                error_message="Agent 未生成必需 artifact：sandbox://outputs/builder-result.json。",
+                error_message=f"Agent 未生成必需 artifact：{required_artifact.artifact_ref}。",
+            )
+        missing_interactions = (
+            _missing_required_interactions(event_writer.events, required_artifact) if required_artifact is not None else {}
+        )
+        if required_artifact is not None and _has_missing_interactions(missing_interactions):
+            return AgentResult(
+                agent_run_id=sandbox.agent_run_id,
+                agent_key=definition.agent_key,
+                status="failed",
+                final_output=final_output,
+                structured_output={"raw_result": _jsonable(result)},
+                events=event_writer.events,
+                artifacts=artifacts,
+                sandbox_path=str(sandbox.root_path),
+                workspace_path=str(sandbox.workspace_path),
+                error_message=(
+                    "Agent 未完成必需交互："
+                    f"skills={missing_interactions['skills']}; "
+                    f"skill_resources={missing_interactions['skill_resources']}; "
+                    f"tools={missing_interactions['tools']}。"
+                ),
             )
         return AgentResult(
             agent_run_id=sandbox.agent_run_id,
@@ -99,6 +195,26 @@ def _collect_artifacts(sandbox: AgentSandbox) -> list[AgentArtifact]:
                 provenance={"content_hash": content_hash},
             )
         )
+    compiler_result = _resolve_optional(sandbox, "/mnt/psop/outputs/compiler-result.json")
+    if compiler_result is not None and compiler_result.exists():
+        provenance = _json_file_provenance(compiler_result)
+        artifacts.append(
+            AgentArtifact(
+                artifact_type="eg_compile_candidate",
+                path="sandbox://outputs/compiler-result.json",
+                provenance=provenance,
+            )
+        )
+    compiler_eg_artifact = _resolve_optional(sandbox, "/mnt/psop/outputs/eg.compile.artifact.json")
+    if compiler_eg_artifact is not None and compiler_eg_artifact.exists():
+        provenance = _json_file_provenance(compiler_eg_artifact)
+        artifacts.append(
+            AgentArtifact(
+                artifact_type="eg_compile_artifact_candidate",
+                path="sandbox://outputs/eg.compile.artifact.json",
+                provenance=provenance,
+            )
+        )
     skill_draft_root = _resolve_optional(sandbox, "/mnt/psop/outputs/skill-draft")
     if skill_draft_root is not None and skill_draft_root.is_dir():
         file_paths = sorted(path for path in skill_draft_root.rglob("*") if path.is_file())
@@ -124,16 +240,54 @@ def _collect_artifacts(sandbox: AgentSandbox) -> list[AgentArtifact]:
     return artifacts
 
 
-def _requires_skill_draft_candidate(definition: AgentDefinition) -> bool:
-    return definition.agent_key == "psop.builder"
-
-
 def _max_continuations(definition: AgentDefinition) -> int:
-    return 2 if _requires_skill_draft_candidate(definition) else 0
+    contract = _required_artifact_contract(definition)
+    return contract.max_continuations if contract is not None else 0
+
+
+def _required_artifact_contract(definition: AgentDefinition) -> RequiredArtifactContract | None:
+    return REQUIRED_ARTIFACTS_BY_AGENT.get(definition.agent_key)
 
 
 def _has_artifact(artifacts: list[AgentArtifact], artifact_type: str) -> bool:
     return any(artifact.artifact_type == artifact_type for artifact in artifacts)
+
+
+def _missing_required_interactions(events, contract: RequiredArtifactContract) -> dict[str, list[str]]:
+    loaded_skills = {
+        str(event.payload.get("skill_name") or "")
+        for event in events
+        if event.event_type == "agent.skill.loaded"
+    }
+    loaded_resources = {
+        (str(event.payload.get("skill_name") or ""), str(event.payload.get("resource_path") or ""))
+        for event in events
+        if event.event_type == "agent.skill.resource.loaded"
+    }
+    completed_tools = {
+        str(event.payload.get("tool_name") or "")
+        for event in events
+        if event.event_type == "agent.tool.completed"
+    }
+    return {
+        "skills": sorted(skill_name for skill_name in contract.required_skill_names if skill_name not in loaded_skills),
+        "skill_resources": sorted(
+            f"{skill_name}:{resource_path}"
+            for skill_name, resource_path in contract.required_skill_resources
+            if (skill_name, resource_path) not in loaded_resources
+        ),
+        "tools": sorted(tool_name for tool_name in contract.required_tool_names if tool_name not in completed_tools),
+    }
+
+
+def _has_missing_interactions(missing: dict[str, list[str]]) -> bool:
+    return bool(missing.get("skills") or missing.get("skill_resources") or missing.get("tools"))
+
+
+def _missing_interactions_prompt(contract: RequiredArtifactContract, missing: dict[str, list[str]]) -> str:
+    details = json.dumps(missing, ensure_ascii=False, indent=2)
+    prompt = contract.missing_interactions_prompt or "你尚未完成必需的 Agent 交互。现在必须补齐缺失项。"
+    return f"{prompt}\n\n缺失项：\n{details}"
 
 
 def _resolve_optional(sandbox: AgentSandbox, virtual_path: str):
@@ -151,6 +305,25 @@ def _directory_hash(root):
         digest.update(path.read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _json_file_provenance(path) -> dict[str, Any]:
+    provenance: dict[str, Any] = {"content_hash": hashlib.sha256(path.read_bytes()).hexdigest()}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return provenance
+    if isinstance(payload, dict):
+        artifact = payload.get("artifact") if isinstance(payload.get("artifact"), dict) else payload
+        provenance["formal_revision"] = str(artifact.get("formal_revision") or "")
+        nodes = artifact.get("nodes")
+        if isinstance(nodes, list):
+            provenance["node_count"] = len(nodes)
+        runtime_contract = artifact.get("runtime_contract")
+        workflow_steps = runtime_contract.get("workflow_steps") if isinstance(runtime_contract, dict) else None
+        if isinstance(workflow_steps, list):
+            provenance["workflow_step_count"] = len(workflow_steps)
+    return provenance
 
 
 def _extract_final_output(result: Any) -> str:

@@ -178,3 +178,50 @@ allowed-tools:
     assert result["name"] == "demo_skill"
     assert "# Demo Skill Body" in result["content"]
     assert writer.events[-1].event_type == "agent.skill.loaded"
+
+
+def test_load_skill_resource_framework_tool_loads_declared_skill_resource(tmp_path) -> None:
+    skill_dir = tmp_path / "skills" / "demo_skill" / "core"
+    skill_dir.mkdir(parents=True)
+    (tmp_path / "skills" / "demo_skill" / "SKILL.md").write_text(
+        """---
+name: demo_skill
+description: Demo framework skill
+allowed-tools:
+  - demo_extract_check_items
+---
+
+# Demo Skill Body
+""",
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text("# Core Resource\n\n必须读取。", encoding="utf-8")
+    registry, context, writer = _context(tmp_path)
+    register_framework_tools(registry)
+    context.skill_loader = SkillLoader(tmp_path / "skills")
+    context.allowed_skill_names = {"demo_skill"}
+
+    result = registry.execute(
+        "load_skill_resource",
+        {"skill_name": "demo_skill", "resource_path": "core/SKILL.md"},
+        context,
+    )
+
+    assert result["skill_name"] == "demo_skill"
+    assert result["resource_path"] == "core/SKILL.md"
+    assert "# Core Resource" in result["content"]
+    assert writer.events[-1].event_type == "agent.skill.resource.loaded"
+
+
+def test_load_skill_resource_framework_tool_rejects_undeclared_skill(tmp_path) -> None:
+    registry, context, _ = _context(tmp_path)
+    register_framework_tools(registry)
+    context.skill_loader = SkillLoader(tmp_path / "skills")
+    context.allowed_skill_names = {"declared_skill"}
+
+    with pytest.raises(ValueError, match="未声明"):
+        registry.execute(
+            "load_skill_resource",
+            {"skill_name": "other_skill", "resource_path": "core/SKILL.md"},
+            context,
+        )

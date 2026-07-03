@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -10,6 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.compiler.agent import SkillCompileAgent
+from app.agent_harness.agents.psop.compiler.schemas import validate_compiler_candidate
+from app.agent_harness.schemas import AgentInvocation, AgentResult
+from app.agent_harness.service import AgentHarnessService
+from app.agent_harness.tools.builtin.compiler import allowed_runtime_snapshot
+from app.agents.registry import DomainPackRegistry
 from app.domain.compiler.formal_v5 import (
     FORMAL_REVISION,
     FormalDiagnostic,
@@ -83,6 +89,8 @@ class CompilerService:
         gitlab_gateway: GitLabSkillSourceGateway,
         inference_gateway: LlmInferenceGateway | None = None,
         compile_agent: SkillCompileAgent | None = None,
+        agent_harness_service: AgentHarnessService | None = None,
+        domain_pack_registry: DomainPackRegistry | None = None,
         repository: CompilerRepository | None = None,
         job_repository: JobRepository | None = None,
     ) -> None:
@@ -90,6 +98,8 @@ class CompilerService:
         self.gitlab_gateway = gitlab_gateway
         self.inference_gateway = inference_gateway or OpenAICompatibleInferenceGateway.from_settings(settings)
         self.compile_agent = compile_agent or SkillCompileAgent(self.inference_gateway)
+        self.agent_harness_service = agent_harness_service
+        self.domain_pack_registry = domain_pack_registry or DomainPackRegistry()
         self.repository = repository or CompilerRepository()
         self.job_repository = job_repository or JobRepository()
 
@@ -353,6 +363,7 @@ class CompilerService:
             ):
                 artifact, agent_diagnostics = self._compile_with_agent(
                     session=session,
+                    compile_request=compile_request,
                     skill_definition=skill_definition,
                     skill_version=skill_version,
                     document=document,
@@ -671,12 +682,23 @@ class CompilerService:
         self,
         *,
         session: Session,
+        compile_request: SkillCompileRequest,
         skill_definition: SkillDefinition,
         skill_version: SkillVersion,
         document: SkillDocument,
         source,
         progress: PublishProgressReporter | None = None,
     ) -> tuple[dict[str, Any] | None, list[FormalDiagnostic]]:
+        if self.agent_harness_service is not None:
+            return self._compile_with_harness_agent(
+                session=session,
+                compile_request=compile_request,
+                skill_definition=skill_definition,
+                skill_version=skill_version,
+                document=document,
+                source=source,
+                progress=progress,
+            )
         diagnostics: list[FormalDiagnostic] = []
         repair_diagnostics: list[FormalDiagnostic] = []
         compiler_metadata: dict[str, Any] = {}
@@ -785,6 +807,351 @@ class CompilerService:
             return None, diagnostics
 
         return None, diagnostics
+
+    def _compile_with_harness_agent(
+        self,
+        *,
+        session: Session,
+        compile_request: SkillCompileRequest,
+        skill_definition: SkillDefinition,
+        skill_version: SkillVersion,
+        document: SkillDocument,
+        source,
+        progress: PublishProgressReporter | None = None,
+    ) -> tuple[dict[str, Any] | None, list[FormalDiagnostic]]:
+        diagnostics: list[FormalDiagnostic] = []
+        repair_diagnostics: list[FormalDiagnostic] = []
+        compiler_metadata, context_diagnostics, domain_pack_context = self._compiler_harness_context_metadata(document)
+        context_recorded = False
+        for attempt in range(2):
+            LOGGER.info(
+                "psop.compiler harness attempt started",
+                extra={
+                    "skill_id": skill_definition.id,
+                    "skill_key": skill_definition.key,
+                    "skill_version_id": skill_version.id,
+                    "compile_request_id": compile_request.id,
+                    "attempt": attempt + 1,
+                },
+            )
+            if progress:
+                message = "正在调用 psop.compiler 生成 formal-v5 EG candidate。"
+                if attempt == 1:
+                    message = "正在根据校验结果请求 psop.compiler 修正 EG candidate。"
+                progress.mark("agent_compiling", "running", message)
+            invocation = AgentInvocation(
+                agent_key="psop.compiler",
+                input={
+                    "text": (
+                        "将冻结的 PSOP Skill source 编译为 formal-v5 PSOP-EG candidate，"
+                        "必须调用 psop.compiler.submit_candidate 写入 sandbox outputs。"
+                    )
+                },
+                context=self._compiler_invocation_context(
+                    compile_request=compile_request,
+                    skill_definition=skill_definition,
+                    skill_version=skill_version,
+                    document=document,
+                    source=source,
+                    domain_pack_context=domain_pack_context,
+                    repair_diagnostics=repair_diagnostics,
+                ),
+                memory_scope="psop.compiler",
+                workspace_id=compile_request.id,
+            )
+            with start_span(
+                "compile.agent.invoke",
+                skill_id=skill_definition.id,
+                skill_key=skill_definition.key,
+                skill_version_id=skill_version.id,
+                compile_request_id=compile_request.id,
+                attempt=attempt + 1,
+                agent_key="psop.compiler",
+            ) as span:
+                try:
+                    assert self.agent_harness_service is not None
+                    agent_result = self.agent_harness_service.invoke(
+                        invocation,
+                        persistence_session=session,
+                        persistence_context={
+                            "related_skill_definition_id": skill_definition.id,
+                            "related_job_id": progress.job_id if progress else "",
+                        },
+                    )
+                except Exception as exc:
+                    record_span_exception(span, exc)
+                    raise
+            if progress:
+                self.job_repository.accumulate_llm_usage(
+                    self.job_repository.get_runtime_job(session, progress.job_id),
+                    self._agent_token_usage(agent_result),
+                )
+                session.flush()
+            if not context_recorded:
+                diagnostics.extend(context_diagnostics)
+                context_recorded = True
+            if agent_result.status != "succeeded":
+                failure = FormalDiagnostic(
+                    severity="error",
+                    code="compile.agent.failed",
+                    message=agent_result.error_message or "psop.compiler 未成功完成运行。",
+                    location={
+                        "agent_run_id": agent_result.agent_run_id,
+                        "sandbox_path": agent_result.sandbox_path,
+                    },
+                )
+                diagnostics.append(failure)
+                repair_diagnostics = [failure]
+                if attempt == 0:
+                    continue
+                if progress:
+                    progress.mark(
+                        "agent_compiling",
+                        "failed",
+                        failure.message,
+                        error_message=failure.message,
+                    )
+                diagnostics.append(
+                    FormalDiagnostic(
+                        severity="error",
+                        code="compile.agent.repair_failed",
+                        message="psop.compiler 修正后仍未成功生成候选产物。",
+                    )
+                )
+                return None, diagnostics
+
+            candidate, candidate_error = self._read_harness_compiler_candidate(agent_result)
+            if candidate_error is not None:
+                diagnostics.append(candidate_error)
+                repair_diagnostics = [candidate_error]
+                if attempt == 0:
+                    continue
+                if progress:
+                    progress.mark(
+                        "agent_compiling",
+                        "failed",
+                        candidate_error.message,
+                        error_message=candidate_error.message,
+                    )
+                diagnostics.append(
+                    FormalDiagnostic(
+                        severity="error",
+                        code="compile.agent.repair_failed",
+                        message="psop.compiler 修正后仍未返回合法 compiler candidate。",
+                    )
+                )
+                return None, diagnostics
+
+            assert candidate is not None
+            diagnostics.extend(self._candidate_diagnostics(candidate.diagnostics))
+            if progress:
+                progress.mark("agent_compiling", "succeeded", "psop.compiler 已提交 EG candidate。")
+                progress.mark("artifact_validating", "running", "正在执行 formal-v5 确定性校验。")
+            with start_span(
+                "compile.validate",
+                skill_id=skill_definition.id,
+                skill_key=skill_definition.key,
+                skill_version_id=skill_version.id,
+                compile_request_id=compile_request.id,
+                attempt=attempt + 1,
+            ):
+                validation = validate_and_normalize_artifact(candidate.artifact)
+            diagnostics.extend(validation.diagnostics)
+            if validation.artifact is not None and not validation.has_errors:
+                validation.artifact["compiler_metadata"] = {
+                    **compiler_metadata,
+                    "agent_run": {
+                        "agent_key": agent_result.agent_key,
+                        "agent_run_id": agent_result.agent_run_id,
+                        "sandbox_path": agent_result.sandbox_path or "",
+                    },
+                }
+                if progress:
+                    progress.mark("artifact_validating", "succeeded", "EG artifact 已通过 formal-v5 校验。")
+                return validation.artifact, diagnostics
+
+            repair_diagnostics = validation.diagnostics
+            if attempt == 0:
+                continue
+            if progress:
+                progress.mark(
+                    "artifact_validating",
+                    "failed",
+                    "psop.compiler 修正后仍未生成通过 formal-v5 校验的 EG artifact。",
+                    error_message="psop.compiler 修正后仍未生成通过 formal-v5 校验的 EG artifact。",
+                )
+            diagnostics.append(
+                FormalDiagnostic(
+                    severity="error",
+                    code="compile.agent.repair_failed",
+                    message="psop.compiler 修正后仍未生成通过 formal-v5 校验的 EG artifact。",
+                )
+            )
+            return None, diagnostics
+        return None, diagnostics
+
+    def _compiler_invocation_context(
+        self,
+        *,
+        compile_request: SkillCompileRequest,
+        skill_definition: SkillDefinition,
+        skill_version: SkillVersion,
+        document: SkillDocument,
+        source,
+        domain_pack_context: dict[str, Any],
+        repair_diagnostics: list[FormalDiagnostic],
+    ) -> dict[str, Any]:
+        return {
+            "compile_request": {
+                "id": compile_request.id,
+                "trigger_type": compile_request.trigger_type,
+                "source_commit_sha": compile_request.source_commit_sha,
+            },
+            "skill": {
+                "id": skill_definition.id,
+                "key": skill_definition.key,
+                "name": skill_definition.name,
+                "description": skill_definition.description,
+                "version_id": skill_version.id,
+                "version_no": skill_version.version_no,
+                "source_commit_sha": skill_version.source_commit_sha,
+            },
+            "source": {
+                "source_commit_sha": compile_request.source_commit_sha,
+                "head_commit_sha": getattr(source, "head_commit_sha", ""),
+                "files": {
+                    "README.md": getattr(source, "readme_content", ""),
+                    "SKILL.md": getattr(source, "skill_md_content", ""),
+                },
+            },
+            "manifest_snapshot": document.skill.model_dump(mode="json"),
+            "runtime_policy_snapshot": skill_version.runtime_policy_snapshot or {},
+            "allowed_runtime": allowed_runtime_snapshot(),
+            "domain_pack": domain_pack_context,
+            "repair_diagnostics": [item.as_dict() for item in repair_diagnostics],
+            "output_contract": {
+                "formal_revision": FORMAL_REVISION,
+                "candidate_artifact_ref": "sandbox://outputs/compiler-result.json",
+                "eg_artifact_ref": "sandbox://outputs/eg.compile.artifact.json",
+            },
+        }
+
+    def _compiler_harness_context_metadata(
+        self,
+        document: SkillDocument,
+    ) -> tuple[dict[str, Any], list[FormalDiagnostic], dict[str, Any]]:
+        domain_resolution = self.domain_pack_registry.resolve(_domain_pack_ref(document))
+        domain_metadata = {
+            **domain_resolution.pack.metadata(),
+            "requested_ref": domain_resolution.requested_ref,
+            "used_default": domain_resolution.used_default,
+        }
+        compiler_metadata = {
+            "agent_prompt": {
+                "agent_key": "psop.compiler",
+                "version": "v1",
+                "source": "agent_harness",
+            },
+            "domain_pack": domain_metadata,
+        }
+        diagnostics = [
+            FormalDiagnostic(
+                severity="info",
+                code="compile.agent.prompt_pack",
+                message="使用 psop.compiler Agent Harness 与 compiler Agent Skills 生成 EG candidate。",
+                location=compiler_metadata,
+            )
+        ]
+        if domain_resolution.used_default:
+            diagnostics.append(
+                FormalDiagnostic(
+                    severity="warning",
+                    code="compile.agent.domain_pack_fallback",
+                    message=(
+                        f"未找到 domain_pack `{domain_resolution.requested_ref}`，"
+                        f"已回退到 `{domain_resolution.pack.key}`。"
+                    ),
+                    location={
+                        "requested_ref": domain_resolution.requested_ref,
+                        "fallback_domain_pack": domain_resolution.pack.metadata(),
+                        "reason": domain_resolution.fallback_reason,
+                    },
+                )
+            )
+        domain_pack_context = {
+            "domain_pack_ref": domain_resolution.pack.key,
+            "metadata": domain_metadata,
+            "guidance_summary": domain_resolution.pack.title,
+            "guidance": domain_resolution.pack.guidance,
+        }
+        return compiler_metadata, diagnostics, domain_pack_context
+
+    @staticmethod
+    def _read_harness_compiler_candidate(agent_result: AgentResult):
+        if not agent_result.sandbox_path:
+            return None, FormalDiagnostic(
+                severity="error",
+                code="compile.agent.missing_artifact",
+                message="psop.compiler 结果缺少 sandbox_path。",
+            )
+        candidate_path = Path(agent_result.sandbox_path) / "outputs" / "compiler-result.json"
+        if not candidate_path.exists():
+            return None, FormalDiagnostic(
+                severity="error",
+                code="compile.agent.missing_artifact",
+                message="psop.compiler 未生成 compiler-result.json。",
+                location={"agent_run_id": agent_result.agent_run_id, "sandbox_path": agent_result.sandbox_path},
+            )
+        try:
+            payload = json.loads(candidate_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            return None, FormalDiagnostic(
+                severity="error",
+                code="compile.agent.invalid_json",
+                message=f"psop.compiler 生成的 compiler-result.json 不是合法 JSON：{exc.msg}",
+                location={"line": exc.lineno, "column": exc.colno},
+            )
+        try:
+            return validate_compiler_candidate(payload), None
+        except ValueError as exc:
+            return None, FormalDiagnostic(
+                severity="error",
+                code="compile.agent.invalid_candidate",
+                message=str(exc),
+                location={"path": "sandbox://outputs/compiler-result.json"},
+            )
+
+    @staticmethod
+    def _candidate_diagnostics(items: list[dict[str, Any]]) -> list[FormalDiagnostic]:
+        diagnostics: list[FormalDiagnostic] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            diagnostics.append(
+                FormalDiagnostic(
+                    severity=str(item.get("severity") or "warning"),
+                    code=str(item.get("code") or "compile.agent.candidate_diagnostic"),
+                    message=str(item.get("message") or "psop.compiler candidate diagnostic."),
+                    location=item.get("location") if isinstance(item.get("location"), dict) else None,
+                    category=str(item.get("category") or "compiler"),
+                )
+            )
+        return diagnostics
+
+    @staticmethod
+    def _agent_token_usage(agent_result: AgentResult) -> dict[str, int]:
+        usage: dict[str, int] = {}
+        for event in agent_result.events:
+            if event.event_type != "agent.token.usage":
+                continue
+            total = event.payload.get("total")
+            if isinstance(total, dict):
+                usage = {
+                    "input_tokens": int(total.get("input_tokens") or 0),
+                    "output_tokens": int(total.get("output_tokens") or 0),
+                    "total_tokens": int(total.get("total_tokens") or 0),
+                }
+        return usage
 
     def _mark_job(self, session: Session, compile_request_id: str, status: str, error: str = "") -> None:
         job = self.job_repository.get_runtime_job_by_dedupe_key(session, f"job:compile:{compile_request_id}")
@@ -980,3 +1347,12 @@ class CompilerService:
             created_at=artifact.created_at,
             artifact=artifact_object.content_json if include_payload and artifact_object else None,
         )
+
+
+def _domain_pack_ref(document: SkillDocument) -> str | None:
+    value = getattr(document.skill.compile_config, "domain_pack", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    extra = getattr(document.skill.compile_config, "__pydantic_extra__", None) or {}
+    extra_value = extra.get("domain_pack")
+    return extra_value.strip() if isinstance(extra_value, str) and extra_value.strip() else None
