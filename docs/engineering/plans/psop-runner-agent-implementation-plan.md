@@ -2,7 +2,9 @@
 
 本文是阶段性实施计划，不是长期架构事实源。`psop.runner` 的职责、工具、Agent Skills、RuntimeService 接入方式、终端协作、证据评估、参考图片输出和 observation 契约以 [PSOP Runner Agent 详细设计](../../architecture/psop-runner-agent-design.md) 为准；Agent Harness 总体边界以 [系统架构设计](../../architecture/system-architecture.md) 为准；PSOP-EG 与 Session Token 的形式语义以 [Execution Graph formal-v5](../../architecture/execution-graph-formal-v5.md) 为准；终端事件与多模态输出边界以 [终端接入说明](../../guides/terminal-integration-v1.md) 为准。
 
-> 状态：首版已实现；`psop.runner` 已成为 Runtime LLM / evidence evaluation 节点的默认执行路径；AgentRun Runtime 关联、参考图片 warning trace 和严格 source ref 校验已补齐。多模态证据语义仍按 Step 10 作为后续生产开启条件。
+> 状态：已实现；`psop.runner` 已成为 Runtime LLM / evidence evaluation 节点的默认执行路径；AgentRun Runtime 关联、参考图片 warning trace、严格 source ref 校验和终端上传图片的 Harness multimodal attachment 直连识别已补齐。Runtime 不生成图片 safe summary，图片语义判断由 `psop.runner` 多模态模型完成。
+>
+> 最近验证：`PYTHONPATH=backend backend/.venv/bin/python -m pytest -q tests/test_agent_harness_runner.py tests/test_agent_harness_persistence.py tests/test_runtime_services.py tests/test_skills_api.py`、`PYTHONPATH=backend backend/.venv/bin/python tests/run_psop_runner_agent.py --fixture tests/fixtures/psop_runner/minimal.json --scripted`、`PYTHONPATH=backend backend/.venv/bin/python -m pytest -q`、`git diff --check` 均已通过。
 >
 > 制定日期：2026-07-03。
 >
@@ -452,7 +454,9 @@ _validate_runner_runtime_observation(...)
 
 ### Step 10：多模态证据语义补齐
 
-当前实现目标：
+状态：已完成。当前实现路径为 Agent Harness multimodal attachment；Runtime safe summary 仅保留为未来降级选项，不作为默认方案。
+
+已实现：
 
 - RuntimeService 通过 `artifact_object_id` 鉴权读取终端上传的 `image/*` part，并作为 Agent Harness 多模态 attachment 传给 `psop.runner`。
 - `psop.runner` 使用多模态 LLM 直接识别本次 invocation 的图片附件，并通过 `submit_observation` 提交结构化证据评估。
@@ -551,7 +555,7 @@ PYTHONPATH=backend backend/.venv/bin/python -m pytest -q tests/test_runtime_serv
 
 ### Slice D：多模态证据语义补齐
 
-完成 Step 10 的 Harness multimodal attachment 路径。
+状态：已完成。Step 10 的 Harness multimodal attachment 路径已落地。
 
 验收：
 
@@ -567,6 +571,7 @@ PYTHONPATH=backend backend/.venv/bin/python -m pytest -q tests/test_runtime_serv
 - RuntimeService 的 LLM / evidence evaluation 节点默认走 Runner Agent，并保持 RuntimeService 状态主权。
 - Runner observation 只作为普通 runtime observation 进入现有 merge、interaction、snapshot、trace、terminal output 和 halt 路径。
 - Runtime LLM 节点不再保留启用开关或未注入 harness 的 direct LLM fallback。
+- 终端上传图片可通过 Harness multimodal attachment 传给 Runner 直接识别；附件 bytes/base64 不进入 sandbox input、AgentRun persistence、TraceEvent、TerminalEvent、Replay 或 API response。
 - pytest 全量通过。
 - 新增脚本验收通过。
 - Replay 可看到 Runtime decision 与 agent_run_id，AgentEvent 可审计工具、Skill 加载和 artifact 提交。
