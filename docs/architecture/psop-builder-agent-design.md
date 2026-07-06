@@ -178,7 +178,7 @@ tools:
 memory_scope: psop.builder
 ```
 
-不得直接复用现有 `skills/skill-creator` 作为 builder 核心 Skill。它面向 Codex 多轮创建通用 Agent Skill，并会生成 `skill.yaml`；而 PSOP builder 禁止模型生成 `skill.yaml`，由平台从 README/SKILL 重建 manifest。可以借鉴其目录完整性和审阅草稿思路，但必须使用 PSOP 专用 Agent Skills。
+不得直接复用通用 Agent Skill 创建器作为 builder 核心 Skill。这类工具面向 Codex 多轮创建通用 Agent Skill，并会生成 `skill.yaml`；而 PSOP builder 禁止模型生成 `skill.yaml`，由平台从 README/SKILL 重建 manifest。可以借鉴其目录完整性和审阅草稿思路，但必须使用 PSOP 专用 Agent Skills。
 
 ## 四、输入与输出契约
 
