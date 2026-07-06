@@ -546,6 +546,46 @@ Range: bytes=0-1048575
 - 响应的 `Content-Type` 使用 part 的 `mime_type`。
 - 终端侧不需要也不应该读取或保存 MinIO bucket/object key。
 
+## 接收 Runner 参考图片输出
+
+`psop.runner` 在协助终端用户执行 PSOP Skill 时，可能会把当前步骤的参考图片作为回答的一部分返回给终端。Runtime 会把这类回答保存为 `direction = "output"`、`event_kind = "terminal.multimodal.output.v1"` 的终端事件；终端可以通过事件列表 REST 接口或 WebSocket `terminal.event.appended` 增量消息接收。
+
+终端侧处理规则：
+
+- 按 `parts[].order_index` 在同一条系统消息内展示所有 part。
+- `kind = "text"` 的 part 直接展示 `parts[].text`。
+- `kind = "image"` 的 part 通过 part 内容接口读取二进制内容，使用 `event.id` 和 `part.part_id` 构造 URL。
+- 可使用 `parts[].metadata.title`、`parts[].metadata.caption` 展示参考图片标题和说明。
+- 不要从 `artifact_object_id` 拼接下载地址，也不要期待 `payload_inline` 或 `parts[]` 中出现图片 base64。
+- 如果 runner 只返回 `terminal.text.output.v1` 或 `terminal.multimodal.output.v1` 中没有 image part，说明本次输出没有可展示的参考图片；终端只展示文本即可。
+
+前端展示示例：
+
+```js
+function terminalPartContentUrl(event, part) {
+  return `/api/v1/terminal/sessions/${event.run_id}/events/${event.id}/parts/${part.part_id}/content`;
+}
+
+function renderRunnerOutput(event) {
+  const parts = [...(event.parts || [])].sort((a, b) => a.order_index - b.order_index);
+
+  for (const part of parts) {
+    if (part.kind === "text") {
+      renderSystemText(part.text || "");
+      continue;
+    }
+
+    if (part.kind === "image") {
+      renderSystemImage({
+        src: terminalPartContentUrl(event, part),
+        title: part.metadata?.title || "",
+        caption: part.metadata?.caption || "",
+      });
+    }
+  }
+}
+```
+
 ## 发送文本输入
 
 接口：
@@ -986,6 +1026,62 @@ WebSocket 服务端消息统一外层结构：
     },
     "occurred_at": "2026-05-25T00:02:00Z",
     "created_at": "2026-05-25T00:02:00Z"
+  }
+}
+```
+
+Runner 参考图片输出推送示例：
+
+```json
+{
+  "event_type": "terminal.event.appended",
+  "run_id": "run-id",
+  "invocation_id": null,
+  "seq_no": 6,
+  "occurred_at": "2026-05-25T00:02:03Z",
+  "payload": {
+    "id": "terminal-event-output-6",
+    "terminal_session_id": "terminal-session-id",
+    "run_id": "run-id",
+    "direction": "output",
+    "event_kind": "terminal.multimodal.output.v1",
+    "mime_type": "multipart/mixed",
+    "payload_inline": {
+      "summary": "请对照参考图确认电源线已经完全断开，然后上传机箱内部照片。",
+      "reference_image_count": 1
+    },
+    "parts": [
+      {
+        "part_id": "text_1",
+        "order_index": 1,
+        "kind": "text",
+        "mime_type": "text/markdown",
+        "text": "请对照参考图确认电源线已经完全断开，然后上传机箱内部照片。"
+      },
+      {
+        "part_id": "image_1",
+        "order_index": 2,
+        "kind": "image",
+        "mime_type": "image/jpeg",
+        "size_bytes": 123456,
+        "checksum": "sha256:...",
+        "metadata": {
+          "title": "电源线断开参考图",
+          "caption": "确认电源线插头已完全离开电源接口。",
+          "source_ref": "runtime_contract.workflow_steps.power_off.reference_images.power-cable-off",
+          "reference_image_ref": "skill-reference://steps/power-off/power-cable-off"
+        }
+      }
+    ],
+    "seq_no": 6,
+    "external_event_id": null,
+    "source_ref": {
+      "kind": "runtime",
+      "node_id": "instruct_collect_context",
+      "agent_key": "psop.runner"
+    },
+    "occurred_at": "2026-05-25T00:02:03Z",
+    "created_at": "2026-05-25T00:02:03Z"
   }
 }
 ```
