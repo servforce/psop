@@ -1,14 +1,3 @@
----
-name: psop-builder-core
-description: 当需要根据用户目标、当前 Skill source、素材分析结果和行业标准引用构建 PSOP Skill draft candidate 时使用此 Skill。
-allowed-tools:
-  - psop.builder.read_current_source
-  - psop.builder.list_materials
-  - psop.builder.read_material_analysis
-  - psop.standard.search
-  - psop.builder.submit_candidate
----
-
 # PSOP Builder Core
 
 ## 使用场景

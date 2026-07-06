@@ -1,15 +1,3 @@
----
-name: psop-builder-quality-review
-description: 当需要审查 PSOP Skill draft candidate 的必需文件、物理作业工作流质量、证据覆盖、标准引用质量和 submit_candidate 就绪度时使用此 Skill。
-allowed-tools:
-  - psop.builder.read_current_source
-  - psop.standard.search
-  - workspace.list
-  - workspace.read_text
-  - workspace.write_text
-  - psop.builder.submit_candidate
----
-
 # PSOP Builder Quality Review
 
 ## 使用场景

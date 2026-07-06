@@ -1,14 +1,3 @@
----
-name: psop-builder-evidence-mapping
-description: 当需要把 PSOP Skill draft 中的关键结论映射到用户描述、当前源码、素材分析、参考资产、行业标准和人工确认缺口时使用此 Skill。
-allowed-tools:
-  - psop.builder.list_materials
-  - psop.builder.read_material_analysis
-  - psop.builder.list_reference_assets
-  - psop.standard.search
-  - workspace.write_text
----
-
 # PSOP Builder Evidence Mapping
 
 ## 使用场景

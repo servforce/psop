@@ -38,13 +38,19 @@ class ScriptedBuilderChatModel(BaseChatModel):
 
 
 def _next_builder_message(messages: list[BaseMessage], tool_names: set[str]) -> AIMessage:
-    for skill_name, call_id in (
-        ("psop-builder-core", "call_load_core"),
-        ("psop-builder-evidence-mapping", "call_load_evidence"),
-        ("psop-builder-quality-review", "call_load_quality"),
+    if "load_skill" in tool_names and not _has_tool_result(messages, "load_skill", "psop-builder"):
+        return _tool_call("call_load_builder_skill", "load_skill", {"skill_name": "psop-builder"})
+    for resource_path, call_id in (
+        ("core/SKILL.md", "call_load_builder_core"),
+        ("evidence-mapping/SKILL.md", "call_load_builder_evidence"),
+        ("quality-review/SKILL.md", "call_load_builder_quality"),
     ):
-        if "load_skill" in tool_names and not _has_tool_result(messages, "load_skill", skill_name):
-            return _tool_call(call_id, "load_skill", {"skill_name": skill_name})
+        if "load_skill_resource" in tool_names and not _has_resource_result(messages, "psop-builder", resource_path):
+            return _tool_call(
+                call_id,
+                "load_skill_resource",
+                {"skill_name": "psop-builder", "resource_path": resource_path, "max_chars": 60000},
+            )
     if "psop.builder.read_current_source" in tool_names and not _has_tool_result(messages, "psop.builder.read_current_source"):
         return _tool_call("call_read_source", "psop.builder.read_current_source", {"paths": ["README.md", "SKILL.md"]})
     if "psop.builder.list_materials" in tool_names and not _has_tool_result(messages, "psop.builder.list_materials"):
@@ -209,6 +215,16 @@ def _has_tool_result(messages: list[BaseMessage], tool_name: str, skill_name: st
             return True
         payload = _parse_jsonish(str(message.content or ""))
         if payload.get("name") == skill_name:
+            return True
+    return False
+
+
+def _has_resource_result(messages: list[BaseMessage], skill_name: str, resource_path: str) -> bool:
+    for message in messages:
+        if not isinstance(message, ToolMessage) or message.name != "load_skill_resource":
+            continue
+        payload = _parse_jsonish(str(message.content or ""))
+        if payload.get("skill_name") == skill_name and payload.get("resource_path") == resource_path:
             return True
     return False
 

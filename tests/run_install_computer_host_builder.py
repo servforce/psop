@@ -26,7 +26,12 @@ from app.infra.object_store import ObjectStoreService
 
 DEFAULT_SKILL_ID = "01738427-60f9-4171-871b-ab84b40ac2db"
 DEFAULT_USER_DESCRIPTION = "帮我构建一个安装电脑主机的技能。"
-REQUIRED_SKILLS = {"psop-builder-core", "psop-builder-evidence-mapping", "psop-builder-quality-review"}
+REQUIRED_SKILLS = {"psop-builder"}
+REQUIRED_SKILL_RESOURCES = {
+    ("psop-builder", "core/SKILL.md"),
+    ("psop-builder", "evidence-mapping/SKILL.md"),
+    ("psop-builder", "quality-review/SKILL.md"),
+}
 REQUIRED_TOOLS = {
     "psop.builder.read_current_source",
     "psop.builder.list_materials",
@@ -176,6 +181,14 @@ def _validate_result(payload: dict[str, Any]) -> int:
             for event in events
             if event.get("event_type") == "agent.skill.loaded"
         }
+        loaded_resources = {
+            (
+                str(event.get("payload", {}).get("skill_name") or ""),
+                str(event.get("payload", {}).get("resource_path") or ""),
+            )
+            for event in events
+            if event.get("event_type") == "agent.skill.resource.loaded"
+        }
         completed_tools = {
             str(event.get("payload", {}).get("tool_name") or "")
             for event in events
@@ -183,14 +196,16 @@ def _validate_result(payload: dict[str, Any]) -> int:
         }
         event_types = {str(event.get("event_type") or "") for event in events}
         missing_skills = sorted(REQUIRED_SKILLS - loaded_skills)
+        missing_resources = sorted(REQUIRED_SKILL_RESOURCES - loaded_resources)
         missing_tools = sorted(REQUIRED_TOOLS - completed_tools)
-        if "agent.memory.read" not in event_types or missing_skills or missing_tools:
+        if "agent.memory.read" not in event_types or missing_skills or missing_resources or missing_tools:
             print(
                 json.dumps(
                     {
                         "message": "PSOP Builder 测试失败：agent 事件不完整。",
                         "memory_read": "agent.memory.read" in event_types,
                         "missing_skills": missing_skills,
+                        "missing_skill_resources": missing_resources,
                         "missing_tools": missing_tools,
                     },
                     ensure_ascii=False,

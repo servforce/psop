@@ -8,9 +8,7 @@ model:
   thinking_enabled: false
 system_prompt_file: system.md
 skills:
-  - psop-builder-core
-  - psop-builder-evidence-mapping
-  - psop-builder-quality-review
+  - psop-builder
 tools:
   - psop.builder.read_current_source
   - psop.builder.list_materials

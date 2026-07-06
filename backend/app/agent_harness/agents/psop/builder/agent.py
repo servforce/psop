@@ -7,7 +7,7 @@ from app.agent_harness.middlewares import build_middlewares
 from app.agent_harness.tools.builtin.builder import register_builder_tools
 from app.agent_harness.tools.builtin.standard import register_standard_tools
 from app.agent_harness.tools.builtin.workspace import register_workspace_tools
-from app.agent_harness.tools.framework import LOAD_SKILL_TOOL_NAME, register_framework_tools
+from app.agent_harness.tools.framework import LOAD_SKILL_RESOURCE_TOOL_NAME, LOAD_SKILL_TOOL_NAME, register_framework_tools
 from app.agent_harness.tools.langchain import to_langchain_tools
 from app.agent_harness.tools.policy import filter_tools_by_skill_allowed_tools
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
@@ -36,7 +36,7 @@ def make_builder_agent(context: AgentBuildContext):
         allowed_skill_names=set(context.definition.skills),
     )
     tools = to_langchain_tools(
-        tool_names=[LOAD_SKILL_TOOL_NAME, *business_tool_names],
+        tool_names=[LOAD_SKILL_TOOL_NAME, LOAD_SKILL_RESOURCE_TOOL_NAME, *business_tool_names],
         registry=registry,
         context=tool_context,
     )

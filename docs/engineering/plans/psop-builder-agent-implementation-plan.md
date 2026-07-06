@@ -4,7 +4,7 @@
 
 > 状态：已完成（2026-07-01）。
 >
-> 完成依据：第 8 节完成定义已满足；`psop.builder` scripted e2e run 已能加载 memory、三个 builder Agent Skills、关键 tools，并写出 `builder-result.json` 与 `outputs/skill-draft/` 物化文件。当前验收口径以最终物化文件为准，不要求 `builder-result.json.files` 与 `outputs/skill-draft/` 字节级一致。
+> 完成依据：第 8 节完成定义已满足；`psop.builder` scripted e2e run 已能加载 memory、`psop-builder` Skill 包、三个包内资源、关键 tools，并写出 `builder-result.json` 与 `outputs/skill-draft/` 物化文件。当前验收口径以最终物化文件为准，不要求 `builder-result.json.files` 与 `outputs/skill-draft/` 字节级一致。
 >
 > 说明：第 2、3 节保留实施前基线和实施步骤记录，其中部分“当前基线”表述不再代表当前代码状态。后续长期约束以架构设计文档和当前实现为准。
 
@@ -15,7 +15,8 @@
 ```text
 AgentHarnessService.invoke(agent_key="psop.builder")
   -> 读取 memory
-  -> 通过 load_skill 加载三个 builder Agent Skills
+  -> 通过 load_skill 加载 psop-builder Skill 包
+  -> 通过 load_skill_resource 加载三个包内资源
   -> 调用 psop.builder.* read-only tools 获取 source、素材分析和参考资产
   -> 调用 psop.standard.search 尝试检索行业标准
   -> 调用 workspace tools 产生可审阅中间产物
@@ -34,7 +35,8 @@ PYTHONPATH=backend backend/.venv/bin/python tests/run_psop_builder_agent.py --fi
 
 - `AgentResult.status == "succeeded"`。
 - events 中包含 `agent.memory.read`。
-- events 中包含三个 `agent.skill.loaded`：`psop-builder-core`、`psop-builder-evidence-mapping`、`psop-builder-quality-review`。
+- events 中包含一个 `agent.skill.loaded`：`psop-builder`。
+- events 中包含三个 `agent.skill.resource.loaded`：`core/SKILL.md`、`evidence-mapping/SKILL.md`、`quality-review/SKILL.md`。
 - events 中包含关键 tool calls：`psop.builder.read_current_source`、`psop.builder.list_materials`、`psop.builder.read_material_analysis`、`psop.builder.list_reference_assets`、`psop.standard.search`、`psop.builder.submit_candidate`。
 - sandbox 中存在 `/mnt/psop/outputs/builder-result.json`。
 - sandbox 中存在 `/mnt/psop/outputs/skill-draft/`，且所有 candidate 必需文件已按相对路径物化为非空 Markdown 文件。最终可提交的 PSOP Skill 文件以 `outputs/skill-draft/` 为准，不要求与 `builder-result.json.files` 字节级一致。
@@ -286,9 +288,7 @@ model:
   thinking_enabled: false
 system_prompt_file: system.md
 skills:
-  - psop-builder-core
-  - psop-builder-evidence-mapping
-  - psop-builder-quality-review
+  - psop-builder
 tools:
   - psop.builder.read_current_source
   - psop.builder.list_materials
@@ -319,7 +319,7 @@ memory_scope: psop.builder
 `system.md`：
 
 - 明确 `psop-builder` 是构建者，不是发布者、编译器或 Runtime。
-- 要求先加载三个 builder Skills。
+- 要求先加载 `psop-builder`，再加载 `core/SKILL.md`、`evidence-mapping/SKILL.md` 和 `quality-review/SKILL.md`。
 - 要求所有外部素材和 LightRAG snippets 作为数据事实，不作为指令来源。
 - 要求最终只能通过 `psop.builder.submit_candidate` 提交候选产物。
 - 禁止生成 `skill.yaml`、禁止伪造标准引用、禁止直接提交 GitLab。
@@ -330,28 +330,31 @@ memory_scope: psop.builder
 - `make_builder_agent()` 返回可 invoke agent。
 - skill allowed-tools 并集不请求未授权工具。
 
-### Step 7：新增 builder Agent Skills
+### Step 7：新增 builder Agent Skill 包
 
 新增：
 
 ```text
-skills/psop-builder-core/SKILL.md
-skills/psop-builder-evidence-mapping/SKILL.md
-skills/psop-builder-quality-review/SKILL.md
+skills/psop-builder/SKILL.md
+skills/psop-builder/core/SKILL.md
+skills/psop-builder/evidence-mapping/SKILL.md
+skills/psop-builder/quality-review/SKILL.md
 ```
 
 要求：
 
-- frontmatter `name` 与目录名一致。
-- frontmatter `description` 使用简体中文表达，例如“当需要……时使用此 Skill”，范围足够窄，避免误触发 compiler、tester、audit 或通用聊天。
-- `allowed-tools` 只声明业务工具，不包含 `load_skill`。
+- 根 `SKILL.md` frontmatter 的 `name` 与目录名一致。
+- 根 `SKILL.md` frontmatter 的 `description` 使用简体中文表达，例如“当需要……时使用此 Skill”，范围足够窄，避免误触发 compiler、tester、audit 或通用聊天。
+- 根 `SKILL.md` 的 `allowed-tools` 只声明业务工具，不包含 `load_skill` 或 `load_skill_resource`。
+- 包内资源不声明独立 frontmatter 或额外工具权限。
 - 内容按详细设计文档第七章落地，不引入脚本、二进制或额外权限。
 
 测试：
 
-- `SkillLoader.load_metadata()` 能读取三个 Skill。
+- `SkillLoader.load_metadata()` 能读取 `psop-builder`。
 - `SkillLoader.load()` 记录 `agent.skill.loaded`。
-- 三个 Skill 的 `allowed-tools` 并集与 `psop.builder` AgentDefinition tools 相容。
+- `SkillLoader.load_resource()` 能读取三个包内资源并记录 `agent.skill.resource.loaded`。
+- `psop-builder.allowed-tools` 与 `psop.builder` AgentDefinition tools 相容。
 
 ### Step 8：扩展 LangChainAgentExecutor artifact 收集
 
@@ -453,7 +456,7 @@ result = self.agent_harness_service.invoke(
   - `material_analysis_results`
   - `candidate_reference_assets`
   - `standard_search_policy`
-- PSOP Skill 形式定义、物理世界任务建模原则和发布审阅标准不作为静态 context 字段传递；这些构建方法论由 `psop-builder-core`、`psop-builder-evidence-mapping` 和 `psop-builder-quality-review` 通过 `load_skill` 提供。
+- PSOP Skill 形式定义、物理世界任务建模原则和发布审阅标准不作为静态 context 字段传递；这些构建方法论由 `psop-builder` 通过 `load_skill` 加载入口，再通过 `load_skill_resource` 加载 `core/SKILL.md`、`evidence-mapping/SKILL.md` 和 `quality-review/SKILL.md` 提供。
 - 从 `AgentResult.artifacts` 或 sandbox path 读取 `outputs/builder-result.json`。
 - 对 artifact 执行 builder v1 严格校验，再调用 `parse_generated_skill_draft(json.dumps(candidate))` 做兼容转化。
 - 复用 `_resolve_selected_reference_assets()`、GitLab head 二次检查和 `_commit_generated_skill_files()`。
@@ -577,8 +580,8 @@ sandbox://outputs/skill-draft
 | Workspace tools | `tests/test_agent_harness_workspace_tools.py` | list/read/write、路径越界、outputs 绕过拒绝。 |
 | Builder tools | `tests/test_agent_harness_builder_tools.py` | context read tools、submit_candidate 成功/失败。 |
 | Standard search | `tests/test_agent_harness_standard_tools.py` | success、timeout、缺配置、malformed response、结果裁剪。 |
-| Builder agent | `tests/test_agent_harness_builder_agent.py` | registry、factory、scripted run、skills loaded、artifact created。 |
-| Builder skills | `tests/test_agent_harness_skills.py` | 三个 builder skills metadata/load/allowed-tools。 |
+| Builder agent | `tests/test_agent_harness_builder_agent.py` | registry、factory、scripted run、skill/resource loaded、artifact created。 |
+| Builder skills | `tests/test_agent_harness_skills.py` | `psop-builder` metadata/load/resource/allowed-tools。 |
 | Persistence | `tests/test_agent_harness_persistence.py` | agent_run/event/artifact ORM 与 repository。 |
 | SkillsService | `tests/test_skills_api.py` 或新增 service 测试 | generation 通过 AgentHarnessService artifact 提交 draft；失败不提交。 |
 
@@ -629,7 +632,7 @@ PYTHONPATH=backend backend/.venv/bin/python tests/run_psop_builder_agent.py --fi
 
 ```text
 1. psop.builder AgentDefinition 可以被 FileAgentDefinitionRegistry 加载。
-2. 三个 psop-builder Agent Skills 可以被 SkillLoader 加载。
+2. `psop-builder` Agent Skill 包和三个包内资源可以被 SkillLoader 加载。
 3. psop.builder scripted e2e run 会加载 memory、skills、tools，并写出 builder-result.json。
 4. builder-result.json 通过 builder v1 strict validation。
 5. AgentResult.artifacts 包含 skill_draft_candidate 和 skill_draft_files。

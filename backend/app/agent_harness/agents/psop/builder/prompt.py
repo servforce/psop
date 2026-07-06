@@ -26,6 +26,7 @@ def _build_skill_section(skills: list[AgentSkill]) -> str:
         "<skill_system>",
         "Agent Skills 位于仓库根目录 skills/。",
         "系统提示词只注入 Skill 元信息；开始执行相关工作前，必须先调用 load_skill 读取完整 SKILL.md。",
+        "如果 Skill 包声明了内部 Markdown 资源，可调用 load_skill_resource 读取同一 Skill 目录内的资源文件。",
         "只能调用当前 AgentDefinition 声明的 skills。",
         "",
         "可用 Skills:",

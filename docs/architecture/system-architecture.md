@@ -462,9 +462,7 @@ model:
   name: default
   thinking_enabled: false
 skills:
-  - psop-builder-core
-  - psop-builder-evidence-mapping
-  - psop-builder-quality-review
+  - psop-builder
 tools:
   - workspace.read_text
   - workspace.write_text

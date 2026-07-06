@@ -78,9 +78,25 @@ def main() -> int:
         for event in result.events
         if event.event_type == "agent.skill.loaded"
     ]
-    required_skills = {"psop-builder-core", "psop-builder-evidence-mapping", "psop-builder-quality-review"}
+    required_skills = {"psop-builder"}
     if not required_skills.issubset(set(str(item) for item in loaded_skills)):
         print(f"未加载全部 builder skills：{loaded_skills}", file=sys.stderr)
+        return 1
+    loaded_resources = {
+        (
+            str(event.payload.get("skill_name") or ""),
+            str(event.payload.get("resource_path") or ""),
+        )
+        for event in result.events
+        if event.event_type == "agent.skill.resource.loaded"
+    }
+    required_resources = {
+        ("psop-builder", "core/SKILL.md"),
+        ("psop-builder", "evidence-mapping/SKILL.md"),
+        ("psop-builder", "quality-review/SKILL.md"),
+    }
+    if not required_resources.issubset(loaded_resources):
+        print(f"未加载全部 builder skill resources：{sorted(loaded_resources)}", file=sys.stderr)
         return 1
     if "agent.memory.read" not in event_types:
         print("未记录 agent.memory.read。", file=sys.stderr)
