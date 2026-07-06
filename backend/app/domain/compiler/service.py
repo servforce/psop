@@ -286,6 +286,11 @@ class CompilerService:
         compile_request.started_at = now_utc()
         session.flush()
 
+        request_id = compile_request.id
+        version_id = skill_version.id
+        definition_id = skill_definition.id
+        definition_key = skill_definition.key
+
         try:
             if progress:
                 progress.mark("source_loaded", "running", "正在读取冻结 commit 下的 Skill source。")
@@ -460,32 +465,50 @@ class CompilerService:
             return compile_request
         except Exception as exc:
             error_message = self._format_exception_message(exc)
+            diagnostic_location = getattr(exc, "details", None)
+            session.rollback()
+
+            compile_request = self.repository.get_compile_request(session, request_id)
+            skill_version = self.repository.get_skill_version(session, version_id)
+            if not compile_request or not skill_version:
+                LOGGER.exception(
+                    "compile request failed unexpectedly and failure state could not be reloaded",
+                    extra={
+                        "skill_id": definition_id,
+                        "skill_key": definition_key,
+                        "skill_version_id": version_id,
+                        "compile_request_id": request_id,
+                        "error": error_message,
+                    },
+                )
+                raise
+
             compile_request.status = "failed"
             compile_request.error_message = error_message
             compile_request.finished_at = now_utc()
             session.add(
                 CompileDiagnostic(
-                    skill_compile_request_id=compile_request.id,
-                    skill_version_id=skill_version.id,
+                    skill_compile_request_id=request_id,
+                    skill_version_id=version_id,
                     severity="error",
                     code="compile.failed",
                     message=error_message,
-                    location=getattr(exc, "details", None),
+                    location=diagnostic_location,
                     category="compiler",
                 )
             )
             if progress:
                 self._mark_current_progress_failed(session, progress.job_id, error_message)
             if mark_job_terminal:
-                self._mark_job(session, compile_request.id, "failed", error_message)
+                self._mark_job(session, request_id, "failed", error_message)
             session.commit()
             LOGGER.exception(
                 "compile request failed unexpectedly",
                 extra={
-                    "skill_id": skill_definition.id,
-                    "skill_key": skill_definition.key,
-                    "skill_version_id": skill_version.id,
-                    "compile_request_id": compile_request.id,
+                    "skill_id": definition_id,
+                    "skill_key": definition_key,
+                    "skill_version_id": version_id,
+                    "compile_request_id": request_id,
                     "error": error_message,
                 },
             )

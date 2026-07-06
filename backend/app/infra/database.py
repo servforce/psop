@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -54,6 +54,34 @@ class DatabaseManager:
         from app.agent_harness.persistence import models as agent_harness_models  # noqa: F401
 
         Base.metadata.create_all(self.engine)
+        self._reconcile_schema()
+
+    def _reconcile_schema(self) -> None:
+        inspector = inspect(self.engine)
+        if "agent_run" not in inspector.get_table_names():
+            return
+
+        agent_run_columns = {column["name"] for column in inspector.get_columns("agent_run")}
+        statements: list[str] = []
+        if "related_runtime_run_id" not in agent_run_columns:
+            statements.append(
+                "ALTER TABLE agent_run "
+                "ADD COLUMN related_runtime_run_id VARCHAR(36) NOT NULL DEFAULT ''"
+            )
+
+        agent_run_indexes = {index["name"] for index in inspector.get_indexes("agent_run")}
+        if "idx_agent_run_related_runtime_run" not in agent_run_indexes:
+            statements.append(
+                "CREATE INDEX IF NOT EXISTS idx_agent_run_related_runtime_run "
+                "ON agent_run (related_runtime_run_id)"
+            )
+
+        if not statements:
+            return
+
+        with self.engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
 
     @contextmanager
     def session(self) -> Generator[Session, None, None]:

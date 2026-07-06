@@ -2,10 +2,88 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import inspect, text
+
 from app.agent_harness.persistence.models import AgentArtifactRecord, AgentEventRecord, AgentRunRecord
 from app.agent_harness.persistence.service import AgentHarnessPersistenceService
 from app.agent_harness.schemas import AgentArtifact, AgentEvent, AgentResult
 from app.infra.database import DatabaseManager
+
+
+def test_create_schema_reconciles_legacy_agent_run_runtime_run_column() -> None:
+    manager = DatabaseManager("sqlite+pysqlite:///:memory:")
+    with manager.engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE agent_run (
+                    id VARCHAR(36) NOT NULL,
+                    agent_key VARCHAR(160) NOT NULL,
+                    agent_version VARCHAR(64) NOT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    related_skill_definition_id VARCHAR(36) NOT NULL,
+                    related_generation_id VARCHAR(36) NOT NULL,
+                    related_job_id VARCHAR(36) NOT NULL,
+                    input_summary JSON NOT NULL,
+                    sandbox_path TEXT NOT NULL,
+                    model_info JSON NOT NULL,
+                    error_message TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    PRIMARY KEY (id)
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO agent_run (
+                    id,
+                    agent_key,
+                    agent_version,
+                    status,
+                    related_skill_definition_id,
+                    related_generation_id,
+                    related_job_id,
+                    input_summary,
+                    sandbox_path,
+                    model_info,
+                    error_message,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    'legacy-run',
+                    'psop.compiler',
+                    '',
+                    'running',
+                    '',
+                    '',
+                    'job-1',
+                    '{}',
+                    '/tmp/legacy-run',
+                    '{}',
+                    '',
+                    '2026-01-01 00:00:00',
+                    '2026-01-01 00:00:00'
+                )
+                """
+            )
+        )
+
+    manager.create_schema()
+
+    inspector = inspect(manager.engine)
+    columns = {column["name"] for column in inspector.get_columns("agent_run")}
+    indexes = {index["name"] for index in inspector.get_indexes("agent_run")}
+    assert "related_runtime_run_id" in columns
+    assert "idx_agent_run_related_runtime_run" in indexes
+
+    with manager.session() as session:
+        record = session.get(AgentRunRecord, "legacy-run")
+        assert record is not None
+        assert record.related_runtime_run_id == ""
 
 
 def test_agent_harness_persistence_records_result() -> None:
