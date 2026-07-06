@@ -35,9 +35,14 @@ class AgentBuildContext:
         model_ref = self.definition.model
         thinking_enabled = model_ref.thinking_enabled if model_ref is not None else self.settings.llm_text_enable_thinking
         model_name = model_ref.name if model_ref is not None else None
+        has_image_attachment = any(
+            str(attachment.media_type or "").lower().startswith("image/")
+            for attachment in self.invocation.attachments
+        )
         return create_chat_model(
             settings=self.settings,
             name=model_name,
             thinking_enabled=thinking_enabled,
             attach_tracing=False,
+            multimodal=has_image_attachment,
         )

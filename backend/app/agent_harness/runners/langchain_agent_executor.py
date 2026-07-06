@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,6 +70,38 @@ REQUIRED_ARTIFACTS_BY_AGENT = {
             "不要回复自然语言说明，不要只说将要补齐。"
         ),
     ),
+    "psop.runner": RequiredArtifactContract(
+        artifact_type="runner_observation",
+        artifact_ref="sandbox://outputs/runner-observation.json",
+        continuation_prompt=(
+            "你还没有生成必需产物 sandbox://outputs/runner-observation.json。"
+            "现在必须立即调用 psop.runner.submit_observation，参数必须是完整 RunnerObservation。"
+            "不要回复自然语言说明，不要只说将要提交。"
+        ),
+        required_skill_names=(
+            "psop-runner",
+        ),
+        required_skill_resources=(
+            ("psop-runner", "core/SKILL.md"),
+            ("psop-runner", "terminal-guidance/SKILL.md"),
+            ("psop-runner", "evidence-evaluation/SKILL.md"),
+        ),
+        required_tool_names=(
+            "psop.runner.read_prompt_view",
+            "psop.runner.read_runtime_contract",
+            "psop.runner.read_current_checkpoint",
+            "psop.runner.list_step_reference_images",
+            "psop.runner.list_terminal_events",
+            "psop.runner.read_latest_evidence",
+            "psop.runner.submit_observation",
+        ),
+        missing_interactions_prompt=(
+            "你已经生成 runner observation，但尚未完成 psop.runner 的必需上下文读取或 Skill 资源加载。"
+            "现在必须补齐缺失的 load_skill / load_skill_resource / psop.runner tool 调用。"
+            "如果补齐后 observation 需要调整，必须重新调用 psop.runner.submit_observation 覆盖 sandbox outputs。"
+            "不要回复自然语言说明，不要只说将要补齐。"
+        ),
+    ),
 }
 
 
@@ -82,7 +115,20 @@ class LangChainAgentExecutor:
         sandbox: AgentSandbox,
         event_writer: AgentEventWriter,
     ) -> AgentResult:
-        messages: list[Any] = [{"role": "user", "content": str(invocation.input.get("text") or "")}]
+        messages: list[Any] = [_initial_user_message(invocation)]
+        if invocation.attachments:
+            event_writer.record(
+                "agent.multimodal.attachments.prepared",
+                {
+                    "attachment_count": len(invocation.attachments),
+                    "image_attachment_count": sum(
+                        1
+                        for attachment in invocation.attachments
+                        if str(attachment.media_type or "").lower().startswith("image/")
+                    ),
+                    "attachments": [attachment.redacted_metadata() for attachment in invocation.attachments],
+                },
+            )
         result = None
         artifacts: list[AgentArtifact] = []
         required_artifact = _required_artifact_contract(definition)
@@ -179,6 +225,28 @@ class LangChainAgentExecutor:
         )
 
 
+def _initial_user_message(invocation: AgentInvocation) -> dict[str, Any]:
+    text = str(invocation.input.get("text") or "")
+    image_attachments = [
+        attachment
+        for attachment in invocation.attachments
+        if str(attachment.media_type or "").lower().startswith("image/") and attachment.content_base64
+    ]
+    if not image_attachments:
+        return {"role": "user", "content": text}
+    content_parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    for attachment in image_attachments:
+        content_parts.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{attachment.media_type};base64,{attachment.content_base64}",
+                },
+            }
+        )
+    return {"role": "user", "content": content_parts}
+
+
 def _collect_artifacts(sandbox: AgentSandbox) -> list[AgentArtifact]:
     artifacts: list[AgentArtifact] = []
     builder_result_path = "/mnt/psop/outputs/builder-result.json"
@@ -212,6 +280,16 @@ def _collect_artifacts(sandbox: AgentSandbox) -> list[AgentArtifact]:
             AgentArtifact(
                 artifact_type="eg_compile_artifact_candidate",
                 path="sandbox://outputs/eg.compile.artifact.json",
+                provenance=provenance,
+            )
+        )
+    runner_observation = _resolve_optional(sandbox, "/mnt/psop/outputs/runner-observation.json")
+    if runner_observation is not None and runner_observation.exists():
+        provenance = _runner_observation_provenance(runner_observation)
+        artifacts.append(
+            AgentArtifact(
+                artifact_type="runner_observation",
+                path="sandbox://outputs/runner-observation.json",
                 provenance=provenance,
             )
         )
@@ -326,6 +404,26 @@ def _json_file_provenance(path) -> dict[str, Any]:
     return provenance
 
 
+def _runner_observation_provenance(path) -> dict[str, Any]:
+    provenance: dict[str, Any] = {"content_hash": hashlib.sha256(path.read_bytes()).hexdigest()}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return provenance
+    if isinstance(payload, dict):
+        provenance["schema"] = str(payload.get("schema") or "")
+        provenance["node_id"] = str(payload.get("node_id") or "")
+        provenance["decision"] = str(payload.get("decision") or "")
+        provenance["runtime_decision"] = str(payload.get("runtime_decision") or "")
+        source_refs = payload.get("source_refs")
+        if isinstance(source_refs, list):
+            provenance["source_ref_count"] = len(source_refs)
+        reference_images = payload.get("reference_images")
+        if isinstance(reference_images, list):
+            provenance["reference_image_count"] = len(reference_images)
+    return provenance
+
+
 def _extract_final_output(result: Any) -> str:
     if isinstance(result, dict):
         messages = result.get("messages")
@@ -347,8 +445,30 @@ def _messages_from_result(result: Any) -> list[Any]:
 
 
 def _jsonable(value: Any) -> Any:
+    return _redact_sensitive_payload(value)
+
+
+def _redact_sensitive_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return _redact_data_urls(value)
+    if isinstance(value, dict):
+        return {str(key): _redact_sensitive_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_sensitive_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_sensitive_payload(item) for item in value]
+    content = getattr(value, "content", None)
+    if content is not None:
+        return {
+            "type": value.__class__.__name__,
+            "content": _redact_sensitive_payload(content),
+        }
     try:
         json.dumps(value)
         return value
     except TypeError:
-        return str(value)
+        return _redact_data_urls(str(value))
+
+
+def _redact_data_urls(value: str) -> str:
+    return re.sub(r"data:[^;,\s]+;base64,[A-Za-z0-9+/=_-]+", "data:[redacted];base64,[redacted]", value)

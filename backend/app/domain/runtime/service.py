@@ -5,10 +5,18 @@ import hashlib
 import json
 import logging
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agent_harness.agents.psop.runner.schemas import (
+    RUNNER_OBSERVATION_ARTIFACT_REF,
+    RUNNER_OBSERVATION_VIRTUAL_PATH,
+    validate_runner_observation,
+)
+from app.agent_harness.schemas import AgentInvocation, AgentInvocationAttachment, AgentResult
+from app.agent_harness.service import AgentHarnessService
 from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
@@ -53,6 +61,7 @@ from app.gateway.inference import LlmAttachment, LlmInferenceGateway, MULTIMODAL
 from app.infra.object_store import ObjectStoreService
 
 LOGGER = logging.getLogger(__name__)
+RUNNER_MAX_IMAGE_ATTACHMENTS = 4
 
 RUNTIME_LLM_LANGUAGE_POLICY = """平台级输出语言要求：
 - 所有面向终端用户展示的自然语言必须使用简体中文。
@@ -74,6 +83,7 @@ class RuntimeService:
         job_repository: JobRepository | None = None,
         agent_prompt_service: AgentPromptService | None = None,
         object_store: ObjectStoreService | None = None,
+        agent_harness_service: AgentHarnessService,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
@@ -81,6 +91,7 @@ class RuntimeService:
         self.job_repository = job_repository or JobRepository()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
         self.object_store = object_store
+        self.agent_harness_service = agent_harness_service
 
     def create_invocation(self, session: Session, payload: CreateInvocationRequest) -> InvocationResponse:
         skill_definition = self.repository.get_skill_definition_by_key(session, payload.skill_key)
@@ -481,6 +492,7 @@ class RuntimeService:
                             )
                             observation = self._execute_node(
                                 session=session,
+                                run=run,
                                 node=node,
                                 token=token,
                                 artifact_payload=artifact_payload,
@@ -962,11 +974,12 @@ class RuntimeService:
                 snapshot_hash=self._hash_payload(token),
             )
         )
+        event_type = "runtime.agent.completed" if _get_path(trace_observation, "runner.agent_key") == "psop.runner" else self._event_type_for_node(node)
         self._append_trace_event(
             session,
             run=run,
             phase=str(node.get("id")),
-            event_type=self._event_type_for_node(node),
+            event_type=event_type,
             payload={
                 "node_id": node.get("id"),
                 "node_kind": node.get("kind"),
@@ -1011,17 +1024,25 @@ class RuntimeService:
         if should_output and terminal_message:
             terminal_session = self.repository.get_terminal_session_for_run(session, run.id)
             if terminal_session and terminal_session.status == "open":
-                self._append_terminal_event(
+                if not self._append_runner_terminal_output(
                     session,
                     run=run,
                     terminal_session=terminal_session,
-                    direction="output",
-                    event_kind=str(interaction.get("output_event_kind") or "terminal.text.output.v1"),
-                    mime_type=str(interaction.get("output_mime_type") or "text/markdown"),
-                    payload_inline=terminal_message,
-                    binding_id=None,
-                    source_ref={"kind": "runtime", "node_id": str(node.get("id"))},
-                )
+                    node=node,
+                    terminal_message=terminal_message,
+                    reference_images=observation.get("reference_images") if isinstance(observation.get("reference_images"), list) else [],
+                ):
+                    self._append_terminal_event(
+                        session,
+                        run=run,
+                        terminal_session=terminal_session,
+                        direction="output",
+                        event_kind=str(interaction.get("output_event_kind") or "terminal.text.output.v1"),
+                        mime_type=str(interaction.get("output_mime_type") or "text/markdown"),
+                        payload_inline=terminal_message,
+                        binding_id=None,
+                        source_ref={"kind": "runtime", "node_id": str(node.get("id"))},
+                    )
 
         if self._node_is_evaluation(node):
             next_token.setdefault("control", {})["latest_evaluation"] = self._evaluation_summary(node, observation)
@@ -1062,6 +1083,137 @@ class RuntimeService:
             )
 
         return next_token, entered_wait
+
+    def _append_runner_terminal_output(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        terminal_session: TerminalSession,
+        node: dict[str, Any],
+        terminal_message: str,
+        reference_images: list[Any],
+    ) -> bool:
+        if not reference_images:
+            return False
+        parts = [
+            TerminalEventPartInput(
+                part_id="text_1",
+                kind="text",
+                mime_type="text/markdown",
+                text=terminal_message,
+            )
+        ]
+        image_index = 0
+        for item in reference_images:
+            if not isinstance(item, dict):
+                self._append_runner_reference_image_warning(
+                    session,
+                    run=run,
+                    node=node,
+                    reference_image_ref="",
+                    artifact_object_id="",
+                    reason="invalid_reference_image",
+                )
+                continue
+            artifact_object_id = str(item.get("artifact_object_id") or "")
+            if not artifact_object_id:
+                self._append_runner_reference_image_warning(
+                    session,
+                    run=run,
+                    node=node,
+                    reference_image_ref=str(item.get("reference_image_ref") or ""),
+                    artifact_object_id="",
+                    reason="missing_artifact_object_id",
+                )
+                continue
+            artifact_object = self.repository.get_artifact_object(session, artifact_object_id)
+            if not artifact_object:
+                self._append_runner_reference_image_warning(
+                    session,
+                    run=run,
+                    node=node,
+                    reference_image_ref=str(item.get("reference_image_ref") or ""),
+                    artifact_object_id=artifact_object_id,
+                    reason="artifact_object_not_found",
+                )
+                continue
+            image_index += 1
+            parts.append(
+                TerminalEventPartInput(
+                    part_id=f"image_{image_index}",
+                    kind="image",
+                    mime_type=str(item.get("mime_type") or artifact_object.media_type or "image/jpeg"),
+                    artifact_object_id=artifact_object_id,
+                    metadata={
+                        "title": str(item.get("title") or ""),
+                        "caption": str(item.get("caption") or ""),
+                        "source_ref": str(item.get("source_ref") or ""),
+                        "reference_image_ref": str(item.get("reference_image_ref") or ""),
+                    },
+                )
+            )
+        if len(parts) <= 1:
+            return False
+        self._append_terminal_event(
+            session,
+            run=run,
+            terminal_session=terminal_session,
+            direction="output",
+            event_kind="terminal.multimodal.output.v1",
+            mime_type="multipart/mixed",
+            payload_inline={"summary": terminal_message, "reference_image_count": len(parts) - 1},
+            binding_id=None,
+            parts=parts,
+            source_ref={"kind": "runtime", "node_id": str(node.get("id")), "agent_key": "psop.runner"},
+        )
+        return True
+
+    def _append_runner_reference_image_warning(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        node: dict[str, Any],
+        reference_image_ref: str,
+        artifact_object_id: str,
+        reason: str,
+    ) -> None:
+        self._append_trace_event(
+            session,
+            run=run,
+            phase=str(node.get("id") or ""),
+            event_type="runtime.runner.reference_image.warning",
+            payload={
+                "node_id": str(node.get("id") or ""),
+                "reference_image_ref": reference_image_ref,
+                "artifact_object_id": artifact_object_id,
+                "reason": reason,
+            },
+        )
+
+    def _append_runner_attachment_warning(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        node: dict[str, Any],
+        source_ref: str,
+        artifact_object_id: str,
+        reason: str,
+    ) -> None:
+        self._append_trace_event(
+            session,
+            run=run,
+            phase=str(node.get("id") or ""),
+            event_type="runtime.runner.attachment.warning",
+            payload={
+                "node_id": str(node.get("id") or ""),
+                "source_ref": source_ref,
+                "artifact_object_id": artifact_object_id,
+                "reason": reason,
+            },
+        )
 
     @staticmethod
     def _node_is_evaluation(node: dict[str, Any]) -> bool:
@@ -2015,6 +2167,7 @@ class RuntimeService:
         self,
         *,
         session: Session,
+        run: Run,
         node: dict[str, Any],
         token: dict[str, Any],
         artifact_payload: dict[str, Any],
@@ -2027,57 +2180,13 @@ class RuntimeService:
             user_input = self._extract_user_input(token.get("input_envelope", {}), artifact_payload)
             return {"user_input": user_input, "summary": "已接收用户输入。"}
         if kind == "llm" or actor_name == "agent.llm":
-            system_prompt, user_prompt, prompt_metadata = self._render_llm_prompts(
-                session,
-                node,
-                token,
-                artifact_payload,
+            return self._execute_runner_agent_node(
+                session=session,
+                run=run,
+                node=node,
+                token=token,
+                artifact_payload=artifact_payload,
             )
-            attachments = self._resolve_llm_attachments(session, token)
-            route_key = (
-                MULTIMODAL_ROUTE_KEY
-                if attachments
-                else artifact_payload.get("capability_summary", {}).get("llm_route_key", TEXT_ROUTE_KEY)
-            )
-            with start_span("gateway.inference", route_key=route_key, node_id=node.get("id")):
-                if attachments:
-                    if not hasattr(self.inference_gateway, "complete_multimodal"):
-                        raise RuntimeError("当前 LLM Inference Gateway 不支持多模态输入。")
-                    llm_completion = self.inference_gateway.complete_multimodal(
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        attachments=attachments,
-                        route_key=route_key,
-                    )
-                else:
-                    llm_completion = self.inference_gateway.complete(
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        route_key=route_key,
-                    )
-            budgets = token.setdefault("budgets", {})
-            budgets["llm_calls"] = int(budgets.get("llm_calls", 0)) + 1
-            self._accumulate_llm_usage(budgets, llm_completion.usage)
-            observation = {
-                "content": llm_completion.content,
-                "provider": llm_completion.provider,
-                "model": llm_completion.model,
-                "input_summary": self._llm_prompt_summary(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    route_key=route_key,
-                    agent_prompt=prompt_metadata,
-                ),
-                "input_parts": self._llm_attachment_summary(attachments),
-                "output": {"content": llm_completion.content},
-                "usage": llm_completion.usage,
-                "summary": "LLM 节点执行完成。",
-            }
-            if llm_completion.request:
-                observation["_trace_request"] = llm_completion.request
-            if self._node_is_evaluation(node):
-                observation.update(self._parse_evaluation_observation(llm_completion.content, node=node))
-            return observation
         if kind == "tool" or actor_name == "capability.demo_tool":
             user_input = self._extract_user_input(token.get("input_envelope", {}), artifact_payload)
             llm_output = str(
@@ -2102,6 +2211,397 @@ class RuntimeService:
                 )
             return {"final_response": str(final_response), "summary": "Run 已完成。"}
         raise RuntimeError(f"Unsupported runtime node actor: {actor_name or kind}")
+
+    def _execute_runner_agent_node(
+        self,
+        *,
+        session: Session,
+        run: Run,
+        node: dict[str, Any],
+        token: dict[str, Any],
+        artifact_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        invocation = self._build_runner_invocation(
+            session=session,
+            run=run,
+            node=node,
+            token=token,
+            artifact_payload=artifact_payload,
+        )
+        with start_span("runtime.agent.invoke", agent_key="psop.runner", node_id=node.get("id"), run_id=run.id):
+            result = self.agent_harness_service.invoke(
+                invocation,
+                persistence_session=session,
+                persistence_context={
+                    "related_runtime_run_id": run.id,
+                    "related_skill_definition_id": run.skill_definition_id,
+                    "live_events_enabled": "false",
+                },
+            )
+        if result.status != "succeeded":
+            raise RuntimeError(f"psop.runner 执行失败：{result.error_message or result.final_output}")
+        observation = self._read_runner_observation_artifact(result)
+        observation = validate_runner_observation(
+            observation,
+            invocation_input=invocation.input,
+            invocation_context=invocation.context,
+        )
+        usage = self._agent_result_usage(result)
+        budgets = token.setdefault("budgets", {})
+        budgets["llm_calls"] = int(budgets.get("llm_calls", 0)) + int(usage.get("llm_calls") or 0)
+        self._accumulate_llm_usage(budgets, usage)
+        return self._map_runner_observation_to_runtime_observation(
+            observation,
+            agent_result=result,
+            usage=usage,
+        )
+
+    def _build_runner_invocation(
+        self,
+        *,
+        session: Session,
+        run: Run,
+        node: dict[str, Any],
+        token: dict[str, Any],
+        artifact_payload: dict[str, Any],
+    ) -> AgentInvocation:
+        node_id = str(node.get("id") or "")
+        actor_name = _actor_name(node.get("actor"))
+        mode = "evidence_evaluation" if self._node_is_evaluation(node) else "terminal_guidance"
+        text = f"node_id={node_id} 协助 PSOP Runtime 节点 `{node_id}`，模式：{mode}。"
+        context = self._build_runner_context(run=run, node=node, token=token, artifact_payload=artifact_payload)
+        attachments = self._build_runner_input_attachments(
+            session=session,
+            run=run,
+            node=node,
+            token=token,
+        )
+        if attachments:
+            context["input_attachments"] = [attachment.redacted_metadata() for attachment in attachments]
+        return AgentInvocation(
+            agent_key="psop.runner",
+            input={
+                "task": "assist_psop_runtime_node",
+                "run_id": run.id,
+                "node": {
+                    "id": node_id,
+                    "kind": str(node.get("kind") or ""),
+                    "actor": actor_name,
+                    "mode": mode,
+                },
+                "output_contract": {
+                    "schema": "psop.runner.observation.v1",
+                    "required_artifact": RUNNER_OBSERVATION_ARTIFACT_REF,
+                    "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
+                    "language": "zh-CN",
+                    "allow_reference_images": True,
+                },
+                "text": text,
+            },
+            context=context,
+            attachments=attachments,
+            memory_scope=f"psop.runner:{run.id}",
+        )
+
+    def _build_runner_context(
+        self,
+        *,
+        run: Run,
+        node: dict[str, Any],
+        token: dict[str, Any],
+        artifact_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        runtime_contract = artifact_payload.get("runtime_contract") if isinstance(artifact_payload.get("runtime_contract"), dict) else {}
+        terminal = token.get("terminal") if isinstance(token.get("terminal"), dict) else {}
+        terminal_events = terminal.get("events") if isinstance(terminal.get("events"), list) else []
+        control = token.get("control") if isinstance(token.get("control"), dict) else {}
+        return {
+            "trust_labels": {
+                "runtime_contract": "trusted",
+                "prompt_view": "trusted_runtime_projection",
+                "terminal_events": "untrusted_runtime_input",
+                "input_attachments": "untrusted_runtime_input",
+            },
+            "prompt_view": self._runner_prompt_view(run=run, node=node, token=token),
+            "runtime_contract": runtime_contract,
+            "step_reference_images": self._runner_step_reference_images(node=node, token=token, runtime_contract=runtime_contract),
+            "current_checkpoint": self._runner_current_checkpoint(run=run, node=node, token=token),
+            "terminal_events": terminal_events[-20:],
+            "latest_evidence": control.get("latest_evidence") if isinstance(control.get("latest_evidence"), dict) else {},
+            "trace_summary": token.get("trace") if isinstance(token.get("trace"), list) else [],
+            "allowed_runtime": {
+                "terminal_event_kinds": ["terminal.text.output.v1", "terminal.multimodal.output.v1"],
+                "input_part_kinds": ["text", "image", "audio", "video"],
+                "output_part_kinds": ["text", "image"],
+                "max_terminal_message_chars": 2000,
+            },
+            "terminal_cursor": _get_path(token, "metadata.terminal_cursor") or 0,
+        }
+
+    def _build_runner_input_attachments(
+        self,
+        *,
+        session: Session,
+        run: Run,
+        node: dict[str, Any],
+        token: dict[str, Any],
+    ) -> list[AgentInvocationAttachment]:
+        latest_evidence = _get_path(token, "control.latest_evidence")
+        if not isinstance(latest_evidence, dict):
+            return []
+        seq_no = latest_evidence.get("seq_no")
+        if not isinstance(seq_no, int) or isinstance(seq_no, bool):
+            return []
+        parts = latest_evidence.get("parts")
+        if not isinstance(parts, list):
+            return []
+
+        attachments: list[AgentInvocationAttachment] = []
+        image_parts = [
+            part
+            for part in parts
+            if isinstance(part, dict) and str(part.get("kind") or "").lower() == "image"
+        ]
+        for part in image_parts:
+            part_id = str(part.get("part_id") or "").strip()
+            source_ref = f"terminal_event:{seq_no}:{part_id}" if part_id else f"terminal_event:{seq_no}"
+            if len(attachments) >= RUNNER_MAX_IMAGE_ATTACHMENTS:
+                self._append_runner_attachment_warning(
+                    session,
+                    run=run,
+                    node=node,
+                    source_ref=source_ref,
+                    artifact_object_id=str(part.get("artifact_object_id") or ""),
+                    reason="attachment_limit_exceeded",
+                )
+                continue
+            attachment = self._resolve_runner_image_attachment(
+                session=session,
+                run=run,
+                node=node,
+                seq_no=seq_no,
+                part=part,
+            )
+            if attachment is not None:
+                attachments.append(attachment)
+        return attachments
+
+    def _resolve_runner_image_attachment(
+        self,
+        *,
+        session: Session,
+        run: Run,
+        node: dict[str, Any],
+        seq_no: int,
+        part: dict[str, Any],
+    ) -> AgentInvocationAttachment | None:
+        part_id = str(part.get("part_id") or "").strip()
+        source_ref = f"terminal_event:{seq_no}:{part_id}" if part_id else f"terminal_event:{seq_no}"
+        artifact_object_id = str(part.get("artifact_object_id") or "")
+        if not artifact_object_id:
+            self._append_runner_attachment_warning(
+                session,
+                run=run,
+                node=node,
+                source_ref=source_ref,
+                artifact_object_id="",
+                reason="missing_artifact_object_id",
+            )
+            return None
+        artifact_object = self.repository.get_artifact_object(session, artifact_object_id)
+        if not artifact_object:
+            self._append_runner_attachment_warning(
+                session,
+                run=run,
+                node=node,
+                source_ref=source_ref,
+                artifact_object_id=artifact_object_id,
+                reason="artifact_object_not_found",
+            )
+            return None
+        if self.object_store is None:
+            self._append_runner_attachment_warning(
+                session,
+                run=run,
+                node=node,
+                source_ref=source_ref,
+                artifact_object_id=artifact_object_id,
+                reason="object_store_unavailable",
+            )
+            return None
+        try:
+            content = self.object_store.download_bytes(bucket=artifact_object.bucket, object_key=artifact_object.object_key)
+        except Exception as exc:  # pragma: no cover - exercised by integration fakes.
+            self._append_runner_attachment_warning(
+                session,
+                run=run,
+                node=node,
+                source_ref=source_ref,
+                artifact_object_id=artifact_object_id,
+                reason=f"download_failed:{exc.__class__.__name__}",
+            )
+            return None
+        metadata = part.get("metadata") if isinstance(part.get("metadata"), dict) else {}
+        filename = str(metadata.get("filename") or metadata.get("name") or part_id or artifact_object_id)
+        media_type = str(part.get("mime_type") or artifact_object.media_type or "application/octet-stream")
+        if not media_type.lower().startswith("image/"):
+            self._append_runner_attachment_warning(
+                session,
+                run=run,
+                node=node,
+                source_ref=source_ref,
+                artifact_object_id=artifact_object_id,
+                reason="unsupported_media_type",
+            )
+            return None
+        return AgentInvocationAttachment(
+            attachment_id=source_ref,
+            source_ref=source_ref,
+            terminal_event_seq=seq_no,
+            part_id=part_id,
+            filename=filename,
+            media_type=media_type,
+            size_bytes=int(part.get("size_bytes") or len(content) or 0),
+            checksum=str(part.get("checksum") or ""),
+            artifact_object_id=artifact_object_id,
+            content_base64=base64.b64encode(content).decode("ascii"),
+        )
+
+    def _runner_prompt_view(self, *, run: Run, node: dict[str, Any], token: dict[str, Any]) -> dict[str, Any]:
+        control = token.get("control") if isinstance(token.get("control"), dict) else {}
+        projected_control = {
+            key: control[key]
+            for key in ("wait", "latest_evidence", "latest_evaluation")
+            if isinstance(control, dict) and key in control
+        }
+        return {
+            "token_projection_ref": f"runtime://runs/{run.id}/snapshots/{run.latest_snapshot_seq}/projection/{node.get('id')}",
+            "phase": token.get("phase"),
+            "input": token.get("input_envelope") if isinstance(token.get("input_envelope"), dict) else {},
+            "facts": token.get("facts") if isinstance(token.get("facts"), dict) else {},
+            "control": projected_control,
+            "observations": token.get("observations") if isinstance(token.get("observations"), dict) else {},
+            "node": {
+                "id": node.get("id"),
+                "kind": node.get("kind"),
+                "actor": node.get("actor"),
+                "interaction": node.get("interaction") if isinstance(node.get("interaction"), dict) else {},
+                "policy": node.get("policy") if isinstance(node.get("policy"), dict) else {},
+            },
+        }
+
+    def _runner_current_checkpoint(self, *, run: Run, node: dict[str, Any], token: dict[str, Any]) -> dict[str, Any]:
+        control = token.get("control") if isinstance(token.get("control"), dict) else {}
+        wait = control.get("wait") if isinstance(control.get("wait"), dict) else None
+        if wait:
+            return dict(wait)
+        interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
+        return {
+            "checkpoint_id": str(interaction.get("checkpoint_id") or f"{node.get('id')}:wait"),
+            "workflow_step_id": str(interaction.get("workflow_step_id") or node.get("id") or ""),
+            "reason": str(interaction.get("wait_reason") or ""),
+            "expected_inputs": interaction.get("expected_inputs") if isinstance(interaction.get("expected_inputs"), list) else [],
+            "resume_phase": str(interaction.get("resume_phase") or f"evaluate_{node.get('id')}"),
+            "run_id": run.id,
+            "evidence": [],
+        }
+
+    def _runner_step_reference_images(
+        self,
+        *,
+        node: dict[str, Any],
+        token: dict[str, Any],
+        runtime_contract: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        workflow_step_id = str(
+            _get_path(token, "control.wait.workflow_step_id")
+            or (node.get("interaction") or {}).get("workflow_step_id")
+            or node.get("id")
+            or ""
+        )
+        images: list[dict[str, Any]] = []
+        for item in runtime_contract.get("step_reference_images") or []:
+            if isinstance(item, dict):
+                images.append(dict(item))
+        workflow_steps = runtime_contract.get("workflow_steps")
+        if isinstance(workflow_steps, list):
+            for step in workflow_steps:
+                if not isinstance(step, dict) or str(step.get("id") or "") != workflow_step_id:
+                    continue
+                reference_images = step.get("reference_images")
+                if isinstance(reference_images, dict):
+                    iterable = reference_images.items()
+                    for key, value in iterable:
+                        if isinstance(value, dict):
+                            images.append({**value, "reference_image_ref": value.get("reference_image_ref") or str(key), "workflow_step_id": workflow_step_id})
+                elif isinstance(reference_images, list):
+                    for value in reference_images:
+                        if isinstance(value, dict):
+                            images.append({**value, "workflow_step_id": workflow_step_id})
+        return [item for item in images if str(item.get("reference_image_ref") or "")]
+
+    @staticmethod
+    def _read_runner_observation_artifact(result: AgentResult) -> dict[str, Any]:
+        if not result.sandbox_path:
+            raise RuntimeError("psop.runner 未返回 sandbox_path。")
+        path = Path(result.sandbox_path) / "outputs" / "runner-observation.json"
+        if not path.exists():
+            raise RuntimeError(f"psop.runner 未生成必需 artifact：{RUNNER_OBSERVATION_VIRTUAL_PATH}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise RuntimeError("runner-observation.json 必须是 JSON object。")
+        return payload
+
+    @staticmethod
+    def _map_runner_observation_to_runtime_observation(
+        observation: dict[str, Any],
+        *,
+        agent_result: AgentResult,
+        usage: dict[str, Any],
+    ) -> dict[str, Any]:
+        terminal_message = str(observation.get("terminal_message") or observation.get("final_response") or "")
+        runtime_decision = str(observation.get("runtime_decision") or observation.get("decision") or "")
+        return {
+            "content": terminal_message,
+            "decision": runtime_decision,
+            "reason": str(observation.get("reason") or ""),
+            "next_phase": str(observation.get("next_phase") or ""),
+            "terminal_message": terminal_message,
+            "wait_reason": str(observation.get("wait_reason") or ""),
+            "expected_inputs": observation.get("expected_inputs") if isinstance(observation.get("expected_inputs"), list) else [],
+            "evidence_assessment": observation.get("evidence_assessment") if isinstance(observation.get("evidence_assessment"), dict) else {},
+            "reference_images": observation.get("reference_images") if isinstance(observation.get("reference_images"), list) else [],
+            "safety_flags": observation.get("safety_flags") if isinstance(observation.get("safety_flags"), list) else [],
+            "final_response": str(observation.get("final_response") or ""),
+            "runner": {
+                "agent_key": "psop.runner",
+                "agent_run_id": agent_result.agent_run_id,
+                "artifact_ref": RUNNER_OBSERVATION_ARTIFACT_REF,
+                "source_refs": observation.get("source_refs") if isinstance(observation.get("source_refs"), list) else [],
+                "reference_images": observation.get("reference_images") if isinstance(observation.get("reference_images"), list) else [],
+                "safety_flags": observation.get("safety_flags") if isinstance(observation.get("safety_flags"), list) else [],
+                "original_decision": str(observation.get("decision") or ""),
+            },
+            "usage": usage,
+            "summary": f"Runner decision: {runtime_decision}",
+        }
+
+    @staticmethod
+    def _agent_result_usage(result: AgentResult) -> dict[str, Any]:
+        usage = {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        for event in result.events:
+            if event.event_type == "agent.model.completed":
+                usage["llm_calls"] += 1
+            if event.event_type != "agent.token.usage":
+                continue
+            item = event.payload.get("usage")
+            if not isinstance(item, dict):
+                continue
+            for key in ("input_tokens", "output_tokens", "total_tokens"):
+                value = item.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    usage[key] += value
+        return usage
 
     def _merge_observation(self, *, node: dict[str, Any], token: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
         next_token = json.loads(json.dumps(token, ensure_ascii=False))
@@ -2542,10 +3042,13 @@ class RuntimeService:
             "binding.updated": "绑定更新",
             "runtime.input.accepted": "输入",
             "runtime.wait_checkpoint.entered": "等待现场证据",
+            "runtime.agent.completed": "Runner 输出",
             "gateway.inference.completed": "LLM 输出",
             "gateway.tool.completed": "工具调用",
             "runtime.final.completed": "最终结果",
             "runtime.aborted": "已中止",
+            "runtime.runner.reference_image.warning": "参考图片告警",
+            "runtime.runner.attachment.warning": "Runner 附件告警",
             "runtime.message_processing.failed": "消息处理失败",
             "runtime.failed": "运行失败",
         }

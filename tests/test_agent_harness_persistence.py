@@ -31,10 +31,12 @@ def test_agent_harness_persistence_records_result() -> None:
             sandbox_path="/tmp/run-1",
         )
 
-        service.persist_result(session, result)
+        service.persist_result(session, result, related_runtime_run_id="runtime-run-1")
         session.commit()
 
-        assert session.get(AgentRunRecord, "run-1").status == "succeeded"
+        record = session.get(AgentRunRecord, "run-1")
+        assert record.status == "succeeded"
+        assert record.related_runtime_run_id == "runtime-run-1"
         assert session.query(AgentEventRecord).count() == 1
         assert session.query(AgentArtifactRecord).count() == 1
 
@@ -94,6 +96,7 @@ def test_agent_harness_persistence_can_preserve_live_events_when_persisting_resu
             agent_run_id="run-1",
             agent_key="psop.builder",
             related_generation_id="generation-1",
+            related_runtime_run_id="runtime-run-1",
         )
         session.add(
             AgentEventRecord(
@@ -123,9 +126,11 @@ def test_agent_harness_persistence_can_preserve_live_events_when_persisting_resu
             sandbox_path="/tmp/run-1",
         )
 
-        service.persist_result(session, result, replace_events=False)
+        service.persist_result(session, result, related_runtime_run_id="runtime-run-1", replace_events=False)
         session.commit()
 
-        assert session.get(AgentRunRecord, "run-1").status == "succeeded"
+        record = session.get(AgentRunRecord, "run-1")
+        assert record.status == "succeeded"
+        assert record.related_runtime_run_id == "runtime-run-1"
         assert session.query(AgentEventRecord).count() == 1
         assert session.query(AgentArtifactRecord).count() == 1

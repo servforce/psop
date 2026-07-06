@@ -50,10 +50,38 @@ class AgentDefinition(BaseModel):
         return self.runner_kind
 
 
+class AgentInvocationAttachment(BaseModel):
+    attachment_id: str
+    source_ref: str = ""
+    terminal_event_seq: int | None = None
+    part_id: str = ""
+    filename: str = ""
+    media_type: str = "application/octet-stream"
+    size_bytes: int = 0
+    checksum: str = ""
+    artifact_object_id: str = ""
+    content_base64: str = Field(default="", exclude=True)
+
+    def redacted_metadata(self) -> dict[str, Any]:
+        return {
+            "attachment_id": self.attachment_id,
+            "source_ref": self.source_ref,
+            "terminal_event_seq": self.terminal_event_seq,
+            "part_id": self.part_id,
+            "filename": self.filename,
+            "media_type": self.media_type,
+            "size_bytes": self.size_bytes,
+            "checksum": self.checksum,
+            "artifact_object_id": self.artifact_object_id,
+            "content_base64_chars": len(self.content_base64),
+        }
+
+
 class AgentInvocation(BaseModel):
     agent_key: str
     input: dict[str, Any]
     context: dict[str, Any] = Field(default_factory=dict)
+    attachments: list[AgentInvocationAttachment] = Field(default_factory=list)
     memory_scope: str | None = None
     agent_run_id: str | None = None
     workspace_id: str | None = None

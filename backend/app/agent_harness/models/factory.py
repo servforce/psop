@@ -47,16 +47,35 @@ def default_harness_model_config(settings: Settings) -> HarnessModelConfig:
     )
 
 
+def multimodal_harness_model_config(settings: Settings) -> HarnessModelConfig:
+    return HarnessModelConfig(
+        name="default",
+        model=settings.llm_multimodal_model,
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_api_base_url,
+        timeout=settings.llm_timeout_seconds,
+        stream_usage=True,
+        supports_thinking=settings.llm_multimodal_enable_thinking,
+        when_thinking_enabled=_thinking_options(
+            enabled=settings.llm_multimodal_enable_thinking,
+            budget=settings.llm_multimodal_thinking_budget,
+        ),
+        when_thinking_disabled=_thinking_options(enabled=False, budget=None),
+        supports_vision=True,
+    )
+
+
 def create_chat_model(
     *,
     settings: Settings,
     name: str | None = None,
     thinking_enabled: bool = False,
     attach_tracing: bool = False,
+    multimodal: bool = False,
     config: HarnessModelConfig | None = None,
     **kwargs: Any,
 ) -> Any:
-    model_config = config or default_harness_model_config(settings)
+    model_config = config or (multimodal_harness_model_config(settings) if multimodal else default_harness_model_config(settings))
     if name not in {None, model_config.name}:
         raise ValueError(f"未找到 Agent Harness model 配置：{name}")
 

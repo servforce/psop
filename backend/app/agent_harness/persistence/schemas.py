@@ -36,6 +36,7 @@ class AgentRunTimelineResponse(BaseModel):
     related_skill_definition_id: str = ""
     related_generation_id: str = ""
     related_job_id: str = ""
+    related_runtime_run_id: str = ""
     progress: RuntimeJobProgressResponse | None = None
     elapsed_ms: int | None = None
     token_usage: RuntimeJobTokenUsageResponse | None = None

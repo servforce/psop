@@ -14,6 +14,7 @@ class AgentRunRecord(Base):
     __table_args__ = (
         Index("idx_agent_run_key_status_created_at", "agent_key", "status", "created_at"),
         Index("idx_agent_run_related_generation", "related_generation_id"),
+        Index("idx_agent_run_related_runtime_run", "related_runtime_run_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
@@ -23,6 +24,7 @@ class AgentRunRecord(Base):
     related_skill_definition_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
     related_generation_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
     related_job_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
+    related_runtime_run_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
     input_summary: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     sandbox_path: Mapped[str] = mapped_column(Text, default="", nullable=False)
     model_info: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)

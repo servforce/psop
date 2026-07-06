@@ -45,7 +45,7 @@ def get_object_store(request: Request) -> ObjectStoreService:
     return request.app.state.object_store  # type: ignore[return-value]
 
 
-def get_agent_harness_service(request: Request) -> AgentHarnessService | None:
+def get_agent_harness_service(request: Request) -> AgentHarnessService:
     return request.app.state.agent_harness_service  # type: ignore[return-value]
 
 
@@ -87,6 +87,7 @@ def get_runtime_service(request: Request) -> RuntimeService:
         settings=get_app_settings(request),
         inference_gateway=get_inference_gateway(request),
         object_store=get_object_store(request),
+        agent_harness_service=get_agent_harness_service(request),
     )
 
 
@@ -103,4 +104,5 @@ def get_skill_test_service(request: Request) -> SkillTestService:
         settings=get_app_settings(request),
         inference_gateway=get_inference_gateway(request),
         object_store=get_object_store(request),
+        agent_harness_service=get_agent_harness_service(request),
     )

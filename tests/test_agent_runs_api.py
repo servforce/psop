@@ -150,6 +150,7 @@ def test_agent_run_timeline_maps_events_and_hides_raw_tool_payload() -> None:
         assert response.status_code == 200
         payload = response.json()
         assert payload["status"] == "succeeded"
+        assert payload["related_runtime_run_id"] == ""
         assert payload["final"]["reference_files"] == ["references/frame-001.png"]
         assert payload["final"]["committed_commit_sha"] == "commit-0001"
         assert payload["token_usage"]["total_tokens"] == 33

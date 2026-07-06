@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
+from app.agent_harness.persistence.models import AgentArtifactRecord, AgentEventRecord, AgentRunRecord
 from app.agent_harness.models.scripted_compiler_chat_model import ScriptedCompilerChatModel
+from app.agent_harness.models.scripted_runner_chat_model import ScriptedRunnerChatModel
 from app.agent_harness.service import AgentHarnessService
 from app.agents.registry import PromptRegistry
+from app.domain.compiler.models import ArtifactObject
 from app.domain.compiler.service import CompilerService
 from app.domain.compiler.formal_v5 import validate_and_normalize_artifact
 from app.domain.jobs.repository import JobRepository
-from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest
+from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest, TerminalEventPartInput
 from app.domain.runtime.service import RuntimeService
 from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
 from app.domain.skills.schemas import CreateSkillRequest, PublishSkillRequest
@@ -22,6 +26,7 @@ from app.infra.database import DatabaseManager
 from tests.test_skills_api import (
     FakeGitLabGateway,
     FakeInferenceGateway,
+    FakeObjectStore,
     build_test_formal_v5_artifact,
     create_test_settings,
 )
@@ -57,6 +62,14 @@ class FailingSkillsGatewayInferenceGateway:
         raise SkillsGatewayError("LLM Inference Gateway 返回错误响应。", details=self.details)
 
 
+class RaisingAgentHarnessService:
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    def invoke(self, *args, **kwargs):
+        raise self.exc
+
+
 class QueuedInferenceGateway:
     def __init__(self, contents: list[str]) -> None:
         self.contents = contents
@@ -74,8 +87,10 @@ class QueuedInferenceGateway:
 
 
 @pytest.fixture
-def runtime_stack() -> Iterator[tuple[DatabaseManager, FakeGitLabGateway, FakeInferenceGateway, CompilerService, SkillsService, RuntimeService]]:
-    settings = create_test_settings()
+def runtime_stack(tmp_path) -> Iterator[tuple[DatabaseManager, FakeGitLabGateway, FakeInferenceGateway, CompilerService, SkillsService, RuntimeService]]:
+    settings = create_test_settings().model_copy(
+        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
+    )
     database_manager = DatabaseManager(settings.sqlalchemy_database_url)
     database_manager.create_schema()
     gitlab_gateway = FakeGitLabGateway()
@@ -90,7 +105,15 @@ def runtime_stack() -> Iterator[tuple[DatabaseManager, FakeGitLabGateway, FakeIn
         gitlab_gateway=gitlab_gateway,
         compiler_service=compiler_service,
     )
-    runtime_service = RuntimeService(settings=settings, inference_gateway=inference_gateway)
+    agent_harness_service = AgentHarnessService(
+        settings=settings,
+        chat_model_factory=lambda _definition: ScriptedRunnerChatModel(),
+    )
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=inference_gateway,
+        agent_harness_service=agent_harness_service,
+    )
 
     try:
         yield database_manager, gitlab_gateway, inference_gateway, compiler_service, skills_service, runtime_service
@@ -195,6 +218,472 @@ def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
         assert artifact.artifact is not None
         assert artifact.artifact["compiler_metadata"]["agent_prompt"]["agent_key"] == "psop.compiler"
         assert any(item.code == "compile.agent.prompt_pack" for item in diagnostics)
+    finally:
+        database_manager.dispose()
+
+
+def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
+    settings = create_test_settings().model_copy(
+        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
+    )
+    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
+    database_manager.create_schema()
+    gitlab_gateway = FakeGitLabGateway()
+    compile_gateway = FakeInferenceGateway()
+    compiler_service = CompilerService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        inference_gateway=compile_gateway,
+    )
+    skills_service = SkillsService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        compiler_service=compiler_service,
+    )
+    agent_harness_service = AgentHarnessService(
+        settings=settings,
+        chat_model_factory=lambda _definition: ScriptedRunnerChatModel(),
+    )
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=agent_harness_service,
+    )
+
+    try:
+        with database_manager.session() as session:
+            skill = skills_service.create_skill(
+                session,
+                CreateSkillRequest(
+                    key="runtime-runner-harness",
+                    name="Runtime Runner Harness",
+                    description="Validate psop.runner harness integration.",
+                ),
+            )
+            published = skills_service.publish_skill(
+                session,
+                skill_id=skill.id,
+                payload=PublishSkillRequest(publish_reason="Runtime through runner harness"),
+            )
+            process_publish_job(session, compiler_service, published.compile_request.id)
+
+            invocation = runtime_service.create_invocation(
+                session,
+                CreateInvocationRequest(
+                    skill_key="runtime-runner-harness",
+                    terminal_context={"terminal_kind": "web"},
+                ),
+            )
+            initial_run = runtime_service.get_run(session, invocation.run_id or "")
+            runtime_service.append_terminal_event(
+                session,
+                invocation.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="我已经完成当前步骤，并上传了现场说明。",
+                    external_event_id="runtime-runner-harness-evidence-001",
+                ),
+            )
+            run = runtime_service.get_run(session, invocation.run_id or "")
+            trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+            terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+            runner_payloads = [
+                event.payload for event in trace_events if event.event_type == "runtime.agent.completed"
+            ]
+            agent_run_id = (
+                str(runner_payloads[0]["observation"]["runner"]["agent_run_id"])
+                if runner_payloads
+                else ""
+            )
+            agent_run_record = session.get(AgentRunRecord, agent_run_id)
+            agent_event_count = (
+                session.query(AgentEventRecord).filter(AgentEventRecord.agent_run_id == agent_run_id).count()
+            )
+            agent_artifact_count = (
+                session.query(AgentArtifactRecord).filter(AgentArtifactRecord.agent_run_id == agent_run_id).count()
+            )
+    finally:
+        database_manager.dispose()
+
+    assert initial_run.status == "waiting_input"
+    assert run.status == "succeeded"
+    assert "测试任务已完成" in run.final_output
+    assert any(event.event_type == "runtime.agent.completed" for event in trace_events)
+    assert not any(event.event_type == "gateway.inference.completed" for event in trace_events)
+    assert runner_payloads
+    assert runner_payloads[0]["observation"]["runner"]["agent_key"] == "psop.runner"
+    assert runner_payloads[0]["observation"]["runner"]["agent_run_id"]
+    assert agent_run_record is not None
+    assert agent_run_record.related_runtime_run_id == run.id
+    assert agent_event_count > 0
+    assert agent_artifact_count > 0
+    assert [event.direction for event in terminal_events] == ["output", "input", "output", "output", "output"]
+
+
+def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> None:
+    settings = create_test_settings().model_copy(
+        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
+    )
+    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
+    database_manager.create_schema()
+    gitlab_gateway = FakeGitLabGateway()
+    inference_gateway = FakeInferenceGateway()
+    object_store = FakeObjectStore()
+    object_store.objects[("test-bucket", "terminal/site.jpg")] = b"image-bytes"
+    compiler_service = CompilerService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        inference_gateway=inference_gateway,
+    )
+    skills_service = SkillsService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        compiler_service=compiler_service,
+    )
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=inference_gateway,
+        object_store=object_store,
+        agent_harness_service=AgentHarnessService(
+            settings=settings,
+            chat_model_factory=lambda _definition: ScriptedRunnerChatModel(),
+        ),
+    )
+
+    try:
+        with database_manager.session() as session:
+            skill = skills_service.create_skill(
+                session,
+                CreateSkillRequest(
+                    key="runtime-runner-image-attachment",
+                    name="Runtime Runner Image Attachment",
+                    description="Validate uploaded images are passed to psop.runner.",
+                ),
+            )
+            published = skills_service.publish_skill(
+                session,
+                skill_id=skill.id,
+                payload=PublishSkillRequest(publish_reason="Runtime runner image attachment"),
+            )
+            process_publish_job(session, compiler_service, published.compile_request.id)
+            invocation = runtime_service.create_invocation(
+                session,
+                CreateInvocationRequest(
+                    skill_key="runtime-runner-image-attachment",
+                    terminal_context={"terminal_kind": "web"},
+                ),
+            )
+            image_object = ArtifactObject(
+                bucket="test-bucket",
+                object_key="terminal/site.jpg",
+                media_type="image/jpeg",
+                size_bytes=len(b"image-bytes"),
+                checksum="sha256-image",
+            )
+            session.add(image_object)
+            session.flush()
+            runtime_service.append_terminal_event(
+                session,
+                invocation.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.multimodal.input.v1",
+                    mime_type="multipart/mixed",
+                    payload_inline={"text": "请根据现场图片判断。"},
+                    parts=[
+                        TerminalEventPartInput(
+                            part_id="text_1",
+                            kind="text",
+                            mime_type="text/plain",
+                            text="请根据现场图片判断。",
+                        ),
+                        TerminalEventPartInput(
+                            part_id="image_1",
+                            kind="image",
+                            mime_type="image/jpeg",
+                            artifact_object_id=image_object.id,
+                            size_bytes=len(b"image-bytes"),
+                            checksum="sha256-image",
+                            metadata={"filename": "site.jpg"},
+                        ),
+                    ],
+                    external_event_id="runtime-runner-image-attachment-001",
+                ),
+            )
+            run = runtime_service.get_run(session, invocation.run_id or "")
+            image_agent_runs = (
+                session.query(AgentRunRecord)
+                .filter(AgentRunRecord.related_runtime_run_id == run.id)
+                .filter(AgentRunRecord.input_summary["image_attachment_count"].as_integer() == 1)
+                .all()
+            )
+            assert image_agent_runs
+            image_agent_run = image_agent_runs[0]
+            prepared_event = (
+                session.query(AgentEventRecord)
+                .filter(AgentEventRecord.agent_run_id == image_agent_run.id)
+                .filter(AgentEventRecord.event_type == "agent.multimodal.attachments.prepared")
+                .one()
+            )
+            trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+            image_agent_run_summary = dict(image_agent_run.input_summary)
+            prepared_payload = dict(prepared_event.payload)
+            sandbox_input = Path(image_agent_run.sandbox_path, "input.json").read_text(encoding="utf-8")
+    finally:
+        database_manager.dispose()
+
+    serialized_event = json.dumps(prepared_payload, ensure_ascii=False)
+    assert run.status == "succeeded"
+    assert image_agent_run_summary["image_attachment_count"] == 1
+    assert image_agent_run_summary["attachment_source_refs"] == ["terminal_event:2:image_1"]
+    assert prepared_payload["attachments"][0]["source_ref"] == "terminal_event:2:image_1"
+    assert "aW1hZ2UtYnl0ZXM=" not in sandbox_input
+    assert "terminal/site.jpg" not in sandbox_input
+    assert "aW1hZ2UtYnl0ZXM=" not in serialized_event
+    assert not any(event.event_type == "runtime.runner.attachment.warning" for event in trace_events)
+
+
+def test_runtime_runner_attachment_warning_when_object_store_unavailable(tmp_path) -> None:
+    settings = create_test_settings().model_copy(
+        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
+    )
+    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
+    database_manager.create_schema()
+    gitlab_gateway = FakeGitLabGateway()
+    inference_gateway = FakeInferenceGateway()
+    compiler_service = CompilerService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        inference_gateway=inference_gateway,
+    )
+    skills_service = SkillsService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        compiler_service=compiler_service,
+    )
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=inference_gateway,
+        object_store=None,
+        agent_harness_service=AgentHarnessService(
+            settings=settings,
+            chat_model_factory=lambda _definition: ScriptedRunnerChatModel(),
+        ),
+    )
+
+    try:
+        with database_manager.session() as session:
+            skill = skills_service.create_skill(
+                session,
+                CreateSkillRequest(
+                    key="runtime-runner-image-attachment-warning",
+                    name="Runtime Runner Image Attachment Warning",
+                    description="Validate unavailable attachments warn without failing Runtime.",
+                ),
+            )
+            published = skills_service.publish_skill(
+                session,
+                skill_id=skill.id,
+                payload=PublishSkillRequest(publish_reason="Runtime runner attachment warning"),
+            )
+            process_publish_job(session, compiler_service, published.compile_request.id)
+            invocation = runtime_service.create_invocation(
+                session,
+                CreateInvocationRequest(
+                    skill_key="runtime-runner-image-attachment-warning",
+                    terminal_context={"terminal_kind": "web"},
+                ),
+            )
+            image_object = ArtifactObject(
+                bucket="test-bucket",
+                object_key="terminal/missing-store.jpg",
+                media_type="image/jpeg",
+                size_bytes=10,
+                checksum="sha256-image",
+            )
+            session.add(image_object)
+            session.flush()
+            runtime_service.append_terminal_event(
+                session,
+                invocation.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.multimodal.input.v1",
+                    mime_type="multipart/mixed",
+                    payload_inline={"text": "请根据现场图片判断。"},
+                    parts=[
+                        TerminalEventPartInput(
+                            part_id="text_1",
+                            kind="text",
+                            mime_type="text/plain",
+                            text="请根据现场图片判断。",
+                        ),
+                        TerminalEventPartInput(
+                            part_id="image_1",
+                            kind="image",
+                            mime_type="image/jpeg",
+                            artifact_object_id=image_object.id,
+                            size_bytes=10,
+                            checksum="sha256-image",
+                            metadata={"filename": "site.jpg"},
+                        ),
+                    ],
+                    external_event_id="runtime-runner-image-attachment-warning-001",
+                ),
+            )
+            run = runtime_service.get_run(session, invocation.run_id or "")
+            trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+    finally:
+        database_manager.dispose()
+
+    warning_events = [event for event in trace_events if event.event_type == "runtime.runner.attachment.warning"]
+    assert run.status == "succeeded"
+    assert warning_events
+    assert warning_events[0].payload["source_ref"] == "terminal_event:2:image_1"
+    assert warning_events[0].payload["reason"] == "object_store_unavailable"
+
+
+def test_runtime_runner_outputs_reference_image_when_artifact_resolves(tmp_path) -> None:
+    result = _run_runner_reference_image_case(
+        tmp_path,
+        skill_key="runtime-runner-reference-image",
+        reference_image_artifact_object_id="__valid__",
+    )
+
+    multimodal_events = [
+        event for event in result["terminal_events"] if event.event_kind == "terminal.multimodal.output.v1"
+    ]
+    warning_events = [
+        event for event in result["trace_events"] if event.event_type == "runtime.runner.reference_image.warning"
+    ]
+
+    assert multimodal_events
+    image_parts = [part for part in multimodal_events[0].parts if part.kind == "image"]
+    assert image_parts
+    assert image_parts[0].artifact_object_id == result["reference_artifact_object_id"]
+    assert not warning_events
+
+
+def test_runtime_runner_reference_image_warning_falls_back_to_text(tmp_path) -> None:
+    result = _run_runner_reference_image_case(
+        tmp_path,
+        skill_key="runtime-runner-reference-image-warning",
+        reference_image_artifact_object_id="missing-artifact-object",
+    )
+
+    multimodal_events = [
+        event for event in result["terminal_events"] if event.event_kind == "terminal.multimodal.output.v1"
+    ]
+    text_outputs = [
+        event for event in result["terminal_events"] if event.event_kind == "terminal.text.output.v1"
+    ]
+    warning_events = [
+        event for event in result["trace_events"] if event.event_type == "runtime.runner.reference_image.warning"
+    ]
+
+    assert not multimodal_events
+    assert text_outputs
+    assert warning_events
+    assert warning_events[0].payload["reference_image_ref"] == "skill-reference://steps/collect-context/site-overview"
+    assert warning_events[0].payload["artifact_object_id"] == "missing-artifact-object"
+    assert warning_events[0].payload["reason"] == "artifact_object_not_found"
+
+
+def _run_runner_reference_image_case(
+    tmp_path,
+    *,
+    skill_key: str,
+    reference_image_artifact_object_id: str,
+) -> dict:
+    settings = create_test_settings().model_copy(
+        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
+    )
+    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
+    database_manager.create_schema()
+    gitlab_gateway = FakeGitLabGateway()
+    compile_gateway = FakeInferenceGateway()
+    compiler_service = CompilerService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        inference_gateway=compile_gateway,
+    )
+    skills_service = SkillsService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        compiler_service=compiler_service,
+    )
+    agent_harness_service = AgentHarnessService(
+        settings=settings,
+        chat_model_factory=lambda _definition: ScriptedRunnerChatModel(),
+    )
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=agent_harness_service,
+    )
+    try:
+        with database_manager.session() as session:
+            skill = skills_service.create_skill(
+                session,
+                CreateSkillRequest(
+                    key=skill_key,
+                    name=skill_key,
+                    description="Validate psop.runner reference image handling.",
+                ),
+            )
+            published = skills_service.publish_skill(
+                session,
+                skill_id=skill.id,
+                payload=PublishSkillRequest(publish_reason="Runtime runner reference image"),
+            )
+            compiled = process_publish_job(session, compiler_service, published.compile_request.id)
+            artifact = compiler_service.get_artifact(session, compiled.artifact_id or "")
+            artifact_object = session.get(ArtifactObject, artifact.artifact_object_id)
+            assert artifact_object is not None
+            reference_artifact_object_id = reference_image_artifact_object_id
+            if reference_image_artifact_object_id == "__valid__":
+                reference_object = ArtifactObject(
+                    bucket="psop-test",
+                    object_key=f"reference/{skill_key}.jpg",
+                    media_type="image/jpeg",
+                    size_bytes=10,
+                    checksum="reference-image-checksum",
+                )
+                session.add(reference_object)
+                session.flush()
+                reference_artifact_object_id = reference_object.id
+            artifact_payload = json.loads(json.dumps(artifact_object.content_json, ensure_ascii=False))
+            artifact_payload["runtime_contract"]["workflow_steps"][0]["reference_images"] = [
+                {
+                    "reference_image_ref": "skill-reference://steps/collect-context/site-overview",
+                    "title": "现场概览参考图",
+                    "caption": "请按参考图角度拍摄现场整体状态。",
+                    "artifact_object_id": reference_artifact_object_id,
+                    "mime_type": "image/jpeg",
+                    "source_ref": "runtime_contract.workflow_steps.collect_context.reference_images.site-overview",
+                }
+            ]
+            artifact_object.content_json = artifact_payload
+            session.flush()
+
+            invocation = runtime_service.create_invocation(
+                session,
+                CreateInvocationRequest(
+                    skill_key=skill_key,
+                    terminal_context={"terminal_kind": "web"},
+                ),
+            )
+            run = runtime_service.get_run(session, invocation.run_id or "")
+            trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+            terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+            return {
+                "run": run,
+                "trace_events": trace_events,
+                "terminal_events": terminal_events,
+                "reference_artifact_object_id": reference_artifact_object_id,
+            }
     finally:
         database_manager.dispose()
 
@@ -629,39 +1118,29 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert run.status == "succeeded"
     assert run.latest_snapshot_seq == 5
     assert run.latest_terminal_seq == 5
-    assert run.latest_trace_seq == 7
+    assert run.latest_trace_seq >= 7
     assert run.terminal_session_id == invocation.terminal_session_id
     assert len(run.binding_summary) == 2
     assert run.latest_evaluation["decision"] == "complete"
     assert "测试任务已完成" in run.final_output
-    assert "final_verify" in inference_gateway.calls[-1]["system_prompt"]
+    assert len(inference_gateway.calls) == 1
     assert [snapshot.seq_no for snapshot in snapshots] == [0, 1, 2, 3, 4, 5]
-    assert snapshots[-1].token_payload["budgets"]["llm_input_tokens"] == 30
-    assert snapshots[-1].token_payload["budgets"]["llm_output_tokens"] == 15
+    assert snapshots[-1].token_payload["budgets"]["llm_input_tokens"] > 0
+    assert snapshots[-1].token_payload["budgets"]["llm_output_tokens"] > 0
     assert "input" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
     assert "request" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
     assert "_trace_request" not in snapshots[-1].token_payload["observations"]["instruct_collect_context"]
-    assert snapshots[-1].token_payload["observations"]["instruct_collect_context"]["input_summary"]["user_chars"] > 0
-    runtime_llm_calls = inference_gateway.calls[1:]
-    assert runtime_llm_calls
-    assert all("平台级输出语言要求" in call["system_prompt"] for call in runtime_llm_calls)
-    assert all("JSON 字段名和 decision/next_phase 等协议枚举值保持英文协议值" in call["system_prompt"] for call in runtime_llm_calls)
-    assert all("reason、terminal_message、final_response、summary" in call["system_prompt"] for call in runtime_llm_calls)
-    assert all("legacy-user-prompt" not in call["user_prompt"] for call in inference_gateway.calls[1:])
-    llm_trace_payloads = [
-        event.payload for event in trace_events if event.event_type == "gateway.inference.completed"
+    assert "legacy-user-prompt" not in json.dumps(snapshots[-1].token_payload, ensure_ascii=False)
+    agent_trace_payloads = [
+        event.payload for event in trace_events if event.event_type == "runtime.agent.completed"
     ]
-    assert "input" not in llm_trace_payloads[0]["observation"]
-    assert "_trace_request" not in llm_trace_payloads[0]["observation"]
-    assert llm_trace_payloads[0]["observation"]["input_summary"]["system_prompt_hash"]
-    assert llm_trace_payloads[0]["observation"]["input_summary"]["route_key"] == "text"
-    assert llm_trace_payloads[0]["observation"]["output"]["content"]
-    assert llm_trace_payloads[0]["observation"]["usage"]["total_tokens"] == 15
-    trace_request = llm_trace_payloads[0]["observation"]["request"]
-    assert trace_request["headers"]["Authorization"] == "Bearer [redacted]"
-    assert trace_request["body"]["messages"][0]["role"] == "system"
-    assert "平台级输出语言要求" in trace_request["body"]["messages"][0]["content"]
-    assert trace_request["body"]["messages"][1]["content"] == runtime_llm_calls[0]["user_prompt"]
+    assert agent_trace_payloads
+    assert not any(event.event_type == "gateway.inference.completed" for event in trace_events)
+    assert "input" not in agent_trace_payloads[0]["observation"]
+    assert "_trace_request" not in agent_trace_payloads[0]["observation"]
+    assert agent_trace_payloads[0]["observation"]["runner"]["agent_key"] == "psop.runner"
+    assert agent_trace_payloads[0]["observation"]["runner"]["agent_run_id"]
+    assert agent_trace_payloads[0]["observation"]["usage"]["total_tokens"] > 0
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
     assert terminal_session.terminal_session.status == "closed"
     assert [event.direction for event in terminal_events] == ["output", "input", "output", "output", "output"]
@@ -674,31 +1153,19 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         "runtime.start.completed",
         "terminal.event.appended",
         "runtime.wait_checkpoint.entered",
-        "gateway.inference.completed",
+        "runtime.agent.completed",
     ]
     assert "runtime.final.completed" in [item.event_type for item in replay.timeline]
 
 
-def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
-    settings = create_test_settings()
+def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> None:
+    settings = create_test_settings().model_copy(
+        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
+    )
     database_manager = DatabaseManager(settings.sqlalchemy_database_url)
     database_manager.create_schema()
     gitlab_gateway = FakeGitLabGateway()
-    inference_gateway = QueuedInferenceGateway(
-        [
-            json.dumps(build_test_abort_formal_v5_artifact(), ensure_ascii=False),
-            "请先核对电源额定功率，并上传现场证据。",
-            json.dumps(
-                {
-                    "decision": "abort",
-                    "reason": "电源额定功率低于当前硬件估算功耗，继续装机会带来安全风险。",
-                    "next_phase": "terminal_abort",
-                    "terminal_message": "已中止：电源功率不足，请先更换合适电源后再继续。",
-                },
-                ensure_ascii=False,
-            ),
-        ]
-    )
+    inference_gateway = QueuedInferenceGateway([json.dumps(build_test_abort_formal_v5_artifact(), ensure_ascii=False)])
     compiler_service = CompilerService(
         settings=settings,
         gitlab_gateway=gitlab_gateway,
@@ -709,7 +1176,25 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort() -> None:
         gitlab_gateway=gitlab_gateway,
         compiler_service=compiler_service,
     )
-    runtime_service = RuntimeService(settings=settings, inference_gateway=inference_gateway)
+    agent_harness_service = AgentHarnessService(
+        settings=settings,
+        chat_model_factory=lambda _definition: ScriptedRunnerChatModel(
+            observation_overrides_by_node={
+                "evaluate_collect_context": {
+                    "decision": "abort",
+                    "next_phase": "terminal_abort",
+                    "terminal_message": "已中止：电源功率不足，请先更换合适电源后再继续。",
+                    "final_response": "已中止：电源功率不足，请先更换合适电源后再继续。",
+                    "reason": "电源额定功率低于当前硬件估算功耗，继续装机会带来安全风险。",
+                }
+            }
+        ),
+    )
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=inference_gateway,
+        agent_harness_service=agent_harness_service,
+    )
 
     try:
         with database_manager.session() as session:
@@ -858,9 +1343,13 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
     assert events[2].payload_inline == "追加输入"
 
 
-def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> None:
+def test_runtime_service_records_failed_run_when_runner_fails(runtime_stack) -> None:
     database_manager, _, _, compiler_service, skills_service, _ = runtime_stack
-    failing_runtime = RuntimeService(settings=create_test_settings(), inference_gateway=FailingInferenceGateway())
+    failing_runtime = RuntimeService(
+        settings=create_test_settings(),
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=RaisingAgentHarnessService(RuntimeError("runner provider unavailable")),
+    )
 
     with database_manager.session() as session:
         skill = skills_service.create_skill(
@@ -891,7 +1380,7 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
 
     assert invocation.status == "failed"
     assert run.status == "failed"
-    assert run.exit_reason == "LLM provider unavailable"
+    assert run.exit_reason == "runner provider unavailable"
     assert trace_events[-1].event_type == "runtime.failed"
     assert terminal_events[-1].direction == "output"
     assert terminal_events[-1].event_kind == "terminal.text.output.v1"
@@ -900,12 +1389,18 @@ def test_runtime_service_records_failed_run_when_llm_fails(runtime_stack) -> Non
     assert "Runtime 执行失败" in terminal_events[-1].payload_inline
     assert "当前运行已停止" in terminal_events[-1].payload_inline
     assert "调试运行" not in terminal_events[-1].payload_inline
-    assert "LLM provider unavailable" in terminal_events[-1].payload_inline
+    assert "runner provider unavailable" in terminal_events[-1].payload_inline
 
 
-def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(runtime_stack) -> None:
+def test_runtime_service_records_runner_gateway_error_details_in_failed_trace_payload(runtime_stack) -> None:
     database_manager, _, _, compiler_service, skills_service, _ = runtime_stack
-    failing_runtime = RuntimeService(settings=create_test_settings(), inference_gateway=FailingSkillsGatewayInferenceGateway())
+    failing_runtime = RuntimeService(
+        settings=create_test_settings(),
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=RaisingAgentHarnessService(
+            SkillsGatewayError("LLM Inference Gateway 返回错误响应。", details=FailingSkillsGatewayInferenceGateway.details)
+        ),
+    )
 
     with database_manager.session() as session:
         skill = skills_service.create_skill(
@@ -953,7 +1448,13 @@ def test_runtime_service_records_gateway_error_details_in_failed_trace_payload(r
 
 def test_runtime_service_recovers_when_single_terminal_message_processing_fails(runtime_stack) -> None:
     database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
-    failing_runtime = RuntimeService(settings=create_test_settings(), inference_gateway=FailingSkillsGatewayInferenceGateway())
+    failing_runtime = RuntimeService(
+        settings=create_test_settings(),
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=RaisingAgentHarnessService(
+            SkillsGatewayError("LLM Inference Gateway 返回错误响应。", details=FailingSkillsGatewayInferenceGateway.details)
+        ),
+    )
 
     with database_manager.session() as session:
         skill = skills_service.create_skill(

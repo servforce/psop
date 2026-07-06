@@ -102,6 +102,7 @@ class AgentRunQueryService:
             ),
             related_generation_id=record.related_generation_id if record else (generation.id if generation else ""),
             related_job_id=record.related_job_id if record else (job.id if job else ""),
+            related_runtime_run_id=record.related_runtime_run_id if record else "",
             progress=job_response.progress if job_response else self._generation_progress(generation),
             elapsed_ms=elapsed_ms,
             token_usage=job_response.token_usage if job_response else self._token_usage_from_events(events),

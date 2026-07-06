@@ -43,6 +43,8 @@ class AgentHarnessService:
         persistence_session: Session | None = None,
         persistence_context: dict[str, str] | None = None,
     ) -> AgentResult:
+        persistence_context = persistence_context or {}
+        live_events_enabled = _persistence_live_events_enabled(persistence_context)
         package = self.registry.load(invocation.agent_key)
         definition = package.definition
         sandbox = self.sandbox_provider.acquire(
@@ -54,13 +56,14 @@ class AgentHarnessService:
             definition_version=definition.version,
             invocation=invocation,
             persistence_context=persistence_context,
+            live_events_enabled=live_events_enabled,
             agent_run_id=sandbox.agent_run_id,
             agent_key=definition.agent_key,
             sandbox_path=str(sandbox.root_path),
         )
         event_writer = AgentEventWriter(
             sandbox.events_path,
-            on_event=self._live_event_sink(persistence_session, sandbox.agent_run_id),
+            on_event=self._live_event_sink(persistence_session, sandbox.agent_run_id) if live_events_enabled else None,
         )
         event_writer.record(
             "agent.run.started",
@@ -111,6 +114,7 @@ class AgentHarnessService:
                 definition_version=definition.version,
                 invocation=invocation,
                 persistence_context=persistence_context,
+                live_events_enabled=live_events_enabled,
             )
             return result
         except Exception as exc:
@@ -135,6 +139,7 @@ class AgentHarnessService:
                 definition_version=definition.version,
                 invocation=invocation,
                 persistence_context=persistence_context,
+                live_events_enabled=live_events_enabled,
             )
             return result
         finally:
@@ -147,6 +152,7 @@ class AgentHarnessService:
         definition_version: str,
         invocation: AgentInvocation,
         persistence_context: dict[str, str] | None,
+        live_events_enabled: bool,
         agent_run_id: str,
         agent_key: str,
         sandbox_path: str,
@@ -162,11 +168,15 @@ class AgentHarnessService:
             related_skill_definition_id=context.get("related_skill_definition_id", ""),
             related_generation_id=context.get("related_generation_id", ""),
             related_job_id=context.get("related_job_id", ""),
+            related_runtime_run_id=context.get("related_runtime_run_id", ""),
             input_summary=_invocation_summary(invocation),
             sandbox_path=sandbox_path,
             model_info={"agent_key": agent_key},
         )
-        persistence_session.commit()
+        if live_events_enabled:
+            persistence_session.commit()
+        else:
+            persistence_session.flush()
 
     @staticmethod
     def _live_event_sink(persistence_session: Session | None, agent_run_id: str):
@@ -198,6 +208,7 @@ class AgentHarnessService:
         definition_version: str,
         invocation: AgentInvocation,
         persistence_context: dict[str, str] | None,
+        live_events_enabled: bool,
     ) -> None:
         if persistence_session is None:
             return
@@ -209,9 +220,10 @@ class AgentHarnessService:
             related_skill_definition_id=context.get("related_skill_definition_id", ""),
             related_generation_id=context.get("related_generation_id", ""),
             related_job_id=context.get("related_job_id", ""),
+            related_runtime_run_id=context.get("related_runtime_run_id", ""),
             input_summary=_invocation_summary(invocation),
             model_info={"agent_key": result.agent_key},
-            replace_events=False,
+            replace_events=not live_events_enabled,
         )
 
 
@@ -219,11 +231,27 @@ def build_agent_harness_service(settings: Settings) -> AgentHarnessService:
     return AgentHarnessService(settings=settings)
 
 
+def _persistence_live_events_enabled(context: dict[str, str]) -> bool:
+    value = str(context.get("live_events_enabled", "true")).strip().lower()
+    return value not in {"false", "0", "no", "off"}
+
+
 def _invocation_summary(invocation: AgentInvocation) -> dict[str, Any]:
+    attachment_metadata = [attachment.redacted_metadata() for attachment in invocation.attachments]
+    image_attachments = [
+        item for item in attachment_metadata if str(item.get("media_type") or "").lower().startswith("image/")
+    ]
     return {
         "agent_key": invocation.agent_key,
         "input_keys": sorted(invocation.input.keys()),
         "context_keys": sorted(invocation.context.keys()),
+        "attachment_count": len(attachment_metadata),
+        "image_attachment_count": len(image_attachments),
+        "attachment_source_refs": [
+            str(item.get("source_ref") or "")
+            for item in attachment_metadata
+            if str(item.get("source_ref") or "")
+        ],
         "memory_scope": invocation.memory_scope or "",
         "workspace_id": invocation.workspace_id or "",
     }

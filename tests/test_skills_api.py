@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
 from app.agent_harness.models.scripted_compiler_chat_model import ScriptedCompilerChatModel
+from app.agent_harness.models.scripted_runner_chat_model import ScriptedRunnerChatModel
 from app.agent_harness.service import AgentHarnessService
 from app.app import create_app
 from app.core.config import Settings
@@ -735,6 +736,8 @@ def create_test_client() -> tuple[TestClient, FakeGitLabGateway, FakeInferenceGa
                 chat_model_factory=lambda definition: (
                     ScriptedCompilerChatModel()
                     if definition.agent_key == "psop.compiler"
+                    else ScriptedRunnerChatModel()
+                    if definition.agent_key == "psop.runner"
                     else ScriptedBuilderChatModel()
                 ),
             ),
@@ -1811,16 +1814,16 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert run_payload["latest_trace_seq"] == 7
     assert len(run_payload["binding_summary"]) == 2
     assert "测试任务已完成" in run_payload["final_output"]
-    assert "final_verify" in fake_inference.calls[-1]["system_prompt"]
+    assert fake_inference.calls == []
 
     event_types = [event["event_type"] for event in trace_response.json()]
     assert event_types == [
         "binding.resolved",
         "runtime.start.completed",
         "runtime.wait_checkpoint.entered",
-        "gateway.inference.completed",
-        "gateway.inference.completed",
-        "gateway.inference.completed",
+        "runtime.agent.completed",
+        "runtime.agent.completed",
+        "runtime.agent.completed",
         "runtime.final.completed",
     ]
 
@@ -1846,7 +1849,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         "runtime.start.completed",
         "终端输出",
         "等待现场证据",
-        "LLM 输出",
+        "Runner 输出",
     ]
     assert len(replay_payload["terminal_events"]) == 6
     assert len(replay_payload["bindings"]) == 2
@@ -1972,7 +1975,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert test_jobs_response.json() == []
 
 
-def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> None:
+def test_terminal_events_accept_multipart_multimodal_parts_and_feed_runner() -> None:
     client, _, fake_inference = create_test_client()
 
     with client:
@@ -2050,9 +2053,8 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_llm() -> Non
     assert "terminal-event-parts" not in latest_evidence["input_bundle"]["text"]
     assert "请结合现场图像" in final_token["input_envelope"]["user_input"]
 
-    multimodal_calls = [call for call in fake_inference.calls if call.get("attachments")]
-    assert multimodal_calls
-    assert any(call["attachments"] == "fault.png,clip.mp4,note.wav" for call in multimodal_calls)
+    assert not any(call.get("attachments") for call in fake_inference.calls)
+    assert any(item["event_type"] == "runtime.agent.completed" for item in replay_response.json()["timeline"])
 
     terminal_events = terminal_events_response.json()
     persisted_event = next(event for event in terminal_events if event["id"] == appended_event["id"])
@@ -2076,6 +2078,8 @@ def test_terminal_file_upload_returns_json_error_when_object_store_unavailable()
                 chat_model_factory=lambda definition: (
                     ScriptedCompilerChatModel()
                     if definition.agent_key == "psop.compiler"
+                    else ScriptedRunnerChatModel()
+                    if definition.agent_key == "psop.runner"
                     else ScriptedBuilderChatModel()
                 ),
             ),
@@ -2481,7 +2485,8 @@ def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> No
     assert bundled_event["mime_type"] == "multipart/mixed"
     assert [part["kind"] for part in bundled_event["parts"]] == ["text", "image", "video"]
     assert [part["metadata"].get("filename") for part in bundled_event["parts"][1:]] == ["panel.png", "startup.mp4"]
-    assert any(call.get("attachments") == "panel.png,startup.mp4" for call in fake_inference.calls)
+    assert not any(call.get("attachments") for call in fake_inference.calls)
+    assert any(item["event_type"] == "runtime.agent.completed" for item in review_response.json()["replay"]["timeline"])
 
     assert review_response.status_code == 200
     review_terminal_event = next(

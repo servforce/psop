@@ -116,7 +116,7 @@ PSOP 的运行、测试、审计和演进必须基于持久化事实。
 
 生产链路中的模型调用必须经过平台认可的受治理入口，避免业务代码分散直连具体模型厂商。
 
-当前实现中，既有 Runtime、Compiler、素材分析等域服务仍可继续使用 `LlmInferenceGateway`；Agent Harness 使用 `backend/app/agent_harness/models/` 中的 model factory 构造 LangChain `BaseChatModel`。因此 `LlmInferenceGateway` 不再是唯一的大模型调用入口。
+当前实现中，Runtime LLM / evidence evaluation 节点通过 `psop.runner` 进入 Agent Harness；Compiler、skill test judge、素材分析等非 Runtime Runner 域服务仍可继续使用 `LlmInferenceGateway`。Agent Harness 使用 `backend/app/agent_harness/models/` 中的 model factory 构造 LangChain `BaseChatModel`。因此 `LlmInferenceGateway` 不再是唯一的大模型调用入口。
 
 ## 6. 北极星闭环
 

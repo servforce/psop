@@ -21,6 +21,7 @@ class AgentHarnessPersistenceService:
         related_skill_definition_id: str = "",
         related_generation_id: str = "",
         related_job_id: str = "",
+        related_runtime_run_id: str = "",
         input_summary: dict | None = None,
         sandbox_path: str = "",
         model_info: dict | None = None,
@@ -35,6 +36,7 @@ class AgentHarnessPersistenceService:
                 related_skill_definition_id=related_skill_definition_id,
                 related_generation_id=related_generation_id,
                 related_job_id=related_job_id,
+                related_runtime_run_id=related_runtime_run_id,
                 input_summary=input_summary or {},
                 sandbox_path=sandbox_path,
                 model_info=model_info or {},
@@ -48,6 +50,7 @@ class AgentHarnessPersistenceService:
         record.related_skill_definition_id = related_skill_definition_id
         record.related_generation_id = related_generation_id
         record.related_job_id = related_job_id
+        record.related_runtime_run_id = related_runtime_run_id
         record.input_summary = input_summary or {}
         record.sandbox_path = sandbox_path
         record.model_info = model_info or {}
@@ -62,6 +65,7 @@ class AgentHarnessPersistenceService:
         related_skill_definition_id: str = "",
         related_generation_id: str = "",
         related_job_id: str = "",
+        related_runtime_run_id: str = "",
         input_summary: dict | None = None,
         model_info: dict | None = None,
         replace_events: bool = True,
@@ -76,6 +80,7 @@ class AgentHarnessPersistenceService:
                 related_skill_definition_id=related_skill_definition_id,
                 related_generation_id=related_generation_id,
                 related_job_id=related_job_id,
+                related_runtime_run_id=related_runtime_run_id,
                 input_summary=input_summary or {},
                 sandbox_path=result.sandbox_path or "",
                 model_info=model_info or {},
@@ -85,6 +90,7 @@ class AgentHarnessPersistenceService:
         record.related_skill_definition_id = related_skill_definition_id
         record.related_generation_id = related_generation_id
         record.related_job_id = related_job_id
+        record.related_runtime_run_id = related_runtime_run_id
         record.input_summary = input_summary or {}
         record.sandbox_path = result.sandbox_path or ""
         record.model_info = model_info or {}

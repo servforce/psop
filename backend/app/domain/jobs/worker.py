@@ -39,7 +39,7 @@ class RuntimeJobWorker:
         inference_gateway: LlmInferenceGateway,
         asr_gateway: AsrGateway,
         object_store: ObjectStoreService,
-        agent_harness_service: AgentHarnessService | None = None,
+        agent_harness_service: AgentHarnessService,
         poll_interval_seconds: float = 0.5,
     ) -> None:
         self.settings = settings
@@ -119,6 +119,7 @@ class RuntimeJobWorker:
                                 settings=self.settings,
                                 inference_gateway=self.inference_gateway,
                                 object_store=self.object_store,
+                                agent_harness_service=self.agent_harness_service,
                             )
                             runtime_service.process_run(session, job.run_id)
                         elif job_type == "skill_test_timeline_driver":

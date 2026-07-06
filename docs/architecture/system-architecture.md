@@ -34,7 +34,7 @@ PSOP 采用确定性 Runtime 与受治理 Agent Harness 结合的架构。
 4. `RuntimeService` 是 `psop-runner-agent` 的正式治理环境。
 5. `terminal_event` 是终端输入输出的 append-only 事实源。
 6. `trace_event`、`session_token_snapshot`、`terminal_event`、`artifact_object` 是 Replay、Audit、Eval 的事实基础。
-7. 既有 Runtime/Domain 服务可继续使用 `LlmInferenceGateway`；Agent Harness 使用 LangChain model factory 直接构造受治理模型。
+7. Runtime LLM / evidence evaluation 节点通过 `psop.runner` 进入 Agent Harness；compiler、skill test judge、素材分析等非 Runtime Runner 域服务可继续使用 `LlmInferenceGateway`。
 8. Agent Harness 负责 builder、compiler、tester、audit、eval 的统一定义、运行、tools、MCP、Agent Skills、memory、sandbox、事件与产物治理。
 
 ## 3. 当前系统基线
@@ -369,7 +369,7 @@ AgentHarnessService
 - LangGraph 作为 LangChain agent 底层能力，不作为业务层 runner 分类。
 - Skills-first，Subagents-later。
 - dev_open profile 优先跑通闭环。
-- Runtime 等既有域服务可继续使用 `LlmInferenceGateway`；Agent Harness 使用 LangChain `BaseChatModel` factory。
+- Runtime LLM / evidence evaluation 节点通过 `psop.runner` 使用 Agent Harness；compiler、skill test judge、素材分析等非 Runtime Runner 域服务可继续使用 `LlmInferenceGateway`。
 
 ### 7.2 模块目录
 

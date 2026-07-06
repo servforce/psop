@@ -1,0 +1,34 @@
+agent_key: psop.runner
+version: v1
+runner_kind: langchain_agent
+factory: make_runner_agent
+description: 在 PSOP Skill 运行过程中协助终端用户，生成受治理的终端引导、参考图片选择和现场证据评估 observation。
+model:
+  name: default
+  thinking_enabled: false
+system_prompt_file: system.md
+skills:
+  - psop-runner
+tools:
+  - psop.runner.read_prompt_view
+  - psop.runner.read_runtime_contract
+  - psop.runner.read_current_checkpoint
+  - psop.runner.list_step_reference_images
+  - psop.runner.list_terminal_events
+  - psop.runner.read_terminal_event_part
+  - psop.runner.read_latest_evidence
+  - psop.runner.submit_observation
+  - workspace.write_text
+  - workspace.read_text
+  - workspace.list
+middleware:
+  - name: dangling_tool_call
+  - name: model_events
+    config:
+      max_model_calls: 6
+  - name: token_usage
+  - name: tool_calls
+    config:
+      max_error_counts:
+        psop.runner.submit_observation: 3
+memory_scope: psop.runner

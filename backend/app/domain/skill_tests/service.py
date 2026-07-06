@@ -11,6 +11,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agent_harness.service import AgentHarnessService
 from app.core.config import Settings
 from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.compiler.models import ArtifactObject
@@ -108,15 +109,18 @@ class SkillTestService:
         runtime_service: RuntimeService | None = None,
         job_repository: JobRepository | None = None,
         agent_prompt_service: AgentPromptService | None = None,
+        agent_harness_service: AgentHarnessService | None = None,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
         self.object_store = object_store
         self.repository = repository or SkillTestRepository()
+        self.agent_harness_service = agent_harness_service or AgentHarnessService(settings=settings)
         self.runtime_service = runtime_service or RuntimeService(
             settings=settings,
             inference_gateway=inference_gateway,
             object_store=object_store,
+            agent_harness_service=self.agent_harness_service,
         )
         self.job_repository = job_repository or JobRepository()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
