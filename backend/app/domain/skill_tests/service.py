@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.agent_harness.service import AgentHarnessService
 from app.core.config import Settings
 from app.domain.agent_prompts.service import AgentPromptService
-from app.domain.compiler.models import ArtifactObject
+from app.domain.compiler.models import ArtifactObject, EgCompileArtifact
 from app.domain.jobs.models import RuntimeJob
 from app.domain.jobs.repository import JobRepository
 from app.domain.runtime.models import Run
@@ -316,6 +316,7 @@ class SkillTestService:
             )
 
         timeline = self._normalize_timeline(payload.timeline_override or scenario.timeline, duration_ms=scenario.duration_ms)
+        target_artifact = self._resolve_target_artifact(session, skill_id, scenario)
         started_at = now_utc()
         scenario_run = SkillTestScenarioRun(
             skill_definition_id=skill_id,
@@ -346,7 +347,7 @@ class SkillTestService:
                 CreateInvocationRequest(
                     skill_key=skill.key,
                     version_selector=scenario.target_version_selector or "latest",
-                    compile_artifact_id=scenario.target_compile_artifact_id,
+                    compile_artifact_id=target_artifact.id,
                     input_envelope={},
                     gateway_type="terminal",
                     terminal_context=terminal_context,
@@ -1009,6 +1010,30 @@ class SkillTestService:
         version = self.repository.get_skill_version(session, artifact.skill_version_id)
         if not version or version.skill_definition_id != skill_id:
             raise SkillValidationError("指定编译产物不属于当前 Skill。", details={"compile_artifact_id": artifact_id})
+
+    def _resolve_target_artifact(self, session: Session, skill_id: str, scenario: SkillTestScenario) -> EgCompileArtifact:
+        if scenario.target_compile_artifact_id:
+            artifact = self.repository.get_artifact(session, scenario.target_compile_artifact_id)
+            if not artifact or artifact.status != "ready":
+                raise SkillValidationError(
+                    "指定编译产物不存在或尚不可运行。",
+                    details={"compile_artifact_id": scenario.target_compile_artifact_id},
+                )
+            version = self.repository.get_skill_version(session, artifact.skill_version_id)
+            if not version or version.skill_definition_id != skill_id:
+                raise SkillValidationError(
+                    "指定编译产物不属于当前 Skill。",
+                    details={"compile_artifact_id": scenario.target_compile_artifact_id},
+                )
+            return artifact
+
+        artifact = self.repository.get_latest_ready_artifact_for_skill(session, skill_id)
+        if not artifact:
+            raise SkillValidationError(
+                "当前 Skill 尚无可测试编译产物，请先编译 draft 或发布版本。",
+                details={"skill_id": skill_id, "target_version_selector": scenario.target_version_selector or "latest"},
+            )
+        return artifact
 
     @staticmethod
     def _normalize_timeline_lanes(lanes: Any) -> list[dict[str, Any]]:

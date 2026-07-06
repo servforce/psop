@@ -1674,6 +1674,81 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
     assert detail_response.json()["latest_published_version"] is None
 
 
+def test_skill_test_scenario_run_can_use_unpublished_ready_artifact() -> None:
+    client, _, _ = create_test_client()
+
+    timeline = {
+        "schema_version": "psop-skill-test-timeline/v1",
+        "duration_ms": 1000,
+        "events": [
+            {
+                "id": "draft_input",
+                "lane_id": "input.text",
+                "at_ms": 0,
+                "payload_inline": "请按 draft 编译产物运行测试。",
+            },
+            {
+                "id": "expect_draft",
+                "lane_id": "expected.semantic",
+                "at_ms": 1000,
+                "expectation": "测试运行应使用未发布 draft 的 ready 编译产物。",
+            },
+        ],
+    }
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "skill-test-unpublished-draft",
+                "name": "Skill Test Unpublished Draft",
+                "description": "Validate tests can target unpublished ready artifacts.",
+            },
+        ).json()
+        skill_id = created["id"]
+
+        compile_response = client.post(f"/api/v1/compiler/skills/{skill_id}/compile")
+        compile_request_id = compile_response.json()["id"]
+        retry_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        artifact_id = retry_response.json()["artifact_id"]
+
+        direct_invocation_response = client.post(
+            "/api/v1/gateway/invocations",
+            json={
+                "skill_key": created["key"],
+                "input_envelope": {"user_input": "真实运行仍需发布版本。"},
+                "gateway_type": "web",
+            },
+        )
+        detail_response = client.get(f"/api/v1/skills/{skill_id}")
+        scenario_response = client.post(
+            f"/api/v1/skills/{skill_id}/test-scenarios",
+            json={
+                "name": "未发布 draft 测试场景",
+                "duration_ms": 1000,
+                "timeline": timeline,
+            },
+        )
+        scenario = scenario_response.json()
+        start_response = client.post(f"/api/v1/skills/{skill_id}/test-scenarios/{scenario['id']}/runs", json={})
+        scenario_run = start_response.json()
+        runtime_run_response = client.get(f"/api/v1/runs/{scenario_run['run_id']}")
+
+    assert compile_response.status_code == 202
+    assert retry_response.status_code == 200
+    assert artifact_id
+    assert detail_response.json()["latest_published_version"] is None
+
+    assert direct_invocation_response.status_code == 422
+    assert direct_invocation_response.json()["message"] == "当前 Skill 尚无已发布版本，无法发起运行。"
+
+    assert scenario_response.status_code == 201
+    assert scenario["target_compile_artifact_id"] is None
+    assert start_response.status_code == 202
+    assert runtime_run_response.json()["compile_artifact_id"] == artifact_id
+    assert scenario_run["run_id"]
+
+
 def test_publish_skill_records_failed_startup_when_gitlab_fails() -> None:
     client, fake_gateway, _ = create_test_client()
 
