@@ -819,33 +819,32 @@ def _instruct_node(step: dict[str, Any]) -> dict[str, Any]:
 def _evaluate_node(step: dict[str, Any], next_phase: str) -> dict[str, Any]:
     step_id = step["id"]
     node_id = f"evaluate_{step_id}"
-    proceed_instruction = (
-        "如果证据充分且无安全风险，next_phase 必须是最终核验阶段 ID；"
-        if next_phase == "final_verify"
-        else f"如果证据充分且无安全风险，next_phase 必须是 `{next_phase}`；"
-    )
     return {
         "id": node_id,
         "kind": "llm",
         "guard": {"phase_is": node_id},
         "actor": {"name": "agent.llm"},
-        "interaction": {"evaluation": True},
+        "interaction": {
+            "evaluation": True,
+            "transitions": {
+                "proceed": next_phase,
+                "complete": "terminal",
+                "abort": "terminal",
+            },
+        },
         "projection": {
-            "system_template": "你是 PSOP Runtime 证据评估节点。只输出 JSON decision，字段包含 decision、next_phase、reason、terminal_message。",
+            "system_template": "你是 PSOP Runtime 证据评估节点。只输出 JSON decision，字段包含 decision、reason、terminal_message；next_phase 是兼容字段，可留空。",
             "user_template": (
                 f"评估阶段：{step['title']}\n"
                 f"完成目标：{step['goal']}\n"
                 f"期望证据：{json.dumps(step['expected_evidence'], ensure_ascii=False)}\n"
-                f"{proceed_instruction}"
-                f"如果证据不足，next_phase 必须回到 `instruct_{step_id}`；"
-                "如果存在不可恢复安全风险，next_phase 必须是 `terminal` 且 terminal_message 说明终止原因。\n"
+                f"如果证据充分且无安全风险，decision 必须是 `proceed`，Runtime 会进入 `{next_phase}`；"
+                f"如果证据不足，decision 必须是 `need_more_evidence` 或 `retry`，Runtime 会继续等待 `{step_id}` 的证据；"
+                "如果存在不可恢复安全风险，decision 必须是 `abort` 且 terminal_message 说明终止原因。\n"
                 "当前 Token：{{token}}"
             ),
         },
-        "merge": [
-            {"op": "set", "path": f"observations.{node_id}", "from": "observation"},
-            {"op": "set", "path": "phase", "from": "observation.next_phase"},
-        ],
+        "merge": [{"op": "set", "path": f"observations.{node_id}", "from": "observation"}],
         "policy": {"priority": 30},
     }
 
@@ -856,18 +855,24 @@ def _final_verify_node() -> dict[str, Any]:
         "kind": "llm",
         "guard": {"phase_is": "final_verify"},
         "actor": {"name": "agent.llm"},
-        "interaction": {"evaluation": True},
+        "interaction": {
+            "evaluation": True,
+            "transitions": {
+                "proceed": "terminal",
+                "complete": "terminal",
+                "abort": "terminal",
+            },
+        },
         "projection": {
-            "system_template": "你是 PSOP Runtime 最终验证节点 final_verify。只输出 JSON object，字段包含 decision、next_phase、reason、terminal_message。",
+            "system_template": "你是 PSOP Runtime 最终验证节点 final_verify。只输出 JSON object，字段包含 decision、reason、terminal_message；next_phase 是兼容字段，可留空。",
             "user_template": (
                 "根据 runtime_contract.completion_criteria、所有 workflow step 观察结果和当前 Token 做最终验证。"
-                "通过时 next_phase=`terminal`，terminal_message 给出完成结论；未通过时回到相应 instruct_<step_id>。\n"
+                "通过时 decision=`complete`，terminal_message 给出完成结论；未通过时说明缺口并回到相应等待点。\n"
                 "当前 Token：{{token}}"
             ),
         },
         "merge": [
             {"op": "set", "path": "observations.final_verify", "from": "observation"},
-            {"op": "set", "path": "phase", "from": "observation.next_phase"},
             {"op": "set", "path": "outputs.final_response", "from": "observation.terminal_message"},
         ],
         "policy": {"priority": 40},

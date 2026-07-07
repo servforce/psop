@@ -109,13 +109,15 @@ PSOP-EG 与普通 LLM agent loop 的主要差异：
 
 PSOP-EG v5.1 采用以下原则。
 
-### 原则一：节点静态，边派生
+### 原则一：节点静态，合法转移由 EG 表达
 
-节点集合由 graph revision 定义；节点之间不要求手工声明完整后继边。运行时的边由 Session Token、Belief State、Experience Ref、guard、requirement 和 policy 动态诱导。
+节点集合由 graph revision 定义。运行时 enabledness 可以由 Session Token、Belief State、Experience Ref、guard、requirement 和 policy 动态诱导，但 evaluation 节点在不同 decision 下的合法下一 phase 必须由 EG 表达，例如 `node.interaction.transitions`。旧 artifact 可以用 `dependency_graph_for_view` 表达可达边作为兼容来源，但它不应替代新 artifact 的显式 transition。
 
 ### 原则二：Actor 不直接写正式状态
 
 节点 actor 可以调用 LLM、tool、code、approval、external skill 或 human input，但 actor 的结果必须先成为 observation。正式状态只能通过 merge 函数和 runtime commit 写入。
+
+Actor observation 不能拥有执行游标。对于运行期 evidence evaluation，模型可以判断当前节点 `proceed`、`need_more_evidence`、`retry`、`abort` 或 `complete`，但不能把 `observation.next_phase` 当作正式 phase 写入来源；Runtime 必须依据 EG transition 决定下一 phase。
 
 ### 原则三：事实、信念、经验、预测分离
 
@@ -701,6 +703,8 @@ Merge 还必须满足：
 4. artifact 不内联，使用 hash / ref；
 5. facts 与 belief 不混写；
 6. 不得清除未解决的 high-risk flags，除非存在对应 recovery / approval event。
+
+对于 evaluation 节点，Merge 不得通过 `phase = observation.next_phase` 推进 Runtime phase。`next_phase` 只可作为兼容字段或诊断信息被记录；正式 phase 由 Runtime 根据 EG transition 在 commit 前解析。
 
 ## 3.11 Belief Update
 
@@ -1638,6 +1642,14 @@ PSOP-EG 的运行语义首先是一个 labeled transition system：
 - \(s_0\)：初始配置。
 
 这比静态流程图更准确，因为 PSOP 的执行边由状态动态诱导。
+
+在 Runtime evaluation 节点上，小步转移的下一 phase 由 EG transition 函数决定：
+
+```text
+next_phase = transition(node_id, normalized_decision)
+```
+
+其中 `normalized_decision` 由 observation 的业务判断得到，`next_phase` 不从模型自填字段取得。若 transition 不存在或目标 phase 不在节点集合中，该小步转移非法，Runtime 必须产生 recoverable failure，而不能先提交成功输出再失败。
 
 ## 8.2 节点作为部分变换
 

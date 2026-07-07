@@ -333,6 +333,7 @@ flowchart TB
 - 选择节点。
 - 执行 actor。
 - 合并 observation。
+- 根据 EG transition 解析下一 Runtime phase。
 - 追加 snapshot 和 trace。
 - 追加 terminal output。
 - 处理 wait、success、aborted、failed、cancelled。
@@ -356,11 +357,16 @@ evaluate enabled nodes
 select node
 execute actor
 merge observation
+resolve EG transition
 apply terminal interaction
 append snapshot
 append trace
 halt / wait / continue
 ```
+
+RuntimeService 拥有节点推进权。`psop.runner` 或其它模型 actor 只能提交当前节点 observation，例如“证据足够”“证据不足”“重试”“中止”或“完成”；下一 Runtime phase 必须由 RuntimeService 根据当前节点的 `interaction.transitions` 解析。旧 EG 没有显式 transitions 时，RuntimeService 可以兼容读取 `dependency_graph_for_view` 中当前节点的真实可达边。模型输出中的 `next_phase` 只保留为兼容字段和诊断信息，不是状态主权来源。
+
+Runtime 写终端输出前必须先完成 transition 校验。对于 evaluation 节点，如果 `continue` / `complete` / `abort` 等结果无法解析出合法下一 phase，Runtime 进入 recoverable failure，并且不得先输出“已进入下一阶段”等成功消息。
 
 每次进入 wait checkpoint 时，RuntimeService 在 `control.wait.input_window` 记录 `accept_after_seq` 和 `policy=checkpoint_scoped`。当前 checkpoint 只消费 `seq_no > accept_after_seq` 且未出现在 `control.terminal_consumption` 的 input event；消费后写入账本，记录 `seq_no`、`event_id`、`checkpoint_id`、`workflow_step_id` 和 `consumed_at`。旧 snapshot 没有窗口或账本时按空值兼容，并在首次恢复时补齐。
 
@@ -379,6 +385,8 @@ state_authority: SessionTokenSnapshot
 ```
 
 LangChain Agent / LangGraph 不接管 runner 的正式状态。后续 Runtime 中的 LLM 节点可以通过 Agent Harness 执行，但输出仍以 observation 形式回到 RuntimeService merge。
+
+Runner observation 中的 `next_phase` 不拥有推进权。RuntimeService 会记录模型的原始建议用于排查，但正式 phase 只能来自 EG transition 解析结果。
 
 ## 7. Agent Harness 架构
 

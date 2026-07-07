@@ -51,7 +51,8 @@ psop-compiler =
 - `runtime_contract`，把 Skill 的 execution goal、applicability、workflow steps、expected evidence、safety constraints、wait checkpoints、completion criteria 和 recovery paths 映射为运行时契约。
 - `nodes`，把每个业务步骤编译为可执行节点，通常包含 `instruct_<step_id>`、`evaluate_<step_id>`、`final_verify` 和 `terminal` 等语义化节点。
 - `guards` 和 `merges`，定义 Session Token 的可执行性判断与受控重写路径。
-- `dependency_graph_for_view`，仅表达由 guard、merge 和合法 next phase 支撑的展示边，不替代运行时 enabledness。
+- evaluation 节点的 `interaction.transitions`，声明 `proceed`、`complete`、`abort` 等 decision 对应的合法下一 Runtime phase。
+- `dependency_graph_for_view`，仅表达由 guard、merge 和合法 transition 支撑的展示边，不替代新 artifact 中 `interaction.transitions` 的权威语义。
 - `policies`，描述调度、预算、重试、等待、超时和安全约束，不得写死与 workflow 规模不匹配的小预算。
 - `compile_diagnostics`，记录 source 缺口、unsupported runtime、formal-v5 violation、source evidence 缺失、repair 失败等诊断。
 - `graph_summary` 和 `capability_summary`，由 validator 或应用层基于 normalized artifact 生成或确认。
@@ -119,7 +120,7 @@ psop-compiler =
 模型负责：
   - 理解 frozen Skill source、manifest snapshot、runtime policy 和 allowed runtime。
   - 从 Skill source 中抽取真实业务 workflow、证据门、等待点、安全约束、恢复路径和完成标准。
-  - 生成 PSOP-EG candidate，包括 nodes、guards、actors、merges、halt、policies、runtime_contract 和 dependency_graph_for_view。
+  - 生成 PSOP-EG candidate，包括 nodes、guards、actors、merges、evaluation transitions、halt、policies、runtime_contract 和 dependency_graph_for_view。
   - 根据 formal-v5 validator diagnostics 做有限修复。
   - 输出 compile rationale、source map 和 review diagnostics，帮助人工审阅。
 
@@ -885,17 +886,21 @@ agent.skill.resource.loaded
 - 将业务步骤映射为 `instruct_<step_id>` 和 `evaluate_<step_id>` 节点。
 - 设计 Session Token 字段、phase 推进、guard 和 merge。
 - 确保 Prompt View 包含运行时判断所需的 `{{token}}` 投影。
-- 构建 dependency_graph_for_view，但不把它误当作运行时固定边。
+- 为 `evaluate_<step_id>` 和 `final_verify` 声明 `interaction.transitions`，由 Runtime 根据 runner decision 推进 phase。
+- 构建 dependency_graph_for_view，使其与 transitions 一致，但不把它误当作新 artifact 的权威转移来源。
 
 映射规则：
 
 - `start` 节点只初始化 Session Token，不承载业务判断。
 - `instruct_<step_id>` 节点面向用户输出当前现实步骤指令，并设置 wait checkpoint。
 - `evaluate_<step_id>` 节点消费现场证据和 token，输出 `proceed | retry | need_more_evidence | abort | complete`。
+- `evaluate_<step_id>` 节点必须声明 `interaction.transitions.proceed` 指向下一个 `instruct_<next_step_id>` 或 `final_verify`，`complete` 和 `abort` 指向 `terminal` 或 EG 声明的终止节点。
 - `final_verify` 必须在 terminal(success) 前验证 completion_criteria。
+- `final_verify` 必须声明进入 `terminal` 的 transition。
 - `terminal` 只在成功或失败终止条件满足时写入最终状态和输出。
 - guard 只使用 allowed runtime 声明的 DSL。
 - merge 只能做受控写入，不得写入未声明或不属于 Session Token 的路径。
+- evaluation / final_verify 节点不得生成 `{"path": "phase", "from": "observation.next_phase"}`；模型输出的 `next_phase` 只能作为兼容字段或诊断信息。
 
 中间产物：
 
@@ -921,9 +926,10 @@ workspace/validator-repair-notes.md
 - `formal_revision` 正确。
 - `nodes` 包含 start 和 terminal。
 - 每个业务 workflow step 有 instruct/evaluate 节点。
+- 每个 evaluate/final_verify 节点有 `interaction.transitions`，且 target 都存在于 nodes。
 - 每个 evaluate/final_verify Prompt View 能看到 `{{token}}`。
 - `runtime_contract.workflow_steps`、`expected_evidence`、`wait_checkpoints`、`completion_criteria` 和 `recovery_paths` 可追溯到 source。
-- `dependency_graph_for_view` 只表达真实可达边。
+- `dependency_graph_for_view` 只表达与 transitions 一致的真实可达边。
 - policies 的预算按 workflow_steps 动态推导，不使用固定小上限。
 - validator 无 error；warning 必须进入 diagnostics 或 review notes。
 
@@ -932,7 +938,8 @@ workspace/validator-repair-notes.md
 - 只生成通用 start/input/llm/tool/terminal 模板。
 - workflow step id 使用 `step1`、`llm`、`tool` 等非业务语义命名。
 - evaluate 节点不包含 `{{token}}` 却判断现场证据。
-- dependency graph 添加没有 guard/merge/next_phase 支撑的 speculative edge。
+- dependency graph 添加没有 guard/merge/transition 支撑的 speculative edge。
+- evaluation 节点依赖 `observation.next_phase` 推进 phase。
 - source evidence 不存在或只写“来自 SKILL.md”但没有片段或摘要。
 - 为通过 validator 删除真实业务步骤。
 
@@ -965,6 +972,7 @@ compiler Skill 包必须满足以下治理要求：
 - 每个 workflow step 必须存在 `instruct_<step_id>` 和 `evaluate_<step_id>`。
 - `expected_evidence`、`wait_checkpoints`、`completion_criteria`、`recovery_paths` 必须和 workflow steps 对应。
 - evaluate / final_verify 节点必须在 projection 中暴露 `{{token}}` 或等价 token 投影。
+- evaluate / final_verify 节点必须声明 `interaction.transitions`，transition target 必须存在于 artifact nodes。
 - dependency_graph_for_view 不得包含 artifact 中不存在的节点或不可达边。
 - policies 不得输出固定小 LLM 调用上限；如有 hard limit，必须不低于 `2 * workflow_steps.length + 1` 并留有 retry 弹性。
 - `source_map` 必须覆盖关键 runtime_contract 和业务节点。

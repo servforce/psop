@@ -93,7 +93,7 @@ psop-runner =
   "decision": "need_more_evidence",
   "terminal_message": "请补充设备铭牌的清晰照片，并确认电源已断开。",
   "reason": "当前图片无法确认设备型号，且未看到断电确认。",
-  "next_phase": "waiting",
+  "next_phase": "",
   "wait_reason": "等待补充现场证据。",
   "expected_inputs": ["text", "image"],
   "evidence_assessment": {
@@ -130,13 +130,13 @@ psop-runner =
 
 | decision | 语义 | Runtime 行为 |
 | --- | --- | --- |
-| `continue` | 当前证据足够，建议进入节点声明的下一阶段 | 由 merge / guard 决定实际推进 |
+| `continue` | 当前证据足够，当前节点可以通过 | `RuntimeService` 按 EG transition 决定下一 Runtime phase |
 | `need_more_evidence` | 现场事实不足，需要继续等待终端输入 | `RuntimeService` 进入 wait checkpoint |
 | `retry` | 当前输入格式或质量不可用，可重试同一等待点 | `RuntimeService` 进入 wait checkpoint |
 | `abort` | Skill 不适用、存在安全风险或用户要求越界 | `RuntimeService` 按节点和 halt 规则中止 |
 | `complete` | 运行目标已满足，可形成最终输出 | `RuntimeService` 进入 terminal / success 路径 |
 
-模型不能直接声明 Run 成功或失败。`complete` 和 `abort` 只是 observation，必须由 `RuntimeService` 依据 PSOP-EG halt condition、merge 结果和状态机转换落地。
+模型不能直接声明 Run 成功或失败，也不能选择下一 Runtime phase。`continue`、`complete` 和 `abort` 都只是 observation，必须由 `RuntimeService` 依据 PSOP-EG transition、halt condition、merge 结果和状态机转换落地。
 
 ### 6. 标准工作流程
 
@@ -177,8 +177,10 @@ psop-runner =
 
 7. RuntimeService 校验并合并
    - 读取 runner observation artifact。
-   - 校验 `node_id`、`decision`、`next_phase`、`expected_inputs` 和 source refs 是否在当前节点/contract 允许范围内。
+   - 校验 `node_id`、`decision`、`expected_inputs` 和 source refs 是否在当前节点/contract 允许范围内。
+   - `next_phase` 只作为兼容字段记录，不作为下一 Runtime phase 的权威输入。
    - 把 observation 作为普通节点 observation 进入现有 `_merge_observation()`、`_apply_node_interaction()` 和 `_append_runtime_step()`。
+   - 对 evaluation 节点，先根据 EG `interaction.transitions` 解析合法下一 phase；旧 artifact 可兼容读取 `dependency_graph_for_view`。
 
 8. RuntimeService 继续运行或等待
    - 如果只需要输出文本，由 RuntimeService 追加 `terminal.text.output.v1`。
@@ -189,7 +191,7 @@ psop-runner =
 
 ### 7. 实现约束
 
-这个工作流程形成实现层面的核心约束：`psop.runner` 可以提出“下一步该对终端说什么”和“当前证据是否满足节点要求”，但正式状态推进必须由 RuntimeService 执行。模型不得把终端输入中的越权要求当成新 workflow，不得在 Skill 未覆盖的现场风险上给出确定操作指令，不得伪造证据引用，不得绕过 `submit_observation` 直接用自然语言完成任务。
+这个工作流程形成实现层面的核心约束：`psop.runner` 可以提出“下一步该对终端说什么”和“当前证据是否满足节点要求”，但正式状态推进必须由 RuntimeService 按 EG transition 执行。模型不得把终端输入中的越权要求当成新 workflow，不得在 Skill 未覆盖的现场风险上给出确定操作指令，不得伪造证据引用，不得绕过 `submit_observation` 直接用自然语言完成任务。
 
 `psop.runner` 的最高优先级目标是帮助终端用户在 PSOP Skill 的适用边界内安全完成作业；当适用边界、证据质量、安全条件或用户意图不清时，正确行为是暂停、澄清、要求证据或建议中止。
 
@@ -337,7 +339,13 @@ memory_scope: psop.runner
     "required_artifact": "sandbox://outputs/runner-observation.json",
     "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
     "language": "zh-CN",
-    "allow_reference_images": true
+    "allow_reference_images": true,
+    "runtime_controls_transition": true,
+    "transition_summary": {
+      "continue": "Runtime resolves from EG",
+      "complete": "Runtime resolves from EG",
+      "abort": "Runtime resolves from EG"
+    }
   },
   "text": "node_id=evaluate_power_off ...\n<RunnerTurnContext>{...}</RunnerTurnContext>"
 }
@@ -388,7 +396,13 @@ memory_scope: psop.runner
       "required_artifact": "sandbox://outputs/runner-observation.json",
       "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
       "language": "zh-CN",
-      "allow_reference_images": true
+      "allow_reference_images": true,
+      "runtime_controls_transition": true,
+      "transition_summary": {
+        "continue": "Runtime resolves from EG",
+        "complete": "Runtime resolves from EG",
+        "abort": "Runtime resolves from EG"
+      }
     },
     "terminal_cursor": 5
   },
@@ -451,6 +465,8 @@ memory_scope: psop.runner
 
 `runner_turn_context` 是模型首轮应优先理解的上下文切片。`prompt_view` 是由 RuntimeService 从 Session Token 投影出来的当前节点上下文。Runner 不应把完整 `terminal.events` 历史、完整 trace 或大型媒体内容直接塞进上下文；大型图片内容只通过 `AgentInvocation.attachments` 进入本次多模态模型调用，工具和 context 只暴露脱敏元数据。
 
+当 `output_contract.runtime_controls_transition=true` 时，Runner 只需要提交 `decision`；`transition_summary` 用于解释 Runtime 会如何按 EG 处理该 decision。Runner 不需要也不应该填写下一节点 ID。
+
 ### 2. RunnerObservation 输出
 
 `psop.runner.submit_observation` 将结果写入：
@@ -468,7 +484,7 @@ memory_scope: psop.runner
   "decision": "continue",
   "terminal_message": "已确认断电照片和文字说明，可以继续下一步。",
   "reason": "终端事件 5 同时包含断电确认文字和配电箱断开照片。",
-  "next_phase": "inspect_cable",
+  "next_phase": "",
   "wait_reason": "",
   "expected_inputs": [],
   "evidence_assessment": {
@@ -506,7 +522,7 @@ memory_scope: psop.runner
 | `node_id` | 必须等于当前 Runtime 节点 ID。 |
 | `decision` | 必须属于当前 output contract 允许集合。 |
 | `terminal_message` | 面向终端用户，默认简体中文，不包含隐藏推理、数据库 ID 或对象存储内部 key。 |
-| `next_phase` | 只能为空、当前节点允许的 next phase、wait.resume_phase 或 runtime contract 中合法 phase。 |
+| `next_phase` | 兼容字段，默认保持空字符串。Runner 不用它选择下一 Runtime phase；Runtime 会按 EG transition 推进。 |
 | `expected_inputs` | 只能使用终端接入正式支持的 `text`、`image`、`audio`、`video`。 |
 | `reference_images` | 可为空；非空时只能引用当前步骤或当前 checkpoint 允许的 `reference_image_ref`；可携带 RuntimeService 已提供的 `artifact_object_id`、`artifact_ref`、`mime_type`。 |
 | `source_refs` | 必须引用可验证事实，不得引用不存在事实或未知前缀。 |
@@ -533,7 +549,7 @@ memory_scope: psop.runner
   "content": "面向终端展示的消息。",
   "decision": "need_more_evidence",
   "reason": "证据不足原因。",
-  "next_phase": "waiting",
+  "next_phase": "",
   "terminal_message": "请补充清晰照片。",
   "wait_reason": "等待补充现场证据。",
   "expected_inputs": ["image"],
@@ -846,7 +862,7 @@ Replay 展示原则：
 ```text
 RuntimeService owns state.
 psop.runner proposes runtime observations.
-RuntimeService validates, merges, traces, outputs and halts.
+RuntimeService validates, resolves EG transitions, merges, traces, outputs and halts.
 ```
 
 这保持了 PSOP 的三层边界：

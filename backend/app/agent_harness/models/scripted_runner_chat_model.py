@@ -90,14 +90,14 @@ def _observation(
         missing_evidence = ["现场说明", "现场证据"]
     elif node_id == "final_verify":
         decision = "complete"
-        next_phase = "terminal"
+        next_phase = ""
         terminal_message = "测试任务已完成，现场步骤已验证。"
         reason = "当前证据满足完成标准。"
         expected_inputs = []
         missing_evidence = []
     else:
         decision = "continue"
-        next_phase = "final_verify"
+        next_phase = ""
         terminal_message = "已确认当前证据，可以继续最终核验。"
         reason = "最新终端事件包含当前步骤所需的文字说明。"
         expected_inputs = []

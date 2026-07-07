@@ -66,7 +66,7 @@ RUNNER_MAX_IMAGE_ATTACHMENTS = 4
 
 RUNTIME_LLM_LANGUAGE_POLICY = """平台级输出语言要求：
 - 所有面向终端用户展示的自然语言必须使用简体中文。
-- 如果当前节点要求输出 JSON，JSON 字段名和 decision/next_phase 等协议枚举值保持英文协议值。
+- 如果当前节点要求输出 JSON，JSON 字段名和 decision 等协议枚举值保持英文协议值；next_phase 是兼容可选字段。
 - reason、terminal_message、final_response、summary 等自然语言字段值必须使用简体中文。
 - 不要因为附件内容、文件名、模型默认行为或上游 prompt 语言而改用英文。
 - 如果当前节点要求只输出 JSON，不要在 JSON 外追加任何说明。"""
@@ -499,6 +499,7 @@ class RuntimeService:
                         token=token,
                         node=node,
                         observation=observation,
+                        artifact_payload=artifact_payload,
                         wait_input_accept_after_seq=turn_input_accept_after_seq,
                     )
                     token = self._append_runtime_step(
@@ -1048,6 +1049,7 @@ class RuntimeService:
         token: dict[str, Any],
         node: dict[str, Any],
         observation: dict[str, Any],
+        artifact_payload: dict[str, Any],
         wait_input_accept_after_seq: int,
     ) -> tuple[dict[str, Any], bool]:
         interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
@@ -1055,6 +1057,19 @@ class RuntimeService:
         entered_wait = False
 
         terminal_message = self._terminal_message_from_observation(observation)
+        resolved_next_phase = ""
+        if self._node_is_evaluation(node):
+            decision = str(observation.get("decision") or "").strip().lower()
+            if decision in {"proceed", "complete", "abort"}:
+                resolved_next_phase = self._resolve_evaluation_transition(
+                    artifact_payload=artifact_payload,
+                    node=node,
+                    decision=decision,
+                )
+                if not resolved_next_phase:
+                    raise RuntimeError(
+                        f"Evaluation node `{node.get('id')}` has no runtime transition for decision `{decision}`."
+                    )
         should_output = bool(interaction.get("output_to_terminal")) or (
             self._node_is_evaluation(node) and bool(terminal_message)
         )
@@ -1082,7 +1097,10 @@ class RuntimeService:
                     )
 
         if self._node_is_evaluation(node):
-            next_token.setdefault("control", {})["latest_evaluation"] = self._evaluation_summary(node, observation)
+            latest_evaluation = self._evaluation_summary(node, observation)
+            if resolved_next_phase:
+                latest_evaluation["resolved_next_phase"] = resolved_next_phase
+            next_token.setdefault("control", {})["latest_evaluation"] = latest_evaluation
             decision = str(observation.get("decision") or "").strip().lower()
             if decision in {"retry", "need_more_evidence"}:
                 wait = next_token.setdefault("control", {}).get("wait")
@@ -1100,13 +1118,16 @@ class RuntimeService:
                     "requested_by_node": str(node.get("id") or ""),
                     "reason": str(observation.get("reason") or ""),
                     "next_phase": requested_next_phase,
+                    "resolved_next_phase": resolved_next_phase,
                     "occurred_at": now_utc().isoformat(),
                 }
-                if requested_next_phase:
-                    next_token["phase"] = requested_next_phase
+                if self._transition_enters_aborted_terminal(artifact_payload, resolved_next_phase):
+                    next_token["phase"] = resolved_next_phase
                 else:
                     next_token["status"] = "aborted"
                     next_token["phase"] = "aborted"
+            elif decision in {"proceed", "complete"}:
+                next_token["phase"] = resolved_next_phase
 
         if interaction.get("wait_after_output"):
             checkpoint_accept_after_seq = max(
@@ -1134,6 +1155,126 @@ class RuntimeService:
             )
 
         return next_token, entered_wait
+
+    def _resolve_evaluation_transition(
+        self,
+        *,
+        artifact_payload: dict[str, Any],
+        node: dict[str, Any],
+        decision: str,
+    ) -> str:
+        node_ids = self._artifact_node_ids(artifact_payload)
+        transition = self._transition_from_node_interaction(node=node, decision=decision)
+        if transition:
+            return transition if transition in node_ids else ""
+        return self._transition_from_dependency_graph(
+            artifact_payload=artifact_payload,
+            node=node,
+            decision=decision,
+            node_ids=node_ids,
+        )
+
+    @staticmethod
+    def _transition_from_node_interaction(*, node: dict[str, Any], decision: str) -> str:
+        interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
+        transitions = interaction.get("transitions")
+        if not isinstance(transitions, dict):
+            return ""
+        candidates = [decision]
+        if decision == "proceed":
+            candidates.append("continue")
+        for key in candidates:
+            raw = transitions.get(key)
+            if isinstance(raw, str):
+                return raw.strip()
+            if isinstance(raw, dict):
+                for field in ("phase", "next_phase", "to"):
+                    value = raw.get(field)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+        return ""
+
+    def _transition_from_dependency_graph(
+        self,
+        *,
+        artifact_payload: dict[str, Any],
+        node: dict[str, Any],
+        decision: str,
+        node_ids: set[str],
+    ) -> str:
+        node_id = str(node.get("id") or "")
+        edges = artifact_payload.get("dependency_graph_for_view")
+        if not isinstance(edges, list):
+            return ""
+        targets = [
+            str(edge.get("to") or "")
+            for edge in edges
+            if isinstance(edge, dict) and str(edge.get("from") or "") == node_id and str(edge.get("to") or "") in node_ids
+        ]
+        if not targets:
+            return ""
+        if decision == "abort":
+            abort_targets = [
+                target for target in targets if self._transition_enters_aborted_terminal(artifact_payload, target)
+            ]
+            if len(abort_targets) == 1:
+                return abort_targets[0]
+            if "terminal" in targets:
+                return "terminal"
+            return targets[0] if len(targets) == 1 else ""
+        if decision == "complete":
+            if "terminal" in targets:
+                return "terminal"
+            non_abort_targets = [
+                target for target in targets if not self._transition_enters_aborted_terminal(artifact_payload, target)
+            ]
+            return non_abort_targets[0] if len(non_abort_targets) == 1 else ""
+        non_abort_targets = [
+            target
+            for target in targets
+            if not self._transition_enters_aborted_terminal(artifact_payload, target) and target != "terminal"
+        ]
+        if len(non_abort_targets) == 1:
+            return non_abort_targets[0]
+        return targets[0] if len(targets) == 1 else ""
+
+    @staticmethod
+    def _artifact_node_ids(artifact_payload: dict[str, Any]) -> set[str]:
+        nodes = artifact_payload.get("nodes")
+        if not isinstance(nodes, list):
+            return set()
+        return {
+            str(node.get("id") or "")
+            for node in nodes
+            if isinstance(node, dict) and str(node.get("id") or "")
+        }
+
+    def _transition_enters_aborted_terminal(self, artifact_payload: dict[str, Any], phase: str) -> bool:
+        node = self._artifact_node_by_id(artifact_payload, phase)
+        if not node or str(node.get("kind") or "") != "terminal":
+            return False
+        if "abort" in str(node.get("id") or "").lower():
+            return True
+        merge = node.get("merge")
+        if not isinstance(merge, list):
+            return False
+        return any(
+            isinstance(operation, dict)
+            and operation.get("op") == "set"
+            and operation.get("path") == "status"
+            and operation.get("value") == "aborted"
+            for operation in merge
+        )
+
+    @staticmethod
+    def _artifact_node_by_id(artifact_payload: dict[str, Any], node_id: str) -> dict[str, Any] | None:
+        nodes = artifact_payload.get("nodes")
+        if not isinstance(nodes, list):
+            return None
+        for node in nodes:
+            if isinstance(node, dict) and str(node.get("id") or "") == node_id:
+                return node
+        return None
 
     @staticmethod
     def _latest_consumed_terminal_seq(token: dict[str, Any]) -> int:
@@ -1313,12 +1454,17 @@ class RuntimeService:
     ) -> dict[str, Any]:
         interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
         checkpoint_id = str(interaction.get("checkpoint_id") or f"{node.get('id')}:wait")
+        observation_expected_inputs = observation.get("expected_inputs")
+        if isinstance(observation_expected_inputs, list) and observation_expected_inputs:
+            expected_inputs = RuntimeService._normalize_wait_expected_inputs(observation_expected_inputs)
+        else:
+            expected_inputs = interaction.get("expected_inputs") if isinstance(interaction.get("expected_inputs"), list) else []
         wait = {
             "status": "waiting",
             "checkpoint_id": checkpoint_id,
             "workflow_step_id": str(interaction.get("workflow_step_id") or node.get("id") or ""),
-            "reason": str(interaction.get("wait_reason") or observation.get("wait_reason") or "等待用户提交现场证据。"),
-            "expected_inputs": interaction.get("expected_inputs") if isinstance(interaction.get("expected_inputs"), list) else [],
+            "reason": str(observation.get("wait_reason") or interaction.get("wait_reason") or "等待用户提交现场证据。"),
+            "expected_inputs": expected_inputs,
             "resume_phase": str(interaction.get("resume_phase") or f"evaluate_{node.get('id')}"),
             "entered_by_node": str(node.get("id") or ""),
             "entered_at": now_utc().isoformat(),
@@ -1341,6 +1487,18 @@ class RuntimeService:
         token["status"] = "waiting"
         token["phase"] = "waiting"
         return token
+
+    @staticmethod
+    def _normalize_wait_expected_inputs(items: list[Any]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for item in items:
+            if isinstance(item, dict):
+                normalized.append(dict(item))
+                continue
+            kind = str(item or "").strip()
+            if kind:
+                normalized.append({"kind": kind})
+        return normalized
 
     @classmethod
     def _consume_available_terminal_inputs_for_wait(cls, token: dict[str, Any]) -> bool:
@@ -1681,7 +1839,6 @@ class RuntimeService:
         wait = control.get("wait")
         if isinstance(wait, dict):
             wait["status"] = "waiting"
-            wait["reason"] = self._runtime_recoverable_failure_terminal_message()
             wait.setdefault("recoverable_errors", []).append(
                 {
                     "trace_event_id": trace_event.id,
@@ -2599,6 +2756,8 @@ class RuntimeService:
                     "schema": "psop.runner.observation.v1",
                     "required_artifact": RUNNER_OBSERVATION_ARTIFACT_REF,
                     "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
+                    "runtime_controls_transition": True,
+                    "transition_summary": context.get("transition_contract", {}),
                     "language": "zh-CN",
                     "allow_reference_images": True,
                 },
@@ -2632,6 +2791,7 @@ class RuntimeService:
             "runtime_contract": runtime_contract,
             "step_reference_images": self._runner_step_reference_images(node=node, token=token, runtime_contract=runtime_contract),
             "current_checkpoint": self._runner_current_checkpoint(run=run, node=node, token=token),
+            "transition_contract": self._runner_transition_contract(artifact_payload=artifact_payload, node=node),
             "terminal_events": terminal_events[-20:],
             "latest_evidence": control.get("latest_evidence") if isinstance(control.get("latest_evidence"), dict) else {},
             "trace_summary": token.get("trace") if isinstance(token.get("trace"), list) else [],
@@ -2673,11 +2833,14 @@ class RuntimeService:
             ],
             "runtime_contract_slice": self._runner_runtime_contract_slice(runtime_contract),
             "reference_image_index": context.get("step_reference_images") if isinstance(context.get("step_reference_images"), list) else [],
+            "transition_contract": context.get("transition_contract") if isinstance(context.get("transition_contract"), dict) else {},
             "trust_labels": context.get("trust_labels") if isinstance(context.get("trust_labels"), dict) else {},
             "output_contract": {
                 "schema": "psop.runner.observation.v1",
                 "required_artifact": RUNNER_OBSERVATION_ARTIFACT_REF,
                 "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
+                "runtime_controls_transition": True,
+                "transition_summary": context.get("transition_contract") if isinstance(context.get("transition_contract"), dict) else {},
                 "language": "zh-CN",
                 "allow_reference_images": True,
             },
@@ -2691,6 +2854,28 @@ class RuntimeService:
             "expected_evidence": runtime_contract.get("expected_evidence") if isinstance(runtime_contract.get("expected_evidence"), dict) else {},
             "safety_constraints": runtime_contract.get("safety_constraints") if isinstance(runtime_contract.get("safety_constraints"), list) else [],
             "completion_criteria": runtime_contract.get("completion_criteria") if isinstance(runtime_contract.get("completion_criteria"), list) else [],
+        }
+
+    def _runner_transition_contract(self, *, artifact_payload: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+        decisions: dict[str, str] = {}
+        if self._node_is_evaluation(node):
+            for runner_decision, runtime_decision in {
+                "continue": "proceed",
+                "complete": "complete",
+                "abort": "abort",
+            }.items():
+                next_phase = self._resolve_evaluation_transition(
+                    artifact_payload=artifact_payload,
+                    node=node,
+                    decision=runtime_decision,
+                )
+                if next_phase:
+                    decisions[runner_decision] = next_phase
+        return {
+            "runtime_controls_transition": True,
+            "current_node_id": str(node.get("id") or ""),
+            "decisions": decisions,
+            "note": "runner 只提交 decision；Runtime 根据 EG transition 决定下一 Runtime phase。",
         }
 
     def _runner_terminal_event_summary(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -2960,6 +3145,7 @@ class RuntimeService:
                 "reference_images": observation.get("reference_images") if isinstance(observation.get("reference_images"), list) else [],
                 "safety_flags": observation.get("safety_flags") if isinstance(observation.get("safety_flags"), list) else [],
                 "original_decision": str(observation.get("decision") or ""),
+                "suggested_next_phase": str(observation.get("next_phase") or ""),
             },
             "usage": usage,
             "summary": f"Runner decision: {runtime_decision}",
@@ -3133,8 +3319,6 @@ class RuntimeService:
             raise RuntimeError(
                 f"Evaluation node `{node.get('id')}` returned unsupported decision `{decision or '<missing>'}`."
             )
-        if decision in {"proceed", "complete"} and not str(parsed.get("next_phase") or "").strip():
-            raise RuntimeError(f"Evaluation node `{node.get('id')}` must include next_phase for decision `{decision}`.")
         return {
             **parsed,
             "decision": decision,

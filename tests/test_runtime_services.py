@@ -1459,7 +1459,7 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
             observation_overrides_by_node={
                 "evaluate_collect_context": {
                     "decision": "continue",
-                    "next_phase": "instruct_second_step",
+                    "next_phase": "second_step",
                     "terminal_message": "第一阶段证据已确认，可以进入第二阶段。",
                     "reason": "电源型号信息已经满足第一阶段验证。",
                     "expected_inputs": [],
@@ -1476,6 +1476,13 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
                     "reason": "第二阶段缺少新的现场证据。",
                     "wait_reason": "等待第二阶段证据。",
                     "expected_inputs": ["text"],
+                },
+                "instruct_second_step": {
+                    "decision": "need_more_evidence",
+                    "terminal_message": "请提交第二阶段照片，或逐项文字确认现场状态。",
+                    "reason": "第二阶段需要新的现场证据。",
+                    "wait_reason": "等待逐项文字确认或照片。",
+                    "expected_inputs": ["text", "image"],
                 },
             }
         ),
@@ -1540,6 +1547,11 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     wait = latest_token["control"]["wait"]
     consumption = latest_token["control"]["terminal_consumption"]
     wait_traces = [event for event in trace_events if event.event_type == "runtime.wait_checkpoint.entered"]
+    collect_eval_payload = next(
+        event.payload["observation"]
+        for event in trace_events
+        if event.event_type == "runtime.agent.completed" and event.payload["node_id"] == "evaluate_collect_context"
+    )
     agent_node_ids = [
         event.payload["node_id"]
         for event in trace_events
@@ -1550,9 +1562,28 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     assert run.checkpoint_id == "second_step_evidence"
     assert wait["checkpoint_id"] == "second_step_evidence"
     assert wait["status"] == "waiting"
+    assert wait["reason"] == "等待逐项文字确认或照片。"
+    assert wait["expected_inputs"] == [{"kind": "text"}, {"kind": "image"}]
     assert wait["evidence"] == []
     assert wait["input_window"]["policy"] == "checkpoint_scoped"
     assert wait["input_window"]["accept_after_seq"] == 1
+    evaluate_second_step_node = next(node for node in artifact_payload["nodes"] if node["id"] == "evaluate_second_step")
+    runner_context = runtime_service._build_runner_context(
+        run=run,
+        node=evaluate_second_step_node,
+        token=latest_token,
+        artifact_payload=artifact_payload,
+    )
+    runner_turn_context = runtime_service._build_runner_turn_context(
+        run=run,
+        node=evaluate_second_step_node,
+        mode="evidence_evaluation",
+        context=runner_context,
+    )
+    assert runner_turn_context["current_checkpoint"]["expected_inputs"] == [{"kind": "text"}, {"kind": "image"}]
+    assert collect_eval_payload["next_phase"] == "second_step"
+    assert collect_eval_payload["runner"]["suggested_next_phase"] == "second_step"
+    assert latest_token["control"]["latest_evaluation"]["resolved_next_phase"] == "instruct_second_step"
     assert consumption == [
         {
             "seq_no": 1,
@@ -1565,6 +1596,69 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     assert "evaluate_second_step" not in agent_node_ids
     assert [event.payload["resumed_from_existing_input"] for event in wait_traces] == [True, False]
     assert [event.direction for event in terminal_events] == ["input", "output", "output", "output"]
+
+
+def test_runtime_missing_evaluation_transition_fails_before_success_output(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-missing-transition",
+                name="Runtime Missing Transition",
+                description="Validate missing evaluation transition recovery.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime missing transition"),
+        )
+        compiled = process_publish_job(session, compiler_service, published.compile_request.id)
+        artifact = compiler_service.get_artifact(session, compiled.artifact_id or "")
+        artifact_object = session.get(ArtifactObject, artifact.artifact_object_id)
+        assert artifact_object is not None
+        artifact_payload = json.loads(json.dumps(artifact_object.content_json, ensure_ascii=False))
+        artifact_payload["dependency_graph_for_view"] = [
+            edge
+            for edge in artifact_payload["dependency_graph_for_view"]
+            if edge != {"from": "evaluate_collect_context", "to": "final_verify"}
+        ]
+        artifact_object.content_json = artifact_payload
+        session.flush()
+
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="runtime-missing-transition",
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        runtime_service.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="我已经完成当前步骤，并上传了现场说明。",
+                external_event_id="runtime-missing-transition-input",
+            ),
+        )
+        runtime_service.process_run(session, invocation.run_id or "")
+        run = runtime_service.get_run(session, invocation.run_id or "")
+        terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+
+    output_texts = [str(event.payload_inline or "") for event in terminal_events if event.direction == "output"]
+    failure_traces = [event for event in trace_events if event.event_type == "runtime.message_processing.failed"]
+
+    assert run.status == "waiting_input"
+    assert failure_traces
+    assert "has no runtime transition" in failure_traces[-1].payload["error"]
+    assert "刚才服务器开小差了，请您重试！" in output_texts
+    assert not any("已确认当前证据，可以继续最终核验" in text for text in output_texts)
 
 
 def _add_second_wait_checkpoint_to_artifact(artifact_payload: dict) -> dict:
@@ -1584,8 +1678,8 @@ def _add_second_wait_checkpoint_to_artifact(artifact_payload: dict) -> dict:
                 "wait_reason": "等待用户提交第二阶段证据。",
                 "expected_inputs": [
                     {
-                        "kind": "text",
-                        "event_kind": "terminal.text.input.v1",
+                        "kind": "image",
+                        "event_kind": "terminal.image.input.v1",
                     }
                 ],
                 "resume_phase": "evaluate_second_step",
@@ -1656,7 +1750,7 @@ def _add_second_wait_checkpoint_to_artifact(artifact_payload: dict) -> dict:
         {
             "checkpoint_id": "second_step_evidence",
             "workflow_step_id": "second_step",
-            "expected_inputs": [{"kind": "text"}],
+            "expected_inputs": [{"kind": "image"}],
         }
     )
     return artifact_payload
@@ -1898,6 +1992,8 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
         )
         first_run = runtime_service.get_run(session, invocation.run_id or "")
         runtime_service.process_run(session, invocation.run_id or "")
+        snapshots_before_failure = runtime_service.list_snapshots(session, invocation.run_id or "")
+        wait_reason_before_failure = snapshots_before_failure[-1].token_payload["control"]["wait"]["reason"]
         failing_runtime.append_terminal_event(
             session,
             invocation.run_id or "",
@@ -1945,5 +2041,8 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
     assert terminal_events[-1].payload_inline == "刚才服务器开小差了，请您重试！"
     assert snapshots[-1].token_payload["status"] == "waiting"
     assert snapshots[-1].token_payload["metadata"]["terminal_cursor"] == terminal_events[-1].seq_no
+    assert snapshots[-1].token_payload["control"]["wait"]["reason"] == wait_reason_before_failure
+    assert snapshots[-1].token_payload["control"]["wait"]["reason"] != "刚才服务器开小差了，请您重试！"
+    assert snapshots[-1].token_payload["control"]["wait"]["recoverable_errors"]
     assert retry.seq_no > terminal_events[-1].seq_no
     assert final_run.status == "succeeded"

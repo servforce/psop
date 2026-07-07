@@ -201,12 +201,13 @@ class SkillCompileAgent:
                 ),
                 "llm_projection_rule": (
                     "指令型 llm 节点输出 terminal_message；评估型 llm 节点必须只输出 JSON object，"
-                    "包含 decision/proceed|retry|need_more_evidence|abort|complete、reason、next_phase、terminal_message。"
+                    "包含 decision/proceed|retry|need_more_evidence|abort|complete、reason、terminal_message；"
+                    "next_phase 只是兼容可选字段，可留空。"
                 ),
                 "runtime_language_rule": (
                     "所有 Runtime LLM 节点的用户可见自然语言必须使用简体中文。"
                     "instruct 节点的终端输出必须是简体中文。"
-                    "evaluate/final_verify 节点输出 JSON 时，字段名与 decision/next_phase 枚举保持英文协议值，"
+                    "evaluate/final_verify 节点输出 JSON 时，字段名与 decision 枚举保持英文协议值，"
                     "但 reason、terminal_message 等自然语言字段值必须是简体中文。"
                 ),
                 "policy_budget_rule": (
@@ -215,8 +216,8 @@ class SkillCompileAgent:
                     "如必须设置也不得低于 happy path 调用数并需为 retry/need_more_evidence 留出弹性。"
                 ),
                 "view_graph_rule": (
-                    "dependency_graph_for_view 只表达 guard/merge/next_phase 真实可达的展示边；"
-                    "不得添加 artifact 中没有明确 phase 写入路径的 speculative recovery edge。"
+                    "dependency_graph_for_view 只表达 guard/merge/interaction.transitions 真实可达的展示边；"
+                    "不得添加 artifact 中没有明确 transition 支撑的 speculative recovery edge。"
                 ),
                 "domain_pack_rule": (
                     "domain_pack 只用于理解行业术语、常见步骤和质量标准；"

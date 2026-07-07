@@ -239,7 +239,14 @@ def _artifact() -> dict[str, Any]:
                 "kind": "llm",
                 "guard": {"phase_is": "evaluate_collect_context"},
                 "actor": {"name": "agent.llm"},
-                "interaction": {"evaluation": True},
+                "interaction": {
+                    "evaluation": True,
+                    "transitions": {
+                        "proceed": "final_verify",
+                        "complete": "terminal",
+                        "abort": "terminal",
+                    },
+                },
                 "projection": {
                     "system_template": "只输出 JSON decision。evaluate_collect_context",
                     "user_template": (
@@ -247,10 +254,7 @@ def _artifact() -> dict[str, Any]:
                         "必须输出 JSON decision。当前 Token：{{token}}"
                     ),
                 },
-                "merge": [
-                    {"op": "set", "path": "observations.evaluate_collect_context", "from": "observation"},
-                    {"op": "set", "path": "phase", "from": "observation.next_phase"},
-                ],
+                "merge": [{"op": "set", "path": "observations.evaluate_collect_context", "from": "observation"}],
                 "policy": {"priority": 30},
             },
             {
@@ -258,14 +262,20 @@ def _artifact() -> dict[str, Any]:
                 "kind": "llm",
                 "guard": {"phase_is": "final_verify"},
                 "actor": {"name": "agent.llm"},
-                "interaction": {"evaluation": True},
+                "interaction": {
+                    "evaluation": True,
+                    "transitions": {
+                        "proceed": "terminal",
+                        "complete": "terminal",
+                        "abort": "terminal",
+                    },
+                },
                 "projection": {
                     "system_template": "只输出 JSON decision。final_verify",
                     "user_template": "根据 completion_criteria 与当前 Token 做最终验证。当前 Token：{{token}}",
                 },
                 "merge": [
                     {"op": "set", "path": "observations.final_verify", "from": "observation"},
-                    {"op": "set", "path": "phase", "from": "observation.next_phase"},
                     {"op": "set", "path": "outputs.final_response", "from": "observation.terminal_message"},
                 ],
                 "policy": {"priority": 40},

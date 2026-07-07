@@ -226,6 +226,24 @@ def test_compiler_build_formal_v5_scaffold_creates_valid_candidate(tmp_path) -> 
     node_ids = {node["id"] for node in candidate["artifact"]["nodes"]}
     assert "instruct_collect_context" in node_ids
     assert "evaluate_verify_result" in node_ids
+    evaluate_collect_context = next(node for node in candidate["artifact"]["nodes"] if node["id"] == "evaluate_collect_context")
+    final_verify = next(node for node in candidate["artifact"]["nodes"] if node["id"] == "final_verify")
+    assert evaluate_collect_context["interaction"]["transitions"] == {
+        "proceed": "instruct_verify_result",
+        "complete": "terminal",
+        "abort": "terminal",
+    }
+    assert final_verify["interaction"]["transitions"] == {
+        "proceed": "terminal",
+        "complete": "terminal",
+        "abort": "terminal",
+    }
+    assert not any(
+        operation.get("path") == "phase" and operation.get("from") == "observation.next_phase"
+        for node in candidate["artifact"]["nodes"]
+        for operation in node.get("merge", [])
+        if isinstance(operation, dict)
+    )
 
     validation_result = registry.execute(
         "psop.compiler.validate_formal_v5",

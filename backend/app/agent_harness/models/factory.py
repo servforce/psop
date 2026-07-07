@@ -128,7 +128,7 @@ def _resolve_class(path: str) -> type:
 
 def _thinking_options(*, enabled: bool, budget: int | None) -> dict[str, Any] | None:
     if not enabled:
-        return None
+        return {"extra_body": {"enable_thinking": False}}
     options: dict[str, Any] = {"extra_body": {"enable_thinking": True}}
     if budget is not None:
         options["extra_body"]["thinking_budget"] = budget

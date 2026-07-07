@@ -12,6 +12,7 @@ from app.agent_harness.agents.psop.runner.schemas import (
 from app.agent_harness.agents.registry import default_agent_registry
 from app.agent_harness.events import AgentEventWriter
 from app.agent_harness.memory.file_store import FileMemoryStore
+from app.agent_harness.models.factory import create_chat_model
 from app.agent_harness.models.scripted_runner_chat_model import ScriptedRunnerChatModel
 from app.agent_harness.sandbox.local import LocalAgentSandboxProvider
 from app.agent_harness.schemas import AgentInvocation, AgentInvocationAttachment
@@ -23,6 +24,11 @@ from app.core.config import Settings
 
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "psop_runner" / "minimal.json"
+
+
+class RecordingChatModel:
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
 
 
 def test_psop_runner_definition_and_skills_load() -> None:
@@ -78,6 +84,44 @@ def test_psop_runner_config_and_prompt_guard_observation_format() -> None:
     assert '"decision": "need_more_evidence"' in prompt
     assert '`decision: "continue"`' in prompt
     assert '`decision: "complete"`' in prompt
+    assert "流程推进由运行时根据执行图完成" in prompt
+    assert "`next_phase`：兼容字段，固定传空字符串" in prompt
+    assert prompt.count("next_phase") <= 4
+    assert '"next_phase": "motherboard_preinstall"' not in prompt
+
+
+def test_agent_harness_model_explicitly_disables_thinking(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.agent_harness.models.factory._resolve_class",
+        lambda _path: RecordingChatModel,
+    )
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        llm_text_model="qwen3.7-max-2026-06-08",
+        llm_text_enable_thinking=True,
+        llm_text_thinking_budget=8192,
+    )
+
+    model = create_chat_model(settings=settings, thinking_enabled=False)
+
+    assert model.kwargs["extra_body"] == {"enable_thinking": False}
+
+
+def test_agent_harness_model_keeps_thinking_budget_when_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.agent_harness.models.factory._resolve_class",
+        lambda _path: RecordingChatModel,
+    )
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        llm_text_model="qwen3.7-max-2026-06-08",
+        llm_text_enable_thinking=True,
+        llm_text_thinking_budget=8192,
+    )
+
+    model = create_chat_model(settings=settings, thinking_enabled=True)
+
+    assert model.kwargs["extra_body"] == {"enable_thinking": True, "thinking_budget": 8192}
 
 
 def test_psop_runner_scripted_run_creates_observation_artifact(tmp_path) -> None:
@@ -260,7 +304,7 @@ def test_runner_submit_observation_validates_and_writes_outputs(tmp_path) -> Non
         "decision": "continue",
         "terminal_message": "已确认当前证据，可以继续最终核验。",
         "reason": "用户提交了当前步骤说明。",
-        "next_phase": "final_verify",
+        "next_phase": "",
         "wait_reason": "",
         "expected_inputs": [],
         "evidence_assessment": {
@@ -310,7 +354,7 @@ def test_runner_submit_observation_rejects_forged_source_ref(tmp_path) -> None:
             "decision": "continue",
             "terminal_message": "继续。",
             "reason": "测试。",
-            "next_phase": "final_verify",
+            "next_phase": "",
             "source_refs": ["terminal_event:999"],
         },
         context,
@@ -472,7 +516,7 @@ def _valid_runner_observation() -> dict:
         "decision": "continue",
         "terminal_message": "已确认当前证据，可以继续最终核验。",
         "reason": "用户提交了当前步骤说明。",
-        "next_phase": "final_verify",
+        "next_phase": "",
         "wait_reason": "",
         "expected_inputs": [],
         "evidence_assessment": {

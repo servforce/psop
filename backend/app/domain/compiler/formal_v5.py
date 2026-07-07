@@ -193,6 +193,7 @@ def validate_and_normalize_artifact(candidate: Any) -> FormalValidationResult:
         diagnostics.append(_error("EG artifact 必须包含 start 节点。", "nodes"))
     if not has_terminal:
         diagnostics.append(_error("EG artifact 必须包含 terminal 节点。", "nodes"))
+    diagnostics.extend(_validate_node_transitions(nodes, node_ids))
 
     init = artifact.get("init")
     if not isinstance(init, dict):
@@ -451,6 +452,37 @@ def _validate_merge(merge: list[Any], token_fields: set[str], path: str) -> list
         has_from = "from" in operation
         if has_value == has_from:
             diagnostics.append(_error("merge operation 必须且只能包含 value 或 from。", op_path))
+    return diagnostics
+
+
+def _validate_node_transitions(nodes: list[Any], node_ids: set[str]) -> list[FormalDiagnostic]:
+    diagnostics: list[FormalDiagnostic] = []
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        interaction = node.get("interaction")
+        if not isinstance(interaction, dict) or "transitions" not in interaction:
+            continue
+        transitions = interaction.get("transitions")
+        path = f"nodes[{index}].interaction.transitions"
+        if not isinstance(transitions, dict):
+            diagnostics.append(_error("interaction.transitions 必须是对象。", path))
+            continue
+        for decision, raw_target in transitions.items():
+            target = ""
+            if isinstance(raw_target, str):
+                target = raw_target
+            elif isinstance(raw_target, dict):
+                value = raw_target.get("phase") or raw_target.get("next_phase") or raw_target.get("to")
+                target = value if isinstance(value, str) else ""
+            else:
+                diagnostics.append(_error("transition target 必须是字符串或对象。", f"{path}.{decision}"))
+                continue
+            if not target:
+                diagnostics.append(_error("transition target 必须是非空节点 ID。", f"{path}.{decision}"))
+                continue
+            if target not in node_ids:
+                diagnostics.append(_error(f"transition target `{target}` 不存在。", f"{path}.{decision}"))
     return diagnostics
 
 

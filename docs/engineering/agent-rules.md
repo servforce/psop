@@ -13,6 +13,7 @@
 - [execution-graph-formal-v5.md](../architecture/execution-graph-formal-v5.md) 是 `EG` 的形式事实源；编译产物与 runtime 推进逻辑都必须与其一致。
 - `Session Token` 是唯一正式状态对象，禁止引入并行“第二状态源”。
 - `Runtime Kernel` 是唯一正式状态提交边界；agent、tool、worker、sandbox 都不是状态主权者。
+- Runtime phase 推进权属于 Runtime Kernel 和 EG transition；模型 observation 中的 `next_phase` 只能作为兼容字段或诊断信息，禁止作为正式状态主权来源。
 - `MCP Gateway` 负责受控接入 MCP server/tool；禁止在业务代码中直接把 reference server 当平台内核。
 - LLM 调用必须经过平台认可的受治理入口。Runtime LLM / evidence evaluation 节点通过 `psop.runner` 进入 Agent Harness；compiler、skill test judge、素材分析等非 Runtime Runner 域服务可继续使用 `LlmInferenceGateway`。禁止业务节点自行直连具体模型厂商。
 - `Capability Host` 负责把 harness 的能力建议变成正式执行绑定；禁止绕过策略裁决直接执行高风险能力。
@@ -42,6 +43,7 @@
 - Runtime worker 是生产路径中唯一推进 Runtime 的执行者。单元测试可以显式调用 `process_run()`，但必须在测试语义中写清这是模拟 worker。
 - Runtime terminal input 必须按 wait checkpoint 的 `input_window` 和 `control.terminal_consumption` 账本消费；不得把旧 input 跨 checkpoint 或 workflow step 自动复用为新的 evidence。
 - Runtime worker 可以在每个节点完成后提交并发布本节点新增 output/trace，以降低终端可见延迟；input event 的 accepted 推送仍由追加事件路径负责。
+- Runtime evaluation 节点在输出成功消息前必须先解析并校验 EG transition；缺失合法 transition 时进入 recoverable failure，禁止先输出“进入下一阶段”再报错。
 - `job:runtime:{run_id}` 必须保持单 Run 单 job 的 dedupe 语义；running job 收到新输入时只标记 `payload.rerun_requested=true`，不抢占、不新建重复 job。
 - `Sandbox Manager` 只在需要更强隔离时介入，不作为默认常驻独立主进程。
 

@@ -137,7 +137,10 @@ def register_runner_tools(registry: ToolRegistry) -> None:
                     },
                     "terminal_message": {"type": "string"},
                     "reason": {"type": "string"},
-                    "next_phase": {"type": "string"},
+                    "next_phase": {
+                        "type": "string",
+                        "description": "兼容字段；runner 不选择 Runtime phase，默认传空字符串。",
+                    },
                     "wait_reason": {"type": "string"},
                     "expected_inputs": {"type": "array", "items": {"type": "string"}},
                     "evidence_assessment": {"type": "object"},
