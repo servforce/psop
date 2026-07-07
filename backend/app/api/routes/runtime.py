@@ -291,14 +291,7 @@ async def append_terminal_event(
         settings=settings,
         object_store=object_store,
     )
-    previous_terminal_seq = service.get_run(session, run_id).latest_terminal_seq
     result = service.append_terminal_event(session, run_id, payload, idempotency_key=idempotency_key)
-    await _broadcast_terminal_events_after(
-        run_id,
-        previous_terminal_seq,
-        session=session,
-        service=service,
-    )
     return result
 
 
@@ -513,29 +506,6 @@ def _multipart_event_payload(parts: list[TerminalEventPartInput]) -> dict[str, A
             )
         ),
         "part_count": len(parts),
-    }
-
-
-async def _broadcast_terminal_events_after(
-    run_id: str,
-    previous_terminal_seq: int,
-    *,
-    session: Session,
-    service: RuntimeService,
-) -> None:
-    events = service.list_terminal_events(session, run_id, from_seq=previous_terminal_seq + 1)
-    for event in events:
-        await run_ws_hub.broadcast(run_id, _terminal_event_ws_message(run_id, event))
-
-
-def _terminal_event_ws_message(run_id: str, event: TerminalEventResponse) -> dict:
-    return {
-        "event_type": "terminal.event.appended",
-        "run_id": run_id,
-        "invocation_id": None,
-        "seq_no": event.seq_no,
-        "occurred_at": event.occurred_at.isoformat(),
-        "payload": event.model_dump(mode="json"),
     }
 
 

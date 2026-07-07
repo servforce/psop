@@ -15,10 +15,12 @@ from app.agent_harness.service import AgentHarnessService
 from app.app import create_app
 from app.core.config import Settings
 from app.domain.jobs.models import RuntimeJob
+from app.domain.runtime.service import RuntimeService
 from app.domain.skills import raw_materials
 from app.domain.skills import video_analysis
 from app.domain.skills import service as skills_service_module
 from app.domain.skills.models import SkillDefinition, SkillRawMaterial, SkillRawMaterialAnalysis, SkillRawMaterialGeneration
+from app.domain.skill_tests.models import SkillTestExpectationEvaluation
 from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
 from app.gateway.asr import AsrTranscription
@@ -744,6 +746,18 @@ def create_test_client() -> tuple[TestClient, FakeGitLabGateway, FakeInferenceGa
         )
     )
     return client, fake_gateway, fake_inference
+
+
+def process_runtime_run_for_test(client: TestClient, run_id: str) -> None:
+    service = RuntimeService(
+        settings=client.app.state.settings,
+        inference_gateway=client.app.state.inference_gateway,
+        object_store=client.app.state.object_store,
+        agent_harness_service=client.app.state.agent_harness_service,
+        runtime_event_sink=client.app.state.runtime_event_sink,
+    )
+    with client.app.state.db_manager.session() as session:
+        service.process_run(session, run_id)
 
 
 def test_process_skill_raw_material_generation_job_rolls_back_before_marking_failed(monkeypatch) -> None:
@@ -1842,6 +1856,9 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
                 "external_event_id": "issue-one-demo-extra-input",
             },
         )
+        run_after_append_response = client.get(f"/api/v1/runs/{run_id}")
+        jobs_after_append_response = client.get("/api/v1/runtime/jobs")
+        process_runtime_run_for_test(client, run_id)
         run_response = client.get(f"/api/v1/runs/{run_id}")
         trace_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
         terminal_events_after_append_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
@@ -1880,12 +1897,22 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert invocation_payload["terminal_session_id"]
     initial_run_payload = initial_run_response.json()
     assert initial_run_payload["status"] == "waiting_input"
-    assert initial_run_payload["current_step"] == "collect_context"
-    assert initial_run_payload["checkpoint_id"] == "collect_context_evidence"
+    assert initial_run_payload["runtime_phase"] == "terminal_bound"
+    assert initial_run_payload["latest_terminal_seq"] == 0
+    assert initial_run_payload["current_step"] == ""
+    assert initial_run_payload["checkpoint_id"] == ""
+    assert terminal_events_response.status_code == 200
+    assert terminal_events_response.json() == []
+    assert terminal_append_response.status_code == 202
+    assert terminal_append_response.json()["seq_no"] == 1
+    assert run_after_append_response.json()["status"] == "waiting_input"
+    assert run_after_append_response.json()["latest_terminal_seq"] == 1
+    runtime_job_after_append = next(job for job in jobs_after_append_response.json() if job["job_type"] == "runtime")
+    assert runtime_job_after_append["status"] == "pending"
     run_payload = run_response.json()
     assert run_payload["status"] == "succeeded"
     assert run_payload["terminal_session_id"] == invocation_payload["terminal_session_id"]
-    assert run_payload["latest_terminal_seq"] == 6
+    assert run_payload["latest_terminal_seq"] == 5
     assert run_payload["latest_trace_seq"] == 7
     assert len(run_payload["binding_summary"]) == 2
     assert "测试任务已完成" in run_payload["final_output"]
@@ -1911,22 +1938,23 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert {item["target_kind"] for item in bindings_response.json()} == {"web_terminal"}
     assert terminal_session_response.status_code == 200
     assert terminal_session_response.json()["terminal_session"]["id"] == invocation_payload["terminal_session_id"]
-    assert terminal_events_response.status_code == 200
-    assert [item["direction"] for item in terminal_events_response.json()] == ["input", "output"]
-    assert terminal_append_response.status_code == 202
-    assert terminal_append_response.json()["seq_no"] == 3
-    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3, 4, 5, 6]
+    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3, 4, 5]
+    assert [item["direction"] for item in terminal_events_after_append_response.json()] == [
+        "input",
+        "output",
+        "output",
+        "output",
+        "output",
+    ]
 
     replay_payload = replay_response.json()
-    assert [item["title"] for item in replay_payload["timeline"]][:6] == [
-        "终端输入",
-        "绑定解析",
-        "runtime.start.completed",
-        "终端输出",
-        "等待现场证据",
-        "Runner 输出",
-    ]
-    assert len(replay_payload["terminal_events"]) == 6
+    replay_event_types = [item["event_type"] for item in replay_payload["timeline"]]
+    assert "terminal.event.appended" in replay_event_types
+    assert "binding.resolved" in replay_event_types
+    assert "runtime.start.completed" in replay_event_types
+    assert "runtime.wait_checkpoint.entered" in replay_event_types
+    assert "runtime.agent.completed" in replay_event_types
+    assert len(replay_payload["terminal_events"]) == 5
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
 
@@ -2011,6 +2039,8 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
             f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content",
             headers={"Range": "bytes=0-4"},
         )
+        run_after_upload_response = client.get(f"/api/v1/runs/{run_id}")
+        process_runtime_run_for_test(client, run_id)
         final_run_response = client.get(f"/api/v1/runs/{run_id}")
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
@@ -2040,6 +2070,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert uploaded_content_response.content == b"debug-image"
     assert uploaded_content_range_response.status_code == 206
     assert uploaded_content_range_response.content == b"debug"
+    assert run_after_upload_response.json()["status"] == "waiting_input"
     assert final_run_response.json()["status"] == "succeeded"
     assert any(event["event_kind"] == "terminal.multimodal.input.v1" for event in terminal_events_response.json())
     assert replay_response.status_code == 200
@@ -2096,6 +2127,8 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_runner() -> 
         image_part_content_response = client.get(
             f"/api/v1/terminal/sessions/{run_id}/events/{appended_event['id']}/parts/{image_part['part_id']}/content"
         )
+        run_after_append_response = client.get(f"/api/v1/runs/{run_id}")
+        process_runtime_run_for_test(client, run_id)
         final_run_response = client.get(f"/api/v1/runs/{run_id}")
         snapshots_response = client.get(f"/api/v1/runs/{run_id}/snapshots")
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
@@ -2116,6 +2149,7 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_runner() -> 
     assert image_part_content_response.status_code == 200
     assert image_part_content_response.headers["content-type"] == "image/png"
     assert image_part_content_response.content == b"image-bytes"
+    assert run_after_append_response.json()["status"] == "waiting_input"
     assert final_run_response.json()["status"] == "succeeded"
 
     final_token = snapshots_response.json()[-1]["token_payload"]
@@ -2240,6 +2274,7 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
                     "external_event_id": "ws-terminal-demo-input",
                 },
             )
+            initial_trace_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
             terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
             appended_events = [
                 event
@@ -2247,6 +2282,19 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
                 if event["seq_no"] >= append_response.json()["seq_no"]
             ]
             messages = [websocket.receive_json() for _ in appended_events]
+            initial_trace_seq = max((event["seq_no"] for event in initial_trace_response.json()), default=0)
+            process_runtime_run_for_test(client, run_id)
+            terminal_events_after_process_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+            trace_after_process_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
+            output_events = [
+                event
+                for event in terminal_events_after_process_response.json()
+                if event["seq_no"] > append_response.json()["seq_no"]
+            ]
+            new_trace_events = [
+                event for event in trace_after_process_response.json() if event["seq_no"] > initial_trace_seq
+            ]
+            process_messages = [websocket.receive_json() for _ in range(len(output_events) + len(new_trace_events))]
 
     assert invocation_response.status_code == 201
     assert connected["event_type"] == "ws.connected"
@@ -2256,8 +2304,12 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
     assert [message["seq_no"] for message in messages] == [event["seq_no"] for event in appended_events]
     assert messages[0]["payload"]["payload_inline"] == "WS 输入"
     assert messages[0]["seq_no"] == append_response.json()["seq_no"]
-    assert [message["payload"]["direction"] for message in messages] == ["input", "output", "output", "output"]
-    assert any("测试任务已完成" in str(message["payload"]["payload_inline"]) for message in messages)
+    assert [message["payload"]["direction"] for message in messages] == ["input"]
+    assert [message["event_type"] for message in process_messages].count("terminal.event.appended") == len(output_events)
+    assert [message["event_type"] for message in process_messages].count("trace.event.appended") == len(new_trace_events)
+    output_messages = [message for message in process_messages if message["event_type"] == "terminal.event.appended"]
+    assert [message["payload"]["direction"] for message in output_messages] == ["output"] * len(output_events)
+    assert any("测试任务已完成" in str(message["payload"]["payload_inline"]) for message in output_messages)
 
 
 def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
@@ -2892,6 +2944,38 @@ def test_skill_test_judge_prompt_compacts_large_outputs() -> None:
     assert len(prompt_json) < 10000
     assert old_payload not in prompt_json
     assert recent_payload not in prompt_json
+
+
+def test_skill_test_evidence_refs_are_normalized_for_review_responses() -> None:
+    assert SkillTestService._normalize_evidence_refs(
+        [
+            {"kind": "terminal_event", "seq_no": 4},
+            "seq_no: 1",
+            "",
+            None,
+        ]
+    ) == [
+        {"kind": "terminal_event", "seq_no": 4},
+        {"kind": "raw", "ref": "seq_no: 1"},
+    ]
+    evaluation = SkillTestExpectationEvaluation(
+        id="evaluation-1",
+        scenario_run_id="scenario-run-1",
+        expectation_id="expectation-1",
+        status="failed",
+        confidence=0.5,
+        reason="缺少预期输出。",
+        evidence_refs=["seq_no: 1"],
+        judge_provider="fake",
+        judge_model="fake-model",
+        prompt_hash="hash",
+        raw_response={},
+        created_at=datetime(2026, 5, 13, tzinfo=timezone.utc),
+    )
+
+    response = SkillTestService._build_evaluation_response(evaluation)
+
+    assert response.evidence_refs == [{"kind": "raw", "ref": "seq_no: 1"}]
 
 
 def test_skill_test_scenario_rejects_duplicate_open_run() -> None:

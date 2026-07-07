@@ -11,6 +11,7 @@ from app.core.config import Settings
 from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.compiler.service import CompilerService
 from app.domain.jobs.service import JobQueryService
+from app.domain.runtime.events import NoopRuntimeEventSink, RuntimeEventSink
 from app.domain.runtime.service import RuntimeService
 from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.service import SkillsService
@@ -47,6 +48,10 @@ def get_object_store(request: Request) -> ObjectStoreService:
 
 def get_agent_harness_service(request: Request) -> AgentHarnessService:
     return request.app.state.agent_harness_service  # type: ignore[return-value]
+
+
+def get_runtime_event_sink(request: Request) -> RuntimeEventSink:
+    return getattr(request.app.state, "runtime_event_sink", NoopRuntimeEventSink())  # type: ignore[return-value]
 
 
 def get_db_session(request: Request) -> Generator[Session, None, None]:
@@ -88,6 +93,7 @@ def get_runtime_service(request: Request) -> RuntimeService:
         inference_gateway=get_inference_gateway(request),
         object_store=get_object_store(request),
         agent_harness_service=get_agent_harness_service(request),
+        runtime_event_sink=get_runtime_event_sink(request),
     )
 
 

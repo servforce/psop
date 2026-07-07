@@ -70,6 +70,14 @@ class RaisingAgentHarnessService:
         raise self.exc
 
 
+class RecordingRuntimeEventSink:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def publish(self, event: dict[str, object]) -> None:
+        self.events.append(event)
+
+
 class QueuedInferenceGateway:
     def __init__(self, contents: list[str]) -> None:
         self.contents = contents
@@ -286,6 +294,7 @@ def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
                     external_event_id="runtime-runner-harness-evidence-001",
                 ),
             )
+            runtime_service.process_run(session, invocation.run_id or "")
             run = runtime_service.get_run(session, invocation.run_id or "")
             trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
             terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
@@ -319,7 +328,7 @@ def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
     assert agent_run_record.related_runtime_run_id == run.id
     assert agent_event_count > 0
     assert agent_artifact_count > 0
-    assert [event.direction for event in terminal_events] == ["output", "input", "output", "output", "output"]
+    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output", "output"]
 
 
 def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> None:
@@ -412,6 +421,7 @@ def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> N
                     external_event_id="runtime-runner-image-attachment-001",
                 ),
             )
+            runtime_service.process_run(session, invocation.run_id or "")
             run = runtime_service.get_run(session, invocation.run_id or "")
             image_agent_runs = (
                 session.query(AgentRunRecord)
@@ -437,8 +447,8 @@ def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> N
     serialized_event = json.dumps(prepared_payload, ensure_ascii=False)
     assert run.status == "succeeded"
     assert image_agent_run_summary["image_attachment_count"] == 1
-    assert image_agent_run_summary["attachment_source_refs"] == ["terminal_event:2:image_1"]
-    assert prepared_payload["attachments"][0]["source_ref"] == "terminal_event:2:image_1"
+    assert image_agent_run_summary["attachment_source_refs"] == ["terminal_event:1:image_1"]
+    assert prepared_payload["attachments"][0]["source_ref"] == "terminal_event:1:image_1"
     assert "aW1hZ2UtYnl0ZXM=" not in sandbox_input
     assert "terminal/site.jpg" not in sandbox_input
     assert "aW1hZ2UtYnl0ZXM=" not in serialized_event
@@ -533,6 +543,7 @@ def test_runtime_runner_attachment_warning_when_object_store_unavailable(tmp_pat
                     external_event_id="runtime-runner-image-attachment-warning-001",
                 ),
             )
+            runtime_service.process_run(session, invocation.run_id or "")
             run = runtime_service.get_run(session, invocation.run_id or "")
             trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
     finally:
@@ -541,7 +552,7 @@ def test_runtime_runner_attachment_warning_when_object_store_unavailable(tmp_pat
     warning_events = [event for event in trace_events if event.event_type == "runtime.runner.attachment.warning"]
     assert run.status == "succeeded"
     assert warning_events
-    assert warning_events[0].payload["source_ref"] == "terminal_event:2:image_1"
+    assert warning_events[0].payload["source_ref"] == "terminal_event:1:image_1"
     assert warning_events[0].payload["reason"] == "object_store_unavailable"
 
 
@@ -675,6 +686,18 @@ def _run_runner_reference_image_case(
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
+            runtime_service.append_terminal_event(
+                session,
+                invocation.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="现场说明已提交。",
+                    external_event_id=f"{skill_key}-evidence-001",
+                ),
+            )
+            runtime_service.process_run(session, invocation.run_id or "")
             run = runtime_service.get_run(session, invocation.run_id or "")
             trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
             terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
@@ -1099,6 +1122,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
                 external_event_id="runtime-unit-evidence-001",
             ),
         )
+        runtime_service.process_run(session, invocation.run_id or "")
         run = runtime_service.get_run(session, invocation.run_id or "")
         replay = runtime_service.build_replay(session, invocation.run_id or "")
         snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
@@ -1110,11 +1134,13 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert invocation.status == "running"
     assert invocation.terminal_session_id
     assert initial_run.status == "waiting_input"
-    assert initial_run.current_step == "collect_context"
-    assert initial_run.checkpoint_id == "collect_context_evidence"
-    assert initial_run.expected_inputs
-    assert [event.direction for event in initial_events] == ["output"]
-    assert appended.seq_no == 2
+    assert initial_run.runtime_phase == "terminal_bound"
+    assert initial_run.latest_terminal_seq == 0
+    assert initial_run.current_step == ""
+    assert initial_run.checkpoint_id == ""
+    assert initial_run.expected_inputs == []
+    assert initial_events == []
+    assert appended.seq_no == 1
     assert run.status == "succeeded"
     assert run.latest_snapshot_seq == 5
     assert run.latest_terminal_seq == 5
@@ -1143,18 +1169,16 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert agent_trace_payloads[0]["observation"]["usage"]["total_tokens"] > 0
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
     assert terminal_session.terminal_session.status == "closed"
-    assert [event.direction for event in terminal_events] == ["output", "input", "output", "output", "output"]
-    assert terminal_events[1].payload_inline == "我已经完成当前步骤，并上传了现场说明。"
+    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output", "output"]
+    assert terminal_events[0].payload_inline == "我已经完成当前步骤，并上传了现场说明。"
     assert {binding.requirement_key for binding in bindings} == {"terminal.input", "terminal.output"}
     assert len(replay.terminal_events) == 5
     assert len(replay.bindings) == 2
-    assert [item.event_type for item in replay.timeline][:5] == [
-        "binding.resolved",
-        "runtime.start.completed",
-        "terminal.event.appended",
-        "runtime.wait_checkpoint.entered",
-        "runtime.agent.completed",
-    ]
+    assert "binding.resolved" in [item.event_type for item in replay.timeline]
+    assert "terminal.event.appended" in [item.event_type for item in replay.timeline]
+    assert "runtime.start.completed" in [item.event_type for item in replay.timeline]
+    assert "runtime.wait_checkpoint.entered" in [item.event_type for item in replay.timeline]
+    assert "runtime.agent.completed" in [item.event_type for item in replay.timeline]
     assert "runtime.final.completed" in [item.event_type for item in replay.timeline]
 
 
@@ -1233,6 +1257,7 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> No
                     external_event_id="runtime-abort-evidence-001",
                 ),
             )
+            runtime_service.process_run(session, invocation.run_id or "")
             run = runtime_service.get_run(session, invocation.run_id or "")
             refreshed_invocation = runtime_service.get_invocation(session, invocation.id)
             terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
@@ -1262,7 +1287,7 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> No
     assert "电源功率不足" in run.exit_reason
     assert run.ended_at is not None
     assert terminal_session.terminal_session.status == "closed"
-    assert [event.direction for event in terminal_events] == ["output", "input", "output", "output"]
+    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output"]
     assert terminal_events[-1].source_ref["node_id"] == "terminal_abort"
     assert snapshots[-1].token_payload["status"] == "aborted"
     assert snapshots[-1].token_payload["control"]["abort"]["next_phase"] == "terminal_abort"
@@ -1324,6 +1349,7 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
             ),
         )
         events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        job = JobRepository().get_runtime_job_by_dedupe_key(session, f"job:runtime:{invocation.run_id}")
 
         with pytest.raises(SkillValidationError):
             runtime_service.append_terminal_event(
@@ -1336,11 +1362,377 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
                 ),
             )
 
-    assert appended.seq_no == 3
+    assert appended.seq_no == 1
     assert duplicate.event_id == appended.event_id
     assert duplicate.seq_no == appended.seq_no
-    assert [event.seq_no for event in events] == [1, 2, 3, 4, 5, 6]
-    assert events[2].payload_inline == "追加输入"
+    assert [event.seq_no for event in events] == [1]
+    assert events[0].payload_inline == "追加输入"
+    assert job is not None
+    assert job.status == "pending"
+
+
+def test_runtime_service_publishes_terminal_and_trace_events_after_commit(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+    sink = RecordingRuntimeEventSink()
+    service = RuntimeService(
+        settings=runtime_service.settings,
+        inference_gateway=runtime_service.inference_gateway,
+        agent_harness_service=runtime_service.agent_harness_service,
+        runtime_event_sink=sink,
+    )
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-event-sink",
+                name="Runtime Event Sink",
+                description="Validate runtime event sink publishing.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime event sink publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+        invocation = service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="runtime-event-sink",
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        create_events = list(sink.events)
+        sink.events.clear()
+
+        appended = service.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="现场输入",
+                external_event_id="runtime-event-sink-input",
+            ),
+        )
+        append_events = list(sink.events)
+        sink.events.clear()
+        service.process_run(session, invocation.run_id or "")
+        process_events = list(sink.events)
+        terminal_events = service.list_terminal_events(session, invocation.run_id or "")
+
+    assert any(event["event_type"] == "trace.event.appended" for event in create_events)
+    assert [event["event_type"] for event in append_events] == ["terminal.event.appended"]
+    assert append_events[0]["seq_no"] == appended.seq_no
+    assert append_events[0]["payload"]["payload_inline"] == "现场输入"
+    output_messages = [event for event in process_events if event["event_type"] == "terminal.event.appended"]
+    output_events = [event for event in terminal_events if event.direction == "output"]
+    assert len(output_messages) == len(output_events)
+    assert [event["payload"]["direction"] for event in output_messages] == ["output"] * len(output_messages)
+    assert [event["seq_no"] for event in output_messages] == sorted(event["seq_no"] for event in output_messages)
+    assert any(event["event_type"] == "trace.event.appended" for event in process_events)
+
+
+def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_path) -> None:
+    settings = create_test_settings().model_copy(
+        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
+    )
+    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
+    database_manager.create_schema()
+    gitlab_gateway = FakeGitLabGateway()
+    compile_gateway = FakeInferenceGateway()
+    compiler_service = CompilerService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        inference_gateway=compile_gateway,
+    )
+    skills_service = SkillsService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        compiler_service=compiler_service,
+    )
+    agent_harness_service = AgentHarnessService(
+        settings=settings,
+        chat_model_factory=lambda _definition: ScriptedRunnerChatModel(
+            observation_overrides_by_node={
+                "evaluate_collect_context": {
+                    "decision": "continue",
+                    "next_phase": "instruct_second_step",
+                    "terminal_message": "第一阶段证据已确认，可以进入第二阶段。",
+                    "reason": "电源型号信息已经满足第一阶段验证。",
+                    "expected_inputs": [],
+                    "evidence_assessment": {
+                        "accepted_event_refs": ["terminal_event:1"],
+                        "rejected_event_refs": [],
+                        "missing_evidence": [],
+                        "unsafe_or_ambiguous_facts": [],
+                    },
+                },
+                "evaluate_second_step": {
+                    "decision": "need_more_evidence",
+                    "terminal_message": "不应使用上一阶段输入评估第二阶段。",
+                    "reason": "第二阶段缺少新的现场证据。",
+                    "wait_reason": "等待第二阶段证据。",
+                    "expected_inputs": ["text"],
+                },
+            }
+        ),
+    )
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=agent_harness_service,
+    )
+
+    try:
+        with database_manager.session() as session:
+            skill = skills_service.create_skill(
+                session,
+                CreateSkillRequest(
+                    key="runtime-checkpoint-consumption",
+                    name="Runtime Checkpoint Consumption",
+                    description="Validate checkpoint-scoped terminal input consumption.",
+                ),
+            )
+            published = skills_service.publish_skill(
+                session,
+                skill_id=skill.id,
+                payload=PublishSkillRequest(publish_reason="Runtime checkpoint consumption"),
+            )
+            compiled = process_publish_job(session, compiler_service, published.compile_request.id)
+            artifact = compiler_service.get_artifact(session, compiled.artifact_id or "")
+            artifact_object = session.get(ArtifactObject, artifact.artifact_object_id)
+            assert artifact_object is not None
+            artifact_payload = json.loads(json.dumps(artifact_object.content_json, ensure_ascii=False))
+            artifact_payload = _add_second_wait_checkpoint_to_artifact(artifact_payload)
+            artifact_object.content_json = artifact_payload
+            session.flush()
+
+            invocation = runtime_service.create_invocation(
+                session,
+                CreateInvocationRequest(
+                    skill_key="runtime-checkpoint-consumption",
+                    terminal_context={"terminal_kind": "web"},
+                ),
+            )
+            runtime_service.append_terminal_event(
+                session,
+                invocation.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="海韵 focus gx-1200",
+                    external_event_id="runtime-checkpoint-consumption-input-1",
+                ),
+            )
+            runtime_service.process_run(session, invocation.run_id or "")
+            run = runtime_service.get_run(session, invocation.run_id or "")
+            terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+            trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+            snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
+    finally:
+        database_manager.dispose()
+
+    latest_token = snapshots[-1].token_payload
+    wait = latest_token["control"]["wait"]
+    consumption = latest_token["control"]["terminal_consumption"]
+    wait_traces = [event for event in trace_events if event.event_type == "runtime.wait_checkpoint.entered"]
+    agent_node_ids = [
+        event.payload["node_id"]
+        for event in trace_events
+        if event.event_type == "runtime.agent.completed"
+    ]
+
+    assert run.status == "waiting_input"
+    assert run.checkpoint_id == "second_step_evidence"
+    assert wait["checkpoint_id"] == "second_step_evidence"
+    assert wait["status"] == "waiting"
+    assert wait["evidence"] == []
+    assert wait["input_window"]["policy"] == "checkpoint_scoped"
+    assert wait["input_window"]["accept_after_seq"] == 1
+    assert consumption == [
+        {
+            "seq_no": 1,
+            "event_id": terminal_events[0].id,
+            "checkpoint_id": "collect_context_evidence",
+            "workflow_step_id": "collect_context",
+            "consumed_at": consumption[0]["consumed_at"],
+        }
+    ]
+    assert "evaluate_second_step" not in agent_node_ids
+    assert [event.payload["resumed_from_existing_input"] for event in wait_traces] == [True, False]
+    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output"]
+
+
+def _add_second_wait_checkpoint_to_artifact(artifact_payload: dict) -> dict:
+    nodes = list(artifact_payload["nodes"])
+    final_index = next(index for index, node in enumerate(nodes) if node["id"] == "final_verify")
+    nodes[final_index:final_index] = [
+        {
+            "id": "instruct_second_step",
+            "kind": "llm",
+            "guard": {"phase_is": "instruct_second_step"},
+            "actor": {"name": "agent.llm"},
+            "interaction": {
+                "output_to_terminal": True,
+                "wait_after_output": True,
+                "checkpoint_id": "second_step_evidence",
+                "workflow_step_id": "second_step",
+                "wait_reason": "等待用户提交第二阶段证据。",
+                "expected_inputs": [
+                    {
+                        "kind": "text",
+                        "event_kind": "terminal.text.input.v1",
+                    }
+                ],
+                "resume_phase": "evaluate_second_step",
+            },
+            "projection": {
+                "system_template": "输出当前现实步骤指令。second_step",
+                "user_template": "请用户提交第二阶段证据。当前 Token：{{token}}",
+            },
+            "merge": [
+                {
+                    "op": "set",
+                    "path": "observations.instruct_second_step",
+                    "from": "observation",
+                }
+            ],
+            "policy": {"priority": 35},
+        },
+        {
+            "id": "evaluate_second_step",
+            "kind": "llm",
+            "guard": {"phase_is": "evaluate_second_step"},
+            "actor": {"name": "agent.llm"},
+            "interaction": {"evaluation": True},
+            "projection": {
+                "system_template": "只输出 JSON decision。evaluate_second_step",
+                "user_template": "根据 token.control.wait.evidence 判断 second_step 是否完成。当前 Token：{{token}}",
+            },
+            "merge": [
+                {
+                    "op": "set",
+                    "path": "observations.evaluate_second_step",
+                    "from": "observation",
+                },
+                {
+                    "op": "set",
+                    "path": "phase",
+                    "from": "observation.next_phase",
+                },
+            ],
+            "policy": {"priority": 36},
+        },
+    ]
+    artifact_payload["nodes"] = nodes
+    artifact_payload["dependency_graph_for_view"] = [
+        {"from": "start", "to": "instruct_collect_context"},
+        {"from": "instruct_collect_context", "to": "evaluate_collect_context"},
+        {"from": "evaluate_collect_context", "to": "instruct_second_step"},
+        {"from": "instruct_second_step", "to": "evaluate_second_step"},
+        {"from": "evaluate_second_step", "to": "final_verify"},
+        {"from": "final_verify", "to": "terminal"},
+    ]
+    runtime_contract = artifact_payload["runtime_contract"]
+    runtime_contract.setdefault("workflow_steps", []).append(
+        {
+            "id": "second_step",
+            "title": "第二阶段",
+            "goal": "等待第二阶段现场证据。",
+            "source_evidence": "测试用第二阶段。",
+        }
+    )
+    runtime_contract.setdefault("expected_evidence", {})["second_step"] = [
+        {
+            "kind": "text",
+            "event_kind": "terminal.text.input.v1",
+        }
+    ]
+    runtime_contract.setdefault("wait_checkpoints", []).append(
+        {
+            "checkpoint_id": "second_step_evidence",
+            "workflow_step_id": "second_step",
+            "expected_inputs": [{"kind": "text"}],
+        }
+    )
+    return artifact_payload
+
+
+def test_runtime_job_running_append_marks_rerun_and_finish_requeues_unsynced_input(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-job-rerun",
+                name="Runtime Job Rerun",
+                description="Validate runtime job rerun marker.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime job rerun publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="runtime-job-rerun",
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        runtime_service.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="第一条输入",
+                external_event_id="runtime-job-rerun-input-1",
+            ),
+        )
+        job = JobRepository().get_runtime_job_by_dedupe_key(session, f"job:runtime:{invocation.run_id}")
+        assert job is not None
+        job.status = "running"
+        job.attempt_no = 4
+        session.commit()
+
+        runtime_service.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="运行中追加输入",
+                external_event_id="runtime-job-rerun-input-2",
+            ),
+        )
+        session.refresh(job)
+        assert job.status == "running"
+        assert job.attempt_no == 4
+        assert (job.payload or {}).get("rerun_requested") is True
+        run_model = runtime_service.repository.get_run(session, invocation.run_id or "")
+        assert run_model is not None
+        snapshot = runtime_service.repository.list_snapshots(session, invocation.run_id or "")[-1]
+        runtime_service._finish_runtime_job_turn(
+            session=session,
+            job=job,
+            run=run_model,
+            token=snapshot.token_payload,
+            status="succeeded",
+        )
+        assert job.status == "pending"
+        assert job.attempt_no == 4
+        assert job.payload == {"run_id": invocation.run_id}
+        assert job.available_at is not None
 
 
 def test_runtime_service_records_failed_run_when_runner_fails(runtime_stack) -> None:
@@ -1374,11 +1766,24 @@ def test_runtime_service_records_failed_run_when_runner_fails(runtime_stack) -> 
                 input_envelope={"user_input": "触发失败"},
             ),
         )
+        failing_runtime.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="触发失败",
+                external_event_id="runtime-failure-input",
+            ),
+        )
+        failing_runtime.process_run(session, invocation.run_id or "")
+        refreshed_invocation = failing_runtime.get_invocation(session, invocation.id)
         run = failing_runtime.get_run(session, invocation.run_id or "")
         trace_events = failing_runtime.list_trace_events(session, invocation.run_id or "")
         terminal_events = failing_runtime.list_terminal_events(session, invocation.run_id or "")
 
-    assert invocation.status == "failed"
+    assert refreshed_invocation.status == "failed"
     assert run.status == "failed"
     assert run.exit_reason == "runner provider unavailable"
     assert trace_events[-1].event_type == "runtime.failed"
@@ -1425,6 +1830,18 @@ def test_runtime_service_records_runner_gateway_error_details_in_failed_trace_pa
                 input_envelope={"user_input": "触发 gateway 失败"},
             ),
         )
+        failing_runtime.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="触发 gateway 失败",
+                external_event_id="runtime-gateway-failure-input",
+            ),
+        )
+        failing_runtime.process_run(session, invocation.run_id or "")
         trace_events = failing_runtime.list_trace_events(session, invocation.run_id or "")
 
     payload = trace_events[-1].payload
@@ -1480,6 +1897,7 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
             ),
         )
         first_run = runtime_service.get_run(session, invocation.run_id or "")
+        runtime_service.process_run(session, invocation.run_id or "")
         failing_runtime.append_terminal_event(
             session,
             invocation.run_id or "",
@@ -1491,6 +1909,7 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
                 external_event_id="runtime-message-recover-failed-input",
             ),
         )
+        failing_runtime.process_run(session, invocation.run_id or "")
         recovered_run = runtime_service.get_run(session, invocation.run_id or "")
         trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
         terminal_session = runtime_service.get_terminal_session(session, invocation.run_id or "")
@@ -1508,6 +1927,7 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
                 external_event_id="runtime-message-recover-retry-input",
             ),
         )
+        runtime_service.process_run(session, invocation.run_id or "")
         final_run = runtime_service.get_run(session, invocation.run_id or "")
 
     assert first_run.status == "waiting_input"

@@ -44,6 +44,42 @@ def test_psop_runner_definition_and_skills_load() -> None:
     assert "PSOP Runner Core" in resource["content"]
 
 
+def test_psop_runner_config_and_prompt_guard_observation_format() -> None:
+    settings = Settings(database_url="sqlite+pysqlite:///:memory:")
+    package = default_agent_registry(settings.backend_root).load("psop.runner")
+    prompt = package.read_system_prompt()
+    model_events_config = next(
+        (
+            middleware.config
+            for middleware in package.definition.middleware
+            if not isinstance(middleware, str) and middleware.name == "model_events"
+        ),
+        None,
+    )
+
+    assert model_events_config == {"max_model_calls": 5}
+    assert "输入上下文怎么读" in prompt
+    assert "输出字段语义" in prompt
+    assert "输出示例" in prompt
+    assert "示例只展示判断思路和字段形态" in prompt
+    assert "RunnerTurnContext" in prompt
+    assert "按需工具" in prompt
+    assert "`schema` 的值必须是 `psop.runner.observation.v1`" in prompt
+    assert "不要使用 `kind` 字段" in prompt
+    assert "不能传 `null`" in prompt
+    assert "`terminal_event:N`" in prompt
+    assert "`runtime_contract.workflow_steps.<id>`" in prompt
+    assert "`runtime_contract.expected_evidence.<id>`" in prompt
+    assert "`runtime_contract.wait_checkpoints.<id>`" in prompt
+    assert "`prompt_view.*`" in prompt
+    assert "`current_checkpoint.*`" in prompt
+    assert "`trace_summary:N`" in prompt
+    assert "不要在 `source_refs` 中使用 `runtime_contract.safety_constraints`" in prompt
+    assert '"decision": "need_more_evidence"' in prompt
+    assert '`decision: "continue"`' in prompt
+    assert '`decision: "complete"`' in prompt
+
+
 def test_psop_runner_scripted_run_creates_observation_artifact(tmp_path) -> None:
     settings = Settings(
         database_url="sqlite+pysqlite:///:memory:",
@@ -84,21 +120,9 @@ def test_psop_runner_scripted_run_creates_observation_artifact(tmp_path) -> None
 
     assert result.status == "succeeded"
     assert "agent.memory.read" in event_types
-    assert loaded_skills == {"psop-runner"}
-    assert {
-        "core/SKILL.md",
-        "terminal-guidance/SKILL.md",
-        "evidence-evaluation/SKILL.md",
-    }.issubset(loaded_resources)
-    assert {
-        "psop.runner.read_prompt_view",
-        "psop.runner.read_runtime_contract",
-        "psop.runner.read_current_checkpoint",
-        "psop.runner.list_terminal_events",
-        "psop.runner.read_latest_evidence",
-        "psop.runner.list_step_reference_images",
-        "psop.runner.submit_observation",
-    }.issubset(completed_tools)
+    assert loaded_skills == set()
+    assert loaded_resources == set()
+    assert completed_tools == {"psop.runner.submit_observation"}
     assert any(artifact.artifact_type == "runner_observation" for artifact in result.artifacts)
     assert observation["schema"] == "psop.runner.observation.v1"
     assert observation["decision"] == "continue"
@@ -108,6 +132,49 @@ def test_psop_runner_scripted_run_creates_observation_artifact(tmp_path) -> None
         invocation_input=payload["input"],
         invocation_context=payload["context"],
     )
+
+
+def test_psop_runner_optional_read_tools_still_work(tmp_path) -> None:
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        agent_harness_sandbox_root=str(tmp_path / "agent-runs"),
+    )
+    service = AgentHarnessService(
+        settings=settings,
+        chat_model_factory=lambda _definition: ScriptedRunnerChatModel(use_optional_reads=True),
+    )
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+    result = service.invoke(
+        AgentInvocation(
+            agent_key="psop.runner",
+            input=payload["input"],
+            context=payload["context"],
+        )
+    )
+
+    completed_tools = {
+        str(event.payload.get("tool_name") or "")
+        for event in result.events
+        if event.event_type == "agent.tool.completed"
+    }
+    loaded_skills = {
+        str(event.payload.get("skill_name") or "")
+        for event in result.events
+        if event.event_type == "agent.skill.loaded"
+    }
+
+    assert result.status == "succeeded"
+    assert loaded_skills == set()
+    assert {
+        "psop.runner.read_prompt_view",
+        "psop.runner.read_runtime_contract",
+        "psop.runner.read_current_checkpoint",
+        "psop.runner.list_terminal_events",
+        "psop.runner.read_latest_evidence",
+        "psop.runner.list_step_reference_images",
+        "psop.runner.submit_observation",
+    }.issubset(completed_tools)
 
 
 def test_psop_runner_multimodal_attachment_is_redacted_from_persistence_surfaces(tmp_path) -> None:

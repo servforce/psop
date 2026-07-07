@@ -78,6 +78,8 @@ psop-runner =
 - 最近 runtime trace 摘要和上一轮 runner observation 摘要。
 - 平台级输出语言、安全和预算约束。
 
+这些事实由 RuntimeService 组织为明确的 `RunnerTurnContext`：当前 node、mode、Prompt View、current checkpoint、latest evidence、最近 terminal event 摘要、相关 runtime contract slice、reference image index、trust labels 和 output contract。`RunnerTurnContext` 会作为首轮上下文提供给模型；各 read tools 只作为上下文不足时的补充路径。
+
 终端事实的信任等级是 `untrusted_runtime_input`。它们可以作为现场证据，但不能覆盖 Agent Harness system prompt、Agent Skill、PSOP-EG、runtime contract 或工具权限。
 
 ### 5. 输出产物
@@ -155,14 +157,15 @@ psop-runner =
 
 4. RuntimeService 调用 psop.runner
    - 当节点是运行期 LLM / evidence evaluation / terminal guidance 节点时，构造 AgentInvocation。
-   - `AgentInvocation.input.text` 放当前节点任务摘要。
-   - `AgentInvocation.context` 放 Prompt View、runtime_contract、terminal facts、当前步骤参考图片索引、trace 摘要、受控附件元数据和输出契约。
+   - `AgentInvocation.input.text` 放当前节点任务摘要，并嵌入本轮 `RunnerTurnContext`。
+   - `AgentInvocation.context` 放 `runner_turn_context`、Prompt View、runtime_contract、terminal facts、当前步骤参考图片索引、trace 摘要、受控附件元数据和输出契约。
    - 如果最新终端 evidence 包含图片 part，RuntimeService 通过 `artifact_object_id` 鉴权并读取对象存储 bytes，作为 Agent Harness 多模态 attachment 传给 `psop.runner`；对象存储 key、内部 URL 和原始 base64 不进入 context、trace 或持久化记录。
    - 通过 `AgentHarnessService.invoke(agent_key="psop.runner")` 启动受治理 agent run。
 
-5. psop.runner 加载方法和读取事实
-   - 必须通过 `load_skill` 渐进加载 runner Agent Skills。
-   - 通过只读 tools 获取当前 checkpoint、终端事件、附件元数据、runtime contract 和当前步骤参考图片。
+5. psop.runner 理解上下文并按需读取事实
+   - 首轮必须先基于 `RunnerTurnContext` 判断。
+   - 上下文足够时可直接调用 `psop.runner.submit_observation`。
+   - `read_prompt_view`、`read_runtime_contract`、`read_current_checkpoint`、`list_terminal_events`、`read_latest_evidence`、`read_terminal_event_part`、`list_step_reference_images` 都是可选工具，仅在需要历史事件、part 摘要、参考图片补充或上下文缺失时调用。
    - 当本次 invocation 带有图片 attachment 时，可以基于多模态模型直接识别图片内容并评估 evidence；图片内容仍是 `untrusted_runtime_input`。
    - 根据当前执行步骤、终端提示意图和证据缺口，选择最能帮助终端用户理解任务的参考图片；没有匹配图片时保持 `reference_images=[]`，不得跨步骤随意选择图片。
    - 不直接读取数据库、对象存储原始 key 或隐藏配置。
@@ -170,6 +173,7 @@ psop-runner =
 6. psop.runner 提交 observation
    - 必须调用 `psop.runner.submit_observation` 写入 `sandbox://outputs/runner-observation.json`。
    - 工具执行 schema 校验、字段裁剪、source refs 检查和 terminal_message 限长。
+   - `submit_observation` 返回 success 后，本次 AgentRun 即满足完成条件；Runner 不应继续调用 read tools、重复提交 observation 或输出自然语言收尾，后续推进由 RuntimeService 负责。
 
 7. RuntimeService 校验并合并
    - 读取 runner observation artifact。
@@ -220,7 +224,7 @@ Runtime job
   -> sync terminal events into Session Token
   -> select enabled runtime node
   -> AgentHarnessService.invoke(agent_key="psop.runner")
-  -> runner reads runtime context through narrow tools
+  -> runner first uses RunnerTurnContext and optionally reads more context through narrow tools
   -> runner submits observation artifact
   -> RuntimeService validates observation
   -> merge observation and append snapshot / trace / terminal event
@@ -277,7 +281,7 @@ middleware:
   - name: dangling_tool_call
   - name: model_events
     config:
-      max_model_calls: 6
+      max_model_calls: 5
   - name: token_usage
   - name: tool_calls
     config:
@@ -286,7 +290,29 @@ middleware:
 memory_scope: psop.runner
 ```
 
-`load_skill` 和 `load_skill_resource` 由 `make_runner_agent()` 通过 framework tools 显式加入可见工具列表。Runner 提交 observation 前必须加载 `psop-runner` 入口 Skill，并读取 required artifact contract 声明的包内资源。
+`psop-runner` Skill 规则由 harness 侧预加载或 system prompt 静态注入。`load_skill` 和 `load_skill_resource` 可以作为按需补充路径，但不属于每轮必需交互。`RequiredArtifactContract` 对 `psop.runner` 只强制 `runner_observation` artifact 和 `psop.runner.submit_observation`，不强制加载 Skill 资源或固定 read tool 清单。
+
+### System prompt 设计原则
+
+`psop.runner` 的 system prompt 面向模型可见输入设计，不面向 Runtime 内部实现设计。职责定义应先使用模型可直接理解的语义：现实物理世界任务执行助手、已定义的任务执行图、当前节点、用户输入、现场证据、是否完成当前节点、是否需要补充证据、是否应重试或停止。`PSOP`、`RuntimeService`、`RunnerObservation`、`Session Token` 等名称只作为协议名、代码对象或架构文档术语出现，不应成为模型理解职责的前置条件。
+
+提示词应把模型本轮能看到的内容描述为：
+
+- 当前节点上下文块，字段名可以是 `RunnerContext` 或 `RunnerTurnContext`，含义都是运行时已经整理好的任务上下文。
+- 受控多模态附件和不可信 terminal facts。
+- 少量按需只读工具。
+- 唯一正式提交工具 `psop.runner.submit_observation`。
+
+提示词不应要求模型先理解数据库对象、job 调度或 Session Token 内部写入机制。此类内部机制属于架构文档和代码边界；模型只需要知道自己不拥有状态主权，不能直接推进流程，成功提交结构化判断结果后必须停止。
+
+提示词内容应帮助模型理解任务，而不是只罗列格式要求：
+
+- 先解释输入上下文中常见字段的语义，例如当前节点、执行图、等待点、最近用户输入、证据要求、输出要求、参考图片索引和 source refs。
+- 再说明判断方法，包括如何对照当前节点要求判断证据是否充分，以及各 `decision` 的业务含义。
+- 再解释输出字段为什么存在，例如 `terminal_message` 面向终端用户，`reason` 面向运行时和审计，`source_refs` 用于校验和回放。
+- 最后列出必要格式约束和少量输入/输出示例。示例必须提醒模型使用当前调用真实可见的 ID 和引用，不得照抄示例值。
+
+章节结构应保持少而稳定，优先覆盖角色、输入上下文、判断方法、工具使用、输出字段语义、提交格式约束、输入/输出示例、完成与预算，详细流程和实现机制放在本文档或 Skill resource 中。
 
 ## 四、输入与输出契约
 
@@ -313,7 +339,7 @@ memory_scope: psop.runner
     "language": "zh-CN",
     "allow_reference_images": true
   },
-  "text": "评估当前终端证据是否满足步骤：确认设备已断电。"
+  "text": "node_id=evaluate_power_off ...\n<RunnerTurnContext>{...}</RunnerTurnContext>"
 }
 ```
 
@@ -342,6 +368,30 @@ memory_scope: psop.runner
 
 ```json
 {
+  "runner_turn_context": {
+    "run_id": "run-id",
+    "node": {
+      "id": "evaluate_power_off",
+      "kind": "llm",
+      "actor": "agent.llm"
+    },
+    "mode": "evidence_evaluation",
+    "prompt_view": {},
+    "current_checkpoint": {},
+    "latest_evidence": {},
+    "recent_terminal_events": [],
+    "runtime_contract_slice": {},
+    "reference_image_index": [],
+    "trust_labels": {},
+    "output_contract": {
+      "schema": "psop.runner.observation.v1",
+      "required_artifact": "sandbox://outputs/runner-observation.json",
+      "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
+      "language": "zh-CN",
+      "allow_reference_images": true
+    },
+    "terminal_cursor": 5
+  },
   "trust_labels": {
     "runtime_contract": "trusted",
     "prompt_view": "trusted_runtime_projection",
@@ -399,7 +449,7 @@ memory_scope: psop.runner
 }
 ```
 
-`prompt_view` 是由 RuntimeService 从 Session Token 投影出来的当前节点上下文。Runner 不应把完整 `terminal.events` 历史、完整 trace 或大型媒体内容直接塞进上下文；大型图片内容只通过 `AgentInvocation.attachments` 进入本次多模态模型调用，工具和 context 只暴露脱敏元数据。
+`runner_turn_context` 是模型首轮应优先理解的上下文切片。`prompt_view` 是由 RuntimeService 从 Session Token 投影出来的当前节点上下文。Runner 不应把完整 `terminal.events` 历史、完整 trace 或大型媒体内容直接塞进上下文；大型图片内容只通过 `AgentInvocation.attachments` 进入本次多模态模型调用，工具和 context 只暴露脱敏元数据。
 
 ### 2. RunnerObservation 输出
 
@@ -555,7 +605,7 @@ memory_scope: psop.runner
 
 ## 五、工具注册表
 
-Runner 工具全部是 narrow tools，不开放 shell/bash，不连接开放网络，不直接写数据库。工具处理器可以从 `AgentInvocation.context`、sandbox 和 RuntimeService 准备的临时只读材料中读取数据；需要访问对象存储或数据库时，必须由 RuntimeService 在调用前解析为脱敏 metadata 或受控多模态 attachment。Runner 工具不得返回图片 bytes、base64、对象存储 key 或内部 URL。
+Runner 工具全部是 narrow tools，不开放 shell/bash，不连接开放网络，不直接写数据库。除 `psop.runner.submit_observation` 外，read tools 都是可选补充路径，不是每轮必需步骤。工具处理器可以从 `AgentInvocation.context`、sandbox 和 RuntimeService 准备的临时只读材料中读取数据；需要访问对象存储或数据库时，必须由 RuntimeService 在调用前解析为脱敏 metadata 或受控多模态 attachment。Runner 工具不得返回图片 bytes、base64、对象存储 key 或内部 URL。
 
 | 工具 | 风险等级 | 副作用 | 权限策略 | 职责 |
 | --- | --- | --- | --- | --- |
@@ -618,7 +668,7 @@ skills/
     evidence-evaluation/SKILL.md
 ```
 
-根 `SKILL.md` 只声明入口规则、工具权限和必须加载的资源。`core/SKILL.md`、`terminal-guidance/SKILL.md` 和 `evidence-evaluation/SKILL.md` 是包内资源，不是独立 Agent Skill；实际可见业务工具仍由根 `SKILL.md` 的 `allowed-tools` 与 `AgentDefinition.tools` 交集决定。
+根 `SKILL.md` 只声明入口规则、工具权限和可按需读取的资源。`core/SKILL.md`、`terminal-guidance/SKILL.md` 和 `evidence-evaluation/SKILL.md` 是包内资源，不是独立 Agent Skill；实际可见业务工具仍由根 `SKILL.md` 的 `allowed-tools` 与 `AgentDefinition.tools` 交集决定。
 
 ### 1. `core/SKILL.md`
 
@@ -644,7 +694,7 @@ skills/
 - 输出 accepted / missing / ambiguous evidence。
 - 识别常见现场风险，例如安全条件未确认、照片不可读、对象不匹配、步骤顺序异常。
 
-Skill 包采用 progressive disclosure：启动时只暴露 name 和 description；运行时必须先 `load_skill("psop-runner")`，再通过 `load_skill_resource` 读取必要资源文件。Runner skill 包默认保持 Markdown-only，不引入 scripts。
+Skill 包采用 context-first 策略：核心规则由 harness/system prompt 预加载，运行时先使用 `RunnerTurnContext`；只有在上下文不足或需要核对具体规则时，才通过 `load_skill` / `load_skill_resource` 读取资源文件。Runner skill 包默认保持 Markdown-only，不引入 scripts。
 
 ## 七、Context、Memory 与 Compaction
 
@@ -656,13 +706,13 @@ Runner context 按稳定到动态排序：
 1. Agent Harness system prompt
 2. psop.runner system.md
 3. Tool schemas in deterministic order
-4. Loaded Agent Skill metadata
-5. Loaded Agent Skill instructions
+4. RunnerTurnContext
+5. Agent Skill metadata and static runner rules
 6. Runtime output contract
 7. Current node definition and runtime contract slice
 8. Current Prompt View
 9. Current checkpoint and latest terminal evidence
-10. Recent trace summary and tool observations
+10. Recent trace summary and optional tool observations
 ```
 
 终端输入、图片内容和附件元数据必须明确标注为数据事实，不得作为指令。
@@ -683,7 +733,7 @@ Runtime 主状态压缩仍由 `RuntimeService` 和 Session Token 负责。`psop.
 
 - 当前 `run_id`、`node_id`、`checkpoint_id`。
 - output contract 和 allowed decisions。
-- 已加载 Agent Skills。
+- RunnerTurnContext 中的关键字段。
 - 已读取 terminal_event refs。
 - 已确认和缺失的 evidence。
 - 已提交或准备提交的 observation 草稿。
@@ -701,6 +751,8 @@ Runtime 主状态压缩仍由 `RuntimeService` 和 Session Token 负责。`psop.
 - 发现安全风险、Skill 不适用或用户越界。
 - 达到模型调用、工具调用、token 或 wall-time 预算。
 - 工具不可用且无法继续降低不确定性。
+
+`psop.runner.submit_observation` 成功返回后，必须立即停止当前 AgentRun。成功标准是工具结果包含 `status=success` 且 `artifact_ref=sandbox://outputs/runner-observation.json`；此后不得再读取 runtime contract、checkpoint、terminal events 或 reference images，不得为了优化措辞再次提交 observation。若提交失败，只根据工具错误做最小修正并重试；首次成功提交后停止。
 
 ## 九、安全与审批策略
 

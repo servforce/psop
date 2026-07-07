@@ -871,7 +871,7 @@ class SkillTestService:
             confidence = self._coerce_confidence(parsed.get("confidence"))
             reason = str(parsed.get("reason") or reason)
             raw_refs = parsed.get("evidence_refs")
-            evidence_refs = raw_refs if isinstance(raw_refs, list) else []
+            evidence_refs = self._normalize_evidence_refs(raw_refs)
         except Exception as exc:
             raw_response = {"request": request_snapshot, "error": str(exc), "error_type": exc.__class__.__name__}
             reason = f"Judge 调用失败或响应非法：{exc.__class__.__name__}"
@@ -1708,7 +1708,7 @@ class SkillTestService:
             status=evaluation.status,
             confidence=evaluation.confidence,
             reason=evaluation.reason,
-            evidence_refs=evaluation.evidence_refs,
+            evidence_refs=SkillTestService._normalize_evidence_refs(evaluation.evidence_refs),
             judge_provider=evaluation.judge_provider,
             judge_model=evaluation.judge_model,
             prompt_hash=evaluation.prompt_hash,
@@ -1838,13 +1838,27 @@ class SkillTestService:
             status=evaluation.status,
             confidence=evaluation.confidence,
             reason=evaluation.reason,
-            evidence_refs=evaluation.evidence_refs,
+            evidence_refs=SkillTestService._normalize_evidence_refs(evaluation.evidence_refs),
             judge_provider=evaluation.judge_provider,
             judge_model=evaluation.judge_model,
             prompt_hash=evaluation.prompt_hash,
             raw_response=evaluation.raw_response,
             created_at=evaluation.created_at,
         )
+
+    @staticmethod
+    def _normalize_evidence_refs(value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        refs: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                refs.append(item)
+                continue
+            ref = str(item or "").strip()
+            if ref:
+                refs.append({"kind": "raw", "ref": ref})
+        return refs
 
     def _sync_driver_job_metrics(self, session: Session, job: RuntimeJob, scenario_run_id: str) -> None:
         evaluations = self.repository.list_expectation_evaluations(session, scenario_run_id)

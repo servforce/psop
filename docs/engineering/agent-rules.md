@@ -29,12 +29,20 @@
 - 外部接口优先围绕 `skill -> publish -> compile -> invocation -> run` 主线组织，而不是直接暴露“用户编辑 EG”的心智模型。
 - 数据库结构改动必须同步更新数据字典或详细设计中的对应章节。
 - 运行时事件、trace、编译记录、上传对象等记录必须具备稳定 ID、时间戳、来源与关联链路。
+- `input_envelope` 不是 Runtime 事实源；正式用户输入必须以 `terminal_event` 进入 Session Token。
 
 ## 5. 任务系统与进程规则
 
 - v1 默认采用数据库驱动的 job system，不引入 Redis/Celery 作为默认依赖。
 - 当前实现由 FastAPI lifespan 可选启动内置 `RuntimeJobWorker`；长耗时能力应进入 `runtime_job`，不要在 router 中直接执行。独立 `scheduler / sandbox` 仍是后续演进项。
 - 任务领取必须具备原子 claim、lease、重试、幂等和恢复机制。
+- Runtime router 只能创建 invocation、追加 terminal event、读取状态或调度 job；不得直接调用 `RuntimeService.process_run()`、LLM gateway 或 Agent Harness。
+- `POST /gateway/invocations` 只创建 Run、TerminalSession、binding 和初始 Session Token，不生成首条终端提示，不把 `input_envelope` 转成 terminal event。
+- `POST /terminal/sessions/{run_id}/events` 只持久化 terminal event 并把 `job:runtime:{run_id}` 置为 pending；202 响应不代表 Runtime 已推进。
+- Runtime worker 是生产路径中唯一推进 Runtime 的执行者。单元测试可以显式调用 `process_run()`，但必须在测试语义中写清这是模拟 worker。
+- Runtime terminal input 必须按 wait checkpoint 的 `input_window` 和 `control.terminal_consumption` 账本消费；不得把旧 input 跨 checkpoint 或 workflow step 自动复用为新的 evidence。
+- Runtime worker 可以在每个节点完成后提交并发布本节点新增 output/trace，以降低终端可见延迟；input event 的 accepted 推送仍由追加事件路径负责。
+- `job:runtime:{run_id}` 必须保持单 Run 单 job 的 dedupe 语义；running job 收到新输入时只标记 `payload.rerun_requested=true`，不抢占、不新建重复 job。
 - `Sandbox Manager` 只在需要更强隔离时介入，不作为默认常驻独立主进程。
 
 ## 6. 前端与交互规则

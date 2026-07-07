@@ -116,7 +116,7 @@ sequenceDiagram
     T->>API: GET /runs/{run_id}
     T->>API: GET /terminal/sessions/{run_id}
     T->>API: GET /terminal/sessions/{run_id}/events
-    API-->>T: Run 状态、会话状态、历史事件
+    API-->>T: Run 处于 terminal_bound，可输入；历史事件可能为空
 
     T->>WS: connect /ws/runs/{run_id}
     WS-->>T: ws.connected
@@ -131,6 +131,8 @@ sequenceDiagram
             API-->>T: accepted, seq_no, event
             WS-->>T: terminal.event.appended
         end
+        Note over API: API 只持久化 input event 并调度 runtime_job
+        Note over API: Runtime 输出由 worker 异步产生
         T->>API: GET /runs/{run_id}
         T->>API: GET /terminal/sessions/{run_id}/events?from_seq=last_seq+1
         API-->>T: 最新状态和缺失事件
@@ -152,7 +154,7 @@ sequenceDiagram
 3. 连接 WebSocket。
 4. 用户发送纯文本时，调用终端事件追加接口并提交 JSON。
 5. 用户同时发送文本、图片、音频或视频时，仍调用同一个终端事件追加接口，提交 `multipart/form-data`。
-6. 每次提交输入后，通过 REST 刷新 Run，并拉取缺失事件。
+6. 每次提交输入后，通过 REST 刷新 Run，并拉取缺失事件；不要假定 POST event 返回时 Runtime 已完成推进。
 7. 断线或刷新后，通过 REST 读取状态和缺失事件，再重连 WebSocket。
 8. Run 进入 `succeeded`、`failed`、`cancelled` 或 `aborted` 后停止发送输入。
 
@@ -201,6 +203,10 @@ Content-Type: application/json
 | `operator` | 否 | 当前操作员、坐席或外部系统标识。 |
 
 新终端接入建议不传 `input_envelope`。如果首屏就有用户文本或媒体，应先创建 Invocation，拿到 `run_id` 后调用 `/terminal/sessions/{run_id}/events` 追加输入。
+
+创建成功后，服务端只保证 Run、TerminalSession、binding 和初始 Session Token 已创建。此时通常还没有任何 terminal output，`GET /terminal/sessions/{run_id}/events` 可以返回空数组。终端不应等待“首条系统提示”才允许用户输入。
+
+如果创建 invocation 后用户已经有首条输入，终端应立即通过 terminal event 提交。Runtime worker 会在首次推进时把该 input 同步进 Session Token，并在首个匹配的 wait checkpoint 中消费它。
 
 
 终端侧可用响应示例：
@@ -683,6 +689,10 @@ Idempotency-Key: <client-event-id>
 规则：
 
 - 终端客户端只应主动发送 `direction=input`。
+- 成功响应只表示事件已被接受并持久化；Runtime worker 会异步读取 `runtime_job` 并推进 Run。
+- POST 返回时，Run 可能仍是 `waiting_input/terminal_bound`，output terminal events 和 trace events 需要随后通过 WebSocket 或 REST 获取。
+- Runtime output 现在按节点级提交后增量可见；同一次输入触发多个节点时，终端可能陆续收到多条 output/trace，而不是等整轮 Runtime 完成后一次性出现。
+- Runtime 只会把 input 消费到当前 wait checkpoint 的输入窗口内。已被一个 checkpoint 记入 `control.terminal_consumption` 的 input，不会被后续 checkpoint 自动复用为 evidence。
 - 终端客户端不要构造 `parts[]`；服务端会根据 `text` 和文件字段生成 part。
 - `payload_inline` 只作为摘要或旧展示兼容字段；正式文本内容以服务端生成的 text part 为准。
 - 必须传 `external_event_id` 或 `Idempotency-Key`，用于重试去重。
@@ -900,7 +910,7 @@ WebSocket 服务端消息统一外层结构：
 
 | 字段 | 说明 |
 | --- | --- |
-| `event_type` | 事件类型，例如 `ws.connected`、`terminal.event.appended`。 |
+| `event_type` | 事件类型，例如 `ws.connected`、`terminal.event.appended`、`trace.event.appended`。 |
 | `run_id` | 当前 Run ID。 |
 | `invocation_id` | 当前版本通常为 `null`，终端侧无需依赖。 |
 | `seq_no` | 事件序号。对 `terminal.event.appended`，与 `payload.seq_no` 一致；连接确认事件为 `0`。 |
@@ -928,10 +938,7 @@ WebSocket 服务端消息统一外层结构：
 | --- | --- |
 | `payload.message` | 固定为连接确认信息。 |
 
-通过 REST 成功追加终端事件后，服务端会按 `seq_no` 顺序广播本次请求中新落库的所有终端事件：
-
-- 已接受的输入事件。
-- `Runtime Kernel` 在同一轮推进中产生的终端输出事件。
+通过 REST 成功追加终端事件后，服务端会广播已接受的输入事件。后续 Runtime worker 推进产生的终端输出事件会在节点级 commit 后另行广播。两者不保证出现在同一个 HTTP 请求返回周期内。
 
 ```json
 {
@@ -977,6 +984,23 @@ WebSocket 服务端消息统一外层结构：
 | `payload.source_ref` | 终端侧提交的来源信息。 |
 | `payload.occurred_at` | 事件发生时间。 |
 | `payload.created_at` | 服务端创建时间。 |
+
+Runtime trace 增量会以 `trace.event.appended` 推送，终端可用于调试面板或实时日志；普通终端 UI 不需要依赖它完成恢复。
+
+```json
+{
+  "event_type": "trace.event.appended",
+  "run_id": "run-id",
+  "invocation_id": null,
+  "seq_no": 3,
+  "occurred_at": "2026-05-25T00:02:03Z",
+  "payload": {
+    "event_type": "runtime.agent.completed",
+    "phase": "evaluate_collect_context",
+    "summary": "Runner 节点执行完成。"
+  }
+}
+```
 
 多模态事件推送示例：
 
@@ -1089,7 +1113,7 @@ Runner 参考图片输出推送示例：
 客户端处理规则：
 
 - WebSocket 只作为增量提示通道，REST 是状态恢复和完整数据读取的权威来源。
-- 一次输入可能触发多个 `terminal.event.appended` 消息；客户端应逐条合并，而不是假定一次 REST 请求只对应一个 WebSocket 消息。
+- 一次输入可能先触发一个 input `terminal.event.appended`，稍后再由 worker 按节点提交触发多个 output `terminal.event.appended` 和 `trace.event.appended`；客户端应逐条合并，而不是假定一次 REST 请求只对应一个 WebSocket 消息。
 - 收到 WebSocket 事件后，按 `payload.id` 去重，按 `payload.seq_no` 排序。
 - 如果需要完整事件字段，收到推送后再调用 `/terminal/sessions/{run_id}/events?from_seq=...` 拉取。
 - 断线重连后，用本地最大 `seq_no + 1` 调用 `/terminal/sessions/{run_id}/events?from_seq=...` 补齐缺失事件。

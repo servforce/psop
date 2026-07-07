@@ -4,6 +4,8 @@
 
 > 状态：已实现；`psop.runner` 已成为 Runtime LLM / evidence evaluation 节点的默认执行路径；AgentRun Runtime 关联、参考图片 warning trace、严格 source ref 校验和终端上传图片的 Harness multimodal attachment 直连识别已补齐。Runtime 不生成图片 safe summary，图片语义判断由 `psop.runner` 多模态模型完成。
 >
+> 更新说明：2026-07 的 Runtime 异步边界与 Runner context-first 改造已经取代本计划中“每轮必须 load_skill / load_skill_resource / 读取全部 runner tools”的旧验收口径。当前基线以 `RunnerTurnContext` 优先、read tools 按需、唯一强制 `psop.runner.submit_observation` 为准。
+>
 > 最近验证：`PYTHONPATH=backend backend/.venv/bin/python -m pytest -q tests/test_agent_harness_runner.py tests/test_agent_harness_persistence.py tests/test_runtime_services.py tests/test_skills_api.py`、`PYTHONPATH=backend backend/.venv/bin/python tests/run_psop_runner_agent.py --fixture tests/fixtures/psop_runner/minimal.json --scripted`、`PYTHONPATH=backend backend/.venv/bin/python -m pytest -q`、`git diff --check` 均已通过。
 >
 > 制定日期：2026-07-03。
@@ -20,8 +22,8 @@ RuntimeService.process_run()
   -> select enabled LLM / evidence evaluation node
   -> build psop.runner AgentInvocation
   -> AgentHarnessService.invoke(agent_key="psop.runner")
-  -> runner loads Agent Skills
-  -> runner reads runtime context through narrow tools
+  -> runner first uses RunnerTurnContext
+  -> runner optionally reads more context through narrow tools
   -> runner calls psop.runner.submit_observation
   -> RuntimeService validates runner-observation.json
   -> map to existing runtime observation
@@ -42,9 +44,8 @@ PYTHONPATH=backend backend/.venv/bin/python tests/run_psop_runner_agent.py --fix
 
 - `AgentResult.status == "succeeded"`。
 - events 中包含 `agent.memory.read`。
-- events 中包含 `agent.skill.loaded`：`psop-runner`。
-- events 中包含三个 `agent.skill.resource.loaded`：`core/SKILL.md`、`terminal-guidance/SKILL.md`、`evidence-evaluation/SKILL.md`。
-- events 中包含关键 tool calls：`psop.runner.read_prompt_view`、`psop.runner.read_runtime_contract`、`psop.runner.read_current_checkpoint`、`psop.runner.list_terminal_events`、`psop.runner.read_latest_evidence`、`psop.runner.list_step_reference_images`、`psop.runner.submit_observation`。
+- 默认 context-first 路径可以不产生 `agent.skill.loaded` 或 `agent.skill.resource.loaded`。
+- 默认 context-first 路径只要求 `psop.runner.submit_observation`；`psop.runner.read_prompt_view`、`psop.runner.read_runtime_contract`、`psop.runner.read_current_checkpoint`、`psop.runner.list_terminal_events`、`psop.runner.read_latest_evidence`、`psop.runner.list_step_reference_images` 和 `psop.runner.read_terminal_event_part` 只在上下文不足时按需调用。
 - sandbox 中存在 `/mnt/psop/outputs/runner-observation.json`。
 - `runner-observation.json` 通过 `psop.runner.observation.v1` 严格校验。
 - Runtime 集成测试中，Runtime LLM / evaluation 节点默认走 `psop.runner`，并产生 `runtime.agent.completed` trace。
@@ -300,15 +301,15 @@ backend/app/agent_harness/runners/langchain_agent_executor.py
   - `artifact_type="runner_observation"`
   - `artifact_ref="sandbox://outputs/runner-observation.json"`
   - `max_continuations=2`
-  - `required_skill_names` 为三个 runner skills。
-  - `required_tool_names` 至少包含 `psop.runner.submit_observation`，首版 scripted 验收要求完整 read tools。
+  - `required_skill_names` 为空。
+  - `required_tool_names` 只包含 `psop.runner.submit_observation`。
 - `_collect_artifacts()` 识别 `/mnt/psop/outputs/runner-observation.json`，记录 hash、decision、node_id 和 source ref 数量。
 - 缺 artifact 时追加 continuation prompt，强制调用 `psop.runner.submit_observation`。
 
 测试：
 
 - Runner agent 若只回复自然语言不提交 artifact，最终 `AgentResult.status == "failed"`。
-- Runner agent 提交 artifact 但未加载必需 Skill 时，required interaction 检查失败。
+- Runner agent 不需要为了通过 required interaction 检查而加载 Skill 或固定 read tools。
 - 合法 scripted runner 一次或有限 continuation 内成功。
 
 ### Step 6：新增 scripted runner model、fixture 和脚本验收
@@ -324,12 +325,9 @@ tests/test_agent_harness_runner.py
 
 `ScriptedRunnerChatModel` 行为：
 
-1. 调用 `load_skill("psop-runner")`。
-2. 调用 `load_skill_resource("psop-runner", "core/SKILL.md")`。
-3. 调用 `load_skill_resource("psop-runner", "terminal-guidance/SKILL.md")`。
-4. 调用 `load_skill_resource("psop-runner", "evidence-evaluation/SKILL.md")`。
-5. 调用 runner read tools 读取 prompt view、runtime contract、checkpoint、terminal events、latest evidence 和 reference images。
-6. 调用 `psop.runner.submit_observation` 写入合法 observation。
+1. 默认直接调用 `psop.runner.submit_observation` 写入合法 observation。
+2. 可选测试模式调用 runner read tools 读取 prompt view、runtime contract、checkpoint、terminal events、latest evidence 和 reference images，再提交 observation。
+3. 不再模拟每轮 `load_skill` / `load_skill_resource`。
 
 fixture 覆盖：
 

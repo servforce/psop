@@ -25,7 +25,7 @@ middleware:
   - name: dangling_tool_call
   - name: model_events
     config:
-      max_model_calls: 6
+      max_model_calls: 5
   - name: token_usage
   - name: tool_calls
     config:

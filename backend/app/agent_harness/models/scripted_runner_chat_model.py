@@ -18,6 +18,7 @@ class ScriptedRunnerChatModel(BaseChatModel):
     model_name: str = "scripted-psop-runner"
     bound_tools: list[Any] = Field(default_factory=list)
     observation_overrides_by_node: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    use_optional_reads: bool = False
 
     @property
     def _llm_type(self) -> str:
@@ -34,7 +35,12 @@ class ScriptedRunnerChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         tool_names = _tool_names(self.bound_tools or kwargs.get("tools") or [])
-        message = _next_runner_message(messages, tool_names, self.observation_overrides_by_node)
+        message = _next_runner_message(
+            messages,
+            tool_names,
+            self.observation_overrides_by_node,
+            self.use_optional_reads,
+        )
         return ChatResult(generations=[ChatGeneration(message=message)])
 
 
@@ -42,38 +48,22 @@ def _next_runner_message(
     messages: list[BaseMessage],
     tool_names: set[str],
     observation_overrides_by_node: dict[str, dict[str, Any]],
+    use_optional_reads: bool,
 ) -> AIMessage:
-    if "load_skill" in tool_names and not _has_tool_result(messages, "load_skill", "psop-runner"):
-        return _tool_call("call_load_runner_skill", "load_skill", {"skill_name": "psop-runner"})
-    missing_resource_calls = []
-    for resource_path, call_id in (
-        ("core/SKILL.md", "call_load_runner_core"),
-        ("terminal-guidance/SKILL.md", "call_load_runner_guidance"),
-        ("evidence-evaluation/SKILL.md", "call_load_runner_evidence"),
-    ):
-        if "load_skill_resource" in tool_names and not _has_resource_result(messages, "psop-runner", resource_path):
-            missing_resource_calls.append(
-                {
-                    "id": call_id,
-                    "name": "load_skill_resource",
-                    "args": {"skill_name": "psop-runner", "resource_path": resource_path, "max_chars": 60000},
-                }
-            )
-    if missing_resource_calls:
-        return _tool_calls(missing_resource_calls)
-    missing_read_calls = []
-    for tool_name, call_id, args in (
-        ("psop.runner.read_prompt_view", "call_read_prompt_view", {}),
-        ("psop.runner.read_runtime_contract", "call_read_runtime_contract", {}),
-        ("psop.runner.read_current_checkpoint", "call_read_checkpoint", {}),
-        ("psop.runner.list_terminal_events", "call_list_terminal_events", {"limit": 20}),
-        ("psop.runner.read_latest_evidence", "call_read_latest_evidence", {}),
-        ("psop.runner.list_step_reference_images", "call_list_reference_images", {}),
-    ):
-        if tool_name in tool_names and not _has_tool_result(messages, tool_name):
-            missing_read_calls.append({"id": call_id, "name": tool_name, "args": args})
-    if missing_read_calls:
-        return _tool_calls(missing_read_calls)
+    if use_optional_reads:
+        missing_read_calls = []
+        for tool_name, call_id, args in (
+            ("psop.runner.read_prompt_view", "call_read_prompt_view", {}),
+            ("psop.runner.read_runtime_contract", "call_read_runtime_contract", {}),
+            ("psop.runner.read_current_checkpoint", "call_read_checkpoint", {}),
+            ("psop.runner.list_terminal_events", "call_list_terminal_events", {"limit": 20}),
+            ("psop.runner.read_latest_evidence", "call_read_latest_evidence", {}),
+            ("psop.runner.list_step_reference_images", "call_list_reference_images", {}),
+        ):
+            if tool_name in tool_names and not _has_tool_result(messages, tool_name):
+                missing_read_calls.append({"id": call_id, "name": tool_name, "args": args})
+        if missing_read_calls:
+            return _tool_calls(missing_read_calls)
     if "psop.runner.submit_observation" in tool_names and not _has_tool_result(messages, "psop.runner.submit_observation"):
         return _tool_call(
             "call_submit_runner_observation",
@@ -156,6 +146,15 @@ def _node_id_from_messages(messages: list[BaseMessage]) -> str:
 
 
 def _latest_terminal_event_ref(messages: list[BaseMessage]) -> str:
+    context = _runner_turn_context_from_messages(messages)
+    latest = context.get("latest_evidence")
+    if isinstance(latest, dict) and isinstance(latest.get("seq_no"), int):
+        return f"terminal_event:{latest['seq_no']}"
+    recent_events = context.get("recent_terminal_events")
+    if isinstance(recent_events, list) and recent_events:
+        for item in reversed(recent_events):
+            if isinstance(item, dict) and isinstance(item.get("seq_no"), int):
+                return f"terminal_event:{item['seq_no']}"
     payload = _latest_tool_payload(messages, "psop.runner.list_terminal_events")
     items = payload.get("items")
     if isinstance(items, list) and items:
@@ -170,6 +169,12 @@ def _latest_terminal_event_ref(messages: list[BaseMessage]) -> str:
 
 
 def _reference_images(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    context = _runner_turn_context_from_messages(messages)
+    context_items = context.get("reference_image_index")
+    if isinstance(context_items, list):
+        images = [_safe_reference_image(item, index) for index, item in enumerate(context_items, start=1)]
+        if images:
+            return images[:1]
     payload = _latest_tool_payload(messages, "psop.runner.list_step_reference_images")
     items = payload.get("items")
     if not isinstance(items, list):
@@ -178,18 +183,26 @@ def _reference_images(messages: list[BaseMessage]) -> list[dict[str, Any]]:
     for index, item in enumerate(items, start=1):
         if not isinstance(item, dict) or not item.get("reference_image_ref"):
             continue
-        image = {
-            "reference_image_ref": str(item.get("reference_image_ref") or ""),
-            "title": str(item.get("title") or ""),
-            "caption": str(item.get("caption") or ""),
-            "source_ref": str(item.get("source_ref") or ""),
-            "display_order": index,
-        }
-        for key in ("artifact_object_id", "artifact_ref", "mime_type", "workflow_step_id"):
-            if item.get(key):
-                image[key] = item.get(key)
-        results.append(image)
+        image = _safe_reference_image(item, index)
+        if image:
+            results.append(image)
     return results[:1]
+
+
+def _safe_reference_image(item: Any, index: int) -> dict[str, Any]:
+    if not isinstance(item, dict) or not item.get("reference_image_ref"):
+        return {}
+    image = {
+        "reference_image_ref": str(item.get("reference_image_ref") or ""),
+        "title": str(item.get("title") or ""),
+        "caption": str(item.get("caption") or ""),
+        "source_ref": str(item.get("source_ref") or ""),
+        "display_order": index,
+    }
+    for key in ("artifact_object_id", "artifact_ref", "mime_type", "workflow_step_id"):
+        if item.get(key):
+            image[key] = item.get(key)
+    return image
 
 
 def _tool_call(call_id: str, name: str, args: dict[str, Any]) -> AIMessage:
@@ -227,22 +240,21 @@ def _has_tool_result(messages: list[BaseMessage], tool_name: str, skill_name: st
     return False
 
 
-def _has_resource_result(messages: list[BaseMessage], skill_name: str, resource_path: str) -> bool:
-    for message in messages:
-        if not isinstance(message, ToolMessage) or message.name != "load_skill_resource":
-            continue
-        payload = _parse_jsonish(str(message.content or ""))
-        if payload.get("skill_name") == skill_name and payload.get("resource_path") == resource_path:
-            return True
-    return False
-
-
 def _latest_tool_payload(messages: list[BaseMessage], tool_name: str) -> dict[str, Any]:
     for message in reversed(messages):
         if not isinstance(message, ToolMessage) or message.name != tool_name:
             continue
         return _parse_jsonish(str(message.content or ""))
     return {}
+
+
+def _runner_turn_context_from_messages(messages: list[BaseMessage]) -> dict[str, Any]:
+    content = "\n".join(str(message.content or "") for message in messages if isinstance(message, HumanMessage))
+    match = re.search(r"<RunnerTurnContext>\s*(\{.*\})\s*</RunnerTurnContext>", content, re.DOTALL)
+    if not match:
+        return {}
+    parsed = _parse_jsonish(match.group(1))
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _parse_jsonish(value: str) -> dict[str, Any]:

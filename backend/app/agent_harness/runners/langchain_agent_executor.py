@@ -78,26 +78,12 @@ REQUIRED_ARTIFACTS_BY_AGENT = {
             "现在必须立即调用 psop.runner.submit_observation，参数必须是完整 RunnerObservation。"
             "不要回复自然语言说明，不要只说将要提交。"
         ),
-        required_skill_names=(
-            "psop-runner",
-        ),
-        required_skill_resources=(
-            ("psop-runner", "core/SKILL.md"),
-            ("psop-runner", "terminal-guidance/SKILL.md"),
-            ("psop-runner", "evidence-evaluation/SKILL.md"),
-        ),
         required_tool_names=(
-            "psop.runner.read_prompt_view",
-            "psop.runner.read_runtime_contract",
-            "psop.runner.read_current_checkpoint",
-            "psop.runner.list_step_reference_images",
-            "psop.runner.list_terminal_events",
-            "psop.runner.read_latest_evidence",
             "psop.runner.submit_observation",
         ),
         missing_interactions_prompt=(
-            "你已经生成 runner observation，但尚未完成 psop.runner 的必需上下文读取或 Skill 资源加载。"
-            "现在必须补齐缺失的 load_skill / load_skill_resource / psop.runner tool 调用。"
+            "你已经生成 runner observation，但尚未通过 psop.runner.submit_observation 提交正式 observation。"
+            "现在必须调用 psop.runner.submit_observation 覆盖 sandbox outputs。"
             "如果补齐后 observation 需要调整，必须重新调用 psop.runner.submit_observation 覆盖 sandbox outputs。"
             "不要回复自然语言说明，不要只说将要补齐。"
         ),

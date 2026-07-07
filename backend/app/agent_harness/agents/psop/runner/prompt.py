@@ -25,8 +25,8 @@ def _build_skill_section(skills: list[AgentSkill]) -> str:
     lines = [
         "<skill_system>",
         "Agent Skills 位于仓库根目录 skills/。",
-        "系统提示词只注入 Skill 元信息；开始执行 Runtime 节点协作前，必须先调用 load_skill 读取完整 SKILL.md。",
-        "如果 Skill 包声明了内部 Markdown 资源，可调用 load_skill_resource 读取同一 Skill 目录内的资源文件。",
+        "Runner 的核心规则已经预加载在 system prompt 中；不要为了形式完整而固定调用 load_skill。",
+        "当前节点上下文可能命名为 RunnerContext 或 RunnerTurnContext；如果它不足以判断，才按需调用 load_skill 或 load_skill_resource 补充 Skill 细节。",
         "只能调用当前 AgentDefinition 声明的 skills。",
         "",
         "可用 Skills:",

@@ -19,6 +19,7 @@ from app.core.observability import configure_observability
 from app.agent_harness.service import AgentHarnessService
 from app.domain.skills.exceptions import SkillsError
 from app.domain.jobs.worker import RuntimeJobWorker
+from app.domain.runtime.events import AsyncioRuntimeEventBus, NoopRuntimeEventSink
 from app.gateway.asr import AsrGateway, HttpAsrGateway
 from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway, HttpGitLabSkillSourceGateway
@@ -48,6 +49,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         db_manager.create_schema()
     if settings.database_check_on_startup:
         db_manager.check_connection()
+    runtime_event_bus = AsyncioRuntimeEventBus(asyncio.get_running_loop())
+    app.state.runtime_event_sink = runtime_event_bus
+    broadcaster_task = asyncio.create_task(_broadcast_runtime_events(runtime_event_bus))
     worker_task: asyncio.Task[None] | None = None
     if settings.runtime_worker_enabled:
         worker = RuntimeJobWorker(
@@ -58,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             asr_gateway=app.state.asr_gateway,
             object_store=app.state.object_store,
             agent_harness_service=app.state.agent_harness_service,
+            runtime_event_sink=runtime_event_bus,
         )
         worker_task = asyncio.create_task(worker.run_forever())
     try:
@@ -67,9 +72,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             worker_task.cancel()
             with suppress(asyncio.CancelledError):
                 await worker_task
+        runtime_event_bus.close()
+        with suppress(asyncio.CancelledError):
+            await broadcaster_task
         db_manager.dispose()
         observability.shutdown()
         LOGGER.info("stopping %s", settings.app_name)
+
+
+async def _broadcast_runtime_events(runtime_event_bus: AsyncioRuntimeEventBus) -> None:
+    from app.api.routes.runtime import run_ws_hub
+
+    while True:
+        event = await runtime_event_bus.next_event()
+        if AsyncioRuntimeEventBus.is_closed_event(event):
+            return
+        run_id = str(event.get("run_id") or "")
+        if run_id:
+            await run_ws_hub.broadcast(run_id, event)
 
 
 def create_app(
@@ -98,6 +118,8 @@ def create_app(
     app.state.asr_gateway = asr_gateway or HttpAsrGateway.from_settings(resolved_settings)
     app.state.object_store = object_store or ObjectStoreService.from_settings(resolved_settings)
     app.state.agent_harness_service = agent_harness_service or AgentHarnessService(settings=resolved_settings)
+    app.state.runtime_event_sink = NoopRuntimeEventSink()
+
     @app.exception_handler(SkillsError)
     async def handle_skills_error(_, exc: SkillsError) -> JSONResponse:
         return JSONResponse(

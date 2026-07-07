@@ -13,6 +13,7 @@ from app.core.observability import record_span_exception, start_span
 from app.domain.compiler.service import CompilerService
 from app.domain.jobs.progress import ensure_publish_progress_payload, mark_publish_stage
 from app.domain.jobs.repository import JobRepository
+from app.domain.runtime.events import NoopRuntimeEventSink, RuntimeEventSink
 from app.domain.runtime.service import RuntimeService
 from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.service import SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE, SkillsService
@@ -40,6 +41,7 @@ class RuntimeJobWorker:
         asr_gateway: AsrGateway,
         object_store: ObjectStoreService,
         agent_harness_service: AgentHarnessService,
+        runtime_event_sink: RuntimeEventSink | None = None,
         poll_interval_seconds: float = 0.5,
     ) -> None:
         self.settings = settings
@@ -49,6 +51,7 @@ class RuntimeJobWorker:
         self.asr_gateway = asr_gateway
         self.object_store = object_store
         self.agent_harness_service = agent_harness_service
+        self.runtime_event_sink = runtime_event_sink or NoopRuntimeEventSink()
         self.poll_interval_seconds = poll_interval_seconds
         self.job_repository = JobRepository()
 
@@ -120,6 +123,7 @@ class RuntimeJobWorker:
                                 inference_gateway=self.inference_gateway,
                                 object_store=self.object_store,
                                 agent_harness_service=self.agent_harness_service,
+                                runtime_event_sink=self.runtime_event_sink,
                             )
                             runtime_service.process_run(session, job.run_id)
                         elif job_type == "skill_test_timeline_driver":
