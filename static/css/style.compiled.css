@@ -4273,6 +4273,123 @@
       }
     }
   }
+  .terminal-markdown {
+    min-width: calc(var(--spacing) * 0);
+    font-size: var(--text-sm);
+    line-height: var(--tw-leading, var(--text-sm--line-height));
+    --tw-leading: calc(var(--spacing) * 5);
+    line-height: calc(var(--spacing) * 5);
+    overflow-wrap: break-word;
+    color: var(--color-slate-100);
+  }
+  .terminal-markdown h1,
+  .terminal-markdown h2,
+  .terminal-markdown h3,
+  .terminal-markdown h4,
+  .terminal-markdown h5,
+  .terminal-markdown h6 {
+    margin-bottom: calc(var(--spacing) * 1);
+    font-size: var(--text-sm);
+    line-height: var(--tw-leading, var(--text-sm--line-height));
+    --tw-leading: calc(var(--spacing) * 5);
+    line-height: calc(var(--spacing) * 5);
+    --tw-font-weight: var(--font-weight-semibold);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-slate-100);
+  }
+  .terminal-markdown p {
+    margin-bottom: calc(var(--spacing) * 2);
+  }
+  .terminal-markdown ul {
+    margin-bottom: calc(var(--spacing) * 2);
+    list-style-type: disc;
+    :where(& > :not(:last-child)) {
+      --tw-space-y-reverse: 0;
+      margin-block-start: calc(calc(var(--spacing) * 1) * var(--tw-space-y-reverse));
+      margin-block-end: calc(calc(var(--spacing) * 1) * calc(1 - var(--tw-space-y-reverse)));
+    }
+    padding-left: calc(var(--spacing) * 5);
+  }
+  .terminal-markdown ol {
+    margin-bottom: calc(var(--spacing) * 2);
+    list-style-type: decimal;
+    :where(& > :not(:last-child)) {
+      --tw-space-y-reverse: 0;
+      margin-block-start: calc(calc(var(--spacing) * 1) * var(--tw-space-y-reverse));
+      margin-block-end: calc(calc(var(--spacing) * 1) * calc(1 - var(--tw-space-y-reverse)));
+    }
+    padding-left: calc(var(--spacing) * 5);
+  }
+  .terminal-markdown blockquote {
+    margin-bottom: calc(var(--spacing) * 2);
+    border-left-style: var(--tw-border-style);
+    border-left-width: 2px;
+    border-color: color-mix(in srgb, oklch(68.5% 0.169 237.323) 40%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--color-sky-500) 40%, transparent);
+    }
+    background-color: color-mix(in srgb, oklch(68.5% 0.169 237.323) 10%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-sky-500) 10%, transparent);
+    }
+    padding-inline: calc(var(--spacing) * 3);
+    padding-block: calc(var(--spacing) * 1.5);
+    color: var(--color-sky-100);
+  }
+  .terminal-markdown pre {
+    margin-bottom: calc(var(--spacing) * 2);
+    max-width: 100%;
+    overflow: auto;
+    border-radius: var(--radius-md);
+    border-style: var(--tw-border-style);
+    border-width: 1px;
+    border-color: var(--color-slate-700);
+    background-color: var(--color-slate-950);
+    padding-inline: calc(var(--spacing) * 3);
+    padding-block: calc(var(--spacing) * 2);
+    font-size: var(--text-xs);
+    line-height: var(--tw-leading, var(--text-xs--line-height));
+    --tw-leading: calc(var(--spacing) * 5);
+    line-height: calc(var(--spacing) * 5);
+    color: var(--color-slate-100);
+  }
+  .terminal-markdown code {
+    border-radius: 0.25rem;
+    background-color: var(--color-slate-800);
+    padding-inline: calc(var(--spacing) * 1);
+    padding-block: calc(var(--spacing) * 0.5);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-slate-100);
+  }
+  .terminal-markdown pre code {
+    background-color: transparent;
+    padding: calc(var(--spacing) * 0);
+  }
+  .terminal-markdown strong {
+    --tw-font-weight: var(--font-weight-semibold);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-slate-100);
+  }
+  .terminal-markdown a {
+    --tw-font-weight: var(--font-weight-medium);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-sky-300);
+    text-decoration-line: underline;
+    text-decoration-color: color-mix(in srgb, oklch(68.5% 0.169 237.323) 40%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      text-decoration-color: color-mix(in oklab, var(--color-sky-500) 40%, transparent);
+    }
+    text-underline-offset: 4px;
+    &:hover {
+      @media (hover: hover) {
+        color: var(--color-sky-200);
+      }
+    }
+  }
+  .terminal-markdown > :last-child {
+    margin-bottom: calc(var(--spacing) * 0);
+  }
 }
 @layer utilities {
   .scrollbar-none {

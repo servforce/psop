@@ -611,7 +611,12 @@
 
 
       terminalEventPartDisplayText(part) {
-        return String(part?.text || "").trim();
+        return this.normalizeTerminalMessageText(part?.text || "").trim();
+      },
+
+
+      terminalEventPartMarkdownHtml(part) {
+        return renderMarkdown(this.terminalEventPartDisplayText(part));
       },
 
 
@@ -721,15 +726,23 @@
       },
 
 
+      normalizeTerminalMessageText(value) {
+        return String(value ?? "")
+          .replace(/\r\n/g, "\n")
+          .replace(/\\r\\n/g, "\n")
+          .replace(/\\n/g, "\n");
+      },
+
+
       terminalEventDisplayText(event) {
         const payload = event?.payload_inline;
         if (typeof payload === "string") {
-          return payload;
+          return this.normalizeTerminalMessageText(payload);
         }
         if (payload === null || payload === undefined) {
           return "";
         }
-        return this.terminalEventPayloadTextValue(event, [
+        return this.normalizeTerminalMessageText(this.terminalEventPayloadTextValue(event, [
           "description",
           "message",
           "text",
@@ -738,7 +751,12 @@
           "user_input",
           "final_response",
           "output"
-        ]);
+        ]));
+      },
+
+
+      terminalEventMarkdownHtml(event) {
+        return renderMarkdown(this.terminalEventDisplayText(event));
       },
 
 

@@ -29,9 +29,11 @@ function loadRuntimeMethods() {
     "renderInlineMarkdown",
     "renderMarkdown"
   ];
+  const helpers = Object.fromEntries(helperNames.map((name) => [name, jest.fn()]));
+  helpers.renderMarkdown = jest.fn((value) => `<md>${String(value)}</md>`);
   const context = {
     window: {
-      PSOPConsoleHelpers: Object.fromEntries(helperNames.map((name) => [name, jest.fn()]))
+      PSOPConsoleHelpers: helpers
     }
   };
   vm.runInNewContext(source, context);
@@ -114,6 +116,29 @@ test("terminal multipart events expose server-generated part media URLs", () => 
   expect(app.terminalEventPartMediaUrl(event, event.parts[1])).toBe(
     "/api/v1/terminal/sessions/run-1/events/event-4/parts/image_1/content"
   );
+});
+
+test("terminal text messages normalize escaped newlines before markdown rendering", () => {
+  const app = createRuntimeHarness();
+  const event = {
+    id: "event-markdown",
+    run_id: "run-1",
+    direction: "output",
+    event_kind: "terminal.text.output.v1",
+    mime_type: "text/markdown",
+    payload_inline: "请提交现场证据：\\n1. **配置清单**\\n2. 上传照片"
+  };
+  const part = {
+    part_id: "text_1",
+    kind: "text",
+    mime_type: "text/markdown",
+    text: "确认事项：\\n- CPU\\n- 电源"
+  };
+
+  expect(app.terminalEventDisplayText(event)).toBe("请提交现场证据：\n1. **配置清单**\n2. 上传照片");
+  expect(app.terminalEventMarkdownHtml(event)).toBe("<md>请提交现场证据：\n1. **配置清单**\n2. 上传照片</md>");
+  expect(app.terminalEventPartDisplayText(part)).toBe("确认事项：\n- CPU\n- 电源");
+  expect(app.terminalEventPartMarkdownHtml(part)).toBe("<md>确认事项：\n- CPU\n- 电源</md>");
 });
 
 test("terminal JSON events render as structured payload", () => {

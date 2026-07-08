@@ -146,20 +146,20 @@
                               <div class="space-y-2">
                                 <template x-for="part in terminalEventParts(event)" :key="part.part_id || part.id">
                                   <div class="space-y-1.5">
-                                    <p x-show="terminalEventPartIsText(part)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventPartDisplayText(part)"></p>
+                                    <div x-show="terminalEventPartIsText(part)" class="terminal-markdown" x-html="terminalEventPartMarkdownHtml(part)"></div>
                                     <figure x-show="terminalEventPartIsImage(part) && terminalEventPartMediaUrl(event, part)" class="space-y-1.5">
                                       <button type="button" class="group relative inline-flex max-w-md items-center justify-center overflow-hidden rounded-md border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(event, part)">
                                         <img class="max-h-72 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventPartMediaUrl(event, part)" :alt="terminalEventPartFileName(part)" loading="lazy" />
                                       </button>
-                                      <figcaption x-show="terminalEventPartDisplayText(part)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventPartDisplayText(part)"></figcaption>
+                                      <figcaption x-show="terminalEventPartDisplayText(part)" class="terminal-markdown" x-html="terminalEventPartMarkdownHtml(part)"></figcaption>
                                     </figure>
                                     <div x-show="terminalEventPartIsAudio(part) && terminalEventPartMediaUrl(event, part)" class="space-y-1.5">
                                       <audio class="w-full max-w-md" controls preload="metadata" :src="terminalEventPartMediaUrl(event, part)"></audio>
-                                      <p x-show="terminalEventPartDisplayText(part)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventPartDisplayText(part)"></p>
+                                      <div x-show="terminalEventPartDisplayText(part)" class="terminal-markdown" x-html="terminalEventPartMarkdownHtml(part)"></div>
                                     </div>
                                     <div x-show="terminalEventPartIsVideo(part) && terminalEventPartMediaUrl(event, part)" class="space-y-1.5">
                                       <video class="max-h-72 w-full max-w-md rounded-md border border-slate-700 bg-black object-contain" controls preload="metadata" :src="terminalEventPartMediaUrl(event, part)"></video>
-                                      <p x-show="terminalEventPartDisplayText(part)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventPartDisplayText(part)"></p>
+                                      <div x-show="terminalEventPartDisplayText(part)" class="terminal-markdown" x-html="terminalEventPartMarkdownHtml(part)"></div>
                                     </div>
                                   </div>
                                 </template>
@@ -174,28 +174,28 @@
                                     <span class="material-symbols-outlined text-[18px]">zoom_in</span>
                                   </span>
                                 </button>
-                                <figcaption x-show="terminalEventDisplayText(event)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventDisplayText(event)"></figcaption>
+                                <figcaption x-show="terminalEventDisplayText(event)" class="terminal-markdown" x-html="terminalEventMarkdownHtml(event)"></figcaption>
                               </figure>
                             </template>
 
                             <template x-if="!terminalEventHasParts(event) && terminalEventIsAudio(event) && terminalEventMediaUrl(event)">
                               <div class="space-y-2">
                                 <audio class="w-full max-w-md" controls preload="metadata" :src="terminalEventMediaUrl(event)"></audio>
-                                <p x-show="terminalEventDisplayText(event)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventDisplayText(event)"></p>
+                                <div x-show="terminalEventDisplayText(event)" class="terminal-markdown" x-html="terminalEventMarkdownHtml(event)"></div>
                               </div>
                             </template>
 
                             <template x-if="!terminalEventHasParts(event) && terminalEventIsVideo(event) && terminalEventMediaUrl(event)">
                               <div class="space-y-2">
                                 <video class="max-h-72 w-full max-w-md rounded-md border border-slate-700 bg-black object-contain" controls preload="metadata" :src="terminalEventMediaUrl(event)"></video>
-                                <p x-show="terminalEventDisplayText(event)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventDisplayText(event)"></p>
+                                <div x-show="terminalEventDisplayText(event)" class="terminal-markdown" x-html="terminalEventMarkdownHtml(event)"></div>
                               </div>
                             </template>
 
                             <template x-if="!terminalEventHasParts(event) && terminalEventIsPdf(event) && terminalEventMediaUrl(event)">
                               <div class="space-y-2">
                                 <iframe class="h-72 w-full max-w-lg rounded-md border border-slate-700 bg-slate-950" :src="terminalEventMediaUrl(event)" :title="terminalEventFileName(event)"></iframe>
-                                <p x-show="terminalEventDisplayText(event)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventDisplayText(event)"></p>
+                                <div x-show="terminalEventDisplayText(event)" class="terminal-markdown" x-html="terminalEventMarkdownHtml(event)"></div>
                               </div>
                             </template>
 
@@ -214,7 +214,7 @@
                             </template>
 
                             <template x-if="!terminalEventHasParts(event) && terminalEventShouldShowPlainText(event)">
-                              <p class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-100" x-text="terminalEventDisplayText(event)"></p>
+                              <div class="terminal-markdown" x-html="terminalEventMarkdownHtml(event)"></div>
                             </template>
                           </div>
                         </div>
@@ -518,7 +518,7 @@
                                 <span class="mono-field truncate" x-text="part.part_id || part.id"></span>
                                 <span class="mono-field shrink-0" x-text="part.mime_type || part.kind"></span>
                               </div>
-                              <p x-show="terminalEventPartIsText(part)" class="whitespace-pre-wrap break-words text-sm leading-5 text-slate-200" x-text="terminalEventPartDisplayText(part)"></p>
+                              <div x-show="terminalEventPartIsText(part)" class="terminal-markdown text-slate-200" x-html="terminalEventPartMarkdownHtml(part)"></div>
                               <button x-show="terminalEventPartIsImage(part) && terminalEventPartMediaUrl(item.event, part)" type="button" class="group relative inline-flex max-w-full items-center justify-center overflow-hidden border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(item.event, part)">
                                 <img class="max-h-44 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventPartMediaUrl(item.event, part)" :alt="terminalEventPartFileName(part)" loading="lazy" />
                               </button>

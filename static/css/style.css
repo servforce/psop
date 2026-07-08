@@ -386,6 +386,59 @@
   .markdown-preview a {
     @apply font-medium text-sky-300 underline decoration-sky-500/40 underline-offset-4 hover:text-sky-200;
   }
+
+  .terminal-markdown {
+    @apply min-w-0 break-words text-sm leading-5 text-slate-100;
+  }
+
+  .terminal-markdown h1,
+  .terminal-markdown h2,
+  .terminal-markdown h3,
+  .terminal-markdown h4,
+  .terminal-markdown h5,
+  .terminal-markdown h6 {
+    @apply mb-1 text-sm font-semibold leading-5 text-slate-100;
+  }
+
+  .terminal-markdown p {
+    @apply mb-2;
+  }
+
+  .terminal-markdown ul {
+    @apply mb-2 list-disc space-y-1 pl-5;
+  }
+
+  .terminal-markdown ol {
+    @apply mb-2 list-decimal space-y-1 pl-5;
+  }
+
+  .terminal-markdown blockquote {
+    @apply mb-2 border-l-2 border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-sky-100;
+  }
+
+  .terminal-markdown pre {
+    @apply mb-2 max-w-full overflow-auto rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-100;
+  }
+
+  .terminal-markdown code {
+    @apply rounded bg-slate-800 px-1 py-0.5 font-mono text-[12px] text-slate-100;
+  }
+
+  .terminal-markdown pre code {
+    @apply bg-transparent p-0;
+  }
+
+  .terminal-markdown strong {
+    @apply font-semibold text-slate-100;
+  }
+
+  .terminal-markdown a {
+    @apply font-medium text-sky-300 underline decoration-sky-500/40 underline-offset-4 hover:text-sky-200;
+  }
+
+  .terminal-markdown > :last-child {
+    @apply mb-0;
+  }
 }
 
 @layer utilities {
