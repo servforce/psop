@@ -81,6 +81,7 @@ def _observation(
     observation_overrides_by_node: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     node_id = _node_id_from_messages(messages)
+    context = _runner_turn_context_from_messages(messages)
     if node_id.startswith("instruct_"):
         decision = "need_more_evidence"
         next_phase = ""
@@ -107,6 +108,13 @@ def _observation(
     if event_ref:
         source_refs.append(event_ref)
     reference_images = _reference_images(messages)
+    requirement_results = _requirement_results(
+        context=context,
+        decision=decision,
+        event_ref=event_ref,
+        reason=reason,
+        missing_evidence=missing_evidence,
+    )
     observation = {
         "schema": "psop.runner.observation.v1",
         "node_id": node_id,
@@ -121,6 +129,7 @@ def _observation(
             "rejected_event_refs": [],
             "missing_evidence": missing_evidence,
             "unsafe_or_ambiguous_facts": [],
+            "requirement_results": requirement_results,
         },
         "reference_images": reference_images,
         "safety_flags": [],
@@ -132,6 +141,57 @@ def _observation(
     if override:
         observation.update(override)
     return observation
+
+
+def _requirement_results(
+    *,
+    context: dict[str, Any],
+    decision: str,
+    event_ref: str,
+    reason: str,
+    missing_evidence: list[str],
+) -> list[dict[str, Any]]:
+    progress = context.get("evidence_progress")
+    requirements = progress.get("requirements") if isinstance(progress, dict) else None
+    if not isinstance(requirements, list):
+        return []
+    results: list[dict[str, Any]] = []
+    for requirement in requirements:
+        if not isinstance(requirement, dict):
+            continue
+        requirement_key = str(requirement.get("requirement_key") or "").strip()
+        if not requirement_key:
+            continue
+        current_status = str(requirement.get("status") or "").strip().lower()
+        accepted_refs = requirement.get("accepted_event_refs") if isinstance(requirement.get("accepted_event_refs"), list) else []
+        if decision in {"continue", "complete"}:
+            results.append(
+                {
+                    "requirement_key": requirement_key,
+                    "status": "accepted",
+                    "event_refs": [event_ref] if event_ref else [str(ref) for ref in accepted_refs if str(ref).strip()],
+                    "reason": reason,
+                }
+            )
+        elif current_status == "accepted":
+            results.append(
+                {
+                    "requirement_key": requirement_key,
+                    "status": "accepted",
+                    "event_refs": [str(ref) for ref in accepted_refs if str(ref).strip()],
+                    "reason": str(requirement.get("reason") or "该证据项此前已通过。"),
+                }
+            )
+        else:
+            results.append(
+                {
+                    "requirement_key": requirement_key,
+                    "status": "missing",
+                    "event_refs": [],
+                    "reason": "当前仍缺少该证据项。" if missing_evidence else reason,
+                }
+            )
+    return results
 
 
 def _node_id_from_messages(messages: list[BaseMessage]) -> str:

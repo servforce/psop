@@ -42,8 +42,12 @@
 - `POST /terminal/sessions/{run_id}/events` 只持久化 terminal event 并把 `job:runtime:{run_id}` 置为 pending；202 响应不代表 Runtime 已推进。
 - Runtime worker 是生产路径中唯一推进 Runtime 的执行者。单元测试可以显式调用 `process_run()`，但必须在测试语义中写清这是模拟 worker。
 - Runtime terminal input 必须按 wait checkpoint 的 `input_window` 和 `control.terminal_consumption` 账本消费；不得把旧 input 跨 checkpoint 或 workflow step 自动复用为新的 evidence。
+- `control.terminal_consumption` 只记录 input 消费事实；多证据 checkpoint 的通过/缺失/拒绝状态必须写入 `control.evidence_progress`，不得要求 runner 仅靠历史自然语言回复重建证据完成状态。
+- runner 对证据项的结构化判断必须通过 `evidence_assessment.requirement_results` 合并；已 `accepted` 的 requirement 不应被后续 `missing` / `ambiguous` 结果清除，只有同一 requirement 的明确 `rejected` 可以改为不通过。
+- 非首个 wait checkpoint 的输入窗口必须从 checkpoint 创建时已同步的最新 terminal seq 之后开始；不得把同轮触发 `instruct_*` 节点输出的 input 立即复用为该新 checkpoint 的 evidence。
 - Runtime worker 可以在每个节点完成后提交并发布本节点新增 output/trace，以降低终端可见延迟；input event 的 accepted 推送仍由追加事件路径负责。
 - Runtime evaluation 节点在输出成功消息前必须先解析并校验 EG transition；缺失合法 transition 时进入 recoverable failure，禁止先输出“进入下一阶段”再报错。
+- `final_verify` 只负责最终验证与写入 `outputs.final_response`；进入 terminal 类节点时，最终用户可见完成/中止消息只能由 terminal 节点输出一次。
 - `job:runtime:{run_id}` 必须保持单 Run 单 job 的 dedupe 语义；running job 收到新输入时只标记 `payload.rerun_requested=true`，不抢占、不新建重复 job。
 - `Sandbox Manager` 只在需要更强隔离时介入，不作为默认常驻独立主进程。
 

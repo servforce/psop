@@ -15,6 +15,7 @@ from app.domain.compiler.models import ArtifactObject
 from app.domain.compiler.service import CompilerService
 from app.domain.compiler.formal_v5 import validate_and_normalize_artifact
 from app.domain.jobs.repository import JobRepository
+from app.domain.runtime.models import Run, SessionTokenSnapshot
 from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest, TerminalEventPartInput
 from app.domain.runtime.service import RuntimeService
 from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
@@ -328,7 +329,13 @@ def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
     assert agent_run_record.related_runtime_run_id == run.id
     assert agent_event_count > 0
     assert agent_artifact_count > 0
-    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output", "output"]
+    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output"]
+    assert terminal_events[-1].source_ref["node_id"] == "terminal"
+    assert "final_verify" not in [
+        event.source_ref.get("node_id")
+        for event in terminal_events
+        if event.direction == "output"
+    ]
 
 
 def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> None:
@@ -1143,7 +1150,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert appended.seq_no == 1
     assert run.status == "succeeded"
     assert run.latest_snapshot_seq == 5
-    assert run.latest_terminal_seq == 5
+    assert run.latest_terminal_seq == 4
     assert run.latest_trace_seq >= 7
     assert run.terminal_session_id == invocation.terminal_session_id
     assert len(run.binding_summary) == 2
@@ -1169,10 +1176,11 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert agent_trace_payloads[0]["observation"]["usage"]["total_tokens"] > 0
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
     assert terminal_session.terminal_session.status == "closed"
-    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output", "output"]
+    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output"]
+    assert terminal_events[-1].source_ref["node_id"] == "terminal"
     assert terminal_events[0].payload_inline == "我已经完成当前步骤，并上传了现场说明。"
     assert {binding.requirement_key for binding in bindings} == {"terminal.input", "terminal.output"}
-    assert len(replay.terminal_events) == 5
+    assert len(replay.terminal_events) == 4
     assert len(replay.bindings) == 2
     assert "binding.resolved" in [item.event_type for item in replay.timeline]
     assert "terminal.event.appended" in [item.event_type for item in replay.timeline]
@@ -1287,7 +1295,7 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> No
     assert "电源功率不足" in run.exit_reason
     assert run.ended_at is not None
     assert terminal_session.terminal_session.status == "closed"
-    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output"]
+    assert [event.direction for event in terminal_events] == ["input", "output", "output"]
     assert terminal_events[-1].source_ref["node_id"] == "terminal_abort"
     assert snapshots[-1].token_payload["status"] == "aborted"
     assert snapshots[-1].token_payload["control"]["abort"]["next_phase"] == "terminal_abort"
@@ -1596,6 +1604,347 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     assert "evaluate_second_step" not in agent_node_ids
     assert [event.payload["resumed_from_existing_input"] for event in wait_traces] == [True, False]
     assert [event.direction for event in terminal_events] == ["input", "output", "output", "output"]
+
+
+def test_runtime_new_checkpoint_does_not_consume_same_turn_trigger_input(tmp_path) -> None:
+    settings = create_test_settings().model_copy(
+        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
+    )
+    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
+    database_manager.create_schema()
+    gitlab_gateway = FakeGitLabGateway()
+    compile_gateway = FakeInferenceGateway()
+    compiler_service = CompilerService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        inference_gateway=compile_gateway,
+    )
+    skills_service = SkillsService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        compiler_service=compiler_service,
+    )
+    agent_harness_service = AgentHarnessService(
+        settings=settings,
+        chat_model_factory=lambda _definition: ScriptedRunnerChatModel(
+            observation_overrides_by_node={
+                "evaluate_collect_context": {
+                    "decision": "continue",
+                    "next_phase": "second_step",
+                    "terminal_message": "第一阶段证据已确认，可以进入第二阶段。",
+                    "reason": "第一阶段证据满足要求。",
+                    "expected_inputs": [],
+                    "evidence_assessment": {
+                        "accepted_event_refs": ["terminal_event:1"],
+                        "rejected_event_refs": [],
+                        "missing_evidence": [],
+                        "unsafe_or_ambiguous_facts": [],
+                    },
+                },
+                "instruct_second_step": {
+                    "decision": "need_more_evidence",
+                    "terminal_message": "请提交第二阶段照片。",
+                    "reason": "第二阶段需要新的现场证据。",
+                    "wait_reason": "等待第二阶段照片。",
+                    "expected_inputs": ["image"],
+                },
+                "evaluate_second_step": {
+                    "decision": "need_more_evidence",
+                    "terminal_message": "不应使用继续评估第二阶段。",
+                    "reason": "第二阶段缺少新的现场证据。",
+                    "wait_reason": "等待第二阶段证据。",
+                    "expected_inputs": ["image"],
+                },
+            }
+        ),
+    )
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=agent_harness_service,
+    )
+
+    try:
+        with database_manager.session() as session:
+            skill = skills_service.create_skill(
+                session,
+                CreateSkillRequest(
+                    key="runtime-same-turn-trigger",
+                    name="Runtime Same Turn Trigger",
+                    description="Validate new checkpoints ignore the input that triggered the instruct node.",
+                ),
+            )
+            published = skills_service.publish_skill(
+                session,
+                skill_id=skill.id,
+                payload=PublishSkillRequest(publish_reason="Runtime same turn trigger"),
+            )
+            compiled = process_publish_job(session, compiler_service, published.compile_request.id)
+            artifact = compiler_service.get_artifact(session, compiled.artifact_id or "")
+            artifact_object = session.get(ArtifactObject, artifact.artifact_object_id)
+            assert artifact_object is not None
+            artifact_object.content_json = _add_second_wait_checkpoint_to_artifact(
+                json.loads(json.dumps(artifact_object.content_json, ensure_ascii=False))
+            )
+            session.flush()
+
+            invocation = runtime_service.create_invocation(
+                session,
+                CreateInvocationRequest(
+                    skill_key="runtime-same-turn-trigger",
+                    terminal_context={"terminal_kind": "web"},
+                ),
+            )
+            run_id = invocation.run_id or ""
+            runtime_service.append_terminal_event(
+                session,
+                run_id,
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="第一阶段证据",
+                    external_event_id="runtime-same-turn-trigger-input-1",
+                ),
+            )
+            runtime_service.process_run(session, run_id)
+
+            source_snapshot = next(
+                snapshot
+                for snapshot in runtime_service.repository.list_snapshots(session, run_id)
+                if snapshot.token_payload.get("phase") == "instruct_second_step"
+                and snapshot.selection_summary.get("selected") == "evaluate_collect_context"
+            )
+            run_model = session.get(Run, run_id)
+            assert run_model is not None
+            next_snapshot_seq = run_model.latest_snapshot_seq + 1
+            run_model.latest_snapshot_seq = next_snapshot_seq
+            run_model.status = "waiting_input"
+            run_model.runtime_phase = "instruct_second_step"
+            session.add(
+                SessionTokenSnapshot(
+                    run_id=run_id,
+                    seq_no=next_snapshot_seq,
+                    token_payload=json.loads(json.dumps(source_snapshot.token_payload, ensure_ascii=False)),
+                    enabled_set=["instruct_second_step"],
+                    selection_summary={"selected": None, "reason": "test rewind to pending instruct"},
+                    snapshot_hash=runtime_service._hash_payload(source_snapshot.token_payload),
+                )
+            )
+            session.flush()
+
+            before_trace_seq = max((event.seq_no for event in runtime_service.list_trace_events(session, run_id)), default=0)
+            continue_event = runtime_service.append_terminal_event(
+                session,
+                run_id,
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="继续",
+                    external_event_id="runtime-same-turn-trigger-continue",
+                ),
+            ).event
+            runtime_service.process_run(session, run_id)
+            run = runtime_service.get_run(session, run_id)
+            terminal_events = runtime_service.list_terminal_events(session, run_id)
+            trace_events = runtime_service.list_trace_events(session, run_id)
+            snapshots = runtime_service.list_snapshots(session, run_id)
+    finally:
+        database_manager.dispose()
+
+    new_output_events = [
+        event
+        for event in terminal_events
+        if event.direction == "output" and event.seq_no > continue_event.seq_no
+    ]
+    new_agent_nodes = [
+        event.payload["node_id"]
+        for event in trace_events
+        if event.seq_no > before_trace_seq and event.event_type == "runtime.agent.completed"
+    ]
+    wait_traces = [
+        event
+        for event in trace_events
+        if event.seq_no > before_trace_seq and event.event_type == "runtime.wait_checkpoint.entered"
+    ]
+    latest_token = snapshots[-1].token_payload
+    wait = latest_token["control"]["wait"]
+    consumed_seqs = [
+        item["seq_no"]
+        for item in latest_token["control"].get("terminal_consumption", [])
+        if isinstance(item, dict)
+    ]
+
+    assert run.status == "waiting_input"
+    assert len(new_output_events) == 1
+    assert new_output_events[0].source_ref["node_id"] == "instruct_second_step"
+    assert "不应使用继续评估第二阶段" not in str(new_output_events[0].payload_inline)
+    assert new_agent_nodes == ["instruct_second_step"]
+    assert wait["checkpoint_id"] == "second_step_evidence"
+    assert wait["status"] == "waiting"
+    assert wait["evidence"] == []
+    assert wait["input_window"]["accept_after_seq"] == continue_event.seq_no
+    assert wait_traces[-1].payload["resumed_from_existing_input"] is False
+    assert wait_traces[-1].payload["wait"]["input_window"]["accept_after_seq"] == continue_event.seq_no
+    assert continue_event.seq_no not in consumed_seqs
+
+
+def test_runtime_evidence_progress_preserves_accepted_requirements_when_later_result_marks_missing() -> None:
+    artifact_payload = build_test_formal_v5_artifact()
+    artifact_payload["runtime_contract"]["expected_evidence"]["collect_context"] = [
+        {"description": "桌面截图", "kind": "image"},
+        {"description": "设备管理器截图（无未知设备）", "kind": "image"},
+        {"description": "磁盘管理截图（分区完整）", "kind": "image"},
+        {"description": "任务管理器性能页（内存频率）", "kind": "image"},
+    ]
+    wait = {
+        "checkpoint_id": "collect_context_evidence",
+        "workflow_step_id": "collect_context",
+    }
+    token = {
+        "control": {
+            "wait": wait,
+            "evidence_progress": RuntimeService._build_evidence_progress(
+                wait=wait,
+                artifact_payload=artifact_payload,
+                updated_by_node="instruct_collect_context",
+            ),
+        }
+    }
+    node = {"id": "evaluate_collect_context"}
+
+    RuntimeService._merge_evidence_progress_from_observation(
+        token=token,
+        node=node,
+        artifact_payload=artifact_payload,
+        observation={
+            "evidence_assessment": {
+                "requirement_results": [
+                    {
+                        "requirement_key": "evidence_1",
+                        "status": "accepted",
+                        "event_refs": ["terminal_event:113"],
+                        "reason": "桌面截图通过。",
+                    },
+                    {
+                        "requirement_key": "evidence_3",
+                        "status": "accepted",
+                        "event_refs": ["terminal_event:116"],
+                        "reason": "磁盘管理截图通过。",
+                    },
+                    {
+                        "requirement_key": "evidence_4",
+                        "status": "accepted",
+                        "event_refs": ["terminal_event:118"],
+                        "reason": "任务管理器截图通过。",
+                    },
+                ]
+            }
+        },
+    )
+    RuntimeService._merge_evidence_progress_from_observation(
+        token=token,
+        node=node,
+        artifact_payload=artifact_payload,
+        observation={
+            "evidence_assessment": {
+                "requirement_results": [
+                    {
+                        "requirement_key": "evidence_2",
+                        "status": "rejected",
+                        "event_refs": ["terminal_event:120"],
+                        "reason": "设备管理器仍有未知设备。",
+                    }
+                ]
+            }
+        },
+    )
+    RuntimeService._merge_evidence_progress_from_observation(
+        token=token,
+        node=node,
+        artifact_payload=artifact_payload,
+        observation={
+            "evidence_assessment": {
+                "requirement_results": [
+                    {
+                        "requirement_key": "evidence_2",
+                        "status": "accepted",
+                        "event_refs": ["terminal_event:124"],
+                        "reason": "设备管理器已无未知设备。",
+                    },
+                    {
+                        "requirement_key": "evidence_1",
+                        "status": "missing",
+                        "event_refs": [],
+                        "reason": "模型本轮未重新引用桌面截图。",
+                    },
+                    {
+                        "requirement_key": "evidence_3",
+                        "status": "missing",
+                        "event_refs": [],
+                        "reason": "模型本轮未重新引用磁盘管理截图。",
+                    },
+                    {
+                        "requirement_key": "evidence_4",
+                        "status": "ambiguous",
+                        "event_refs": [],
+                        "reason": "模型本轮未重新引用任务管理器截图。",
+                    },
+                ]
+            }
+        },
+    )
+
+    requirements = {
+        item["requirement_key"]: item
+        for item in token["control"]["evidence_progress"]["requirements"]
+    }
+    assert {key: item["status"] for key, item in requirements.items()} == {
+        "evidence_1": "accepted",
+        "evidence_2": "accepted",
+        "evidence_3": "accepted",
+        "evidence_4": "accepted",
+    }
+    assert requirements["evidence_1"]["accepted_event_refs"] == ["terminal_event:113"]
+    assert requirements["evidence_2"]["rejected_event_refs"] == ["terminal_event:120"]
+    assert requirements["evidence_2"]["accepted_event_refs"] == ["terminal_event:124"]
+    assert requirements["evidence_3"]["accepted_event_refs"] == ["terminal_event:116"]
+    assert requirements["evidence_4"]["accepted_event_refs"] == ["terminal_event:118"]
+
+
+def test_runtime_evidence_progress_initializes_new_checkpoint_independently() -> None:
+    artifact_payload = build_test_formal_v5_artifact()
+    artifact_payload["runtime_contract"]["expected_evidence"]["second_step"] = [
+        {"description": "第二阶段照片", "kind": "image"}
+    ]
+    wait = {
+        "checkpoint_id": "second_step_evidence",
+        "workflow_step_id": "second_step",
+    }
+
+    progress = RuntimeService._build_evidence_progress(
+        wait=wait,
+        artifact_payload=artifact_payload,
+        updated_by_node="instruct_second_step",
+    )
+
+    assert progress["checkpoint_id"] == "second_step_evidence"
+    assert progress["workflow_step_id"] == "second_step"
+    assert progress["requirements"] == [
+        {
+            "requirement_key": "evidence_1",
+            "description": "第二阶段照片",
+            "kind": "image",
+            "status": "missing",
+            "accepted_event_refs": [],
+            "rejected_event_refs": [],
+            "latest_event_refs": [],
+            "reason": "",
+            "updated_at": progress["requirements"][0]["updated_at"],
+            "updated_by_node": "instruct_second_step",
+        }
+    ]
 
 
 def test_runtime_missing_evaluation_transition_fails_before_success_output(runtime_stack) -> None:

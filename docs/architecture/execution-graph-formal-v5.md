@@ -119,6 +119,8 @@ PSOP-EG v5.1 采用以下原则。
 
 Actor observation 不能拥有执行游标。对于运行期 evidence evaluation，模型可以判断当前节点 `proceed`、`need_more_evidence`、`retry`、`abort` 或 `complete`，但不能把 `observation.next_phase` 当作正式 phase 写入来源；Runtime 必须依据 EG transition 决定下一 phase。
 
+最终验证节点与终止节点的职责必须分离。`final_verify` 负责判断 completion criteria 是否满足，并把最终说明写入 `outputs.final_response`；`terminal` 或 terminal-like 节点负责唯一一次向终端提交最终用户可见消息并关闭运行。Runtime 不应让 `final_verify` 和 `terminal` 同时输出同一份完成或中止文案。
+
 ### 原则三：事实、信念、经验、预测分离
 
 - `facts` 是已经进入正式状态的事实；

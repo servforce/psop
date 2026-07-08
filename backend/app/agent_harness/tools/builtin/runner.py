@@ -143,7 +143,33 @@ def register_runner_tools(registry: ToolRegistry) -> None:
                     },
                     "wait_reason": {"type": "string"},
                     "expected_inputs": {"type": "array", "items": {"type": "string"}},
-                    "evidence_assessment": {"type": "object"},
+                    "evidence_assessment": {
+                        "type": "object",
+                        "properties": {
+                            "accepted_event_refs": {"type": "array", "items": {"type": "string"}},
+                            "rejected_event_refs": {"type": "array", "items": {"type": "string"}},
+                            "missing_evidence": {"type": "array", "items": {"type": "string"}},
+                            "unsafe_or_ambiguous_facts": {"type": "array", "items": {"type": "string"}},
+                            "requirement_results": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "required": ["requirement_key", "status"],
+                                    "properties": {
+                                        "requirement_key": {"type": "string"},
+                                        "status": {
+                                            "type": "string",
+                                            "enum": ["accepted", "rejected", "missing", "ambiguous"],
+                                        },
+                                        "event_refs": {"type": "array", "items": {"type": "string"}},
+                                        "reason": {"type": "string"},
+                                    },
+                                    "additionalProperties": False,
+                                },
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
                     "reference_images": {"type": "array", "items": {"type": "object"}},
                     "safety_flags": {"type": "array", "items": {"type": "object"}},
                     "final_response": {"type": "string"},
@@ -193,6 +219,7 @@ def _read_current_checkpoint(_: dict[str, Any], context: ToolExecutionContext) -
     return _success_result(
         "已读取当前 wait checkpoint。",
         checkpoint=checkpoint,
+        evidence_progress=_dict_value(context.invocation_context, "evidence_progress"),
         next_valid_actions=["psop.runner.list_terminal_events", "psop.runner.read_latest_evidence"],
     )
 

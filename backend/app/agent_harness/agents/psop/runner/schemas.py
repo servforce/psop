@@ -18,6 +18,14 @@ RUNTIME_DECISION_BY_RUNNER_DECISION = {
     "complete": "complete",
 }
 SUPPORTED_EXPECTED_INPUTS = {"text", "image", "audio", "video"}
+REQUIREMENT_RESULT_STATUSES = {"accepted", "rejected", "missing", "ambiguous"}
+
+
+class RunnerRequirementResult(BaseModel):
+    requirement_key: str
+    status: Literal["accepted", "rejected", "missing", "ambiguous"]
+    event_refs: list[str] = Field(default_factory=list)
+    reason: str = ""
 
 
 class RunnerEvidenceAssessment(BaseModel):
@@ -25,6 +33,7 @@ class RunnerEvidenceAssessment(BaseModel):
     rejected_event_refs: list[str] = Field(default_factory=list)
     missing_evidence: list[str] = Field(default_factory=list)
     unsafe_or_ambiguous_facts: list[str] = Field(default_factory=list)
+    requirement_results: list[RunnerRequirementResult] = Field(default_factory=list)
 
 
 class RunnerReferenceImage(BaseModel):
@@ -100,7 +109,9 @@ def validate_runner_observation(
 
     _validate_reference_images(observation.get("reference_images") or [], invocation_context)
     _validate_source_refs(observation.get("source_refs") or [], invocation_context)
-    _validate_evidence_event_refs(_evidence_event_refs(observation.get("evidence_assessment") or {}), invocation_context)
+    evidence_assessment = observation.get("evidence_assessment") or {}
+    _validate_evidence_event_refs(_evidence_event_refs(evidence_assessment), invocation_context)
+    _validate_requirement_results(evidence_assessment, invocation_context)
     observation["runtime_decision"] = runner_decision_to_runtime_decision(observation["decision"])
     return observation
 
@@ -311,7 +322,43 @@ def _evidence_event_refs(evidence_assessment: dict[str, Any]) -> list[str]:
         value = evidence_assessment.get(key)
         if isinstance(value, list):
             refs.extend(str(item) for item in value if str(item).strip())
+    for item in evidence_assessment.get("requirement_results") or []:
+        if not isinstance(item, dict):
+            continue
+        event_refs = item.get("event_refs")
+        if isinstance(event_refs, list):
+            refs.extend(str(ref) for ref in event_refs if str(ref).strip())
     return refs
+
+
+def _validate_requirement_results(evidence_assessment: dict[str, Any], invocation_context: dict[str, Any]) -> None:
+    results = evidence_assessment.get("requirement_results")
+    if not isinstance(results, list) or not results:
+        return
+    allowed_keys = _evidence_requirement_keys(invocation_context)
+    if not allowed_keys:
+        raise ValueError("requirement_results 需要当前上下文提供 evidence_progress.requirements。")
+    for item in results:
+        if not isinstance(item, dict):
+            raise ValueError("requirement_results 每项必须是 JSON object。")
+        key = str(item.get("requirement_key") or "").strip()
+        if key not in allowed_keys:
+            raise ValueError(f"requirement_results 引用了当前 checkpoint 不存在的 requirement_key：{key}")
+        status = str(item.get("status") or "").strip().lower()
+        if status not in REQUIREMENT_RESULT_STATUSES:
+            raise ValueError(f"requirement_results.status 不受支持：{status}")
+
+
+def _evidence_requirement_keys(invocation_context: dict[str, Any]) -> set[str]:
+    progress = _dict_value(invocation_context, "evidence_progress")
+    requirements = progress.get("requirements")
+    if not isinstance(requirements, list):
+        return set()
+    return {
+        str(item.get("requirement_key") or "").strip()
+        for item in requirements
+        if isinstance(item, dict) and str(item.get("requirement_key") or "").strip()
+    }
 
 
 def _list_value(payload: dict[str, Any], key: str) -> list[Any]:

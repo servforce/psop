@@ -1912,7 +1912,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     run_payload = run_response.json()
     assert run_payload["status"] == "succeeded"
     assert run_payload["terminal_session_id"] == invocation_payload["terminal_session_id"]
-    assert run_payload["latest_terminal_seq"] == 5
+    assert run_payload["latest_terminal_seq"] == 4
     assert run_payload["latest_trace_seq"] == 7
     assert len(run_payload["binding_summary"]) == 2
     assert "测试任务已完成" in run_payload["final_output"]
@@ -1938,13 +1938,18 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert {item["target_kind"] for item in bindings_response.json()} == {"web_terminal"}
     assert terminal_session_response.status_code == 200
     assert terminal_session_response.json()["terminal_session"]["id"] == invocation_payload["terminal_session_id"]
-    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3, 4, 5]
+    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3, 4]
     assert [item["direction"] for item in terminal_events_after_append_response.json()] == [
         "input",
         "output",
         "output",
         "output",
-        "output",
+    ]
+    assert terminal_events_after_append_response.json()[-1]["source_ref"]["node_id"] == "terminal"
+    assert "final_verify" not in [
+        item["source_ref"].get("node_id")
+        for item in terminal_events_after_append_response.json()
+        if item["direction"] == "output"
     ]
 
     replay_payload = replay_response.json()
@@ -1954,7 +1959,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert "runtime.start.completed" in replay_event_types
     assert "runtime.wait_checkpoint.entered" in replay_event_types
     assert "runtime.agent.completed" in replay_event_types
-    assert len(replay_payload["terminal_events"]) == 5
+    assert len(replay_payload["terminal_events"]) == 4
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
 

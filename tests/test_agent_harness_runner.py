@@ -397,6 +397,66 @@ def test_runner_observation_validates_strict_source_refs() -> None:
     assert validated["runtime_decision"] == "proceed"
 
 
+def test_runner_observation_validates_requirement_results() -> None:
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    payload["context"]["evidence_progress"] = {
+        "checkpoint_id": "collect_context_evidence",
+        "workflow_step_id": "collect_context",
+        "requirements": [
+            {
+                "requirement_key": "evidence_1",
+                "description": "现场文字说明",
+                "status": "missing",
+                "accepted_event_refs": [],
+                "rejected_event_refs": [],
+                "latest_event_refs": [],
+            }
+        ],
+    }
+    observation = _valid_runner_observation()
+    observation["evidence_assessment"]["requirement_results"] = [
+        {
+            "requirement_key": "evidence_1",
+            "status": "accepted",
+            "event_refs": ["terminal_event:1"],
+            "reason": "现场说明满足要求。",
+        }
+    ]
+
+    validated = validate_runner_observation(
+        observation,
+        invocation_input=payload["input"],
+        invocation_context=payload["context"],
+    )
+
+    assert validated["evidence_assessment"]["requirement_results"][0]["requirement_key"] == "evidence_1"
+
+
+def test_runner_observation_rejects_unknown_requirement_key() -> None:
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    payload["context"]["evidence_progress"] = {
+        "checkpoint_id": "collect_context_evidence",
+        "workflow_step_id": "collect_context",
+        "requirements": [{"requirement_key": "evidence_1", "description": "现场文字说明"}],
+    }
+    observation = _valid_runner_observation()
+    observation["evidence_assessment"]["requirement_results"] = [
+        {
+            "requirement_key": "missing_key",
+            "status": "accepted",
+            "event_refs": ["terminal_event:1"],
+            "reason": "测试。",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="requirement_key"):
+        validate_runner_observation(
+            observation,
+            invocation_input=payload["input"],
+            invocation_context=payload["context"],
+        )
+
+
 @pytest.mark.parametrize(
     "source_ref",
     [

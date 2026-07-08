@@ -1058,6 +1058,7 @@ class RuntimeService:
 
         terminal_message = self._terminal_message_from_observation(observation)
         resolved_next_phase = ""
+        decision = ""
         if self._node_is_evaluation(node):
             decision = str(observation.get("decision") or "").strip().lower()
             if decision in {"proceed", "complete", "abort"}:
@@ -1070,10 +1071,22 @@ class RuntimeService:
                     raise RuntimeError(
                         f"Evaluation node `{node.get('id')}` has no runtime transition for decision `{decision}`."
                     )
+            self._merge_evidence_progress_from_observation(
+                token=next_token,
+                node=node,
+                observation=observation,
+                artifact_payload=artifact_payload,
+            )
+        suppress_terminal_output = self._should_suppress_evaluation_terminal_output(
+            artifact_payload=artifact_payload,
+            node=node,
+            decision=decision,
+            resolved_next_phase=resolved_next_phase,
+        )
         should_output = bool(interaction.get("output_to_terminal")) or (
             self._node_is_evaluation(node) and bool(terminal_message)
         )
-        if should_output and terminal_message:
+        if should_output and not suppress_terminal_output and terminal_message:
             terminal_session = self.repository.get_terminal_session_for_run(session, run.id)
             if terminal_session and terminal_session.status == "open":
                 if not self._append_runner_terminal_output(
@@ -1130,15 +1143,16 @@ class RuntimeService:
                 next_token["phase"] = resolved_next_phase
 
         if interaction.get("wait_after_output"):
-            checkpoint_accept_after_seq = max(
-                wait_input_accept_after_seq,
-                self._latest_consumed_terminal_seq(next_token),
+            checkpoint_accept_after_seq = self._wait_checkpoint_accept_after_seq(
+                next_token,
+                default_accept_after_seq=wait_input_accept_after_seq,
             )
             next_token = self._enter_wait_checkpoint(
                 run=run,
                 token=next_token,
                 node=node,
                 observation=observation,
+                artifact_payload=artifact_payload,
                 accept_after_seq=checkpoint_accept_after_seq,
             )
             resumed_from_existing_input = self._consume_available_terminal_inputs_for_wait(next_token)
@@ -1266,6 +1280,10 @@ class RuntimeService:
             for operation in merge
         )
 
+    def _transition_enters_terminal(self, artifact_payload: dict[str, Any], phase: str) -> bool:
+        node = self._artifact_node_by_id(artifact_payload, phase)
+        return bool(node and str(node.get("kind") or "") == "terminal")
+
     @staticmethod
     def _artifact_node_by_id(artifact_payload: dict[str, Any], node_id: str) -> dict[str, Any] | None:
         nodes = artifact_payload.get("nodes")
@@ -1285,6 +1303,38 @@ class RuntimeService:
             for item in consumed
             if isinstance(item, dict) and isinstance(item.get("seq_no"), int)
         ]
+        return max(seqs) if seqs else 0
+
+    @classmethod
+    def _wait_checkpoint_accept_after_seq(cls, token: dict[str, Any], *, default_accept_after_seq: int) -> int:
+        candidates = [default_accept_after_seq, cls._latest_consumed_terminal_seq(token)]
+        if cls._has_prior_wait_checkpoint(token):
+            candidates.append(cls._latest_synced_terminal_seq(token))
+        return max(candidates)
+
+    @staticmethod
+    def _has_prior_wait_checkpoint(token: dict[str, Any]) -> bool:
+        control = token.get("control") if isinstance(token.get("control"), dict) else {}
+        wait_checkpoints = control.get("wait_checkpoints")
+        terminal_consumption = control.get("terminal_consumption")
+        return (
+            isinstance(control.get("wait"), dict)
+            or (isinstance(wait_checkpoints, list) and bool(wait_checkpoints))
+            or (isinstance(terminal_consumption, list) and bool(terminal_consumption))
+        )
+
+    @staticmethod
+    def _latest_synced_terminal_seq(token: dict[str, Any]) -> int:
+        seqs: list[int] = []
+        for value in (
+            _get_path(token, "metadata.terminal_cursor"),
+            _get_path(token, "terminal.latest_seq"),
+        ):
+            try:
+                seq = int(value or 0)
+            except (TypeError, ValueError):
+                continue
+            seqs.append(seq)
         return max(seqs) if seqs else 0
 
     def _append_runner_terminal_output(
@@ -1435,13 +1485,33 @@ class RuntimeService:
 
     @staticmethod
     def _evaluation_summary(node: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
-        return {
+        summary = {
             "node_id": str(node.get("id") or ""),
             "decision": str(observation.get("decision") or ""),
             "reason": str(observation.get("reason") or ""),
             "next_phase": str(observation.get("next_phase") or ""),
             "terminal_message": str(observation.get("terminal_message") or ""),
         }
+        if isinstance(observation.get("evidence_assessment"), dict):
+            summary["evidence_assessment"] = observation["evidence_assessment"]
+        if observation.get("final_response"):
+            summary["final_response"] = str(observation.get("final_response") or "")
+        return summary
+
+    def _should_suppress_evaluation_terminal_output(
+        self,
+        *,
+        artifact_payload: dict[str, Any],
+        node: dict[str, Any],
+        decision: str,
+        resolved_next_phase: str,
+    ) -> bool:
+        return (
+            self._node_is_evaluation(node)
+            and decision in {"complete", "abort"}
+            and bool(resolved_next_phase)
+            and self._transition_enters_terminal(artifact_payload, resolved_next_phase)
+        )
 
     @staticmethod
     def _enter_wait_checkpoint(
@@ -1450,6 +1520,7 @@ class RuntimeService:
         token: dict[str, Any],
         node: dict[str, Any],
         observation: dict[str, Any],
+        artifact_payload: dict[str, Any],
         accept_after_seq: int,
     ) -> dict[str, Any]:
         interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
@@ -1475,8 +1546,14 @@ class RuntimeService:
             },
             "evidence": [],
         }
-        token.setdefault("control", {})["wait"] = wait
-        token.setdefault("control", {}).setdefault("wait_checkpoints", []).append(
+        control = token.setdefault("control", {})
+        control["wait"] = wait
+        control["evidence_progress"] = RuntimeService._build_evidence_progress(
+            wait=wait,
+            artifact_payload=artifact_payload,
+            updated_by_node=str(node.get("id") or ""),
+        )
+        control.setdefault("wait_checkpoints", []).append(
             {
                 "checkpoint_id": checkpoint_id,
                 "workflow_step_id": wait["workflow_step_id"],
@@ -1487,6 +1564,167 @@ class RuntimeService:
         token["status"] = "waiting"
         token["phase"] = "waiting"
         return token
+
+    @classmethod
+    def _build_evidence_progress(
+        cls,
+        *,
+        wait: dict[str, Any],
+        artifact_payload: dict[str, Any],
+        updated_by_node: str,
+    ) -> dict[str, Any]:
+        requirements = cls._evidence_requirements_for_workflow_step(
+            artifact_payload=artifact_payload,
+            workflow_step_id=str(wait.get("workflow_step_id") or ""),
+        )
+        now = now_utc().isoformat()
+        return {
+            "checkpoint_id": str(wait.get("checkpoint_id") or ""),
+            "workflow_step_id": str(wait.get("workflow_step_id") or ""),
+            "requirements": [
+                {
+                    **requirement,
+                    "status": "missing",
+                    "accepted_event_refs": [],
+                    "rejected_event_refs": [],
+                    "latest_event_refs": [],
+                    "reason": "",
+                    "updated_at": now,
+                    "updated_by_node": updated_by_node,
+                }
+                for requirement in requirements
+            ],
+            "updated_at": now,
+            "updated_by_node": updated_by_node,
+        }
+
+    @classmethod
+    def _evidence_requirements_for_workflow_step(
+        cls,
+        *,
+        artifact_payload: dict[str, Any],
+        workflow_step_id: str,
+    ) -> list[dict[str, Any]]:
+        runtime_contract = artifact_payload.get("runtime_contract")
+        expected_evidence = runtime_contract.get("expected_evidence") if isinstance(runtime_contract, dict) else {}
+        raw = expected_evidence.get(workflow_step_id) if isinstance(expected_evidence, dict) else None
+        if isinstance(raw, dict) and isinstance(raw.get("items"), list):
+            raw_items = raw["items"]
+        elif isinstance(raw, list):
+            raw_items = raw
+        elif isinstance(raw, dict):
+            raw_items = [
+                {"requirement_key": str(key), **value} if isinstance(value, dict) else {"requirement_key": str(key), "description": str(value)}
+                for key, value in raw.items()
+            ]
+        else:
+            raw_items = []
+
+        requirements: list[dict[str, Any]] = []
+        for index, item in enumerate(raw_items, start=1):
+            if not isinstance(item, dict):
+                item = {"description": str(item)}
+            requirement_key = str(item.get("requirement_key") or item.get("id") or item.get("key") or f"evidence_{index}").strip()
+            if not requirement_key:
+                requirement_key = f"evidence_{index}"
+            description = str(item.get("description") or item.get("title") or requirement_key)
+            requirement = {
+                "requirement_key": requirement_key,
+                "description": description,
+            }
+            for field in ("kind", "event_kind"):
+                value = item.get(field)
+                if value:
+                    requirement[field] = value
+            requirements.append(requirement)
+        return requirements
+
+    @classmethod
+    def _merge_evidence_progress_from_observation(
+        cls,
+        *,
+        token: dict[str, Any],
+        node: dict[str, Any],
+        observation: dict[str, Any],
+        artifact_payload: dict[str, Any],
+    ) -> None:
+        evidence_assessment = observation.get("evidence_assessment")
+        if not isinstance(evidence_assessment, dict):
+            return
+        requirement_results = evidence_assessment.get("requirement_results")
+        if not isinstance(requirement_results, list) or not requirement_results:
+            return
+
+        control = token.setdefault("control", {})
+        wait = control.get("wait") if isinstance(control.get("wait"), dict) else {}
+        progress = control.get("evidence_progress") if isinstance(control.get("evidence_progress"), dict) else {}
+        if not cls._evidence_progress_matches_wait(progress, wait):
+            progress = cls._build_evidence_progress(
+                wait=wait,
+                artifact_payload=artifact_payload,
+                updated_by_node=str(node.get("id") or ""),
+            )
+            control["evidence_progress"] = progress
+
+        requirements = progress.get("requirements") if isinstance(progress.get("requirements"), list) else []
+        by_key = {
+            str(item.get("requirement_key") or ""): item
+            for item in requirements
+            if isinstance(item, dict) and str(item.get("requirement_key") or "")
+        }
+        now = now_utc().isoformat()
+        for result in requirement_results:
+            if not isinstance(result, dict):
+                continue
+            requirement_key = str(result.get("requirement_key") or "").strip()
+            requirement = by_key.get(requirement_key)
+            if not requirement:
+                continue
+            status = str(result.get("status") or "").strip().lower()
+            if status not in {"accepted", "rejected", "missing", "ambiguous"}:
+                continue
+            if requirement.get("status") == "accepted" and status in {"missing", "ambiguous"}:
+                continue
+            event_refs = cls._string_list(result.get("event_refs"))
+            requirement["status"] = status
+            requirement["latest_event_refs"] = event_refs
+            requirement["reason"] = str(result.get("reason") or "")
+            requirement["updated_at"] = now
+            requirement["updated_by_node"] = str(node.get("id") or "")
+            if status == "accepted":
+                requirement["accepted_event_refs"] = cls._unique_strings(
+                    [*cls._string_list(requirement.get("accepted_event_refs")), *event_refs]
+                )
+            elif status == "rejected":
+                requirement["rejected_event_refs"] = cls._unique_strings(
+                    [*cls._string_list(requirement.get("rejected_event_refs")), *event_refs]
+                )
+        progress["updated_at"] = now
+        progress["updated_by_node"] = str(node.get("id") or "")
+
+    @staticmethod
+    def _evidence_progress_matches_wait(progress: dict[str, Any], wait: dict[str, Any]) -> bool:
+        return (
+            isinstance(progress, dict)
+            and isinstance(wait, dict)
+            and str(progress.get("checkpoint_id") or "") == str(wait.get("checkpoint_id") or "")
+            and str(progress.get("workflow_step_id") or "") == str(wait.get("workflow_step_id") or "")
+        )
+
+    @staticmethod
+    def _string_list(value: Any) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else []
+
+    @staticmethod
+    def _unique_strings(values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result
 
     @staticmethod
     def _normalize_wait_expected_inputs(items: list[Any]) -> list[dict[str, Any]]:
@@ -2791,6 +3029,7 @@ class RuntimeService:
             "runtime_contract": runtime_contract,
             "step_reference_images": self._runner_step_reference_images(node=node, token=token, runtime_contract=runtime_contract),
             "current_checkpoint": self._runner_current_checkpoint(run=run, node=node, token=token),
+            "evidence_progress": self._runner_evidence_progress(node=node, token=token, artifact_payload=artifact_payload),
             "transition_contract": self._runner_transition_contract(artifact_payload=artifact_payload, node=node),
             "terminal_events": terminal_events[-20:],
             "latest_evidence": control.get("latest_evidence") if isinstance(control.get("latest_evidence"), dict) else {},
@@ -2825,6 +3064,7 @@ class RuntimeService:
             "mode": mode,
             "prompt_view": prompt_view,
             "current_checkpoint": context.get("current_checkpoint") if isinstance(context.get("current_checkpoint"), dict) else {},
+            "evidence_progress": context.get("evidence_progress") if isinstance(context.get("evidence_progress"), dict) else {},
             "latest_evidence": context.get("latest_evidence") if isinstance(context.get("latest_evidence"), dict) else {},
             "recent_terminal_events": [
                 self._runner_terminal_event_summary(item)
@@ -2901,6 +3141,26 @@ class RuntimeService:
             if isinstance(part, dict)
         ][:10]
         return summary
+
+    def _runner_evidence_progress(
+        self,
+        *,
+        node: dict[str, Any],
+        token: dict[str, Any],
+        artifact_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        control = token.get("control") if isinstance(token.get("control"), dict) else {}
+        wait = control.get("wait") if isinstance(control.get("wait"), dict) else None
+        progress = control.get("evidence_progress") if isinstance(control.get("evidence_progress"), dict) else {}
+        if wait and self._evidence_progress_matches_wait(progress, wait):
+            return dict(progress)
+        if wait:
+            return self._build_evidence_progress(
+                wait=wait,
+                artifact_payload=artifact_payload,
+                updated_by_node=str(node.get("id") or ""),
+            )
+        return {}
 
     def _build_runner_input_attachments(
         self,

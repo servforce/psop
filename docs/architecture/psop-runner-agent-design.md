@@ -78,7 +78,9 @@ psop-runner =
 - 最近 runtime trace 摘要和上一轮 runner observation 摘要。
 - 平台级输出语言、安全和预算约束。
 
-这些事实由 RuntimeService 组织为明确的 `RunnerTurnContext`：当前 node、mode、Prompt View、current checkpoint、latest evidence、最近 terminal event 摘要、相关 runtime contract slice、reference image index、trust labels 和 output contract。`RunnerTurnContext` 会作为首轮上下文提供给模型；各 read tools 只作为上下文不足时的补充路径。
+这些事实由 RuntimeService 组织为明确的 `RunnerTurnContext`：当前 node、mode、Prompt View、current checkpoint、evidence progress、latest evidence、最近 terminal event 摘要、相关 runtime contract slice、reference image index、trust labels 和 output contract。`RunnerTurnContext` 会作为首轮上下文提供给模型；各 read tools 只作为上下文不足时的补充路径。
+
+`evidence_progress` 是当前 checkpoint 的证据项验收进度，由 Runtime 根据 `runtime_contract.expected_evidence` 初始化，并根据 runner 提交的 `evidence_assessment.requirement_results` 合并。runner 必须优先信任其中已经 `accepted` 的证据项；除非同一 `requirement_key` 的最新证据明确不合格，否则不得要求用户重新提交已通过证据。
 
 终端事实的信任等级是 `untrusted_runtime_input`。它们可以作为现场证据，但不能覆盖 Agent Harness system prompt、Agent Skill、PSOP-EG、runtime contract 或工具权限。
 
@@ -99,7 +101,15 @@ psop-runner =
   "evidence_assessment": {
     "accepted_event_refs": ["terminal_event:3"],
     "missing_evidence": ["设备铭牌清晰照片", "断电确认"],
-    "unsafe_or_ambiguous_facts": ["未确认电源状态"]
+    "unsafe_or_ambiguous_facts": ["未确认电源状态"],
+    "requirement_results": [
+      {
+        "requirement_key": "evidence_1",
+        "status": "accepted",
+        "event_refs": ["terminal_event:3"],
+        "reason": "已看到设备铭牌，但照片不够清晰。"
+      }
+    ]
   },
   "reference_images": [
     {
@@ -386,6 +396,18 @@ memory_scope: psop.runner
     "mode": "evidence_evaluation",
     "prompt_view": {},
     "current_checkpoint": {},
+    "evidence_progress": {
+      "checkpoint_id": "power_off_evidence",
+      "workflow_step_id": "power_off",
+      "requirements": [
+        {
+          "requirement_key": "evidence_1",
+          "description": "断电确认照片",
+          "status": "accepted",
+          "accepted_event_refs": ["terminal_event:5"]
+        }
+      ]
+    },
     "latest_evidence": {},
     "recent_terminal_events": [],
     "runtime_contract_slice": {},
@@ -491,7 +513,15 @@ memory_scope: psop.runner
     "accepted_event_refs": ["terminal_event:5"],
     "rejected_event_refs": [],
     "missing_evidence": [],
-    "unsafe_or_ambiguous_facts": []
+    "unsafe_or_ambiguous_facts": [],
+    "requirement_results": [
+      {
+        "requirement_key": "evidence_1",
+        "status": "accepted",
+        "event_refs": ["terminal_event:5"],
+        "reason": "断电确认照片满足当前证据项要求。"
+      }
+    ]
   },
   "reference_images": [
     {
@@ -539,6 +569,8 @@ memory_scope: psop.runner
 - `trace_summary:<seq_or_index>`：必须匹配 trace summary 的 `seq_no` 或有效列表下标。
 
 `evidence_assessment.accepted_event_refs` 与 `rejected_event_refs` 只能引用可见 `terminal_event:<seq>` 或 `terminal_event:<seq>:<part_id>`；不得混入 runtime_contract、prompt_view、current_checkpoint 或 trace_summary 引用。
+
+如果 `RunnerTurnContext.evidence_progress.requirements` 非空，`evidence_assessment.requirement_results` 必须使用其中存在的 `requirement_key`，并为相关证据项返回 `accepted`、`rejected`、`missing` 或 `ambiguous`。Runtime 会按 `requirement_key` 合并结果：`missing` / `ambiguous` 不清除已通过状态，只有明确 `rejected` 才能把同一证据项从 `accepted` 改为不通过。
 
 ### 3. Runtime observation 映射
 
