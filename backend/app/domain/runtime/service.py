@@ -143,8 +143,8 @@ class RuntimeService:
             skill_definition_id=skill_definition.id,
             skill_version_id=skill_version.id,
             compile_artifact_id=artifact.id,
-            status="waiting_input",
-            runtime_phase="terminal_bound",
+            status="waiting_runtime",
+            runtime_phase=self._initial_phase(artifact_payload),
         )
         session.add(run)
         session.flush()
@@ -183,6 +183,7 @@ class RuntimeService:
                 snapshot_hash=self._hash_payload(initial_token),
             )
         )
+        self._ensure_runtime_job_pending(session, run)
         self._commit_and_publish(
             session,
             run_id=run.id,
@@ -414,7 +415,8 @@ class RuntimeService:
             token = self.repository.list_snapshots(session, run.id)[-1].token_payload
             token = self._compact_runtime_token(token)
             turn_input_accept_after_seq = int(_get_path(token, "metadata.terminal_cursor") or 0)
-            token = self._sync_terminal_events(session, run=run, token=token)
+            if self._token_is_waiting_for_terminal_input(token):
+                token = self._sync_terminal_events(session, run=run, token=token)
             run.status = "running"
             run.runtime_phase = str(token.get("phase") or self._initial_phase(artifact_payload))
             if token.get("status") == "waiting":
@@ -771,7 +773,7 @@ class RuntimeService:
         idempotency_key: str | None = None,
         process_after_append: bool = False,
     ) -> TerminalEventAppendResponse:
-        run = self.repository.get_run(session, run_id)
+        run = self.repository.get_run_for_update(session, run_id)
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
 
@@ -1077,7 +1079,41 @@ class RuntimeService:
                 observation=observation,
                 artifact_payload=artifact_payload,
             )
-        suppress_terminal_output = self._should_suppress_evaluation_terminal_output(
+
+        resumed_from_existing_input = False
+        if interaction.get("wait_after_output"):
+            checkpoint_accept_after_seq = self._wait_checkpoint_accept_after_seq(
+                next_token,
+                default_accept_after_seq=wait_input_accept_after_seq,
+            )
+            if self._has_prior_wait_checkpoint(next_token):
+                checkpoint_accept_after_seq = max(checkpoint_accept_after_seq, int(run.latest_terminal_seq or 0))
+            next_token = self._enter_wait_checkpoint(
+                run=run,
+                token=next_token,
+                node=node,
+                observation=observation,
+                artifact_payload=artifact_payload,
+                accept_after_seq=checkpoint_accept_after_seq,
+            )
+            resumed_from_existing_input = self._consume_pending_terminal_inputs_for_wait(
+                session,
+                run=run,
+                token=next_token,
+            )
+            entered_wait = not resumed_from_existing_input
+            self._append_trace_event(
+                session,
+                run=run,
+                phase=str(node.get("id")),
+                event_type="runtime.wait_checkpoint.entered",
+                payload={
+                    "wait": next_token.get("control", {}).get("wait", {}),
+                    "resumed_from_existing_input": resumed_from_existing_input,
+                },
+            )
+
+        suppress_terminal_output = resumed_from_existing_input or self._should_suppress_evaluation_terminal_output(
             artifact_payload=artifact_payload,
             node=node,
             decision=decision,
@@ -1141,32 +1177,6 @@ class RuntimeService:
                     next_token["phase"] = "aborted"
             elif decision in {"proceed", "complete"}:
                 next_token["phase"] = resolved_next_phase
-
-        if interaction.get("wait_after_output"):
-            checkpoint_accept_after_seq = self._wait_checkpoint_accept_after_seq(
-                next_token,
-                default_accept_after_seq=wait_input_accept_after_seq,
-            )
-            next_token = self._enter_wait_checkpoint(
-                run=run,
-                token=next_token,
-                node=node,
-                observation=observation,
-                artifact_payload=artifact_payload,
-                accept_after_seq=checkpoint_accept_after_seq,
-            )
-            resumed_from_existing_input = self._consume_available_terminal_inputs_for_wait(next_token)
-            entered_wait = not resumed_from_existing_input
-            self._append_trace_event(
-                session,
-                run=run,
-                phase=str(node.get("id")),
-                event_type="runtime.wait_checkpoint.entered",
-                payload={
-                    "wait": next_token.get("control", {}).get("wait", {}),
-                    "resumed_from_existing_input": resumed_from_existing_input,
-                },
-            )
 
         return next_token, entered_wait
 
@@ -1738,39 +1748,73 @@ class RuntimeService:
                 normalized.append({"kind": kind})
         return normalized
 
-    @classmethod
-    def _consume_available_terminal_inputs_for_wait(cls, token: dict[str, Any]) -> bool:
+    def _consume_pending_terminal_inputs_for_wait(
+        self,
+        session: Session,
+        *,
+        run: Run,
+        token: dict[str, Any],
+    ) -> bool:
         control = token.get("control") if isinstance(token.get("control"), dict) else {}
         wait = control.get("wait") if isinstance(control.get("wait"), dict) else None
         if not isinstance(control, dict) or not isinstance(wait, dict) or token.get("status") != "waiting":
             return False
 
-        terminal = token.get("terminal") if isinstance(token.get("terminal"), dict) else {}
-        events = terminal.get("events") if isinstance(terminal.get("events"), list) else []
+        input_window = wait.get("input_window") if isinstance(wait.get("input_window"), dict) else {}
+        try:
+            accept_after_seq = int(input_window.get("accept_after_seq") or 0)
+        except (TypeError, ValueError):
+            accept_after_seq = 0
+        delivery_upper_seq = int(run.latest_terminal_seq or 0)
+        if delivery_upper_seq <= accept_after_seq:
+            return False
+
+        terminal = token.setdefault("terminal", {})
+        token_events = terminal.setdefault("events", [])
+        input_envelope = token.setdefault("input_envelope", {})
+        existing_event_ids = {
+            str(item.get("id") or "")
+            for item in token_events
+            if isinstance(item, dict) and str(item.get("id") or "")
+        }
         consumed_evidence: list[dict[str, Any]] = []
-        for event_payload in events:
-            if not isinstance(event_payload, dict) or event_payload.get("direction") != "input":
+        for event in self.repository.list_terminal_events(
+            session,
+            run.id,
+            from_seq=accept_after_seq + 1,
+            to_seq=delivery_upper_seq,
+        ):
+            if event.direction != "input":
                 continue
-            if not cls._can_consume_terminal_input_for_wait(
+            event_payload = self._terminal_event_token_payload_with_parts(session, event)
+            if not self._can_consume_terminal_input_for_wait(
                 event_payload=event_payload,
                 wait=wait,
                 control=control,
             ):
                 continue
-            input_bundle = event_payload.get("input_bundle") if isinstance(event_payload.get("input_bundle"), dict) else {}
-            input_text = str(
-                input_bundle.get("text")
-                or event_payload.get("text")
-                or cls._terminal_input_text_from_payload(event_payload.get("payload_inline"))
-            )
+            parts = event_payload.get("parts") if isinstance(event_payload.get("parts"), list) else []
+            input_text = self._terminal_input_text(event, parts)
+            if input_text:
+                input_envelope["user_input"] = input_text
+                input_envelope.setdefault("text", input_text)
             evidence = {
-                **json.loads(json.dumps(event_payload, ensure_ascii=False, default=str)),
+                **event_payload,
                 "text": input_text,
-                "input_bundle": input_bundle or cls._terminal_input_bundle_from_token_payload(event_payload),
+                "input_bundle": event_payload.get("input_bundle")
+                or self._terminal_input_bundle_from_parts(event, parts),
             }
+            if str(event_payload.get("id") or "") not in existing_event_ids:
+                token_events.append(evidence)
+                existing_event_ids.add(str(event_payload.get("id") or ""))
+            terminal["latest_seq"] = max(int(terminal.get("latest_seq") or 0), event.seq_no)
+            token.setdefault("metadata", {})["terminal_cursor"] = max(
+                int(_get_path(token, "metadata.terminal_cursor") or 0),
+                event.seq_no,
+            )
             wait.setdefault("evidence", []).append(evidence)
             consumed_evidence.append(evidence)
-            cls._record_terminal_consumption(control=control, wait=wait, evidence=evidence)
+            self._record_terminal_consumption(control=control, wait=wait, evidence=evidence)
 
         if not consumed_evidence:
             return False
@@ -1781,19 +1825,6 @@ class RuntimeService:
         token["status"] = "running"
         token["phase"] = str(wait.get("resume_phase") or token.get("phase") or "start")
         return True
-
-    @classmethod
-    def _terminal_input_bundle_from_token_payload(cls, event_payload: dict[str, Any]) -> dict[str, Any]:
-        parts = event_payload.get("parts") if isinstance(event_payload.get("parts"), list) else []
-        summary = cls._terminal_input_summary(parts, event_payload.get("payload_inline")) if parts else cls._terminal_input_text_from_payload(event_payload.get("payload_inline"))
-        return {
-            "event_id": event_payload.get("id"),
-            "seq_no": event_payload.get("seq_no"),
-            "event_kind": event_payload.get("event_kind"),
-            "mime_type": event_payload.get("mime_type"),
-            "text": summary,
-            "parts": parts,
-        }
 
     @staticmethod
     def _truncate_exit_reason(value: str, *, max_length: int = 255) -> str:
@@ -2255,6 +2286,12 @@ class RuntimeService:
             if not binding or binding.run_id != run.id or binding.status != "active":
                 raise SkillValidationError("terminal event binding 无效。", details={"binding_id": resolved_binding_id})
 
+        session.flush()
+        locked_run = self.repository.get_run_for_update(session, run.id)
+        if not locked_run:
+            raise SkillNotFoundError("未找到 Run。", details={"run_id": run.id})
+        run = locked_run
+
         next_seq = run.latest_terminal_seq + 1
         run.latest_terminal_seq = next_seq
         event = TerminalEvent(
@@ -2364,7 +2401,14 @@ class RuntimeService:
             metadata=part.metadata,
         )
 
+    @staticmethod
+    def _token_is_waiting_for_terminal_input(token: dict[str, Any]) -> bool:
+        control = token.get("control") if isinstance(token.get("control"), dict) else {}
+        return token.get("status") == "waiting" and isinstance(control.get("wait"), dict)
+
     def _sync_terminal_events(self, session: Session, *, run: Run, token: dict[str, Any]) -> dict[str, Any]:
+        if not self._token_is_waiting_for_terminal_input(token):
+            return token
         cursor = int(_get_path(token, "metadata.terminal_cursor") or 0)
         events = self.repository.list_terminal_events(session, run.id, from_seq=cursor + 1)
         if not events:
@@ -2535,18 +2579,21 @@ class RuntimeService:
         previous_trace_seq: int,
         terminal_directions: set[str] | None = None,
     ) -> tuple[int, int]:
+        session.flush()
+        run = self.repository.get_run(session, run_id)
+        terminal_upper_seq = run.latest_terminal_seq if run else previous_terminal_seq
+        trace_upper_seq = run.latest_trace_seq if run else previous_trace_seq
         session.commit()
         self._publish_runtime_events_after(
             session,
             run_id=run_id,
             previous_terminal_seq=previous_terminal_seq,
             previous_trace_seq=previous_trace_seq,
+            terminal_upper_seq=terminal_upper_seq,
+            trace_upper_seq=trace_upper_seq,
             terminal_directions=terminal_directions,
         )
-        run = self.repository.get_run(session, run_id)
-        if not run:
-            return previous_terminal_seq, previous_trace_seq
-        return run.latest_terminal_seq, run.latest_trace_seq
+        return terminal_upper_seq, trace_upper_seq
 
     def _publish_runtime_events_after(
         self,
@@ -2555,9 +2602,16 @@ class RuntimeService:
         run_id: str,
         previous_terminal_seq: int,
         previous_trace_seq: int,
+        terminal_upper_seq: int,
+        trace_upper_seq: int,
         terminal_directions: set[str] | None = None,
     ) -> None:
-        for event in self.repository.list_terminal_events(session, run_id, from_seq=previous_terminal_seq + 1):
+        for event in self.repository.list_terminal_events(
+            session,
+            run_id,
+            from_seq=previous_terminal_seq + 1,
+            to_seq=terminal_upper_seq,
+        ):
             if terminal_directions is not None and event.direction not in terminal_directions:
                 continue
             response = self._build_terminal_event_response(session, event)
@@ -2572,7 +2626,7 @@ class RuntimeService:
                 }
             )
         for event in self.repository.list_trace_events(session, run_id):
-            if event.seq_no <= previous_trace_seq:
+            if event.seq_no <= previous_trace_seq or event.seq_no > trace_upper_seq:
                 continue
             response = self._build_trace_event_response(event)
             self.runtime_event_sink.publish(

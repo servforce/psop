@@ -189,17 +189,17 @@ TerminalEventPart
 
 一次 invocation 创建一个逻辑 run。run 不是 OS 进程，而是可持久化、可回放、可审计的执行实例。
 
-`POST /gateway/invocations` 的职责是创建 `SkillInvocation`、`Run`、`TerminalSession`、默认 binding 和初始 Session Token。Invocation 不再隐式生成首条终端提示，也不把 `input_envelope` 转换为 terminal event。新建 Run 进入可输入绑定态：
+`POST /gateway/invocations` 的职责是创建 `SkillInvocation`、`Run`、`TerminalSession`、默认 binding、初始 Session Token，并调度 `job:runtime:{run_id}` 进行异步 Runtime 预热。Invocation 不再隐式生成首条终端提示，也不把 `input_envelope` 转换为 terminal event。新建 Run 进入 Runtime 初始化态：
 
 ```text
-Run.status = waiting_input
-Run.runtime_phase = terminal_bound
+Run.status = waiting_runtime
+Run.runtime_phase = start
 Run.latest_terminal_seq = 0
 TerminalSession.status = open
 terminal_event = []
 ```
 
-`input_envelope` 保留为兼容字段，不再作为运行时事实源。正式用户输入只能来自 `terminal_event`。
+`input_envelope` 保留为兼容字段，不再作为运行时事实源。正式用户输入只能来自 `terminal_event`。Terminal session open 只表示系统可以接收终端事实，不表示 Runtime 已经建立可解释输入的 wait checkpoint。
 
 ### 4.4 Session Token
 
@@ -343,7 +343,7 @@ flowchart TB
 
 RuntimeService 的同步边界：
 
-- `create_invocation()` 只创建绑定和初始 token，不调用 `process_run()`。
+- `create_invocation()` 只创建绑定和初始 token，并调度 `job:runtime:{run_id}` 预热 Runtime，不调用 `process_run()`。
 - `append_terminal_event()` 只追加 terminal fact、调度 `job:runtime:{run_id}`，默认不调用 `process_run()`。
 - `process_run()` 是 Runtime Kernel 推进入口，只由 worker 或显式测试调用。
 - router 不直接执行 Runtime loop、LLM 或 Agent Harness 调用。
@@ -354,13 +354,13 @@ RuntimeService 的同步边界：
 ```text
 worker claims job:runtime:{run_id}
 load latest snapshot
-sync terminal events
+sync terminal events only when a wait checkpoint is active
 evaluate enabled nodes
 select node
 execute actor
 merge observation
 resolve EG transition
-apply terminal interaction
+apply terminal interaction / deliver pending input to checkpoint
 append snapshot
 append trace
 halt / wait / continue
@@ -372,9 +372,9 @@ Runtime 写终端输出前必须先完成 transition 校验。对于 evaluation 
 
 终局用户可见输出只有一个所有者：`terminal` 节点。`final_verify` 等 evaluation 节点可以生成 `terminal_message` / `final_response` 并写入 `outputs.final_response`，但当其 `complete` 或 `abort` transition 进入 terminal 类节点时，Runtime 不从该 evaluation 节点追加 terminal output，避免最终完成或中止消息重复发送。
 
-每次进入 wait checkpoint 时，RuntimeService 在 `control.wait.input_window` 记录 `accept_after_seq` 和 `policy=checkpoint_scoped`。首个 checkpoint 可以从本轮 Runtime 推进前的 terminal cursor 之后消费输入，以兼容“用户先发输入、worker 后推进”的场景；非首个 checkpoint 的 `accept_after_seq` 必须锚定到 checkpoint 创建时 token 已同步的最新 terminal seq，防止同轮触发指令节点的 input 被新 checkpoint 立即复用为 evidence。当前 checkpoint 只消费 `seq_no > accept_after_seq` 且未出现在 `control.terminal_consumption` 的 input event；消费后写入账本，记录 `seq_no`、`event_id`、`checkpoint_id`、`workflow_step_id` 和 `consumed_at`。旧 snapshot 没有窗口或账本时按空值兼容，并在首次恢复时补齐。
+每次进入 wait checkpoint 时，RuntimeService 在 `control.wait.input_window` 记录 `accept_after_seq` 和 `policy=checkpoint_scoped`。终端输入可以在 Runtime 初始化期间先进入 `terminal_event`，但在 checkpoint 建立前只能作为 pending terminal fact 留在数据库中，不写入 runner context、`input_envelope` 或 `latest_evidence`。首个 checkpoint 可以从本轮 Runtime 推进前的 terminal cursor 之后批量交付 pending input，以兼容“用户先发输入、worker 后推进”的场景；如果因此立即恢复到 evaluation，Runtime 抑制本节点 instruct terminal output，只由 evaluation 对该批输入给出一次正式反馈。非首个 checkpoint 的 `accept_after_seq` 必须锚定到 checkpoint 创建时数据库中已存在的最新 terminal seq，防止同轮触发指令节点的 input 被新 checkpoint 立即复用为 evidence。当前 checkpoint 只消费 `seq_no > accept_after_seq` 且未出现在 `control.terminal_consumption` 的 input event；消费后写入账本，记录 `seq_no`、`event_id`、`checkpoint_id`、`workflow_step_id` 和 `consumed_at`。旧 snapshot 没有窗口或账本时按空值兼容，并在首次恢复时补齐。
 
-如果 terminal input 在首次 Runtime 推进前已经入库，RuntimeService 会先同步该 input，再从初始 EG 节点推进；首个 wait checkpoint 可以消费这类尚未入账的 input，避免首个终端输入被初始提示吞掉。进入后续 checkpoint 后，历史 input 默认不能跨 checkpoint 自动复用。
+如果 terminal input 在首次 Runtime 推进前已经入库，RuntimeService 仍先从初始 EG 节点推进；该 input 直到首个 wait checkpoint 建立后才会被批量交付并消费，避免首个终端输入既触发 Runtime 初始化又被初始化提示提前解释。进入后续 checkpoint 后，历史 input 默认不能跨 checkpoint 自动复用。
 
 worker 在每个节点执行完 `_append_runtime_step()` 后提交本节点新增 snapshot、trace 和 terminal output。若节点未进入 wait/success/failure，提交并发布后继续下一节点；若节点进入 wait/success/failure，先设置 Run/Job 状态，再提交并发布。REST 仍是权威恢复路径，WebSocket 只发布增量提示。
 

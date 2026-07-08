@@ -317,7 +317,7 @@ def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
     finally:
         database_manager.dispose()
 
-    assert initial_run.status == "waiting_input"
+    assert initial_run.status == "waiting_runtime"
     assert run.status == "succeeded"
     assert "测试任务已完成" in run.final_output
     assert any(event.event_type == "runtime.agent.completed" for event in trace_events)
@@ -329,7 +329,7 @@ def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
     assert agent_run_record.related_runtime_run_id == run.id
     assert agent_event_count > 0
     assert agent_artifact_count > 0
-    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output"]
+    assert [event.direction for event in terminal_events] == ["input", "output", "output"]
     assert terminal_events[-1].source_ref["node_id"] == "terminal"
     assert "final_verify" not in [
         event.source_ref.get("node_id")
@@ -1107,6 +1107,8 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
             ),
         )
         initial_run = runtime_service.get_run(session, invocation.run_id or "")
+        initial_job = JobRepository().get_runtime_job_by_dedupe_key(session, f"job:runtime:{invocation.run_id}")
+        initial_job_status = initial_job.status if initial_job else ""
         initial_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
         legacy_snapshots = runtime_service.repository.list_snapshots(session, invocation.run_id or "")
         legacy_token = json.loads(json.dumps(legacy_snapshots[-1].token_payload, ensure_ascii=False))
@@ -1140,9 +1142,11 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
 
     assert invocation.status == "running"
     assert invocation.terminal_session_id
-    assert initial_run.status == "waiting_input"
-    assert initial_run.runtime_phase == "terminal_bound"
+    assert initial_run.status == "waiting_runtime"
+    assert initial_run.runtime_phase == "start"
     assert initial_run.latest_terminal_seq == 0
+    assert initial_job is not None
+    assert initial_job_status == "pending"
     assert initial_run.current_step == ""
     assert initial_run.checkpoint_id == ""
     assert initial_run.expected_inputs == []
@@ -1150,7 +1154,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert appended.seq_no == 1
     assert run.status == "succeeded"
     assert run.latest_snapshot_seq == 5
-    assert run.latest_terminal_seq == 4
+    assert run.latest_terminal_seq == 3
     assert run.latest_trace_seq >= 7
     assert run.terminal_session_id == invocation.terminal_session_id
     assert len(run.binding_summary) == 2
@@ -1176,11 +1180,13 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert agent_trace_payloads[0]["observation"]["usage"]["total_tokens"] > 0
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
     assert terminal_session.terminal_session.status == "closed"
-    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output"]
+    assert [event.direction for event in terminal_events] == ["input", "output", "output"]
+    assert terminal_events[1].source_ref["node_id"] == "evaluate_collect_context"
     assert terminal_events[-1].source_ref["node_id"] == "terminal"
     assert terminal_events[0].payload_inline == "我已经完成当前步骤，并上传了现场说明。"
+    assert snapshots[2].token_payload["control"]["terminal_consumption"][0]["seq_no"] == appended.seq_no
     assert {binding.requirement_key for binding in bindings} == {"terminal.input", "terminal.output"}
-    assert len(replay.terminal_events) == 4
+    assert len(replay.terminal_events) == 3
     assert len(replay.bindings) == 2
     assert "binding.resolved" in [item.event_type for item in replay.timeline]
     assert "terminal.event.appended" in [item.event_type for item in replay.timeline]
@@ -1188,6 +1194,79 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert "runtime.wait_checkpoint.entered" in [item.event_type for item in replay.timeline]
     assert "runtime.agent.completed" in [item.event_type for item in replay.timeline]
     assert "runtime.final.completed" in [item.event_type for item in replay.timeline]
+
+
+def test_runtime_service_batches_inputs_that_arrive_before_first_checkpoint(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-early-input-batch",
+                name="Runtime Early Input Batch",
+                description="Validate early terminal inputs are delivered once the first checkpoint exists.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime early input batch publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="runtime-early-input-batch",
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        first = runtime_service.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="配置清单：CPU、主板、显卡、电源。",
+                external_event_id="runtime-early-input-batch-1",
+            ),
+        )
+        second = runtime_service.append_terminal_event(
+            session,
+            invocation.run_id or "",
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="兼容性自查结果：已逐项确认。",
+                external_event_id="runtime-early-input-batch-2",
+            ),
+        )
+        runtime_service.process_run(session, invocation.run_id or "")
+        run = runtime_service.get_run(session, invocation.run_id or "")
+        terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+        snapshots = runtime_service.list_snapshots(session, invocation.run_id or "")
+
+    wait_traces = [event for event in trace_events if event.event_type == "runtime.wait_checkpoint.entered"]
+    agent_nodes = [
+        event.payload["node_id"]
+        for event in trace_events
+        if event.event_type == "runtime.agent.completed"
+    ]
+    consumed = snapshots[2].token_payload["control"]["terminal_consumption"]
+    delivered_evidence = snapshots[2].token_payload["control"]["wait"]["evidence"]
+
+    assert run.status == "succeeded"
+    assert [event.direction for event in terminal_events] == ["input", "input", "output", "output"]
+    assert terminal_events[2].source_ref["node_id"] == "evaluate_collect_context"
+    assert [item["seq_no"] for item in consumed] == [first.seq_no, second.seq_no]
+    assert [item["seq_no"] for item in delivered_evidence] == [first.seq_no, second.seq_no]
+    assert [event.payload["resumed_from_existing_input"] for event in wait_traces] == [True]
+    assert agent_nodes.count("evaluate_collect_context") == 1
+    assert "instruct_collect_context" in agent_nodes
 
 
 def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> None:
@@ -1287,7 +1366,7 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> No
     finally:
         database_manager.dispose()
 
-    assert initial_run.status == "waiting_input"
+    assert initial_run.status == "waiting_runtime"
     assert refreshed_invocation.status == "aborted"
     assert run.status == "aborted"
     assert run.runtime_phase == "aborted"
@@ -1295,7 +1374,7 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> No
     assert "电源功率不足" in run.exit_reason
     assert run.ended_at is not None
     assert terminal_session.terminal_session.status == "closed"
-    assert [event.direction for event in terminal_events] == ["input", "output", "output"]
+    assert [event.direction for event in terminal_events] == ["input", "output"]
     assert terminal_events[-1].source_ref["node_id"] == "terminal_abort"
     assert snapshots[-1].token_payload["status"] == "aborted"
     assert snapshots[-1].token_payload["control"]["abort"]["next_phase"] == "terminal_abort"
@@ -1357,6 +1436,7 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
             ),
         )
         events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+        run_model = runtime_service.repository.get_run(session, invocation.run_id or "")
         job = JobRepository().get_runtime_job_by_dedupe_key(session, f"job:runtime:{invocation.run_id}")
 
         with pytest.raises(SkillValidationError):
@@ -1375,8 +1455,76 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
     assert duplicate.seq_no == appended.seq_no
     assert [event.seq_no for event in events] == [1]
     assert events[0].payload_inline == "追加输入"
+    assert run_model is not None
+    assert run_model.latest_terminal_seq == 1
     assert job is not None
     assert job.status == "pending"
+
+
+def test_terminal_event_append_refreshes_stale_run_before_assigning_seq(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="terminal-event-stale-run",
+                name="Terminal Event Stale Run",
+                description="Validate stale Run seq refresh.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Terminal event stale run publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(skill_key="terminal-event-stale-run"),
+        )
+        run_id = invocation.run_id or ""
+
+    with database_manager.session() as stale_session:
+        stale_run = runtime_service.repository.get_run(stale_session, run_id)
+        assert stale_run is not None
+        assert stale_run.latest_terminal_seq == 0
+        stale_session.commit()
+
+        with database_manager.session() as writer_session:
+            first = runtime_service.append_terminal_event(
+                writer_session,
+                run_id,
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="第一条输入",
+                    external_event_id="stale-run-first",
+                ),
+            )
+
+        assert first.seq_no == 1
+        assert stale_run.latest_terminal_seq == 0
+
+        second = runtime_service.append_terminal_event(
+            stale_session,
+            run_id,
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="第二条输入",
+                external_event_id="stale-run-second",
+            ),
+        )
+        events = runtime_service.list_terminal_events(stale_session, run_id)
+        refreshed_run = runtime_service.repository.get_run(stale_session, run_id)
+
+    assert second.seq_no == 2
+    assert [event.seq_no for event in events] == [1, 2]
+    assert refreshed_run is not None
+    assert refreshed_run.latest_terminal_seq == 2
 
 
 def test_runtime_service_publishes_terminal_and_trace_events_after_commit(runtime_stack) -> None:
@@ -1441,6 +1589,96 @@ def test_runtime_service_publishes_terminal_and_trace_events_after_commit(runtim
     assert [event["payload"]["direction"] for event in output_messages] == ["output"] * len(output_messages)
     assert [event["seq_no"] for event in output_messages] == sorted(event["seq_no"] for event in output_messages)
     assert any(event["event_type"] == "trace.event.appended" for event in process_events)
+
+
+def test_runtime_service_publish_uses_precommit_upper_bounds(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+    sink = RecordingRuntimeEventSink()
+    service = RuntimeService(
+        settings=runtime_service.settings,
+        inference_gateway=runtime_service.inference_gateway,
+        agent_harness_service=runtime_service.agent_harness_service,
+        runtime_event_sink=sink,
+    )
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-event-upper-bound",
+                name="Runtime Event Upper Bound",
+                description="Validate runtime event publish upper bounds.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime event upper bound publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+        invocation = service.create_invocation(
+            session,
+            CreateInvocationRequest(skill_key="runtime-event-upper-bound"),
+        )
+        run_id = invocation.run_id or ""
+        service.append_terminal_event(
+            session,
+            run_id,
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="已发布输入",
+                external_event_id="upper-bound-first",
+            ),
+        )
+
+    sink.events.clear()
+    with database_manager.session() as stale_session:
+        stale_run = service.repository.get_run(stale_session, run_id)
+        assert stale_run is not None
+        previous_terminal_seq = stale_run.latest_terminal_seq
+        previous_trace_seq = stale_run.latest_trace_seq
+        stale_session.commit()
+
+        with database_manager.session() as writer_session:
+            service.append_terminal_event(
+                writer_session,
+                run_id,
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="并发输入",
+                    external_event_id="upper-bound-concurrent",
+                ),
+            )
+            writer_run = service.repository.get_run(writer_session, run_id)
+            assert writer_run is not None
+            service._append_trace_event(
+                writer_session,
+                run=writer_run,
+                phase="test",
+                event_type="runtime.concurrent_test",
+                payload={"source": "concurrent_writer"},
+            )
+            writer_session.commit()
+
+        sink.events.clear()
+        returned_terminal_seq, returned_trace_seq = service._commit_and_publish(
+            stale_session,
+            run_id=run_id,
+            previous_terminal_seq=previous_terminal_seq,
+            previous_trace_seq=previous_trace_seq,
+        )
+        published_events = list(sink.events)
+        terminal_events = service.list_terminal_events(stale_session, run_id)
+
+    assert returned_terminal_seq == previous_terminal_seq
+    assert returned_trace_seq == previous_trace_seq
+    assert [event.seq_no for event in terminal_events] == [1, 2]
+    assert not [event for event in published_events if event["event_type"] == "terminal.event.appended"]
+    assert not [event for event in published_events if event["event_type"] == "trace.event.appended"]
 
 
 def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_path) -> None:
@@ -1574,7 +1812,7 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     assert wait["expected_inputs"] == [{"kind": "text"}, {"kind": "image"}]
     assert wait["evidence"] == []
     assert wait["input_window"]["policy"] == "checkpoint_scoped"
-    assert wait["input_window"]["accept_after_seq"] == 1
+    assert wait["input_window"]["accept_after_seq"] == 2
     evaluate_second_step_node = next(node for node in artifact_payload["nodes"] if node["id"] == "evaluate_second_step")
     runner_context = runtime_service._build_runner_context(
         run=run,
@@ -1603,7 +1841,7 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     ]
     assert "evaluate_second_step" not in agent_node_ids
     assert [event.payload["resumed_from_existing_input"] for event in wait_traces] == [True, False]
-    assert [event.direction for event in terminal_events] == ["input", "output", "output", "output"]
+    assert [event.direction for event in terminal_events] == ["input", "output", "output"]
 
 
 def test_runtime_new_checkpoint_does_not_consume_same_turn_trigger_input(tmp_path) -> None:
@@ -2375,7 +2613,7 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
         runtime_service.process_run(session, invocation.run_id or "")
         final_run = runtime_service.get_run(session, invocation.run_id or "")
 
-    assert first_run.status == "waiting_input"
+    assert first_run.status == "waiting_runtime"
     assert recovered_run.status == "waiting_input"
     assert recovered_run.exit_reason == ""
     assert recovered_run.ended_at is None

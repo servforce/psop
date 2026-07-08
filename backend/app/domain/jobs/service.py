@@ -169,7 +169,7 @@ class JobQueryService:
             return self._fallback_progress(job)
         if run.status in {"succeeded", "failed", "cancelled"} or job.status in TERMINAL_JOB_STATUSES:
             percent = 100
-        elif run.status == "queued":
+        elif run.status in {"queued", "waiting_runtime"}:
             percent = 0
         elif run.status == "waiting_input":
             percent = 80
@@ -391,6 +391,7 @@ class JobQueryService:
     def _runtime_label(status: str) -> str:
         labels = {
             "queued": "等待运行",
+            "waiting_runtime": "等待运行",
             "running": "运行中",
             "waiting_input": "等待输入",
             "succeeded": "运行完成",

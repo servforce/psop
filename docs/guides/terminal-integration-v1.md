@@ -67,6 +67,7 @@ ws(s)://<psop-host>/ws/runs/{run_id}
 | status | 说明 | 终端侧行为 |
 | --- | --- | --- |
 | `queued` | 已创建，等待处理。 | 展示等待状态。 |
+| `waiting_runtime` | Runtime 正在异步初始化或预热任务上下文。 | 可以继续接收用户输入；展示准备状态，不要禁用输入框。 |
 | `running` | 系统正在执行。 | 展示输出和进度，不要强制用户输入。 |
 | `waiting_input` | 系统等待用户输入。 | 突出输入框，并按 `expected_inputs` 引导用户提交内容。 |
 | `succeeded` | 运行成功。 | 停止输入，展示 `final_output`。 |
@@ -116,7 +117,7 @@ sequenceDiagram
     T->>API: GET /runs/{run_id}
     T->>API: GET /terminal/sessions/{run_id}
     T->>API: GET /terminal/sessions/{run_id}/events
-    API-->>T: Run 处于 terminal_bound，可输入；历史事件可能为空
+    API-->>T: Run 通常处于 waiting_runtime/start；TerminalSession open，可输入；历史事件可能为空
 
     T->>WS: connect /ws/runs/{run_id}
     WS-->>T: ws.connected
@@ -204,9 +205,9 @@ Content-Type: application/json
 
 新终端接入建议不传 `input_envelope`。如果首屏就有用户文本或媒体，应先创建 Invocation，拿到 `run_id` 后调用 `/terminal/sessions/{run_id}/events` 追加输入。
 
-创建成功后，服务端只保证 Run、TerminalSession、binding 和初始 Session Token 已创建。此时通常还没有任何 terminal output，`GET /terminal/sessions/{run_id}/events` 可以返回空数组。终端不应等待“首条系统提示”才允许用户输入。
+创建成功后，服务端只保证 Run、TerminalSession、binding、初始 Session Token 已创建，并已调度 `job:runtime:{run_id}` 进行异步 Runtime 预热。此时 Run 通常处于 `waiting_runtime/start`，还没有任何 terminal output，`GET /terminal/sessions/{run_id}/events` 可以返回空数组。终端不应等待“首条系统提示”才允许用户输入。
 
-如果创建 invocation 后用户已经有首条输入，终端应立即通过 terminal event 提交。Runtime worker 会在首次推进时把该 input 同步进 Session Token，并在首个匹配的 wait checkpoint 中消费它。
+如果创建 invocation 后用户已经有首条输入，终端应立即通过 terminal event 提交。该输入会先作为 pending terminal fact 持久化在 `terminal_event` 中；Runtime worker 建立首个匹配的 wait checkpoint 后，再把这些 pending input 批量交付为 checkpoint evidence。若首个 checkpoint 因早到输入直接进入 evaluation，Runtime 会抑制被跳过的 instruct 提示，只输出 evaluation 的正式反馈。
 
 
 终端侧可用响应示例：
@@ -690,7 +691,7 @@ Idempotency-Key: <client-event-id>
 
 - 终端客户端只应主动发送 `direction=input`。
 - 成功响应只表示事件已被接受并持久化；Runtime worker 会异步读取 `runtime_job` 并推进 Run。
-- POST 返回时，Run 可能仍是 `waiting_input/terminal_bound`，output terminal events 和 trace events 需要随后通过 WebSocket 或 REST 获取。
+- POST 返回时，Run 可能仍是 `waiting_runtime/start` 或 `waiting_input`，output terminal events 和 trace events 需要随后通过 WebSocket 或 REST 获取。
 - Runtime output 现在按节点级提交后增量可见；同一次输入触发多个节点时，终端可能陆续收到多条 output/trace，而不是等整轮 Runtime 完成后一次性出现。
 - Runtime 只会把 input 消费到当前 wait checkpoint 的输入窗口内。已被一个 checkpoint 记入 `control.terminal_consumption` 的 input，不会被后续 checkpoint 自动复用为 evidence。
 - 如果一条 input 只是触发 Runtime 输出下一阶段指令，Runtime 创建的新 checkpoint 会从该 input 之后开始接收证据；终端用户需要再发送新消息或新附件，才会被作为新 checkpoint 的 evidence。

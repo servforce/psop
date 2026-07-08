@@ -66,6 +66,14 @@ class RuntimeRepository:
     def get_run(self, session: Session, run_id: str) -> Run | None:
         return session.get(Run, run_id)
 
+    def get_run_for_update(self, session: Session, run_id: str) -> Run | None:
+        return session.scalar(
+            select(Run)
+            .where(Run.id == run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
     def get_run_for_invocation(self, session: Session, invocation_id: str) -> Run | None:
         return session.scalar(select(Run).where(Run.invocation_id == invocation_id))
 

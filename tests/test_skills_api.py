@@ -1896,8 +1896,8 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert invocation_payload["gateway_type"] == "terminal"
     assert invocation_payload["terminal_session_id"]
     initial_run_payload = initial_run_response.json()
-    assert initial_run_payload["status"] == "waiting_input"
-    assert initial_run_payload["runtime_phase"] == "terminal_bound"
+    assert initial_run_payload["status"] == "waiting_runtime"
+    assert initial_run_payload["runtime_phase"] == "start"
     assert initial_run_payload["latest_terminal_seq"] == 0
     assert initial_run_payload["current_step"] == ""
     assert initial_run_payload["checkpoint_id"] == ""
@@ -1905,14 +1905,14 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert terminal_events_response.json() == []
     assert terminal_append_response.status_code == 202
     assert terminal_append_response.json()["seq_no"] == 1
-    assert run_after_append_response.json()["status"] == "waiting_input"
+    assert run_after_append_response.json()["status"] == "waiting_runtime"
     assert run_after_append_response.json()["latest_terminal_seq"] == 1
     runtime_job_after_append = next(job for job in jobs_after_append_response.json() if job["job_type"] == "runtime")
     assert runtime_job_after_append["status"] == "pending"
     run_payload = run_response.json()
     assert run_payload["status"] == "succeeded"
     assert run_payload["terminal_session_id"] == invocation_payload["terminal_session_id"]
-    assert run_payload["latest_terminal_seq"] == 4
+    assert run_payload["latest_terminal_seq"] == 3
     assert run_payload["latest_trace_seq"] == 7
     assert len(run_payload["binding_summary"]) == 2
     assert "测试任务已完成" in run_payload["final_output"]
@@ -1938,10 +1938,9 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert {item["target_kind"] for item in bindings_response.json()} == {"web_terminal"}
     assert terminal_session_response.status_code == 200
     assert terminal_session_response.json()["terminal_session"]["id"] == invocation_payload["terminal_session_id"]
-    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3, 4]
+    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3]
     assert [item["direction"] for item in terminal_events_after_append_response.json()] == [
         "input",
-        "output",
         "output",
         "output",
     ]
@@ -1959,7 +1958,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert "runtime.start.completed" in replay_event_types
     assert "runtime.wait_checkpoint.entered" in replay_event_types
     assert "runtime.agent.completed" in replay_event_types
-    assert len(replay_payload["terminal_events"]) == 4
+    assert len(replay_payload["terminal_events"]) == 3
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
 
@@ -2062,7 +2061,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     persisted_context = persisted_invocation_response.json()["terminal_context"]
     assert persisted_context["operator_mode"] == "debug"
     assert persisted_context["debug_context"]["kind"] == "skill_debug"
-    assert initial_run_response.json()["status"] == "waiting_input"
+    assert initial_run_response.json()["status"] == "waiting_runtime"
     assert upload_response.status_code == 202
     assert uploaded_event["event_kind"] == "terminal.multimodal.input.v1"
     assert uploaded_event["mime_type"] == "multipart/mixed"
@@ -2075,7 +2074,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert uploaded_content_response.content == b"debug-image"
     assert uploaded_content_range_response.status_code == 206
     assert uploaded_content_range_response.content == b"debug"
-    assert run_after_upload_response.json()["status"] == "waiting_input"
+    assert run_after_upload_response.json()["status"] == "waiting_runtime"
     assert final_run_response.json()["status"] == "succeeded"
     assert any(event["event_kind"] == "terminal.multimodal.input.v1" for event in terminal_events_response.json())
     assert replay_response.status_code == 200
@@ -2154,7 +2153,7 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_runner() -> 
     assert image_part_content_response.status_code == 200
     assert image_part_content_response.headers["content-type"] == "image/png"
     assert image_part_content_response.content == b"image-bytes"
-    assert run_after_append_response.json()["status"] == "waiting_input"
+    assert run_after_append_response.json()["status"] == "waiting_runtime"
     assert final_run_response.json()["status"] == "succeeded"
 
     final_token = snapshots_response.json()[-1]["token_payload"]
