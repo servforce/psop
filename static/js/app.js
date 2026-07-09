@@ -652,6 +652,7 @@
       centerToast: null,
       centerToastTimer: null,
       notice: null,
+      createFormError: "",
       createForm: {
         name: "",
         description: ""

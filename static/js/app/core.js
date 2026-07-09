@@ -377,6 +377,7 @@
 
       openCreateModal() {
         this.createForm = { name: "", description: "" };
+        this.createFormError = "";
         this.createModalOpen = true;
       },
 
@@ -387,6 +388,7 @@
         }
 
         this.createModalOpen = false;
+        this.createFormError = "";
       },
 
 

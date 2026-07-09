@@ -47,6 +47,7 @@
       async createSkill() {
         this.busy.create = true;
         this.clearNotice();
+        this.createFormError = "";
 
         try {
           const payload = {
@@ -62,7 +63,7 @@
           await this.navigate(buildSkillDetailPath(created.id));
           this.showNotice("success", "Skill 已创建，并已在 GitLab 中初始化。");
         } catch (error) {
-          this.showNotice("error", error.message || "创建 Skill 失败。");
+          this.createFormError = error.message || "创建 Skill 失败。";
         } finally {
           this.busy.create = false;
         }
