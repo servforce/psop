@@ -54,6 +54,7 @@ class SkillCompileAgent:
         skill_version: SkillVersion,
         document: SkillDocument,
         source: SkillSourceBundle,
+        reference_assets: list[dict[str, Any]] | None = None,
         repair_diagnostics: list[FormalDiagnostic] | None = None,
         session: Session | None = None,
     ) -> CompileAgentCandidate:
@@ -72,6 +73,7 @@ class SkillCompileAgent:
                 skill_version=skill_version,
                 document=document,
                 source=source,
+                reference_assets=reference_assets or [],
                 prompt_pack=prompt_pack,
                 domain_pack=domain_resolution.pack,
                 compiler_metadata=compiler_metadata,
@@ -139,6 +141,7 @@ class SkillCompileAgent:
         skill_version: SkillVersion,
         document: SkillDocument,
         source: SkillSourceBundle,
+        reference_assets: list[dict[str, Any]],
         prompt_pack: AgentPromptPack,
         domain_pack: DomainPack,
         compiler_metadata: dict[str, Any],
@@ -159,6 +162,7 @@ class SkillCompileAgent:
             "source": {
                 "README.md": source.readme_content,
                 "SKILL.md": source.skill_md_content,
+                "reference_assets": reference_assets,
             },
             "agent_prompt": prompt_pack.metadata(),
             "domain_pack": {
@@ -191,6 +195,12 @@ class SkillCompileAgent:
                     "recovery_paths",
                 ],
                 "workflow_step_required_fields": ["id", "title", "goal", "source_evidence"],
+                "workflow_step_reference_images_rule": (
+                    "如果 source.reference_assets 中的图片能帮助用户理解某个 workflow step，"
+                    "必须把它映射到该 step 的 reference_images；"
+                    "每项只能引用 source.reference_assets 提供的 artifact_object_id，"
+                    "不得编造新的附件或运行时对象。"
+                ),
                 "business_node_rule": (
                     "每个 workflow step 必须编译为 instruct_<step_id> 和 evaluate_<step_id> 两个节点。"
                     "instruct 节点必须输出到终端并进入 wait checkpoint；evaluate 节点必须消费 terminal evidence 并输出 JSON decision。"

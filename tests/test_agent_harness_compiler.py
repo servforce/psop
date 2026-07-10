@@ -175,6 +175,17 @@ def test_compiler_build_formal_v5_scaffold_creates_valid_candidate(tmp_path) -> 
                     "expected_evidence": [
                         {"kind": "text", "event_kind": "terminal.text.input.v1", "description": "用户任务说明"}
                     ],
+                    "reference_images": [
+                        {
+                            "reference_image_ref": "skill-reference://steps/collect_context/site-overview",
+                            "title": "现场概览参考图",
+                            "caption": "请按参考图角度提交现场照片。",
+                            "artifact_object_id": "artifact-reference-image-1",
+                            "mime_type": "image/jpeg",
+                            "source_ref": "source.SKILL.md:image:references/site-overview.jpg",
+                            "display_order": 1,
+                        }
+                    ],
                     "source_file": "SKILL.md",
                 },
                 {
@@ -223,6 +234,18 @@ def test_compiler_build_formal_v5_scaffold_creates_valid_candidate(tmp_path) -> 
     assert validation.artifact is not None
     assert not validation.has_errors
     assert len(candidate["artifact"]["runtime_contract"]["workflow_steps"]) == 2
+    reference_images = candidate["artifact"]["runtime_contract"]["workflow_steps"][0]["reference_images"]
+    assert reference_images == [
+        {
+            "reference_image_ref": "skill-reference://steps/collect_context/site-overview",
+            "title": "现场概览参考图",
+            "caption": "请按参考图角度提交现场照片。",
+            "artifact_object_id": "artifact-reference-image-1",
+            "mime_type": "image/jpeg",
+            "source_ref": "source.SKILL.md:image:references/site-overview.jpg",
+            "display_order": 1,
+        }
+    ]
     node_ids = {node["id"] for node in candidate["artifact"]["nodes"]}
     assert "instruct_collect_context" in node_ids
     assert "evaluate_verify_result" in node_ids

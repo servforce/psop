@@ -166,14 +166,28 @@ class FakeGitLabGateway:
 
     def get_repository_file(self, project_id: str, ref: str, file_path: str) -> RepositoryFile:
         project = self.projects[project_id]
-        assert ref == project.default_branch
+        assert ref in {project.default_branch, project.head_commit_sha}
+        raw_content = project.files[file_path]
+        if isinstance(raw_content, bytes):
+            content_bytes = raw_content
+            content = raw_content.decode("utf-8", errors="replace")
+        else:
+            content = raw_content
+            content_bytes = raw_content.encode("utf-8")
         return RepositoryFile(
             file_path=file_path,
             file_name=file_path.rsplit("/", 1)[-1],
-            content=str(project.files[file_path]),
+            content=content,
             ref=project.default_branch,
             head_commit_sha=project.head_commit_sha,
+            content_bytes=content_bytes,
         )
+
+    def get_repository_file_bytes(self, project_id: str, ref: str, file_path: str) -> bytes:
+        project = self.projects[project_id]
+        assert ref in {project.default_branch, project.head_commit_sha}
+        content = project.files[file_path]
+        return content if isinstance(content, bytes) else content.encode("utf-8")
 
     def commit_repository_file(
         self,
@@ -2314,6 +2328,10 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
     output_messages = [message for message in process_messages if message["event_type"] == "terminal.event.appended"]
     assert [message["payload"]["direction"] for message in output_messages] == ["output"] * len(output_events)
     assert any("测试任务已完成" in str(message["payload"]["payload_inline"]) for message in output_messages)
+    assert any(
+        any(part["kind"] == "text" and "测试任务已完成" in part["text"] for part in message["payload"]["parts"])
+        for message in output_messages
+    )
 
 
 def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:

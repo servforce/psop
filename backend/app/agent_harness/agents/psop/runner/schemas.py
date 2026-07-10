@@ -152,11 +152,13 @@ def _validate_reference_images(items: list[dict[str, Any]], invocation_context: 
         for item in _list_value(invocation_context, "step_reference_images")
         if isinstance(item, dict)
     }
+    if items and not allowed_refs:
+        raise ValueError("当前步骤没有允许的 reference_images，Runner 不能提交参考图片引用。")
     for item in items:
         ref = str(item.get("reference_image_ref") or "")
         if not ref:
             raise ValueError("reference_images 每项必须包含 reference_image_ref。")
-        if allowed_refs and ref not in allowed_refs:
+        if ref not in allowed_refs:
             raise ValueError(f"reference_image_ref 不属于当前步骤允许集合：{ref}")
 
 

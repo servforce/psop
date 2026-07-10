@@ -35,8 +35,8 @@ def register_compiler_tools(registry: ToolRegistry) -> None:
     registry.register(
         ToolSpec(
             name="psop.compiler.read_skill_source",
-            description="读取本次编译请求中的冻结 Skill source。",
-            purpose="用于 psop.compiler 从 invocation context 获取 README.md、SKILL.md 和 source 摘要，不直接访问 GitLab。",
+            description="读取本次编译请求中的冻结 Skill source 和已镜像参考资产索引。",
+            purpose="用于 psop.compiler 从 invocation context 获取 README.md、SKILL.md、source 摘要和 source.reference_assets，不直接访问 GitLab。",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -125,7 +125,7 @@ def register_compiler_tools(registry: ToolRegistry) -> None:
             description="根据抽取出的 workflow steps 机械生成合法 formal-v5 PSOP-EG scaffold。",
             purpose=(
                 "用于 psop.compiler 避免手写完整 EG JSON；模型只提供业务 workflow 语义，"
-                "工具生成 nodes、guards、merges、wait checkpoints、dependency view 和 compiler candidate。"
+                "工具生成 nodes、guards、merges、wait checkpoints、dependency view、reference_images 和 compiler candidate。"
             ),
             input_schema={
                 "type": "object",
@@ -133,7 +133,17 @@ def register_compiler_tools(registry: ToolRegistry) -> None:
                 "properties": {
                     "execution_goal": {"type": "string", "minLength": 1},
                     "applicability": {"type": "object"},
-                    "workflow_steps": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 50},
+                    "workflow_steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "reference_images": {"type": "array", "items": {"type": "object"}},
+                            },
+                        },
+                        "minItems": 1,
+                        "maxItems": 50,
+                    },
                     "safety_constraints": {"type": "array", "items": {"type": "string"}},
                     "completion_criteria": {"type": "array", "items": {"type": "string"}},
                     "recovery_paths": {"type": "array", "items": {"type": "object"}},
@@ -194,6 +204,7 @@ def allowed_runtime_snapshot() -> dict[str, Any]:
         "formal_v5_contract": {
             "recommended_builder_tool": "psop.compiler.build_formal_v5_scaffold",
             "workflow_step_node_pattern": ["instruct_<step_id>", "evaluate_<step_id>"],
+            "workflow_step_optional_fields": ["reference_images"],
             "required_runtime_contract_fields": [
                 "execution_goal",
                 "applicability",
@@ -231,12 +242,16 @@ def _read_skill_source(arguments: dict[str, Any], context: ToolExecutionContext)
             return _error_result("not_found", f"frozen source 中不存在文件：{path}", ["psop.compiler.read_skill_source"])
         content = files[path]
         selected[path] = {"content": _truncate(content, max_chars), "truncated": len(content) > max_chars}
+    reference_assets = _source_reference_assets(source)
+    source_summary = _source_summary(files)
+    source_summary["reference_asset_count"] = len(reference_assets)
     return {
         "status": "success",
         "summary": f"读取 frozen Skill source：{', '.join(selected)}。",
         "source_commit_sha": _source_commit_sha(context, source),
         "files": selected,
-        "source_summary": _source_summary(files),
+        "source_summary": source_summary,
+        "reference_assets": reference_assets,
         "trust_level": "frozen_source",
         "truncated": any(item["truncated"] for item in selected.values()),
         "next_valid_actions": ["psop.compiler.read_manifest_snapshot", "psop.compiler.read_allowed_runtime"],
@@ -667,8 +682,88 @@ def _normalize_scaffold_steps(raw_steps: list[Any]) -> list[dict[str, Any]]:
             value = raw_step.get(optional_key)
             if value not in (None, "", [], {}):
                 normalized_step[optional_key] = value
+        reference_images = _normalize_reference_images(raw_step.get("reference_images"), step_id=step_id)
+        if reference_images:
+            normalized_step["reference_images"] = reference_images
         normalized.append(normalized_step)
     return normalized
+
+
+def _source_reference_assets(source: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_assets = source.get("reference_assets")
+    if not isinstance(raw_assets, list):
+        return []
+    assets: list[dict[str, Any]] = []
+    for item in raw_assets:
+        if not isinstance(item, dict):
+            continue
+        reference_path = str(item.get("reference_path") or "").strip()
+        artifact_object_id = str(item.get("artifact_object_id") or "").strip()
+        mime_type = str(item.get("mime_type") or "").strip()
+        if not reference_path or not artifact_object_id or not mime_type:
+            continue
+        assets.append(
+            {
+                "reference_path": reference_path,
+                "artifact_object_id": artifact_object_id,
+                "mime_type": mime_type,
+                "title": str(item.get("title") or ""),
+                "source_ref": str(item.get("source_ref") or ""),
+                "display_order": _bounded_int(item.get("display_order"), default=len(assets) + 1, minimum=0, maximum=1000),
+            }
+        )
+    return assets
+
+
+def _normalize_reference_images(raw_value: Any, *, step_id: str) -> list[dict[str, Any]]:
+    if isinstance(raw_value, dict):
+        raw_items = []
+        for key, value in raw_value.items():
+            if isinstance(value, dict):
+                raw_items.append({**value, "reference_image_ref": value.get("reference_image_ref") or str(key)})
+    elif isinstance(raw_value, list):
+        raw_items = raw_value
+    else:
+        raw_items = []
+
+    normalized: list[dict[str, Any]] = []
+    used_refs: set[str] = set()
+    for index, item in enumerate(raw_items, start=1):
+        if not isinstance(item, dict):
+            continue
+        title = _non_empty_text(item.get("title"), _title_from_reference_image_item(item, index))
+        reference_image_ref = str(item.get("reference_image_ref") or item.get("ref") or "").strip()
+        if not reference_image_ref:
+            reference_image_ref = f"skill-reference://steps/{step_id}/{_safe_reference_slug(title, index)}"
+        if reference_image_ref in used_refs:
+            reference_image_ref = f"{reference_image_ref}-{index}"
+        used_refs.add(reference_image_ref)
+        normalized.append(
+            {
+                "reference_image_ref": reference_image_ref,
+                "title": title,
+                "caption": str(item.get("caption") or ""),
+                "artifact_object_id": str(item.get("artifact_object_id") or ""),
+                "mime_type": str(item.get("mime_type") or ""),
+                "source_ref": str(item.get("source_ref") or ""),
+                "display_order": _bounded_int(item.get("display_order"), default=index, minimum=0, maximum=1000),
+            }
+        )
+    return normalized
+
+
+def _title_from_reference_image_item(item: dict[str, Any], index: int) -> str:
+    path = str(item.get("reference_path") or "")
+    if path:
+        stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("-", " ").replace("_", " ")
+        if stem.strip():
+            return stem.strip()
+    return f"参考图 {index}"
+
+
+def _safe_reference_slug(value: str, index: int) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
+    return slug or f"image-{index}"
 
 
 def _normalize_expected_evidence(raw_value: Any) -> list[dict[str, Any]]:

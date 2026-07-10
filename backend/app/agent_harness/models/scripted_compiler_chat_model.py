@@ -64,7 +64,7 @@ def _next_compiler_message(messages: list[BaseMessage], tool_names: set[str]) ->
         messages,
         "psop.compiler.build_formal_v5_scaffold",
     ):
-        return _tool_call("call_build_scaffold", "psop.compiler.build_formal_v5_scaffold", _scaffold_arguments())
+        return _tool_call("call_build_scaffold", "psop.compiler.build_formal_v5_scaffold", _scaffold_arguments(messages))
     artifact_ref = _artifact_ref_from_scaffold(messages)
     candidate_ref = _candidate_ref_from_scaffold(messages)
     artifact = _artifact_from_scaffold(messages) or _artifact()
@@ -122,27 +122,68 @@ def _candidate(messages: list[BaseMessage], artifact: dict[str, Any]) -> dict[st
     }
 
 
-def _scaffold_arguments() -> dict[str, Any]:
+def _scaffold_arguments(messages: list[BaseMessage]) -> dict[str, Any]:
+    reference_images = _reference_images_from_source_assets(messages)
+    workflow_step = {
+        "id": "collect_context",
+        "title": "收集上下文",
+        "goal": "识别用户任务、约束和期望输出。",
+        "source_evidence": "SKILL.md 要求先理解用户任务，并等待用户提交真实场景证据。",
+        "expected_evidence": [
+            {"kind": "text", "event_kind": "terminal.text.input.v1", "description": "用户任务和现场约束说明"},
+            {"kind": "image", "event_kind": "terminal.image.input.v1", "description": "现场图片或状态截图"},
+        ],
+        "source_file": "SKILL.md",
+    }
+    if reference_images:
+        workflow_step["reference_images"] = reference_images
     return {
         "execution_goal": "帮助用户在现实世界完成当前 Skill 目标。",
-        "workflow_steps": [
-            {
-                "id": "collect_context",
-                "title": "收集上下文",
-                "goal": "识别用户任务、约束和期望输出。",
-                "source_evidence": "SKILL.md 要求先理解用户任务，并等待用户提交真实场景证据。",
-                "expected_evidence": [
-                    {"kind": "text", "event_kind": "terminal.text.input.v1", "description": "用户任务和现场约束说明"},
-                    {"kind": "image", "event_kind": "terminal.image.input.v1", "description": "现场图片或状态截图"},
-                ],
-                "source_file": "SKILL.md",
-            }
-        ],
+        "workflow_steps": [workflow_step],
         "safety_constraints": ["如果用户证据显示存在安全风险，应暂停并要求补充证据。"],
         "completion_criteria": ["用户任务上下文和必要证据已经收集完成。"],
         "recovery_paths": [{"when": "evidence_insufficient", "action": "request_more_evidence"}],
         "compile_reason": "根据冻结 Skill source 中的收集上下文 workflow，使用 scaffold tool 生成 formal-v5 最小可运行 EG candidate。",
     }
+
+
+def _reference_images_from_source_assets(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    payload = _latest_tool_payload(messages, "psop.compiler.read_skill_source")
+    raw_assets = payload.get("reference_assets") if isinstance(payload, dict) else []
+    if not isinstance(raw_assets, list):
+        return []
+    reference_images: list[dict[str, Any]] = []
+    for index, asset in enumerate(raw_assets, start=1):
+        if not isinstance(asset, dict):
+            continue
+        reference_path = str(asset.get("reference_path") or "")
+        artifact_object_id = str(asset.get("artifact_object_id") or "")
+        mime_type = str(asset.get("mime_type") or "")
+        if not reference_path or not artifact_object_id or not mime_type:
+            continue
+        reference_images.append(
+            {
+                "reference_image_ref": f"skill-reference://steps/collect_context/{_reference_image_slug(reference_path, index)}",
+                "title": str(asset.get("title") or _reference_image_title(reference_path, index)),
+                "caption": "",
+                "artifact_object_id": artifact_object_id,
+                "mime_type": mime_type,
+                "source_ref": str(asset.get("source_ref") or ""),
+                "display_order": int(asset.get("display_order") or index),
+            }
+        )
+    return reference_images
+
+
+def _reference_image_title(reference_path: str, index: int) -> str:
+    stem = reference_path.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("-", " ").replace("_", " ").strip()
+    return stem or f"参考图 {index}"
+
+
+def _reference_image_slug(reference_path: str, index: int) -> str:
+    stem = _reference_image_title(reference_path, index)
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", stem.lower()).strip("-")
+    return slug or f"image-{index}"
 
 
 def _artifact_from_scaffold(messages: list[BaseMessage]) -> dict[str, Any] | None:

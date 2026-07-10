@@ -88,10 +88,10 @@ ws(s)://<psop-host>/ws/runs/{run_id}
 | event_kind | 方向 | 展示建议 |
 | --- | --- | --- |
 | `terminal.multimodal.input.v1` | input | 同一条用户输入气泡内展示文本、图片、音频、视频 part。 |
-| `terminal.text.output.v1` | output | 系统输出文本。 |
+| `terminal.text.output.v1` | output | 系统输出文本；正式文本位于 text part。 |
 | `terminal.multimodal.output.v1` | output | 同一条系统输出气泡内展示文本和参考图片 part。 |
 
-多模态事件的正式内容优先读取 `parts[]`。`payload_inline` 只作为事件级摘要或小文本摘要，不应承载二进制内容、对象存储地址或 MinIO object key。
+终端事件的正式展示内容优先读取 `parts[]`。`payload_inline` 只作为事件级摘要、小文本摘要或旧客户端兼容字段，不应承载二进制内容、对象存储地址或 MinIO object key。旧数据或少量兼容事件可能没有 `parts[]`，客户端可在这种情况下回退读取 `payload_inline`。
 
 part 常见类型：
 
@@ -516,8 +516,8 @@ GET /api/v1/terminal/sessions/{run_id}/events?from_seq=4&to_seq=12
 | `direction` | `input` 或 `output`。 |
 | `event_kind` | 事件类型。 |
 | `mime_type` | 内容 MIME。 |
-| `payload_inline` | 事件级摘要、小文本或结构化小 JSON；多模态事件不要依赖这里获取完整内容。 |
-| `parts` | 服务端生成的事件内容单元。纯文本输入通常包含一个 text part；多模态输入可同时包含 text、image、audio、video part；多模态输出通常包含 text 和当前步骤参考 image part。 |
+| `payload_inline` | 事件级摘要、小文本或结构化小 JSON；客户端不要依赖这里获取完整展示内容。 |
+| `parts` | 服务端生成的事件内容单元。纯文本输入和纯文本输出通常包含一个 text part；多模态输入可同时包含 text、image、audio、video part；多模态输出通常包含 text 和当前步骤参考 image part。 |
 | `parts[].part_id` | 服务端生成的同一事件内稳定 part ID，用于构造内容读取 URL。 |
 | `parts[].kind` | 服务端根据文本字段或 MIME 推导出的 `text`、`image`、`audio` 或 `video`。 |
 | `parts[].mime_type` | 服务端保存的内容 MIME。 |
@@ -557,6 +557,8 @@ Range: bytes=0-1048575
 
 `psop.runner` 在协助终端用户执行 PSOP Skill 时，可能会把当前步骤的参考图片作为回答的一部分返回给终端。Runtime 会把这类回答保存为 `direction = "output"`、`event_kind = "terminal.multimodal.output.v1"` 的终端事件；终端可以通过事件列表 REST 接口或 WebSocket `terminal.event.appended` 增量消息接收。
 
+参考图片来自已发布 Skill source 的 `references/` 目录，并在编译阶段被镜像为受控 `ArtifactObject` 写入 `runtime_contract.workflow_steps[*].reference_images`。Runner 运行时只选择当前步骤允许的 `reference_image_ref`；最终 image part 由 Runtime 校验并补齐。因此终端协议不需要新增上传、下载或附件字段，也不应把参考图片理解为 Runner 临时生成的外部附件。
+
 终端侧处理规则：
 
 - 按 `parts[].order_index` 在同一条系统消息内展示所有 part。
@@ -564,7 +566,7 @@ Range: bytes=0-1048575
 - `kind = "image"` 的 part 通过 part 内容接口读取二进制内容，使用 `event.id` 和 `part.part_id` 构造 URL。
 - 可使用 `parts[].metadata.title`、`parts[].metadata.caption` 展示参考图片标题和说明。
 - 不要从 `artifact_object_id` 拼接下载地址，也不要期待 `payload_inline` 或 `parts[]` 中出现图片 base64。
-- 如果 runner 只返回 `terminal.text.output.v1` 或 `terminal.multimodal.output.v1` 中没有 image part，说明本次输出没有可展示的参考图片；终端只展示文本即可。
+- 如果 output 事件中没有 image part，说明本次输出没有可展示的参考图片；终端只展示 text part 即可。旧事件没有 `parts[]` 时再回退展示 `payload_inline`。
 
 前端展示示例：
 
@@ -868,7 +870,7 @@ curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/events" \
 - 原始二进制不要通过 `payload_inline` 传输。
 - 上传失败或响应丢失后可以使用同一个 `Idempotency-Key` 和 `external_event_id` 重试，服务端会避免重复创建终端消息。
 - 终端展示媒体时调用 `/terminal/sessions/{run_id}/events/{event_id}/parts/{part_id}/content`，不要使用 `artifact_object_id` 拼接下载地址。
-- 终端展示 `terminal.multimodal.output.v1` 时，应在同一条系统消息内按 `order_index` 展示 text part 和参考图片 part；参考图片可使用 `metadata.title`、`metadata.caption` 作为辅助说明。
+- 终端展示 output 事件时，应在同一条系统消息内按 `order_index` 展示 text part 和参考图片 part；参考图片可使用 `metadata.title`、`metadata.caption` 作为辅助说明。
 
 ## 订阅 WebSocket
 

@@ -58,6 +58,7 @@ class RepositoryFile:
     content: str
     ref: str
     head_commit_sha: str
+    content_bytes: bytes | None = None
 
 
 class GitLabSkillSourceGateway(Protocol):
@@ -84,6 +85,9 @@ class GitLabSkillSourceGateway(Protocol):
         ...
 
     def get_repository_file(self, project_id: str, ref: str, file_path: str) -> RepositoryFile:
+        ...
+
+    def get_repository_file_bytes(self, project_id: str, ref: str, file_path: str) -> bytes:
         ...
 
     def commit_repository_file(
@@ -370,11 +374,21 @@ class HttpGitLabSkillSourceGateway:
             raise SkillsGatewayError("GitLab 文件读取响应格式错误。", details={"file_path": file_path})
         return payload
 
-    def _get_file_content(self, project_id: str, ref: str, file_path: str) -> str:
+    def _get_file_bytes(self, project_id: str, ref: str, file_path: str) -> bytes:
         payload = self._get_file_payload(project_id, ref, file_path)
         try:
-            return base64.b64decode(str(payload["content"])).decode("utf-8")
+            return base64.b64decode(str(payload["content"]))
         except Exception as exc:  # pragma: no cover - defensive decode guard
+            raise SkillsGatewayError(
+                "GitLab 文件内容解码失败。",
+                details={"file_path": file_path, "error": str(exc)},
+            ) from exc
+
+    def _get_file_content(self, project_id: str, ref: str, file_path: str) -> str:
+        content_bytes = self._get_file_bytes(project_id, ref, file_path)
+        try:
+            return content_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:  # pragma: no cover - defensive decode guard
             raise SkillsGatewayError(
                 "GitLab 文件内容解码失败。",
                 details={"file_path": file_path, "error": str(exc)},
@@ -419,14 +433,22 @@ class HttpGitLabSkillSourceGateway:
         return entries
 
     def get_repository_file(self, project_id: str, ref: str, file_path: str) -> RepositoryFile:
-        content = self._get_file_content(project_id, ref, file_path)
+        content_bytes = self._get_file_bytes(project_id, ref, file_path)
+        try:
+            content = content_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            content = ""
         return RepositoryFile(
             file_path=file_path,
             file_name=file_path.rsplit("/", 1)[-1],
             content=content,
             ref=ref,
-            head_commit_sha=self.get_branch_head(project_id, ref),
+            head_commit_sha=self._resolve_ref_head(project_id, ref),
+            content_bytes=content_bytes,
         )
+
+    def get_repository_file_bytes(self, project_id: str, ref: str, file_path: str) -> bytes:
+        return self._get_file_bytes(project_id, ref, file_path)
 
     def commit_repository_file(
         self,

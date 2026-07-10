@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import posixpath
+import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -46,8 +49,17 @@ from app.domain.skills.manifest import SkillDocument, document_from_manifest_sna
 from app.domain.skills.models import SkillDefinition, SkillPublishRecord, SkillVersion, now_utc
 from app.gateway.inference import LlmInferenceGateway, OpenAICompatibleInferenceGateway
 from app.gateway.gitlab import GitLabSkillSourceGateway
+from app.infra.object_store import ObjectStoreService
 
 LOGGER = logging.getLogger(__name__)
+MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)\n]+)\)")
+REFERENCE_IMAGE_MEDIA_TYPES = {
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 
 class PublishProgressReporter:
@@ -91,6 +103,7 @@ class CompilerService:
         compile_agent: SkillCompileAgent | None = None,
         agent_harness_service: AgentHarnessService | None = None,
         domain_pack_registry: DomainPackRegistry | None = None,
+        object_store: ObjectStoreService | None = None,
         repository: CompilerRepository | None = None,
         job_repository: JobRepository | None = None,
     ) -> None:
@@ -100,6 +113,7 @@ class CompilerService:
         self.compile_agent = compile_agent or SkillCompileAgent(self.inference_gateway)
         self.agent_harness_service = agent_harness_service
         self.domain_pack_registry = domain_pack_registry or DomainPackRegistry()
+        self.object_store = object_store
         self.repository = repository or CompilerRepository()
         self.job_repository = job_repository or JobRepository()
 
@@ -359,6 +373,14 @@ class CompilerService:
             if progress:
                 progress.mark("manifest_checked", "succeeded", "manifest snapshot 校验通过。")
 
+            reference_assets = self._build_reference_assets_for_compile(
+                session=session,
+                compile_request=compile_request,
+                skill_definition=skill_definition,
+                skill_version=skill_version,
+                source=source,
+            )
+
             with start_span(
                 "compile.agent",
                 skill_id=skill_definition.id,
@@ -373,6 +395,7 @@ class CompilerService:
                     skill_version=skill_version,
                     document=document,
                     source=source,
+                    reference_assets=reference_assets,
                     progress=progress,
                 )
             self._add_diagnostics(session, compile_request, skill_version, [item.as_dict() for item in agent_diagnostics])
@@ -554,6 +577,119 @@ class CompilerService:
             return self.process_compile_job(session, job.id)
         return self.process_compile_request(session, compile_request_id)
 
+    def _build_reference_assets_for_compile(
+        self,
+        *,
+        session: Session,
+        compile_request: SkillCompileRequest,
+        skill_definition: SkillDefinition,
+        skill_version: SkillVersion,
+        source,
+    ) -> list[dict[str, Any]]:
+        candidates = _extract_reference_image_candidates(
+            {
+                "README.md": getattr(source, "readme_content", ""),
+                "SKILL.md": getattr(source, "skill_md_content", ""),
+            }
+        )
+        if not candidates:
+            return []
+        if self.object_store is None:
+            LOGGER.warning(
+                "reference images skipped because object store is unavailable",
+                extra={
+                    "skill_id": skill_definition.id,
+                    "skill_key": skill_definition.key,
+                    "compile_request_id": compile_request.id,
+                    "candidate_count": len(candidates),
+                },
+            )
+            return []
+
+        assets: list[dict[str, Any]] = []
+        for candidate in candidates:
+            reference_path = str(candidate["reference_path"])
+            try:
+                content = self.gitlab_gateway.get_repository_file_bytes(
+                    skill_definition.gitlab_project_id,
+                    compile_request.source_commit_sha,
+                    reference_path,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "reference image read skipped",
+                    extra={
+                        "skill_id": skill_definition.id,
+                        "skill_key": skill_definition.key,
+                        "compile_request_id": compile_request.id,
+                        "reference_path": reference_path,
+                        "error": str(exc),
+                    },
+                )
+                continue
+            if not content:
+                LOGGER.warning(
+                    "empty reference image skipped",
+                    extra={
+                        "skill_id": skill_definition.id,
+                        "skill_key": skill_definition.key,
+                        "compile_request_id": compile_request.id,
+                        "reference_path": reference_path,
+                    },
+                )
+                continue
+            media_type = str(candidate["mime_type"])
+            checksum = hashlib.sha256(content).hexdigest()
+            object_key = (
+                f"skills/{skill_definition.key}/versions/{skill_version.version_no}/"
+                f"{compile_request.id}/reference-images/{checksum[:16]}/{Path(reference_path).name}"
+            )
+            try:
+                stored = self.object_store.upload_bytes(
+                    object_key=object_key,
+                    content=content,
+                    media_type=media_type,
+                    metadata={
+                        "skill_key": skill_definition.key,
+                        "source_commit_sha": compile_request.source_commit_sha,
+                        "reference_path": reference_path,
+                    },
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "reference image upload skipped",
+                    extra={
+                        "skill_id": skill_definition.id,
+                        "skill_key": skill_definition.key,
+                        "compile_request_id": compile_request.id,
+                        "reference_path": reference_path,
+                        "error": str(exc),
+                    },
+                )
+                continue
+            artifact_object = ArtifactObject(
+                bucket=stored.bucket,
+                object_key=stored.object_key,
+                media_type=stored.media_type,
+                size_bytes=stored.size_bytes,
+                checksum=stored.checksum,
+            )
+            session.add(artifact_object)
+            session.flush()
+            assets.append(
+                {
+                    "reference_path": reference_path,
+                    "artifact_object_id": artifact_object.id,
+                    "mime_type": artifact_object.media_type,
+                    "title": str(candidate["title"]),
+                    "source_ref": str(candidate["source_ref"]),
+                    "display_order": int(candidate["display_order"]),
+                    "size_bytes": artifact_object.size_bytes,
+                    "checksum": artifact_object.checksum,
+                }
+            )
+        return assets
+
     def list_compile_requests(
         self,
         session: Session,
@@ -710,6 +846,7 @@ class CompilerService:
         skill_version: SkillVersion,
         document: SkillDocument,
         source,
+        reference_assets: list[dict[str, Any]],
         progress: PublishProgressReporter | None = None,
     ) -> tuple[dict[str, Any] | None, list[FormalDiagnostic]]:
         if self.agent_harness_service is not None:
@@ -720,6 +857,7 @@ class CompilerService:
                 skill_version=skill_version,
                 document=document,
                 source=source,
+                reference_assets=reference_assets,
                 progress=progress,
             )
         diagnostics: list[FormalDiagnostic] = []
@@ -754,6 +892,7 @@ class CompilerService:
                         skill_version=skill_version,
                         document=document,
                         source=source,
+                        reference_assets=reference_assets,
                         repair_diagnostics=repair_diagnostics,
                         session=session,
                     )
@@ -840,6 +979,7 @@ class CompilerService:
         skill_version: SkillVersion,
         document: SkillDocument,
         source,
+        reference_assets: list[dict[str, Any]],
         progress: PublishProgressReporter | None = None,
     ) -> tuple[dict[str, Any] | None, list[FormalDiagnostic]]:
         diagnostics: list[FormalDiagnostic] = []
@@ -876,6 +1016,7 @@ class CompilerService:
                     skill_version=skill_version,
                     document=document,
                     source=source,
+                    reference_assets=reference_assets,
                     domain_pack_context=domain_pack_context,
                     repair_diagnostics=repair_diagnostics,
                 ),
@@ -1021,6 +1162,7 @@ class CompilerService:
         skill_version: SkillVersion,
         document: SkillDocument,
         source,
+        reference_assets: list[dict[str, Any]],
         domain_pack_context: dict[str, Any],
         repair_diagnostics: list[FormalDiagnostic],
     ) -> dict[str, Any]:
@@ -1042,6 +1184,7 @@ class CompilerService:
             "source": {
                 "source_commit_sha": compile_request.source_commit_sha,
                 "head_commit_sha": getattr(source, "head_commit_sha", ""),
+                "reference_assets": reference_assets,
                 "files": {
                     "README.md": getattr(source, "readme_content", ""),
                     "SKILL.md": getattr(source, "skill_md_content", ""),
@@ -1372,6 +1515,73 @@ class CompilerService:
             created_at=artifact.created_at,
             artifact=artifact_object.content_json if include_payload and artifact_object else None,
         )
+
+
+def _extract_reference_image_candidates(files: dict[str, str]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    display_order = 0
+    for source_file in ("README.md", "SKILL.md"):
+        content = files.get(source_file) or ""
+        for match in MARKDOWN_IMAGE_PATTERN.finditer(content):
+            reference_path = _normalize_reference_image_path(match.group(2))
+            if not reference_path or reference_path in seen_paths:
+                continue
+            seen_paths.add(reference_path)
+            display_order += 1
+            alt_text = str(match.group(1) or "").strip()
+            title = alt_text or _title_from_reference_path(reference_path)
+            candidates.append(
+                {
+                    "reference_path": reference_path,
+                    "mime_type": _mime_type_for_reference_image(reference_path),
+                    "title": title,
+                    "source_ref": f"source.{source_file}:image:{reference_path}",
+                    "display_order": display_order,
+                }
+            )
+    return candidates
+
+
+def _normalize_reference_image_path(raw_target: str) -> str | None:
+    target = _markdown_image_url(raw_target)
+    if not target or "\\" in target:
+        return None
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc:
+        return None
+    path = unquote(parsed.path).strip()
+    if not path or "\\" in path or path.startswith("/"):
+        return None
+    normalized = posixpath.normpath(path)
+    if normalized == "." or normalized == "references" or normalized.startswith("../"):
+        return None
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    if not normalized.startswith("references/"):
+        return None
+    if _mime_type_for_reference_image(normalized) is None:
+        return None
+    return normalized
+
+
+def _markdown_image_url(raw_target: str) -> str:
+    target = str(raw_target or "").strip()
+    if not target:
+        return ""
+    if target.startswith("<") and ">" in target:
+        return target[1 : target.index(">")].strip()
+    return target.split(maxsplit=1)[0].strip("<>")
+
+
+def _mime_type_for_reference_image(reference_path: str) -> str | None:
+    suffix = Path(reference_path).suffix.lower()
+    return REFERENCE_IMAGE_MEDIA_TYPES.get(suffix)
+
+
+def _title_from_reference_path(reference_path: str) -> str:
+    stem = Path(reference_path).stem.strip()
+    return stem.replace("-", " ").replace("_", " ") or Path(reference_path).name
 
 
 def _is_standard_search_availability_diagnostic(item: dict[str, Any]) -> bool:

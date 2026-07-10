@@ -28,6 +28,14 @@
 - `source_evidence`：来自 SKILL.md/README.md 的阶段摘要或片段。
 - `expected_evidence`：阶段要求用户提交的照片、截图、文字确认或文件。
 - `source_file`：通常为 `SKILL.md`。
+- `reference_images`：可选。只能从 `psop.compiler.read_skill_source` 返回的 `reference_assets` 中选择与该阶段相关的图片。每项包含 `reference_image_ref`、`title`、`caption`、`artifact_object_id`、`mime_type`、`source_ref`、`display_order`；`artifact_object_id` 必须来自 `reference_assets`，不能由模型编造。
+
+参考图片映射语义：
+
+- `reference_assets` 是发布编译阶段已镜像到对象存储的只读资产索引，不是 Runner 临时附件。
+- `workflow_steps[].reference_images[].reference_image_ref` 是运行时 Runner 选择图片时使用的稳定引用。
+- 图片 bytes、base64、对象存储 key、内部 URL 不进入 runtime contract。
+- 如果无法确定某张图片适用于哪个步骤，不要强行映射；可以在 diagnostics 中说明 source 参考图缺少步骤语义。
 
 ## Prompt View 要求
 

@@ -15,6 +15,7 @@
 - 必须调用 `load_skill_resource` 读取 `psop-compiler` 包内的 `core/SKILL.md`、`contract/SKILL.md`、`mapping/SKILL.md` 和 `review/SKILL.md`；可以读取 `README.md` 辅助理解模块职责。
 - 必须通过 `psop.compiler.read_skill_source`、`psop.compiler.read_manifest_snapshot`、`psop.compiler.read_allowed_runtime` 和 `psop.compiler.read_domain_pack` 建立事实边界。
 - 必须把 Skill source 中的 workflow、证据、等待点、安全约束、完成标准和恢复路径映射进 `runtime_contract`。
+- 如果 `psop.compiler.read_skill_source` 返回 `reference_assets`，必须只从这些受控资产中选择与步骤相关的参考图片，并映射到对应 `workflow_steps[].reference_images`；不得编造 `artifact_object_id`、对象存储 key、外部 URL 或临时附件。
 - 必须先抽取业务 workflow steps，再调用 `psop.compiler.build_formal_v5_scaffold` 生成 formal-v5 scaffold；不要直接手写完整 nodes/guards/merges 大 JSON。
 - `psop.compiler.build_formal_v5_scaffold` 默认返回 `artifact_ref` 和 `candidate_ref`；后续优先把引用传给 `psop.compiler.validate_formal_v5` 和 `psop.compiler.submit_candidate`，不要把完整 artifact/candidate 大 JSON 复制进 tool 参数。
 - 必须调用 `psop.compiler.validate_formal_v5` 获取确定性 diagnostics；优先使用 `artifact_ref` 或 `candidate_ref`。

@@ -12,7 +12,7 @@ from app.agent_harness.models.scripted_runner_chat_model import ScriptedRunnerCh
 from app.agent_harness.service import AgentHarnessService
 from app.agents.registry import PromptRegistry
 from app.domain.compiler.models import ArtifactObject
-from app.domain.compiler.service import CompilerService
+from app.domain.compiler.service import CompilerService, _extract_reference_image_candidates
 from app.domain.compiler.formal_v5 import validate_and_normalize_artifact
 from app.domain.jobs.repository import JobRepository
 from app.domain.runtime.models import Run, SessionTokenSnapshot
@@ -229,6 +229,141 @@ def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
         assert any(item.code == "compile.agent.prompt_pack" for item in diagnostics)
     finally:
         database_manager.dispose()
+
+
+def test_compiler_reference_images_flow_to_runner_multimodal_output(tmp_path) -> None:
+    settings = create_test_settings().model_copy(
+        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
+    )
+    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
+    database_manager.create_schema()
+    gitlab_gateway = FakeGitLabGateway()
+    object_store = FakeObjectStore()
+    compiler_harness = AgentHarnessService(
+        settings=settings,
+        chat_model_factory=lambda _definition: ScriptedCompilerChatModel(),
+    )
+    compiler_service = CompilerService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=compiler_harness,
+        object_store=object_store,
+    )
+    skills_service = SkillsService(
+        settings=settings,
+        gitlab_gateway=gitlab_gateway,
+        compiler_service=compiler_service,
+    )
+    runner_harness = AgentHarnessService(
+        settings=settings,
+        chat_model_factory=lambda _definition: ScriptedRunnerChatModel(),
+    )
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=FailingInferenceGateway(),
+        object_store=object_store,
+        agent_harness_service=runner_harness,
+    )
+
+    try:
+        with database_manager.session() as session:
+            skill = skills_service.create_skill(
+                session,
+                CreateSkillRequest(
+                    key="compiler-reference-images",
+                    name="Compiler Reference Images",
+                    description="Validate Skill reference image output flow.",
+                ),
+            )
+            project = gitlab_gateway.projects[skill.gitlab_project_id]
+            gitlab_gateway.commit_repository_files(
+                project_id=skill.gitlab_project_id,
+                branch=skill.default_branch,
+                files={
+                    "README.md": "# Reference Skill\n\n忽略外部图片 ![bad](https://example.test/outside.jpg)\n",
+                    "SKILL.md": "# Reference Skill\n\n请按参考图角度确认现场。\n\n![现场概览](references/site-overview.jpg)\n",
+                    "skill.yaml": str(project.files["skill.yaml"]),
+                },
+                binary_files={"references/site-overview.jpg": b"jpeg-reference-bytes"},
+                commit_message="Add reference image",
+            )
+            published = skills_service.publish_skill(
+                session,
+                skill_id=skill.id,
+                payload=PublishSkillRequest(publish_reason="Compile reference images"),
+            )
+            compiled = process_publish_job(session, compiler_service, published.compile_request.id)
+            artifact = compiler_service.get_artifact(session, compiled.artifact_id or "")
+            assert artifact.artifact is not None
+            reference_images = artifact.artifact["runtime_contract"]["workflow_steps"][0]["reference_images"]
+            reference_image = reference_images[0]
+            reference_object = session.get(ArtifactObject, reference_image["artifact_object_id"])
+
+            assert len(reference_images) == 1
+            assert reference_image["reference_image_ref"].startswith("skill-reference://steps/collect_context/")
+            assert reference_image["title"] == "现场概览"
+            assert reference_image["mime_type"] == "image/jpeg"
+            assert reference_object is not None
+            assert reference_object.media_type == "image/jpeg"
+            assert object_store.objects[(reference_object.bucket, reference_object.object_key)] == b"jpeg-reference-bytes"
+
+            invocation = runtime_service.create_invocation(
+                session,
+                CreateInvocationRequest(
+                    skill_key=skill.key,
+                    terminal_context={"terminal_kind": "web"},
+                ),
+            )
+            runtime_service.append_terminal_event(
+                session,
+                invocation.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="现场说明已提交。",
+                    external_event_id="compiler-reference-images-input-001",
+                ),
+            )
+            runtime_service.process_run(session, invocation.run_id or "")
+            terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+
+        multimodal_events = [
+            event for event in terminal_events if event.event_kind == "terminal.multimodal.output.v1"
+        ]
+        assert multimodal_events
+        image_parts = [part for part in multimodal_events[0].parts if part.kind == "image"]
+        assert len(image_parts) == 1
+        assert image_parts[0].artifact_object_id == reference_image["artifact_object_id"]
+    finally:
+        database_manager.dispose()
+
+
+def test_compiler_reference_image_parser_ignores_unsafe_markdown_links() -> None:
+    candidates = _extract_reference_image_candidates(
+        {
+            "README.md": "\n".join(
+                [
+                    "![good](./references/good.png)",
+                    "![external](https://example.test/good.png)",
+                    "![data](data:image/png;base64,AAAA)",
+                    "![outside](../references/outside.png)",
+                    "![escape](references/../outside.png)",
+                    "![wrong-dir](examples/good.png)",
+                    "![text](references/not-image.txt)",
+                    "![absolute](/references/absolute.png)",
+                    r"![backslash](references\\bad.png)",
+                ]
+            ),
+            "SKILL.md": "![nested](references/nested/photo.webp?cache=1#view)",
+        }
+    )
+
+    assert [item["reference_path"] for item in candidates] == [
+        "references/good.png",
+        "references/nested/photo.webp",
+    ]
 
 
 def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
@@ -584,6 +719,22 @@ def test_runtime_runner_outputs_reference_image_when_artifact_resolves(tmp_path)
     assert not warning_events
 
 
+def test_runtime_ignores_runner_supplied_reference_image_artifact_object_id(tmp_path) -> None:
+    result = _run_runner_reference_image_case(
+        tmp_path,
+        skill_key="runtime-runner-reference-image-spoof",
+        reference_image_artifact_object_id="__valid__",
+        runner_reference_image_artifact_object_id="spoofed-artifact-object",
+    )
+
+    multimodal_events = [
+        event for event in result["terminal_events"] if event.event_kind == "terminal.multimodal.output.v1"
+    ]
+    image_parts = [part for part in multimodal_events[0].parts if part.kind == "image"]
+
+    assert image_parts[0].artifact_object_id == result["reference_artifact_object_id"]
+
+
 def test_runtime_runner_reference_image_warning_falls_back_to_text(tmp_path) -> None:
     result = _run_runner_reference_image_case(
         tmp_path,
@@ -614,6 +765,7 @@ def _run_runner_reference_image_case(
     *,
     skill_key: str,
     reference_image_artifact_object_id: str,
+    runner_reference_image_artifact_object_id: str | None = None,
 ) -> dict:
     settings = create_test_settings().model_copy(
         update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
@@ -632,9 +784,28 @@ def _run_runner_reference_image_case(
         gitlab_gateway=gitlab_gateway,
         compiler_service=compiler_service,
     )
+    reference_image_ref = "skill-reference://steps/collect-context/site-overview"
+
+    def _runner_model(_definition):
+        if runner_reference_image_artifact_object_id:
+            return ScriptedRunnerChatModel(
+                observation_overrides_by_node={
+                    "instruct_collect_context": {
+                        "reference_images": [
+                            {
+                                "reference_image_ref": reference_image_ref,
+                                "artifact_object_id": runner_reference_image_artifact_object_id,
+                                "mime_type": "image/jpeg",
+                            }
+                        ]
+                    }
+                }
+            )
+        return ScriptedRunnerChatModel()
+
     agent_harness_service = AgentHarnessService(
         settings=settings,
-        chat_model_factory=lambda _definition: ScriptedRunnerChatModel(),
+        chat_model_factory=_runner_model,
     )
     runtime_service = RuntimeService(
         settings=settings,
@@ -675,7 +846,7 @@ def _run_runner_reference_image_case(
             artifact_payload = json.loads(json.dumps(artifact_object.content_json, ensure_ascii=False))
             artifact_payload["runtime_contract"]["workflow_steps"][0]["reference_images"] = [
                 {
-                    "reference_image_ref": "skill-reference://steps/collect-context/site-overview",
+                    "reference_image_ref": reference_image_ref,
                     "title": "现场概览参考图",
                     "caption": "请按参考图角度拍摄现场整体状态。",
                     "artifact_object_id": reference_artifact_object_id,
@@ -1181,6 +1352,11 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert terminal_session.terminal_session.id == invocation.terminal_session_id
     assert terminal_session.terminal_session.status == "closed"
     assert [event.direction for event in terminal_events] == ["input", "output", "output"]
+    output_events = [event for event in terminal_events if event.direction == "output"]
+    assert [[part.kind for part in event.parts] for event in output_events] == [["text"], ["text"]]
+    assert [event.parts[0].part_id for event in output_events] == ["text_1", "text_1"]
+    assert output_events[0].parts[0].text == output_events[0].payload_inline
+    assert "测试任务已完成" in output_events[-1].parts[0].text
     assert terminal_events[1].source_ref["node_id"] == "evaluate_collect_context"
     assert terminal_events[-1].source_ref["node_id"] == "terminal"
     assert terminal_events[0].payload_inline == "我已经完成当前步骤，并上传了现场说明。"
@@ -1376,6 +1552,8 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> No
     assert terminal_session.terminal_session.status == "closed"
     assert [event.direction for event in terminal_events] == ["input", "output"]
     assert terminal_events[-1].source_ref["node_id"] == "terminal_abort"
+    assert [part.kind for part in terminal_events[-1].parts] == ["text"]
+    assert "电源功率不足" in terminal_events[-1].parts[0].text
     assert snapshots[-1].token_payload["status"] == "aborted"
     assert snapshots[-1].token_payload["control"]["abort"]["next_phase"] == "terminal_abort"
     assert "runtime.aborted" in [item.event_type for item in trace_events]
@@ -2472,6 +2650,8 @@ def test_runtime_service_records_failed_run_when_runner_fails(runtime_stack) -> 
     assert terminal_events[-1].event_kind == "terminal.text.output.v1"
     assert terminal_events[-1].external_event_id == f"runtime:{invocation.run_id}:failed"
     assert terminal_events[-1].trace_event_id == trace_events[-1].id
+    assert [part.kind for part in terminal_events[-1].parts] == ["text"]
+    assert "Runtime 执行失败" in terminal_events[-1].parts[0].text
     assert "Runtime 执行失败" in terminal_events[-1].payload_inline
     assert "当前运行已停止" in terminal_events[-1].payload_inline
     assert "调试运行" not in terminal_events[-1].payload_inline
@@ -2626,6 +2806,8 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
     assert terminal_events[-1].direction == "output"
     assert terminal_events[-1].trace_event_id == trace_events[-1].id
     assert terminal_events[-1].payload_inline == "刚才服务器开小差了，请您重试！"
+    assert [part.kind for part in terminal_events[-1].parts] == ["text"]
+    assert terminal_events[-1].parts[0].text == "刚才服务器开小差了，请您重试！"
     assert snapshots[-1].token_payload["status"] == "waiting"
     assert snapshots[-1].token_payload["metadata"]["terminal_cursor"] == terminal_events[-1].seq_no
     assert snapshots[-1].token_payload["control"]["wait"]["reason"] == wait_reason_before_failure

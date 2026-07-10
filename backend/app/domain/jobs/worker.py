@@ -112,6 +112,7 @@ class RuntimeJobWorker:
                                 gitlab_gateway=self.gitlab_gateway,
                                 inference_gateway=self.inference_gateway,
                                 agent_harness_service=self.agent_harness_service,
+                                object_store=self.object_store,
                             )
                             compiler_service.process_compile_job(session, job_id)
                         elif job_type == "runtime":

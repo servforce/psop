@@ -457,6 +457,43 @@ def test_runner_observation_rejects_unknown_requirement_key() -> None:
         )
 
 
+def test_runner_observation_accepts_allowed_reference_image_ref() -> None:
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    allowed_ref = payload["context"]["step_reference_images"][0]["reference_image_ref"]
+    observation = _valid_runner_observation()
+    observation["reference_images"] = [{"reference_image_ref": allowed_ref}]
+
+    validated = validate_runner_observation(
+        observation,
+        invocation_input=payload["input"],
+        invocation_context=payload["context"],
+    )
+
+    assert validated["reference_images"][0]["reference_image_ref"] == allowed_ref
+
+
+def test_runner_observation_rejects_unlisted_reference_image_ref() -> None:
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    observation = _valid_runner_observation()
+    observation["reference_images"] = [{"reference_image_ref": "skill-reference://steps/collect-context/missing"}]
+
+    with pytest.raises(ValueError, match="reference_image_ref"):
+        validate_runner_observation(
+            observation,
+            invocation_input=payload["input"],
+            invocation_context=payload["context"],
+        )
+
+    payload["context"]["step_reference_images"] = []
+    observation["reference_images"] = [{"reference_image_ref": "skill-reference://steps/collect-context/site-overview"}]
+    with pytest.raises(ValueError, match="没有允许"):
+        validate_runner_observation(
+            observation,
+            invocation_input=payload["input"],
+            invocation_context=payload["context"],
+        )
+
+
 @pytest.mark.parametrize(
     "source_ref",
     [
