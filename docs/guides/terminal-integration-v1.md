@@ -9,6 +9,7 @@
 终端侧需要实现以下能力：
 
 - 通过 `skill_key` 发起一次运行。
+- 查询运行记录，并按 Skill 或运行状态筛选后进入指定 Run。
 - 展示当前运行状态、当前等待原因、期望输入和最终输出。
 - 展示终端输入/输出事件流。
 - 发送文本、图片、音频、视频输入。
@@ -118,6 +119,11 @@ sequenceDiagram
     participant T as 终端客户端
     participant API as PSOP API
     participant WS as WebSocket
+
+    opt 查看运行记录
+        T->>API: GET /runs?status=waiting_input&skill_id={skill_id}
+        API-->>T: Run[]
+    end
 
     T->>API: POST /gateway/invocations
     API-->>T: invocation_id, run_id, terminal_session_id
@@ -271,6 +277,65 @@ curl -sS -X POST "$PSOP_API_BASE/gateway/invocations" \
 ```
 
 ## 读取状态和事件
+
+### 查询运行记录
+
+终端如果需要提供“运行记录”或“继续已有运行”入口，可以查询 Run 列表：
+
+```http
+GET /api/v1/runs
+GET /api/v1/runs?status=waiting_input
+GET /api/v1/runs?skill_id={skill_id}
+GET /api/v1/runs?status=waiting_input&skill_id={skill_id}
+```
+
+查询参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `status` | 否 | 按 Run 状态精确筛选。可选值：`queued`、`waiting_runtime`、`running`、`waiting_input`、`succeeded`、`failed`、`aborted`、`cancelled`。传入其他值返回 `422`。 |
+| `skill_id` | 否 | 按 Skill Definition ID 精确筛选，不是 `skill_key`。 |
+
+同时传入 `status` 和 `skill_id` 时，两个条件按 AND 关系生效。不传查询参数时，
+接口返回当前调用方有权查看的全部 Run，并按 `created_at` 倒序排列。当前接口不提供
+分页参数，终端不应把它作为高频轮询接口；用户选择某条记录后，应改用单 Run 状态、
+Task Status、TerminalSession、TerminalEvent 和 WebSocket 接口进行恢复和增量更新。
+
+响应为 Run 数组，数组元素与 `GET /api/v1/runs/{run_id}` 的响应结构相同：
+
+```json
+[
+  {
+    "id": "run-id",
+    "invocation_id": "invocation-id",
+    "skill_definition_id": "skill-definition-id",
+    "status": "waiting_input",
+    "runtime_phase": "collect_context_evidence",
+    "latest_terminal_seq": 3,
+    "terminal_session_id": "terminal-session-id",
+    "current_step": "collect_context",
+    "wait_reason": "等待用户提交当前真实场景的说明或多模态证据。",
+    "final_output": "",
+    "exit_reason": "",
+    "created_at": "2026-05-25T00:00:00Z",
+    "started_at": "2026-05-25T00:00:02Z",
+    "ended_at": null,
+    "updated_at": "2026-05-25T00:00:04Z"
+  }
+]
+```
+
+终端列表建议至少展示 Skill、Run 状态和创建时间，并保存选中项的 `id` 作为
+`run_id`。进入详情后，按本文“断线恢复”流程读取权威状态和事件；不要仅凭列表响应
+判断是否允许继续输入。
+
+命令示例：
+
+```bash
+curl -sS "$PSOP_API_BASE/runs?status=waiting_input&skill_id=$SKILL_ID"
+```
+
+### 读取单个 Run
 
 读取 Run：
 
@@ -1329,6 +1394,7 @@ PSOP 业务错误通常返回：
 | 项目 | 验收标准 |
 | --- | --- |
 | 创建运行 | 能通过 `skill_key` 创建 Invocation，并得到 `run_id`。 |
+| 运行记录 | 能查询 Run 列表，按 `status` 或 `skill_id` 筛选，并从选中记录进入单 Run 恢复流程。 |
 | 状态加载 | 能读取 Run、Task Status、TerminalSession 和 TerminalEvent。 |
 | 文本输入 | 能发送带 text part 的 `terminal.multimodal.input.v1`，并通过 `external_event_id` 确认服务端接收。 |
 | 多模态输入 | 能通过 `/events` multipart 在同一事件内发送文本和至少一种图片、音频或视频 part，并在事件流中同气泡展示。 |

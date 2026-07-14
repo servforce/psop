@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+RunStatus = Literal[
+    "queued",
+    "waiting_runtime",
+    "running",
+    "waiting_input",
+    "succeeded",
+    "failed",
+    "aborted",
+    "cancelled",
+]
 
 
 class CreateInvocationRequest(BaseModel):

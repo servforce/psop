@@ -559,6 +559,7 @@
         requested_to: ""
       },
       runtimeFilters: {
+        status: "",
         created_from: "",
         created_to: ""
       },

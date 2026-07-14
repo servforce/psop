@@ -770,11 +770,11 @@
   .min-w-\[56rem\] {
     min-width: 56rem;
   }
-  .min-w-\[58rem\] {
-    min-width: 58rem;
-  }
   .min-w-\[64rem\] {
     min-width: 64rem;
+  }
+  .min-w-\[68rem\] {
+    min-width: 68rem;
   }
   .min-w-\[72rem\] {
     min-width: 72rem;
@@ -852,8 +852,8 @@
   .grid-cols-\[4\.75rem_minmax\(0\,1fr\)\] {
     grid-template-columns: 4.75rem minmax(0,1fr);
   }
-  .grid-cols-\[10rem_10rem_minmax\(24rem\,1fr\)_2\.5rem\] {
-    grid-template-columns: 10rem 10rem minmax(24rem,1fr) 2.5rem;
+  .grid-cols-\[9rem_10rem_10rem_minmax\(24rem\,1fr\)_2\.5rem\] {
+    grid-template-columns: 9rem 10rem 10rem minmax(24rem,1fr) 2.5rem;
   }
   .grid-cols-\[12rem_minmax\(0\,1fr\)_22rem\] {
     grid-template-columns: 12rem minmax(0,1fr) 22rem;

@@ -2311,11 +2311,8 @@
 
       currentSkillFilteredInvocations() {
         return this.currentSkillInvocations().filter((invocation) =>
-          this.inDateRange(
-            invocation.created_at,
-            this.runtimeFilters.created_from,
-            this.runtimeFilters.created_to
-          )
+          (!this.runtimeFilters.status || invocation.status === this.runtimeFilters.status) &&
+          this.inDateRange(invocation.created_at, this.runtimeFilters.created_from, this.runtimeFilters.created_to)
         );
       },
 

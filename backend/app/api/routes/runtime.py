@@ -50,6 +50,7 @@ from app.domain.runtime.schemas import (
     ResolveRunBindingsRequest,
     RunCapabilityBindingResponse,
     RunResponse,
+    RunStatus,
     RunTaskStatusResponse,
     SessionTokenSnapshotResponse,
     TerminalEventAppendResponse,
@@ -133,7 +134,7 @@ def get_invocation(
 
 @runs_router.get("", response_model=list[RunResponse])
 def list_runs(
-    status: str | None = Query(default=None),
+    status: RunStatus | None = Query(default=None),
     skill_id: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),

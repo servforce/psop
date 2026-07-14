@@ -51,6 +51,38 @@ def test_api_service_info() -> None:
     assert response.json()["api_prefix"] == "/api/v1"
 
 
+def test_runs_status_filter_exposes_openapi_enum_and_rejects_unknown_status() -> None:
+    settings = create_test_settings().model_copy(update={"database_auto_create_schema": True})
+    app = create_app(settings)
+    openapi = app.openapi()
+    parameters = openapi["paths"]["/api/v1/runs"]["get"]["parameters"]
+    status_parameter = next(parameter for parameter in parameters if parameter["name"] == "status")
+    enum_schema = next(
+        schema
+        for schema in status_parameter["schema"].get("anyOf", [status_parameter["schema"]])
+        if "enum" in schema
+    )
+
+    assert enum_schema["enum"] == [
+        "queued",
+        "waiting_runtime",
+        "running",
+        "waiting_input",
+        "succeeded",
+        "failed",
+        "aborted",
+        "cancelled",
+    ]
+
+    with TestClient(app) as client:
+        valid_response = client.get("/api/v1/runs", params={"status": "waiting_input"})
+        invalid_response = client.get("/api/v1/runs", params={"status": "unknown"})
+
+    assert valid_response.status_code == 200
+    assert valid_response.json() == []
+    assert invalid_response.status_code == 422
+
+
 def test_inference_models_api_lists_two_configured_capabilities() -> None:
     settings = create_test_settings()
     with TestClient(create_app(settings)) as client:

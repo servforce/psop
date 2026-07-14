@@ -1142,7 +1142,18 @@
       <div class="min-h-0 flex-1 overflow-auto">
         <section class="flex h-full min-h-0 flex-col overflow-hidden">
           <div class="shrink-0 overflow-x-auto border-b border-slate-800 bg-slate-950/45 px-3 py-2">
-            <div class="grid min-w-[58rem] grid-cols-[10rem_10rem_minmax(24rem,1fr)_2.5rem] items-end gap-2">
+            <div class="grid min-w-[68rem] grid-cols-[9rem_10rem_10rem_minmax(24rem,1fr)_2.5rem] items-end gap-2">
+              <label class="field-block gap-1">
+                <span class="field-label">状态</span>
+                <select x-model="runtimeFilters.status" class="select-field h-10 px-3 py-0" aria-label="运行状态">
+                  <option value="">全部状态</option>
+                  <option value="running">运行中</option>
+                  <option value="succeeded">成功</option>
+                  <option value="failed">失败</option>
+                  <option value="aborted">已中止</option>
+                  <option value="cancelled">已取消</option>
+                </select>
+              </label>
               <label class="field-block gap-1">
                 <span class="field-label">创建开始</span>
                 <input x-model="runtimeFilters.created_from" type="date" class="input-field h-10 px-3 py-0" />
