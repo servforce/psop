@@ -94,6 +94,7 @@ class Run(Base):
 class SessionTokenSnapshot(Base):
     __tablename__ = "session_token_snapshot"
     __table_args__ = (
+        UniqueConstraint("run_id", "seq_no", name="uk_session_token_snapshot_run_seq"),
         Index("idx_session_token_snapshot_run_seq", "run_id", "seq_no"),
     )
 
@@ -110,6 +111,7 @@ class SessionTokenSnapshot(Base):
 class TraceEvent(Base):
     __tablename__ = "trace_event"
     __table_args__ = (
+        UniqueConstraint("run_id", "seq_no", name="uk_trace_event_run_seq"),
         Index("idx_trace_event_run_phase_seq", "run_id", "phase", "seq_no"),
         Index("idx_trace_event_span_id", "span_id"),
     )

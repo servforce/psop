@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any
 
 from app.agent_harness.events import AgentEventWriter
+from app.agent_harness.errors import AgentDeadlineExceededError
 from app.agent_harness.sandbox.base import AgentSandbox
 from app.agent_harness.schemas import AgentArtifact, AgentDefinition, AgentInvocation, AgentResult
 
@@ -100,6 +103,7 @@ class LangChainAgentExecutor:
         definition: AgentDefinition,
         sandbox: AgentSandbox,
         event_writer: AgentEventWriter,
+        before_provider_call: Callable[[], None] | None = None,
     ) -> AgentResult:
         messages: list[Any] = [_initial_user_message(invocation)]
         if invocation.attachments:
@@ -119,10 +123,14 @@ class LangChainAgentExecutor:
         artifacts: list[AgentArtifact] = []
         required_artifact = _required_artifact_contract(definition)
         for continuation_index in range(_max_continuations(definition) + 1):
+            _check_deadline(invocation)
+            if before_provider_call is not None:
+                before_provider_call()
             result = agent.invoke(
                 {"messages": messages},
                 context={"agent_run_id": sandbox.agent_run_id, "sandbox_id": sandbox.sandbox_id},
             )
+            _check_deadline(invocation)
             artifacts = _collect_artifacts(sandbox)
             if required_artifact is None:
                 break
@@ -209,6 +217,13 @@ class LangChainAgentExecutor:
             sandbox_path=str(sandbox.root_path),
             workspace_path=str(sandbox.workspace_path),
         )
+
+
+def _check_deadline(invocation: AgentInvocation) -> None:
+    if invocation.deadline_monotonic is None:
+        return
+    if time.monotonic() >= invocation.deadline_monotonic:
+        raise AgentDeadlineExceededError("Agent invocation exceeded its runtime step deadline.")
 
 
 def _initial_user_message(invocation: AgentInvocation) -> dict[str, Any]:

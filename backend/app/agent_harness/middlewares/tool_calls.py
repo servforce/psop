@@ -13,7 +13,7 @@ from langgraph.errors import GraphBubbleUp
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
-from app.agent_harness.errors import AgentBudgetExceededError
+from app.agent_harness.errors import AgentBudgetExceededError, AgentDeadlineExceededError
 from app.agent_harness.events import AgentEventWriter
 
 
@@ -23,10 +23,12 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
         event_writer: AgentEventWriter,
         *,
         max_error_counts: dict[str, int] | None = None,
+        deadline_monotonic: float | None = None,
     ) -> None:
         super().__init__()
         self.event_writer = event_writer
         self.max_error_counts = max_error_counts or {}
+        self.deadline_monotonic = deadline_monotonic
         self._error_counts: dict[str, int] = {}
 
     @override
@@ -35,12 +37,13 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
+        self._check_deadline()
         started_at = time.perf_counter()
         payload = _tool_payload(request)
         self.event_writer.record("agent.tool.started", payload)
         try:
             result = handler(request)
-        except GraphBubbleUp:
+        except (GraphBubbleUp, AgentDeadlineExceededError):
             raise
         except Exception as exc:
             failed_payload = {
@@ -59,6 +62,7 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
                 }
             )
             return _error_tool_message(request, exc)
+        self._check_deadline()
         completed_payload = {**payload, **_tool_result_payload(result), "duration_ms": _elapsed_ms(started_at)}
         self.event_writer.record("agent.tool.completed", completed_payload)
         self._check_error_budget(completed_payload)
@@ -70,12 +74,13 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
     ) -> ToolMessage | Command:
+        self._check_deadline()
         started_at = time.perf_counter()
         payload = _tool_payload(request)
         self.event_writer.record("agent.tool.started", payload)
         try:
             result = await handler(request)
-        except GraphBubbleUp:
+        except (GraphBubbleUp, AgentDeadlineExceededError):
             raise
         except Exception as exc:
             failed_payload = {
@@ -94,10 +99,16 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
                 }
             )
             return _error_tool_message(request, exc)
+        self._check_deadline()
         completed_payload = {**payload, **_tool_result_payload(result), "duration_ms": _elapsed_ms(started_at)}
         self.event_writer.record("agent.tool.completed", completed_payload)
         self._check_error_budget(completed_payload)
         return result
+
+    def _check_deadline(self) -> None:
+        if self.deadline_monotonic is None or time.monotonic() < self.deadline_monotonic:
+            return
+        raise AgentDeadlineExceededError("Agent invocation exceeded its runtime step deadline.")
 
     def _check_error_budget(self, payload: dict[str, Any]) -> None:
         tool_name = str(payload.get("tool_name") or "")

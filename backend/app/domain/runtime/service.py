@@ -4,10 +4,12 @@ import base64
 import hashlib
 import json
 import logging
+import time
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agent_harness.agents.psop.runner.schemas import (
@@ -19,10 +21,10 @@ from app.agent_harness.schemas import AgentInvocation, AgentInvocationAttachment
 from app.agent_harness.service import AgentHarnessService
 from app.core.config import Settings
 from app.core.logging import log_context
-from app.core.observability import record_span_exception, start_span
+from app.core.observability import add_metric_counter, record_span_exception, start_span
 from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.jobs.models import RuntimeJob
-from app.domain.jobs.repository import JobRepository
+from app.domain.jobs.repository import JobLease, JobRepository
 from app.domain.jobs.schemas import RuntimeJobResponse
 from app.domain.runtime.events import NoopRuntimeEventSink, RuntimeEventSink
 from app.domain.runtime.models import (
@@ -72,6 +74,14 @@ RUNTIME_LLM_LANGUAGE_POLICY = """平台级输出语言要求：
 - 如果当前节点要求只输出 JSON，不要在 JSON 外追加任何说明。"""
 
 
+class RuntimeStepTimeoutError(TimeoutError):
+    """Raised when one Execution Graph node exhausts its shared time budget."""
+
+
+class RuntimeLeaseLostError(RuntimeError):
+    """Raised when an attempt no longer owns the durable runtime job."""
+
+
 class RuntimeService:
     """Invocation, RuntimeKernel and Replay service for the issue #1 MVP slice."""
 
@@ -86,6 +96,7 @@ class RuntimeService:
         object_store: ObjectStoreService | None = None,
         agent_harness_service: AgentHarnessService,
         runtime_event_sink: RuntimeEventSink | None = None,
+        lease_is_healthy: Callable[[], bool] | None = None,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
@@ -95,6 +106,8 @@ class RuntimeService:
         self.object_store = object_store
         self.agent_harness_service = agent_harness_service
         self.runtime_event_sink = runtime_event_sink or NoopRuntimeEventSink()
+        self._lease_is_healthy = lease_is_healthy
+        self._active_job_lease: JobLease | None = None
 
     def create_invocation(self, session: Session, payload: CreateInvocationRequest) -> InvocationResponse:
         skill_definition = self.repository.get_skill_definition_by_key(session, payload.skill_key)
@@ -374,11 +387,34 @@ class RuntimeService:
             raise SkillNotFoundError("Fork Invocation 创建后无法读取。")
         return self._build_invocation_response(session, refreshed)
 
-    def process_run(self, session: Session, run_id: str) -> Run:
+    def process_run(
+        self,
+        session: Session,
+        run_id: str,
+        *,
+        job_lease: JobLease | None = None,
+    ) -> Run:
+        self._active_job_lease = job_lease
         run = self.repository.get_run(session, run_id)
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        job = self.job_repository.get_runtime_job_by_dedupe_key_for_update(
+            session,
+            f"job:runtime:{run.id}",
+        )
+        if job_lease is not None:
+            if job is None or job.id != job_lease.job_id:
+                raise RuntimeLeaseLostError("Runtime job 与当前 lease 不匹配。")
+            self._validate_active_job_lease(session)
         if run.status in {"succeeded", "failed", "cancelled", "aborted"}:
+            if job is not None:
+                job.status = "succeeded" if run.status in {"succeeded", "aborted"} else run.status
+                job.worker_name = ""
+                job.lease_until = None
+                job.finished_at = job.finished_at or now_utc()
+                if run.status == "failed":
+                    job.last_error = run.exit_reason
+                session.commit()
             return run
         publish_terminal_seq = run.latest_terminal_seq
         publish_trace_seq = run.latest_trace_seq
@@ -400,7 +436,6 @@ class RuntimeService:
         ):
             LOGGER.info("runtime loop started")
 
-        job = self.job_repository.get_runtime_job_by_dedupe_key(session, f"job:runtime:{run.id}")
         if job:
             if job.status != "running":
                 job.attempt_no += 1
@@ -434,6 +469,11 @@ class RuntimeService:
                 )
                 LOGGER.info("runtime loop waiting for terminal evidence")
                 return run
+            # Persist the attempt marker and release the initial read transaction.
+            # The selected node may now perform object-store/model/tool I/O without
+            # retaining a Run row lock or a database checkout.
+            session.commit()
+            session.info.pop("runtime_lease_fence", None)
             max_steps = int(artifact_payload.get("policies", {}).get("max_steps") or 16)
             with start_span(
                 "runtime.loop",
@@ -471,6 +511,7 @@ class RuntimeService:
                         raise RuntimeError("Runtime deadlock: no enabled nodes and no wait condition matched.")
 
                     node = self._select_node(enabled_nodes)
+                    expected_snapshot_seq = run.latest_snapshot_seq
                     with start_span(
                         "runtime.actor",
                         run_id=run.id,
@@ -494,6 +535,11 @@ class RuntimeService:
                         except Exception as exc:
                             record_span_exception(actor_span, exc)
                             raise
+                    run = self._lock_runtime_write(
+                        session,
+                        run_id=run.id,
+                        expected_snapshot_seq=expected_snapshot_seq,
+                    )
                     token = self._merge_observation(node=node, token=token, observation=observation)
                     token, entered_wait = self._apply_node_interaction(
                         session,
@@ -583,6 +629,9 @@ class RuntimeService:
             LOGGER.info("runtime loop succeeded", extra={"final_output_length": len(run.final_output or "")})
             return run
         except Exception as exc:
+            if isinstance(exc, RuntimeLeaseLostError):
+                session.rollback()
+                raise
             if self._is_recoverable_terminal_turn_failure(token):
                 self._recover_terminal_turn_failure(
                     session,
@@ -602,6 +651,12 @@ class RuntimeService:
                 )
                 LOGGER.exception("runtime turn processing failed; returned to waiting input", extra={"error": str(exc)})
                 return run
+
+            if isinstance(exc, RuntimeStepTimeoutError):
+                # Initialization/instruction turns are retried by the durable job
+                # worker. Do not publish a partially executed node as final state.
+                session.rollback()
+                raise
 
             run.status = "failed"
             run.runtime_phase = "failed"
@@ -635,6 +690,61 @@ class RuntimeService:
             LOGGER.exception("runtime loop failed", extra={"error": str(exc)})
             return run
 
+    def finalize_exhausted_job(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+        error_message: str,
+    ) -> bool:
+        """Idempotently terminate the domain state for an exhausted runtime job."""
+
+        self._active_job_lease = None
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
+        if job is None or job.job_type != "runtime" or not job.run_id:
+            return False
+        run = self.repository.get_run_for_update(session, job.run_id)
+        if run is None or run.status in {"succeeded", "failed", "cancelled", "aborted"}:
+            return False
+
+        previous_terminal_seq = run.latest_terminal_seq
+        previous_trace_seq = run.latest_trace_seq
+        reason = error_message.strip() or "Runtime job attempts exhausted."
+        run.status = "failed"
+        run.runtime_phase = "failed"
+        run.exit_reason = self._truncate_exit_reason(reason)
+        run.ended_at = now_utc()
+        invocation = self.repository.get_invocation(session, run.invocation_id)
+        if invocation is not None:
+            invocation.status = "failed"
+        job.status = "failed"
+        job.worker_name = ""
+        job.lease_until = None
+        job.last_error = reason
+        failure_trace = self._append_trace_event(
+            session,
+            run=run,
+            phase="failed",
+            event_type="runtime.job.attempts_exhausted",
+            payload={"error": reason, "job_id": job.id, "recoverable": False},
+        )
+        session.flush()
+        self._append_runtime_failure_terminal_event(
+            session,
+            run=run,
+            error=reason,
+            trace_event=failure_trace,
+        )
+        self._close_terminal_session(session, run)
+        self._commit_and_publish(
+            session,
+            run_id=run.id,
+            previous_terminal_seq=previous_terminal_seq,
+            previous_trace_seq=previous_trace_seq,
+            terminal_directions={"output"},
+        )
+        return True
+
     def list_invocations(
         self,
         session: Session,
@@ -666,7 +776,11 @@ class RuntimeService:
         return self._build_run_response(session, run)
 
     def cancel_run(self, session: Session, run_id: str, *, reason: str = "cancelled by user") -> RunResponse:
-        run = self.repository.get_run(session, run_id)
+        job = self.job_repository.get_runtime_job_by_dedupe_key_for_update(
+            session,
+            f"job:runtime:{run_id}",
+        )
+        run = self.repository.get_run_for_update(session, run_id)
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
         if run.status == "cancelled":
@@ -674,6 +788,8 @@ class RuntimeService:
         if run.status in {"succeeded", "failed", "aborted"}:
             raise SkillValidationError("Run 已结束，不能取消。", details={"run_id": run_id, "status": run.status})
 
+        previous_terminal_seq = run.latest_terminal_seq
+        previous_trace_seq = run.latest_trace_seq
         invocation = self.repository.get_invocation(session, run.invocation_id)
         run.status = "cancelled"
         run.runtime_phase = "cancelled"
@@ -690,11 +806,18 @@ class RuntimeService:
             event_type="runtime.cancelled",
             payload={"reason": reason},
         )
-        job = self.job_repository.get_runtime_job_by_dedupe_key(session, f"job:runtime:{run.id}")
         if job and job.status not in {"succeeded", "failed", "cancelled"}:
             job.status = "cancelled"
             job.last_error = reason
-        session.commit()
+            job.worker_name = ""
+            job.lease_until = None
+            job.finished_at = now_utc()
+        self._commit_and_publish(
+            session,
+            run_id=run_id,
+            previous_terminal_seq=previous_terminal_seq,
+            previous_trace_seq=previous_trace_seq,
+        )
         return self._build_run_response(session, run)
 
     def list_snapshots(self, session: Session, run_id: str) -> list[SessionTokenSnapshotResponse]:
@@ -711,6 +834,26 @@ class RuntimeService:
             self._build_trace_event_response(item)
             for item in self.repository.list_trace_events(session, run_id, event_type=event_type)
         ]
+
+    def runtime_event_envelope(self, session: Session, *, event_type: str, run_id: str, seq_no: int) -> dict[str, Any] | None:
+        if event_type == "terminal.event.appended":
+            record = self.repository.get_terminal_event_by_seq(session, run_id, seq_no)
+            response = self._build_terminal_event_response(session, record) if record is not None else None
+        elif event_type == "trace.event.appended":
+            record = self.repository.get_trace_event_by_seq(session, run_id, seq_no)
+            response = self._build_trace_event_response(record) if record is not None else None
+        else:
+            return None
+        if response is None:
+            return None
+        return {
+            "event_type": event_type,
+            "run_id": run_id,
+            "invocation_id": None,
+            "seq_no": seq_no,
+            "occurred_at": response.occurred_at.isoformat(),
+            "payload": response.model_dump(mode="json"),
+        }
 
     def get_terminal_session(self, session: Session, run_id: str) -> TerminalSessionDetailResponse:
         terminal_session = self.repository.get_terminal_session_for_run(session, run_id)
@@ -773,6 +916,10 @@ class RuntimeService:
         idempotency_key: str | None = None,
         process_after_append: bool = False,
     ) -> TerminalEventAppendResponse:
+        runtime_job = self.job_repository.get_runtime_job_by_dedupe_key_for_update(
+            session,
+            f"job:runtime:{run_id}",
+        )
         run = self.repository.get_run_for_update(session, run_id)
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
@@ -817,7 +964,7 @@ class RuntimeService:
             occurred_at=payload.occurred_at,
         )
         if payload.direction == "input":
-            self._ensure_runtime_job_pending(session, run)
+            self._ensure_runtime_job_pending(session, run, existing_job=runtime_job)
         if run.status == "waiting_input" and process_after_append:
             self._commit_and_publish(
                 session,
@@ -877,9 +1024,15 @@ class RuntimeService:
         run_id: str,
         payload: ResolveRunBindingsRequest,
     ) -> list[RunCapabilityBindingResponse]:
-        run = self.repository.get_run(session, run_id)
+        self.job_repository.get_runtime_job_by_dedupe_key_for_update(
+            session,
+            f"job:runtime:{run_id}",
+        )
+        run = self.repository.get_run_for_update(session, run_id)
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        previous_terminal_seq = run.latest_terminal_seq
+        previous_trace_seq = run.latest_trace_seq
         terminal_session = self.repository.get_terminal_session_for_run(session, run_id)
         if not terminal_session:
             raise SkillValidationError("当前 Run 没有 Terminal Session。", details={"run_id": run_id})
@@ -908,6 +1061,7 @@ class RuntimeService:
                 existing.target_ref = item.target_ref or terminal_session.id
                 existing.channel = item.channel
                 existing.status = "active"
+        session.flush()
         bindings = self.repository.list_run_bindings(session, run_id)
         self._append_trace_event(
             session,
@@ -916,7 +1070,12 @@ class RuntimeService:
             event_type="binding.updated",
             payload={"bindings": [self._binding_payload(item) for item in bindings]},
         )
-        session.commit()
+        self._commit_and_publish(
+            session,
+            run_id=run_id,
+            previous_terminal_seq=previous_terminal_seq,
+            previous_trace_seq=previous_trace_seq,
+        )
         return [self._build_run_binding_response(item) for item in bindings]
 
     def list_runtime_jobs(
@@ -1939,11 +2098,21 @@ class RuntimeService:
     ) -> None:
         latest_evidence = token.get("control", {}).get("latest_evidence") if isinstance(token.get("control"), dict) else {}
         error_text = str(error)
+        if isinstance(error, RuntimeStepTimeoutError):
+            add_metric_counter(
+                "psop.jobs.step_timeout",
+                attributes={"recoverable": True},
+                description="Runtime steps that exhausted their shared deadline",
+            )
         failure_trace = self._append_trace_event(
             session,
             run=run,
             phase="waiting",
-            event_type="runtime.message_processing.failed",
+            event_type=(
+                "runtime.step.timeout"
+                if isinstance(error, RuntimeStepTimeoutError)
+                else "runtime.message_processing.failed"
+            ),
             payload=self._runtime_exception_trace_payload(
                 error,
                 recoverable=True,
@@ -2642,6 +2811,48 @@ class RuntimeService:
         session.flush()
         return bindings
 
+    def _validate_active_job_lease(self, session: Session) -> RuntimeJob | None:
+        lease = self._active_job_lease
+        if lease is None:
+            return None
+        if self._lease_is_healthy is not None and not self._lease_is_healthy():
+            raise RuntimeLeaseLostError("Runtime advisory lock 已失效，丢弃本次 observation。")
+        transaction = session.get_transaction()
+        fence_marker = (lease.owner, id(transaction)) if transaction is not None else None
+        if session.info.get("runtime_lease_fence") == fence_marker:
+            return session.get(RuntimeJob, lease.job_id)
+        job = session.scalar(
+            select(RuntimeJob)
+            .where(
+                RuntimeJob.id == lease.job_id,
+                RuntimeJob.status == "running",
+                RuntimeJob.worker_name == lease.owner,
+                RuntimeJob.lease_until.is_not(None),
+                RuntimeJob.lease_until > now_utc(),
+            )
+            .with_for_update()
+        )
+        if job is None:
+            raise RuntimeLeaseLostError("Runtime job lease 已失效，丢弃本次 observation。")
+        transaction = session.get_transaction()
+        session.info["runtime_lease_fence"] = (lease.owner, id(transaction))
+        return job
+
+    def _lock_runtime_write(
+        self,
+        session: Session,
+        *,
+        run_id: str,
+        expected_snapshot_seq: int,
+    ) -> Run:
+        self._validate_active_job_lease(session)
+        run = self.repository.get_run_for_update(session, run_id)
+        if run is None:
+            raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+        if run.latest_snapshot_seq != expected_snapshot_seq:
+            raise RuntimeLeaseLostError("Runtime snapshot 版本已变化，丢弃本次 observation。")
+        return run
+
     def _commit_and_publish(
         self,
         session: Session,
@@ -2651,20 +2862,32 @@ class RuntimeService:
         previous_trace_seq: int,
         terminal_directions: set[str] | None = None,
     ) -> tuple[int, int]:
+        self._validate_active_job_lease(session)
         session.flush()
         run = self.repository.get_run(session, run_id)
         terminal_upper_seq = run.latest_terminal_seq if run else previous_terminal_seq
         trace_upper_seq = run.latest_trace_seq if run else previous_trace_seq
         session.commit()
-        self._publish_runtime_events_after(
-            session,
-            run_id=run_id,
-            previous_terminal_seq=previous_terminal_seq,
-            previous_trace_seq=previous_trace_seq,
-            terminal_upper_seq=terminal_upper_seq,
-            trace_upper_seq=trace_upper_seq,
-            terminal_directions=terminal_directions,
-        )
+        session.info.pop("runtime_lease_fence", None)
+        try:
+            self._publish_runtime_events_after(
+                session,
+                run_id=run_id,
+                previous_terminal_seq=previous_terminal_seq,
+                previous_trace_seq=previous_trace_seq,
+                terminal_upper_seq=terminal_upper_seq,
+                trace_upper_seq=trace_upper_seq,
+                terminal_directions=terminal_directions,
+            )
+        except Exception:
+            session.rollback()
+            # Event delivery is a post-commit hint. REST/from_seq remains
+            # authoritative and a transport failure must not fail the write.
+            LOGGER.exception("runtime event publish failed after commit", extra={"run_id": run_id})
+        else:
+            # Event hydration uses a new read transaction after the formal
+            # commit. Close it before the next node can perform external I/O.
+            session.commit()
         return terminal_upper_seq, trace_upper_seq
 
     def _publish_runtime_events_after(
@@ -2724,6 +2947,7 @@ class RuntimeService:
     ) -> None:
         if not job:
             return
+        self._validate_active_job_lease(session)
         payload = dict(job.payload or {})
         payload.pop("rerun_requested", None)
         job.payload = payload or {"run_id": run.id}
@@ -2736,10 +2960,13 @@ class RuntimeService:
             job.available_at = now_utc()
             job.lease_until = None
             job.worker_name = ""
+            job.finished_at = None
             job.last_error = ""
             return
         job.status = status
         job.lease_until = None
+        job.worker_name = ""
+        job.finished_at = now_utc() if status in {"succeeded", "failed", "cancelled"} else None
         job.last_error = last_error
 
     def _has_unsynced_terminal_inputs(self, session: Session, *, run_id: str, token: dict[str, Any]) -> bool:
@@ -2749,8 +2976,17 @@ class RuntimeService:
             for event in self.repository.list_terminal_events(session, run_id, from_seq=cursor + 1)
         )
 
-    def _ensure_runtime_job_pending(self, session: Session, run: Run) -> RuntimeJob:
-        job = self.job_repository.get_runtime_job_by_dedupe_key(session, f"job:runtime:{run.id}")
+    def _ensure_runtime_job_pending(
+        self,
+        session: Session,
+        run: Run,
+        *,
+        existing_job: RuntimeJob | None = None,
+    ) -> RuntimeJob:
+        job = existing_job or self.job_repository.get_runtime_job_by_dedupe_key_for_update(
+            session,
+            f"job:runtime:{run.id}",
+        )
         if job:
             payload = dict(job.payload or {})
             if job.status == "running":
@@ -2994,12 +3230,14 @@ class RuntimeService:
             user_input = self._extract_user_input(token.get("input_envelope", {}), artifact_payload)
             return {"user_input": user_input, "summary": "已接收用户输入。"}
         if kind == "llm" or actor_name == "agent.llm":
+            deadline_monotonic = time.monotonic() + self.settings.runtime_step_timeout_seconds
             return self._execute_runner_agent_node(
                 session=session,
                 run=run,
                 node=node,
                 token=token,
                 artifact_payload=artifact_payload,
+                deadline_monotonic=deadline_monotonic,
             )
         if kind == "tool" or actor_name == "capability.demo_tool":
             user_input = self._extract_user_input(token.get("input_envelope", {}), artifact_payload)
@@ -3034,6 +3272,7 @@ class RuntimeService:
         node: dict[str, Any],
         token: dict[str, Any],
         artifact_payload: dict[str, Any],
+        deadline_monotonic: float,
     ) -> dict[str, Any]:
         invocation = self._build_runner_invocation(
             session=session,
@@ -3041,6 +3280,7 @@ class RuntimeService:
             node=node,
             token=token,
             artifact_payload=artifact_payload,
+            deadline_monotonic=deadline_monotonic,
         )
         with start_span("runtime.agent.invoke", agent_key="psop.runner", node_id=node.get("id"), run_id=run.id):
             result = self.agent_harness_service.invoke(
@@ -3052,7 +3292,17 @@ class RuntimeService:
                     "live_events_enabled": "false",
                 },
             )
+        self._ensure_runtime_deadline(deadline_monotonic)
         if result.status != "succeeded":
+            if result.structured_output.get("error_type") in {
+                "AgentDeadlineExceededError",
+                "TimeoutError",
+                "APITimeoutError",
+                "ReadTimeout",
+                "ConnectTimeout",
+                "TimeoutException",
+            }:
+                raise RuntimeStepTimeoutError("Runtime 节点执行超过总时限。")
             raise RuntimeError(f"psop.runner 执行失败：{result.error_message or result.final_output}")
         observation = self._read_runner_observation_artifact(result)
         observation = validate_runner_observation(
@@ -3078,6 +3328,7 @@ class RuntimeService:
         node: dict[str, Any],
         token: dict[str, Any],
         artifact_payload: dict[str, Any],
+        deadline_monotonic: float,
     ) -> AgentInvocation:
         node_id = str(node.get("id") or "")
         actor_name = _actor_name(node.get("actor"))
@@ -3102,6 +3353,7 @@ class RuntimeService:
             run=run,
             node=node,
             token=token,
+            deadline_monotonic=deadline_monotonic,
         )
         if attachments:
             context["input_attachments"] = [attachment.redacted_metadata() for attachment in attachments]
@@ -3130,6 +3382,7 @@ class RuntimeService:
             context=context,
             attachments=attachments,
             memory_scope=f"psop.runner:{run.id}",
+            deadline_monotonic=deadline_monotonic,
         )
 
     def _build_runner_context(
@@ -3295,6 +3548,7 @@ class RuntimeService:
         run: Run,
         node: dict[str, Any],
         token: dict[str, Any],
+        deadline_monotonic: float,
     ) -> list[AgentInvocationAttachment]:
         latest_evidence = _get_path(token, "control.latest_evidence")
         if not isinstance(latest_evidence, dict):
@@ -3313,6 +3567,7 @@ class RuntimeService:
             if isinstance(part, dict) and str(part.get("kind") or "").lower() == "image"
         ]
         for part in image_parts:
+            self._ensure_runtime_deadline(deadline_monotonic)
             part_id = str(part.get("part_id") or "").strip()
             source_ref = f"terminal_event:{seq_no}:{part_id}" if part_id else f"terminal_event:{seq_no}"
             if len(attachments) >= RUNNER_MAX_IMAGE_ATTACHMENTS:
@@ -3331,9 +3586,11 @@ class RuntimeService:
                 node=node,
                 seq_no=seq_no,
                 part=part,
+                deadline_monotonic=deadline_monotonic,
             )
             if attachment is not None:
                 attachments.append(attachment)
+        self._commit_before_runtime_external_io(session)
         return attachments
 
     def _resolve_runner_image_attachment(
@@ -3344,6 +3601,7 @@ class RuntimeService:
         node: dict[str, Any],
         seq_no: int,
         part: dict[str, Any],
+        deadline_monotonic: float,
     ) -> AgentInvocationAttachment | None:
         part_id = str(part.get("part_id") or "").strip()
         source_ref = f"terminal_event:{seq_no}:{part_id}" if part_id else f"terminal_event:{seq_no}"
@@ -3379,18 +3637,6 @@ class RuntimeService:
                 reason="object_store_unavailable",
             )
             return None
-        try:
-            content = self.object_store.download_bytes(bucket=artifact_object.bucket, object_key=artifact_object.object_key)
-        except Exception as exc:  # pragma: no cover - exercised by integration fakes.
-            self._append_runner_attachment_warning(
-                session,
-                run=run,
-                node=node,
-                source_ref=source_ref,
-                artifact_object_id=artifact_object_id,
-                reason=f"download_failed:{exc.__class__.__name__}",
-            )
-            return None
         metadata = part.get("metadata") if isinstance(part.get("metadata"), dict) else {}
         filename = str(metadata.get("filename") or metadata.get("name") or part_id or artifact_object_id)
         media_type = str(part.get("mime_type") or artifact_object.media_type or "application/octet-stream")
@@ -3404,6 +3650,26 @@ class RuntimeService:
                 reason="unsupported_media_type",
             )
             return None
+        self._commit_before_runtime_external_io(session)
+        try:
+            content = self._download_runner_attachment_bytes(
+                bucket=artifact_object.bucket,
+                object_key=artifact_object.object_key,
+                deadline_monotonic=deadline_monotonic,
+            )
+        except RuntimeStepTimeoutError:
+            raise
+        except Exception as exc:  # pragma: no cover - exercised by integration fakes.
+            self._append_runner_attachment_warning(
+                session,
+                run=run,
+                node=node,
+                source_ref=source_ref,
+                artifact_object_id=artifact_object_id,
+                reason=f"download_failed:{exc.__class__.__name__}",
+            )
+            return None
+        self._ensure_runtime_deadline(deadline_monotonic)
         return AgentInvocationAttachment(
             attachment_id=source_ref,
             source_ref=source_ref,
@@ -3416,6 +3682,54 @@ class RuntimeService:
             artifact_object_id=artifact_object_id,
             content_base64=base64.b64encode(content).decode("ascii"),
         )
+
+    @staticmethod
+    def _ensure_runtime_deadline(deadline_monotonic: float) -> None:
+        if time.monotonic() >= deadline_monotonic:
+            raise RuntimeStepTimeoutError("Runtime 节点执行超过总时限。")
+
+    def _download_runner_attachment_bytes(
+        self,
+        *,
+        bucket: str,
+        object_key: str,
+        deadline_monotonic: float,
+    ) -> bytes:
+        def object_io(operation, /, *args, **kwargs):
+            call_io = getattr(self.object_store, "call_io", None)
+            if callable(call_io):
+                return call_io(operation, *args, **kwargs)
+            return operation(*args, **kwargs)
+
+        self._ensure_runtime_deadline(deadline_monotonic)
+        open_download = getattr(self.object_store, "open_download", None)
+        if not callable(open_download):
+            content = object_io(
+                self.object_store.download_bytes,
+                bucket=bucket,
+                object_key=object_key,
+            )
+            self._ensure_runtime_deadline(deadline_monotonic)
+            return content
+        download = object_io(open_download, bucket=bucket, object_key=object_key)
+        chunks: list[bytes] = []
+        try:
+            while True:
+                self._ensure_runtime_deadline(deadline_monotonic)
+                chunk = object_io(download.read, 256 * 1024)
+                self._ensure_runtime_deadline(deadline_monotonic)
+                if not chunk:
+                    return b"".join(chunks)
+                chunks.append(chunk)
+        finally:
+            object_io(download.close)
+
+    def _commit_before_runtime_external_io(self, session: Session) -> None:
+        if not session.in_transaction():
+            return
+        self._validate_active_job_lease(session)
+        session.commit()
+        session.info.pop("runtime_lease_fence", None)
 
     def _runner_prompt_view(self, *, run: Run, node: dict[str, Any], token: dict[str, Any]) -> dict[str, Any]:
         control = token.get("control") if isinstance(token.get("control"), dict) else {}

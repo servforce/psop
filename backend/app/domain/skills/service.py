@@ -846,7 +846,7 @@ class SkillsService:
         return self._build_raw_material_analysis_response(session, analysis)
 
     def process_raw_material_analysis_job(self, session: Session, job_id: str) -> SkillRawMaterialAnalysis:
-        job = self.job_repository.get_runtime_job(session, job_id)
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
         if not job:
             raise SkillNotFoundError("未找到素材分析任务。", details={"job_id": job_id})
         analysis_id = str((job.payload or {}).get("analysis_id") or "")
@@ -937,6 +937,43 @@ class SkillsService:
             LOGGER.exception("raw material analysis failed", extra={"material_id": material.id, "job_id": job_id})
             return analysis
 
+    def finalize_exhausted_raw_material_analysis_job(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+        error_message: str,
+    ) -> bool:
+        """Idempotently fail analysis-owned state without committing the reaper transaction."""
+
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
+        if job is None or job.job_type != "raw_material_analysis":
+            return False
+        analysis_id = str((job.payload or {}).get("analysis_id") or "")
+        if not analysis_id:
+            return False
+        analysis = self.repository.get_raw_material_analysis_for_update(session, analysis_id)
+        if analysis is None or analysis.status in {"ready", "failed"}:
+            return False
+
+        reason = error_message.strip() or "Raw material analysis job attempts exhausted."
+        error_details = {
+            "error_type": "JobAttemptsExhausted",
+            "message": reason,
+            "job_id": job.id,
+        }
+        material = self.repository.get_raw_material_for_update(session, analysis.raw_material_id)
+        analysis.status = "failed"
+        analysis.error_message = reason
+        analysis.error_details = error_details
+        analysis.ended_at = analysis.ended_at or now_utc()
+        if material is not None:
+            analysis.analysis_result = self._failed_material_analysis_result(material, error_details)
+            if material.status != "archived":
+                material.status = "failed"
+                material.error_message = reason
+        return True
+
     def generate_skill_draft_from_raw_materials(
         self,
         session: Session,
@@ -1022,7 +1059,7 @@ class SkillsService:
         session: Session,
         job_id: str,
     ) -> SkillRawMaterialGeneration:
-        job = self.job_repository.get_runtime_job(session, job_id)
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
         if not job:
             raise SkillNotFoundError("未找到 Skill 生成任务。", details={"job_id": job_id})
         if job.job_type != SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE:
@@ -1091,6 +1128,37 @@ class SkillsService:
                 extra={"generation_id": generation.id, "job_id": job_id},
             )
             return generation
+
+    def finalize_exhausted_raw_material_generation_job(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+        error_message: str,
+    ) -> bool:
+        """Idempotently fail generation-owned state without committing the reaper transaction."""
+
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
+        if job is None or job.job_type != SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE:
+            return False
+        generation_id = str((job.payload or {}).get("generation_id") or "")
+        if not generation_id:
+            return False
+        generation = self.repository.get_raw_material_generation_for_update(session, generation_id)
+        if generation is None or generation.status in {"succeeded", "failed", "cancelled"}:
+            return False
+
+        reason = error_message.strip() or "Skill raw material generation job attempts exhausted."
+        generation.status = "failed"
+        generation.error_message = reason
+        generation.raw_response = {
+            **(generation.raw_response or {}),
+            "error": reason,
+            "error_type": "JobAttemptsExhausted",
+            "error_details": {"message": reason, "job_id": job.id},
+        }
+        job.payload = self._set_skill_generation_job_stage(job.payload, "failed", "failed", reason)
+        return True
 
     def _run_skill_raw_material_generation(
         self,

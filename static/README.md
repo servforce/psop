@@ -1,21 +1,12 @@
-# PSOP Static Admin Scaffold
+# PSOP Static Web
 
-This directory now keeps only the frontend scaffold that is independent from the old business UI.
+该目录包含 PSOP 的静态管理端与运行终端，使用本地 TailwindCSS v4、Alpine.js
+和 Jest，不依赖新的前端框架。
 
-## What remains
+运行页对 terminal、IO 和 Replay 采用首次激活挂载并保留 DOM 的策略；媒体 part
+按 MIME/kind 归一后互斥渲染，图片 lazy/async 解码，音视频在用户播放前不预加载。
 
-- `TailwindCSS v4` local build pipeline
-- `Alpine.js` shell for simple interactive pages
-- Static preview server and Jest setup
-- Generic admin homepage that explains the preserved scaffold
-
-## What was removed
-
-- Legacy Skills list and detail pages
-- Legacy page fragments and page-specific Alpine components
-- Old mock data tied to the previous business flows
-
-## Local development
+## 本地开发
 
 ```bash
 cd static
@@ -24,7 +15,7 @@ npm run build:css
 npm run dev
 ```
 
-Or from the repo root:
+或从仓库根目录运行：
 
 ```bash
 scripts/dev/build-web.sh

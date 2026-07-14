@@ -21,6 +21,13 @@ class CompilerRepository:
     def get_compile_request(self, session: Session, request_id: str) -> SkillCompileRequest | None:
         return session.get(SkillCompileRequest, request_id)
 
+    def get_compile_request_for_update(self, session: Session, request_id: str) -> SkillCompileRequest | None:
+        return session.scalar(
+            select(SkillCompileRequest)
+            .where(SkillCompileRequest.id == request_id)
+            .with_for_update()
+        )
+
     def get_compile_request_by_dedupe_key(self, session: Session, dedupe_key: str) -> SkillCompileRequest | None:
         return session.scalar(select(SkillCompileRequest).where(SkillCompileRequest.dedupe_key == dedupe_key))
 
@@ -57,4 +64,3 @@ class CompilerRepository:
                 .order_by(CompileDiagnostic.created_at.asc())
             ).all()
         )
-

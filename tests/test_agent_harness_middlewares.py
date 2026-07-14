@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 from langchain.agents.middleware.types import ModelRequest
@@ -8,7 +9,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
-from app.agent_harness.errors import AgentBudgetExceededError
+from app.agent_harness.errors import AgentBudgetExceededError, AgentDeadlineExceededError
 from app.agent_harness.events import AgentEventWriter
 from app.agent_harness.middlewares.dangling_tool_call import DanglingToolCallMiddleware
 from app.agent_harness.middlewares.model_events import ModelCallEventMiddleware
@@ -131,6 +132,54 @@ def test_model_call_event_middleware_stops_after_call_limit(tmp_path) -> None:
 
     assert writer.events[-1].event_type == "agent.budget.exceeded"
     assert writer.events[-1].payload["budget_type"] == "model_calls"
+
+
+def test_model_and_tool_middleware_fence_expired_runtime_deadline(tmp_path) -> None:
+    writer = AgentEventWriter(tmp_path / "events.jsonl")
+    expired = time.monotonic() - 1
+    model_middleware = ModelCallEventMiddleware(writer, deadline_monotonic=expired)
+    model_request = ModelRequest(
+        model=FakeListChatModel(responses=["ok"]),
+        messages=[HumanMessage(content="hello")],
+        tools=[],
+    )
+    tool_middleware = ToolCallMiddleware(writer, deadline_monotonic=expired)
+    tool_request = ToolCallRequest(
+        tool_call={"name": "demo_tool", "id": "call-deadline", "args": {}},
+        tool=None,
+        state={},
+        runtime=None,
+    )
+
+    with pytest.raises(AgentDeadlineExceededError):
+        model_middleware.wrap_model_call(model_request, lambda _: AIMessage(content="late"))
+    with pytest.raises(AgentDeadlineExceededError):
+        tool_middleware.wrap_tool_call(
+            tool_request,
+            lambda _: ToolMessage(content="late", tool_call_id="call-deadline", name="demo_tool"),
+        )
+
+    assert writer.events == []
+
+
+def test_model_middleware_refreshes_provider_timeout_for_each_call(tmp_path) -> None:
+    writer = AgentEventWriter(tmp_path / "events.jsonl")
+    refresh_calls = []
+    middleware = ModelCallEventMiddleware(
+        writer,
+        deadline_monotonic=time.monotonic() + 60,
+        before_model_call=lambda: refresh_calls.append("refresh"),
+    )
+    request = ModelRequest(
+        model=FakeListChatModel(responses=["ok"]),
+        messages=[HumanMessage(content="hello")],
+        tools=[],
+    )
+
+    middleware.wrap_model_call(request, lambda _: AIMessage(content="one"))
+    middleware.wrap_model_call(request, lambda _: AIMessage(content="two"))
+
+    assert refresh_calls == ["refresh", "refresh"]
 
 
 def test_token_usage_middleware_records_usage(tmp_path) -> None:

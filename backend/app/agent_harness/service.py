@@ -104,6 +104,7 @@ class AgentHarnessService:
                 definition=definition,
                 sandbox=sandbox,
                 event_writer=event_writer,
+                before_provider_call=context.refresh_provider_deadline,
             )
             event_writer.record("agent.run.completed", {"status": result.status})
             result.events = event_writer.events
@@ -127,6 +128,7 @@ class AgentHarnessService:
                 agent_key=definition.agent_key,
                 status="failed",
                 final_output="",
+                structured_output={"error_type": exc.__class__.__name__},
                 error_message=str(exc),
                 events=event_writer.events,
                 sandbox_path=str(sandbox.root_path),
@@ -160,23 +162,21 @@ class AgentHarnessService:
         if persistence_session is None:
             return
         context = persistence_context or {}
-        self.persistence_service.start_run(
-            persistence_session,
-            agent_run_id=agent_run_id,
-            agent_key=agent_key,
-            agent_version=definition_version,
-            related_skill_definition_id=context.get("related_skill_definition_id", ""),
-            related_generation_id=context.get("related_generation_id", ""),
-            related_job_id=context.get("related_job_id", ""),
-            related_runtime_run_id=context.get("related_runtime_run_id", ""),
-            input_summary=_invocation_summary(invocation),
-            sandbox_path=sandbox_path,
-            model_info={"agent_key": agent_key},
-        )
-        if live_events_enabled:
-            persistence_session.commit()
-        else:
-            persistence_session.flush()
+        with _independent_session(persistence_session) as write_session:
+            self.persistence_service.start_run(
+                write_session,
+                agent_run_id=agent_run_id,
+                agent_key=agent_key,
+                agent_version=definition_version,
+                related_skill_definition_id=context.get("related_skill_definition_id", ""),
+                related_generation_id=context.get("related_generation_id", ""),
+                related_job_id=context.get("related_job_id", ""),
+                related_runtime_run_id=context.get("related_runtime_run_id", ""),
+                input_summary=_invocation_summary(invocation),
+                sandbox_path=sandbox_path,
+                model_info={"agent_key": agent_key},
+            )
+            write_session.commit()
 
     @staticmethod
     def _live_event_sink(persistence_session: Session | None, agent_run_id: str):
@@ -213,18 +213,20 @@ class AgentHarnessService:
         if persistence_session is None:
             return
         context = persistence_context or {}
-        self.persistence_service.persist_result(
-            persistence_session,
-            result,
-            agent_version=definition_version,
-            related_skill_definition_id=context.get("related_skill_definition_id", ""),
-            related_generation_id=context.get("related_generation_id", ""),
-            related_job_id=context.get("related_job_id", ""),
-            related_runtime_run_id=context.get("related_runtime_run_id", ""),
-            input_summary=_invocation_summary(invocation),
-            model_info={"agent_key": result.agent_key},
-            replace_events=not live_events_enabled,
-        )
+        with _independent_session(persistence_session) as write_session:
+            self.persistence_service.persist_result(
+                write_session,
+                result,
+                agent_version=definition_version,
+                related_skill_definition_id=context.get("related_skill_definition_id", ""),
+                related_generation_id=context.get("related_generation_id", ""),
+                related_job_id=context.get("related_job_id", ""),
+                related_runtime_run_id=context.get("related_runtime_run_id", ""),
+                input_summary=_invocation_summary(invocation),
+                model_info={"agent_key": result.agent_key},
+                replace_events=not live_events_enabled,
+            )
+            write_session.commit()
 
 
 def build_agent_harness_service(settings: Settings) -> AgentHarnessService:
@@ -234,6 +236,16 @@ def build_agent_harness_service(settings: Settings) -> AgentHarnessService:
 def _persistence_live_events_enabled(context: dict[str, str]) -> bool:
     value = str(context.get("live_events_enabled", "true")).strip().lower()
     return value not in {"false", "0", "no", "off"}
+
+
+def _independent_session(source_session: Session):
+    factory = sessionmaker(
+        bind=source_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+    )
+    return factory()
 
 
 def _invocation_summary(invocation: AgentInvocation) -> dict[str, Any]:

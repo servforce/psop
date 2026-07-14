@@ -621,7 +621,14 @@
       liveRunTerminalEvents: [],
       liveRunTraceEvents: [],
       liveRunInteractionTab: "terminal",
+      liveRunMountedTabs: {
+        terminal: false,
+        io: false,
+        replay: false
+      },
       liveRunLoadedRunId: "",
+      liveRunTerminalEventsLoadedRunId: "",
+      liveRunReplayLoadedRunId: "",
       selectedLiveRunReplayItemKey: "",
       selectedLiveRunProcessEventKey: "",
       terminalMediaPreview: {
@@ -634,6 +641,10 @@
       liveRunWs: null,
       liveRunWsRunId: "",
       liveRunWsStatus: "idle",
+      _liveRunLoadGeneration: 0,
+      _liveRunWsHasOpened: false,
+      _liveRunReplayRefreshTimer: null,
+      _liveRunReplayGeneration: 0,
       replayDetail: null,
       invocationForm: {
         skill_key: "",

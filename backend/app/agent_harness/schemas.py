@@ -85,6 +85,7 @@ class AgentInvocation(BaseModel):
     memory_scope: str | None = None
     agent_run_id: str | None = None
     workspace_id: str | None = None
+    deadline_monotonic: float | None = Field(default=None, exclude=True)
 
 
 class AgentResult(BaseModel):

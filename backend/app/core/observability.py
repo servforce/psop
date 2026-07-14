@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,6 +15,8 @@ LOGGER = logging.getLogger(__name__)
 _PROVIDERS_INITIALIZED = False
 _FASTAPI_INSTRUMENTED_IDS: set[int] = set()
 _HTTPX_INSTRUMENTED = False
+_METRIC_INSTRUMENTS: dict[tuple[str, str], Any] = {}
+_METRIC_INSTRUMENTS_LOCK = threading.Lock()
 
 
 @dataclass(slots=True)
@@ -22,9 +26,10 @@ class ObservabilityHandle:
     enabled: bool = False
     tracer_provider: Any | None = None
     logger_provider: Any | None = None
+    meter_provider: Any | None = None
 
     def shutdown(self) -> None:
-        for provider in (self.logger_provider, self.tracer_provider):
+        for provider in (self.meter_provider, self.logger_provider, self.tracer_provider):
             if provider is None:
                 continue
             try:
@@ -77,12 +82,18 @@ def configure_observability(*, app: Any, settings: Settings, engine: Any | None 
 
     handle = ObservabilityHandle(enabled=True)
     global _PROVIDERS_INITIALIZED
-    providers_requested = settings.otel_traces_enabled or settings.otel_logs_enabled
+    providers_requested = (
+        settings.otel_traces_enabled
+        or settings.otel_logs_enabled
+        or settings.otel_metrics_enabled
+    )
     if providers_requested and not _PROVIDERS_INITIALIZED:
         if settings.otel_traces_enabled:
             handle.tracer_provider = _configure_traces(settings=settings, resource=resource, trace_module=trace)
         if settings.otel_logs_enabled:
             handle.logger_provider = _configure_logs(settings=settings, resource=resource)
+        if settings.otel_metrics_enabled:
+            handle.meter_provider = _configure_metrics(settings=settings, resource=resource)
         _PROVIDERS_INITIALIZED = True
 
     _instrument_fastapi(app)
@@ -151,6 +162,106 @@ def record_span_exception(span: Any, exc: Exception) -> None:
         return
 
 
+def add_metric_counter(
+    name: str,
+    value: int | float = 1,
+    *,
+    attributes: dict[str, Any] | None = None,
+    unit: str = "1",
+    description: str = "",
+) -> None:
+    """Add to a low-cardinality OTel counter, failing open when OTel is unavailable."""
+
+    try:
+        instrument = _metric_instrument(
+            kind="counter",
+            name=name,
+            unit=unit,
+            description=description,
+        )
+        if instrument is not None:
+            instrument.add(value, attributes=_clean_metric_attributes(attributes))
+    except Exception:
+        return
+
+
+def add_metric_up_down_counter(
+    name: str,
+    value: int | float,
+    *,
+    attributes: dict[str, Any] | None = None,
+    unit: str = "1",
+    description: str = "",
+) -> None:
+    """Add to an OTel up/down counter without affecting application behavior."""
+
+    try:
+        instrument = _metric_instrument(
+            kind="up_down_counter",
+            name=name,
+            unit=unit,
+            description=description,
+        )
+        if instrument is not None:
+            instrument.add(value, attributes=_clean_metric_attributes(attributes))
+    except Exception:
+        return
+
+
+def record_metric_histogram(
+    name: str,
+    value: int | float,
+    *,
+    attributes: dict[str, Any] | None = None,
+    unit: str = "1",
+    description: str = "",
+) -> None:
+    """Record an OTel histogram sample without affecting application behavior."""
+
+    try:
+        instrument = _metric_instrument(
+            kind="histogram",
+            name=name,
+            unit=unit,
+            description=description,
+        )
+        if instrument is not None:
+            instrument.record(value, attributes=_clean_metric_attributes(attributes))
+    except Exception:
+        return
+
+
+def _metric_instrument(*, kind: str, name: str, unit: str, description: str) -> Any | None:
+    cache_key = (kind, name)
+    instrument = _METRIC_INSTRUMENTS.get(cache_key)
+    if instrument is not None:
+        return instrument
+    with _METRIC_INSTRUMENTS_LOCK:
+        instrument = _METRIC_INSTRUMENTS.get(cache_key)
+        if instrument is not None:
+            return instrument
+        try:
+            from opentelemetry import metrics
+
+            meter = metrics.get_meter("psop.backend")
+            factory = {
+                "counter": meter.create_counter,
+                "up_down_counter": meter.create_up_down_counter,
+                "histogram": meter.create_histogram,
+            }[kind]
+            instrument = factory(name, unit=unit, description=description)
+        except Exception:
+            return None
+        _METRIC_INSTRUMENTS[cache_key] = instrument
+        return instrument
+
+
+def _clean_metric_attributes(attributes: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not attributes:
+        return None
+    return {key: value for key, value in attributes.items() if value is not None}
+
+
 def _configure_traces(*, settings: Settings, resource: Any, trace_module: Any) -> Any | None:
     try:
         from opentelemetry.sdk.trace import TracerProvider
@@ -205,6 +316,43 @@ def _configure_logs(*, settings: Settings, resource: Any) -> Any | None:
     return provider
 
 
+def _configure_metrics(*, settings: Settings, resource: Any) -> Any | None:
+    try:
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import (
+            ConsoleMetricExporter,
+            PeriodicExportingMetricReader,
+        )
+    except Exception as exc:
+        LOGGER.warning("OpenTelemetry metric SDK is unavailable; metrics disabled: %s", exc)
+        return None
+
+    try:
+        readers: list[Any] = []
+        exporter = _build_otlp_metric_exporter(settings)
+        if exporter is not None:
+            readers.append(PeriodicExportingMetricReader(exporter))
+        if settings.otel_console_exporter:
+            readers.append(PeriodicExportingMetricReader(ConsoleMetricExporter()))
+        if not readers:
+            return None
+        provider = MeterProvider(resource=resource, metric_readers=readers)
+    except Exception as exc:
+        LOGGER.warning("OpenTelemetry metric provider initialization failed: %s", exc)
+        return None
+    try:
+        metrics.set_meter_provider(provider)
+    except Exception as exc:
+        LOGGER.warning("OpenTelemetry meter provider was not installed: %s", exc)
+        try:
+            provider.shutdown()
+        except Exception:
+            pass
+        return None
+    return provider
+
+
 def _build_otlp_span_exporter(settings: Settings) -> Any | None:
     if settings.otel_exporter_otlp_protocol != "http/protobuf":
         LOGGER.warning(
@@ -237,6 +385,22 @@ def _build_otlp_log_exporter(settings: Settings) -> Any | None:
         return None
 
 
+def _build_otlp_metric_exporter(settings: Settings) -> Any | None:
+    if settings.otel_exporter_otlp_protocol != "http/protobuf":
+        LOGGER.warning(
+            "OpenTelemetry protocol %s is not enabled in this build; skipping OTLP metric exporter",
+            settings.otel_exporter_otlp_protocol,
+        )
+        return None
+    try:
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+
+        return OTLPMetricExporter(endpoint=f"{settings.otel_exporter_otlp_endpoint.rstrip('/')}/v1/metrics")
+    except Exception as exc:
+        LOGGER.warning("OpenTelemetry OTLP metric exporter initialization failed: %s", exc)
+        return None
+
+
 def _instrument_fastapi(app: Any) -> None:
     app_id = id(app)
     if app_id in _FASTAPI_INSTRUMENTED_IDS:
@@ -253,7 +417,14 @@ def _instrument_fastapi(app: Any) -> None:
 def _safe_asgi_span_details(scope: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     method = str(scope.get("method") or "").strip() or "HTTP"
     path = str(scope.get("path") or "").strip() or "/"
-    return f"{method} {path}", {}
+    route_path = str(getattr(scope.get("route"), "path", "") or "").strip()
+    stable_path = route_path or re.sub(
+        r"(?i)(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![0-9a-f])",
+        "{id}",
+        path,
+    )
+    attributes = {"http.route": route_path} if route_path else {}
+    return f"{method} {stable_path}", attributes
 
 
 def _instrument_httpx() -> None:

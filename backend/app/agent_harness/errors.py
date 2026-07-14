@@ -11,3 +11,7 @@ class AgentDefinitionNotFoundError(AgentHarnessError):
 
 class AgentBudgetExceededError(AgentHarnessError):
     """Raised when an agent run exceeds a harness-enforced budget."""
+
+
+class AgentDeadlineExceededError(TimeoutError, AgentHarnessError):
+    """Raised when one governed agent invocation exhausts its shared deadline."""

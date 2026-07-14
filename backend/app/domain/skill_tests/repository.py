@@ -117,6 +117,13 @@ class SkillTestRepository:
     def get_scenario_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRun | None:
         return session.get(SkillTestScenarioRun, scenario_run_id)
 
+    def get_scenario_run_for_update(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRun | None:
+        return session.scalar(
+            select(SkillTestScenarioRun)
+            .where(SkillTestScenarioRun.id == scenario_run_id)
+            .with_for_update()
+        )
+
     def list_expectation_evaluations(
         self,
         session: Session,

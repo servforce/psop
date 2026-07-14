@@ -577,6 +577,32 @@ class CompilerService:
             return self.process_compile_job(session, job.id)
         return self.process_compile_request(session, compile_request_id)
 
+    def finalize_exhausted_compile_job(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+        error_message: str,
+    ) -> bool:
+        """Idempotently fail compile-owned state without committing the worker transaction."""
+
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
+        if job is None or job.job_type != "compile" or not job.compile_request_id:
+            return False
+        compile_request = self.repository.get_compile_request_for_update(session, job.compile_request_id)
+        if compile_request is None or compile_request.status in {"succeeded", "failed", "cancelled"}:
+            return False
+        reason = error_message.strip() or "Compile job attempts exhausted."
+        compile_request.status = "failed"
+        compile_request.error_message = reason
+        compile_request.finished_at = now_utc()
+        publish_record_id = str((job.payload or {}).get("publish_record_id") or "")
+        if publish_record_id:
+            publish_record = session.get(SkillPublishRecord, publish_record_id)
+            if publish_record is not None and publish_record.publish_status != "published":
+                publish_record.publish_status = "failed"
+        return True
+
     def _build_reference_assets_for_compile(
         self,
         *,

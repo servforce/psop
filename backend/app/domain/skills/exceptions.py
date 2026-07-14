@@ -33,6 +33,11 @@ class SkillValidationError(SkillsError):
     error_code = "skill_validation_error"
 
 
+class PayloadTooLargeError(SkillsError):
+    status_code = 413
+    error_code = "payload_too_large"
+
+
 class SkillsConfigurationError(SkillsError):
     status_code = 503
     error_code = "skills_configuration_error"
@@ -41,3 +46,8 @@ class SkillsConfigurationError(SkillsError):
 class SkillsGatewayError(SkillsError):
     status_code = 502
     error_code = "skills_gateway_error"
+
+
+class SkillsGatewayTimeoutError(SkillsError):
+    status_code = 504
+    error_code = "skills_gateway_timeout"

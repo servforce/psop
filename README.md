@@ -117,6 +117,10 @@ cd ..
 scripts/dev/start.sh
 ```
 
+该脚本会分别启动 FastAPI API、数据库任务 worker（`runtime-interactive`、
+`build-test`、`material` 三个隔离 pool）和静态 Web。API 默认不再内嵌 worker；
+需要单独调试后台任务时可运行 `scripts/dev/run-worker.sh`。
+
 后台启动并把日志写入项目根目录 `logs/`：
 
 ```bash
@@ -132,6 +136,7 @@ scripts/dev/start-background.sh
 - `PSOP_DATABASE_*` 或 `PSOP_DATABASE_URL`
 - `PSOP_GITLAB_*`
 - `PSOP_OBJECT_STORE_*`
+- `PSOP_TERMINAL_EVENT_*` 与 `PSOP_TERMINAL_OBJECT_STORE_IO_WORKERS`
 - `PSOP_RAW_MATERIAL_*`
 - `PSOP_VIDEO_*`
 - `PSOP_LLM_*`
@@ -139,6 +144,7 @@ scripts/dev/start-background.sh
 - `PSOP_OTEL_*`
 - `PSOP_SERVER_*`
 - `PSOP_WEB_*`
+- `PSOP_RUNTIME_WORKER_*`、`PSOP_RUNTIME_JOB_*` 与 `PSOP_RUNTIME_EVENT_*`
 
 开发脚本会读取根目录 `.env` 与 `backend/.env`，并为缺失的 host、port 等本地联调参数补齐默认值。
 

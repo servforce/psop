@@ -100,6 +100,13 @@ class SkillsRepository:
     def get_raw_material(self, session: Session, material_id: str) -> SkillRawMaterial | None:
         return session.get(SkillRawMaterial, material_id)
 
+    def get_raw_material_for_update(self, session: Session, material_id: str) -> SkillRawMaterial | None:
+        return session.scalar(
+            select(SkillRawMaterial)
+            .where(SkillRawMaterial.id == material_id)
+            .with_for_update()
+        )
+
     def list_raw_materials_by_ids(
         self,
         session: Session,
@@ -128,6 +135,17 @@ class SkillsRepository:
     def get_raw_material_generation(self, session: Session, generation_id: str) -> SkillRawMaterialGeneration | None:
         return session.get(SkillRawMaterialGeneration, generation_id)
 
+    def get_raw_material_generation_for_update(
+        self,
+        session: Session,
+        generation_id: str,
+    ) -> SkillRawMaterialGeneration | None:
+        return session.scalar(
+            select(SkillRawMaterialGeneration)
+            .where(SkillRawMaterialGeneration.id == generation_id)
+            .with_for_update()
+        )
+
     def get_latest_raw_material_analysis(
         self,
         session: Session,
@@ -143,6 +161,17 @@ class SkillsRepository:
 
     def get_raw_material_analysis(self, session: Session, analysis_id: str) -> SkillRawMaterialAnalysis | None:
         return session.get(SkillRawMaterialAnalysis, analysis_id)
+
+    def get_raw_material_analysis_for_update(
+        self,
+        session: Session,
+        analysis_id: str,
+    ) -> SkillRawMaterialAnalysis | None:
+        return session.scalar(
+            select(SkillRawMaterialAnalysis)
+            .where(SkillRawMaterialAnalysis.id == analysis_id)
+            .with_for_update()
+        )
 
     def get_derived_asset(self, session: Session, asset_id: str) -> SkillRawMaterialDerivedAsset | None:
         return session.get(SkillRawMaterialDerivedAsset, asset_id)

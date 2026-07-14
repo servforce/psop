@@ -551,6 +551,11 @@ Range: bytes=0-1048575
 - `run_id`、`event_id`、`part_id` 均来自终端事件响应。
 - `Range` 可选；图片缩略图、音频和视频播放器可以按浏览器默认行为请求范围内容。
 - 响应的 `Content-Type` 使用 part 的 `mime_type`。
+- 无 Range 返回流式 `200`；单个合法 Range 返回 `206` 与准确的
+  `Content-Range`，malformed、多 Range 或越界请求返回 `416`。
+- 响应包含 `Accept-Ranges: bytes`、稳定 `ETag` 与
+  `Cache-Control: private, max-age=86400, immutable`。客户端可发送
+  `If-None-Match` 获取零对象读取的 `304`；`If-Range` 不匹配时服务端返回完整 `200`。
 - 终端侧不需要也不应该读取或保存 MinIO bucket/object key。
 
 ## 接收 Runner 参考图片输出
@@ -699,7 +704,8 @@ Idempotency-Key: <client-event-id>
 - 如果一条 input 只是触发 Runtime 输出下一阶段指令，Runtime 创建的新 checkpoint 会从该 input 之后开始接收证据；终端用户需要再发送新消息或新附件，才会被作为新 checkpoint 的 evidence。
 - 终端客户端不要构造 `parts[]`；服务端会根据 `text` 和文件字段生成 part。
 - `payload_inline` 只作为摘要或旧展示兼容字段；正式文本内容以服务端生成的 text part 为准。
-- 必须传 `external_event_id` 或 `Idempotency-Key`，用于重试去重。
+- 强烈建议传 `external_event_id` 或 `Idempotency-Key`，用于重试去重。为兼容旧客户端
+  两者仍可缺省，但缺省请求无法获得端到端幂等保证。
 - Run 已结束或 TerminalSession 已关闭时，服务端会拒绝继续追加输入。
 
 命令示例：
@@ -767,7 +773,8 @@ Idempotency-Key: <client-event-id>
 
 - 文本直接写在 `event` JSON 的 `text` 字段中。没有文本时可以省略。
 - 图片、音频、视频通过重复的 `files` 字段提交。服务端根据每个文件的 MIME 推导 part kind。
-- 文件大小限制由服务端配置控制，默认值为 25 MiB。
+- 每个事件最多 4 个媒体文件；单文件不超过 25 MiB，媒体合计不超过 25 MiB，
+  multipart 请求体默认不超过 27 MiB。限制可由部署配置调整。
 - 终端侧不要上传对象存储 key；服务端会在同一次请求内保存文件并创建 part 级对象引用。
 
 命令示例：
@@ -1189,6 +1196,10 @@ PSOP 业务错误通常返回：
 | 缺少 `event_kind` 或 `mime_type` | 无需处理；服务端会使用 `terminal.multimodal.input.v1` 和 `multipart/mixed` 默认值。 |
 | 媒体文件过大 | 提示压缩或拆分媒体，必要时联系服务端调整上传限制。 |
 | MIME 不支持 | 转换为 `image/*`、`audio/*`、`video/*` 或文本输入。 |
+| `413 payload_too_large` | 文件数量、单文件、媒体总量或请求体超过部署限制；压缩媒体后重试。 |
+| `422 skill_validation_error` | 修正空文件、MIME、event JSON 或其它输入语义。 |
+| `504 skills_gateway_timeout` | 对象存储操作超时；保留同一幂等 ID 后退避重试。 |
+| `502 skills_gateway_error` | 对象存储不可用、鉴权失败或 backing object 缺失；等待服务恢复并重试。 |
 | WebSocket 断开 | 自动重连，并通过 REST 补齐事件。 |
 
 ## 展示建议

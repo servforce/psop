@@ -194,3 +194,13 @@ class RuntimeRepository:
             query = query.where(TraceEvent.event_type == event_type)
         query = query.order_by(TraceEvent.seq_no.asc())
         return list(session.scalars(query).all())
+
+    def get_trace_event_by_seq(self, session: Session, run_id: str, seq_no: int) -> TraceEvent | None:
+        return session.scalar(
+            select(TraceEvent).where(TraceEvent.run_id == run_id, TraceEvent.seq_no == seq_no).limit(1)
+        )
+
+    def get_terminal_event_by_seq(self, session: Session, run_id: str, seq_no: int) -> TerminalEvent | None:
+        return session.scalar(
+            select(TerminalEvent).where(TerminalEvent.run_id == run_id, TerminalEvent.seq_no == seq_no).limit(1)
+        )

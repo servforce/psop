@@ -1,5 +1,5 @@
 <template x-if="liveRun">
-<div class="h-full min-h-0">
+<div class="h-full min-h-0" data-run-live-view>
   <section class="panel rounded-none border-0">
     <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
       <div class="flex min-w-0 items-center">
@@ -105,23 +105,24 @@
         <main class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
           <section class="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950/20">
             <div class="flex h-11 shrink-0 items-center overflow-x-auto overflow-y-hidden border-b border-slate-200 bg-white">
-              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'terminal' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'terminal'">
+              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'terminal' ? 'detail-tab-active' : ''" @click="selectLiveRunInteractionTab('terminal')">
                 <span class="material-symbols-outlined text-[18px]">forum</span>
                 <span>terminal</span>
                 <span class="mono-field" x-text="`${liveRunTerminalEvents.length} events`"></span>
               </button>
-              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'replay' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'replay'">
+              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'replay' ? 'detail-tab-active' : ''" @click="selectLiveRunInteractionTab('replay')">
                 <span class="material-symbols-outlined text-[18px]">history</span>
                 <span>replay</span>
                 <span class="mono-field" x-text="`${liveRunReplayTimeline().length} events`"></span>
               </button>
-              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'io' ? 'detail-tab-active' : ''" @click="liveRunInteractionTab = 'io'">
+              <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'io' ? 'detail-tab-active' : ''" @click="selectLiveRunInteractionTab('io')">
                 <span class="material-symbols-outlined text-[18px]">swap_horiz</span>
                 <span>输入输出</span>
                 <span class="mono-field" x-text="`${liveRunProcessTerminalEvents().length} nodes`"></span>
               </button>
             </div>
 
+            <template x-if="liveRunMountedTabs.terminal">
             <section x-show="liveRunInteractionTab === 'terminal'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
               <template x-if="liveRunTerminalEvents.length === 0">
                 <div class="empty-state h-full min-h-80">
@@ -146,21 +147,38 @@
                               <div class="space-y-2">
                                 <template x-for="part in terminalEventParts(event)" :key="part.part_id || part.id">
                                   <div class="space-y-1.5">
-                                    <div x-show="terminalEventPartIsText(part)" class="terminal-markdown" x-html="terminalEventPartMarkdownHtml(part)"></div>
-                                    <figure x-show="terminalEventPartIsImage(part) && terminalEventPartMediaUrl(event, part)" class="space-y-1.5">
+                                    <template x-if="terminalEventPartPresentationKind(part) === 'text'">
+                                      <div class="terminal-markdown" x-html="terminalEventPartMarkdownHtml(part)"></div>
+                                    </template>
+                                    <template x-if="terminalEventPartPresentationKind(part) === 'image' && terminalEventPartMediaUrl(event, part)">
+                                    <figure class="space-y-1.5">
                                       <button type="button" class="group relative inline-flex max-w-md items-center justify-center overflow-hidden rounded-md border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(event, part)">
-                                        <img class="max-h-72 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventPartMediaUrl(event, part)" :alt="terminalEventPartFileName(part)" loading="lazy" />
+                                        <img class="max-h-72 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventPartMediaUrl(event, part)" :alt="terminalEventPartFileName(part)" loading="lazy" decoding="async" />
                                       </button>
                                       <figcaption x-show="terminalEventPartDisplayText(part)" class="terminal-markdown" x-html="terminalEventPartMarkdownHtml(part)"></figcaption>
                                     </figure>
-                                    <div x-show="terminalEventPartIsAudio(part) && terminalEventPartMediaUrl(event, part)" class="space-y-1.5">
-                                      <audio class="w-full max-w-md" controls preload="metadata" :src="terminalEventPartMediaUrl(event, part)"></audio>
+                                    </template>
+                                    <template x-if="terminalEventPartPresentationKind(part) === 'audio' && terminalEventPartMediaUrl(event, part)">
+                                    <div class="space-y-1.5">
+                                      <audio class="w-full max-w-md" controls preload="none" :src="terminalEventPartMediaUrl(event, part)"></audio>
                                       <div x-show="terminalEventPartDisplayText(part)" class="terminal-markdown" x-html="terminalEventPartMarkdownHtml(part)"></div>
                                     </div>
-                                    <div x-show="terminalEventPartIsVideo(part) && terminalEventPartMediaUrl(event, part)" class="space-y-1.5">
-                                      <video class="max-h-72 w-full max-w-md rounded-md border border-slate-700 bg-black object-contain" controls preload="metadata" :src="terminalEventPartMediaUrl(event, part)"></video>
+                                    </template>
+                                    <template x-if="terminalEventPartPresentationKind(part) === 'video' && terminalEventPartMediaUrl(event, part)">
+                                    <div class="space-y-1.5">
+                                      <video class="max-h-72 w-full max-w-md rounded-md border border-slate-700 bg-black object-contain" controls preload="none" :src="terminalEventPartMediaUrl(event, part)"></video>
                                       <div x-show="terminalEventPartDisplayText(part)" class="terminal-markdown" x-html="terminalEventPartMarkdownHtml(part)"></div>
                                     </div>
+                                    </template>
+                                    <template x-if="terminalEventPartPresentationKind(part) === 'pdf' && terminalEventPartMediaUrl(event, part)">
+                                      <iframe class="h-72 w-full max-w-lg rounded-md border border-slate-700 bg-slate-950" :src="terminalEventPartMediaUrl(event, part)" :title="terminalEventPartFileName(part)" loading="lazy"></iframe>
+                                    </template>
+                                    <template x-if="terminalEventPartPresentationKind(part) === 'file'">
+                                      <div class="flex min-w-0 items-center gap-2 rounded-md border border-slate-700 bg-slate-950/40 px-2.5 py-2 text-slate-200">
+                                        <span class="material-symbols-outlined shrink-0 text-[22px]">draft</span>
+                                        <span class="block min-w-0 flex-1 truncate text-sm font-medium" x-text="terminalEventPartFileName(part)"></span>
+                                      </div>
+                                    </template>
                                   </div>
                                 </template>
                               </div>
@@ -169,7 +187,7 @@
                             <template x-if="!terminalEventHasParts(event) && terminalEventIsImage(event) && terminalEventMediaUrl(event)">
                               <figure class="space-y-2">
                                 <button type="button" class="group relative inline-flex max-w-md items-center justify-center overflow-hidden rounded-md border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(event)">
-                                  <img class="max-h-72 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventMediaUrl(event)" :alt="terminalEventFileName(event) || 'terminal image'" loading="lazy" />
+                                  <img class="max-h-72 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventMediaUrl(event)" :alt="terminalEventFileName(event) || 'terminal image'" loading="lazy" decoding="async" />
                                   <span class="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-md bg-slate-950/80 text-slate-100 opacity-0 transition group-hover:opacity-100">
                                     <span class="material-symbols-outlined text-[18px]">zoom_in</span>
                                   </span>
@@ -180,21 +198,21 @@
 
                             <template x-if="!terminalEventHasParts(event) && terminalEventIsAudio(event) && terminalEventMediaUrl(event)">
                               <div class="space-y-2">
-                                <audio class="w-full max-w-md" controls preload="metadata" :src="terminalEventMediaUrl(event)"></audio>
+                                <audio class="w-full max-w-md" controls preload="none" :src="terminalEventMediaUrl(event)"></audio>
                                 <div x-show="terminalEventDisplayText(event)" class="terminal-markdown" x-html="terminalEventMarkdownHtml(event)"></div>
                               </div>
                             </template>
 
                             <template x-if="!terminalEventHasParts(event) && terminalEventIsVideo(event) && terminalEventMediaUrl(event)">
                               <div class="space-y-2">
-                                <video class="max-h-72 w-full max-w-md rounded-md border border-slate-700 bg-black object-contain" controls preload="metadata" :src="terminalEventMediaUrl(event)"></video>
+                                <video class="max-h-72 w-full max-w-md rounded-md border border-slate-700 bg-black object-contain" controls preload="none" :src="terminalEventMediaUrl(event)"></video>
                                 <div x-show="terminalEventDisplayText(event)" class="terminal-markdown" x-html="terminalEventMarkdownHtml(event)"></div>
                               </div>
                             </template>
 
                             <template x-if="!terminalEventHasParts(event) && terminalEventIsPdf(event) && terminalEventMediaUrl(event)">
                               <div class="space-y-2">
-                                <iframe class="h-72 w-full max-w-lg rounded-md border border-slate-700 bg-slate-950" :src="terminalEventMediaUrl(event)" :title="terminalEventFileName(event)"></iframe>
+                                <iframe class="h-72 w-full max-w-lg rounded-md border border-slate-700 bg-slate-950" :src="terminalEventMediaUrl(event)" :title="terminalEventFileName(event)" loading="lazy"></iframe>
                                 <div x-show="terminalEventDisplayText(event)" class="terminal-markdown" x-html="terminalEventMarkdownHtml(event)"></div>
                               </div>
                             </template>
@@ -224,7 +242,9 @@
                 </div>
               </div>
             </section>
+            </template>
 
+            <template x-if="liveRunMountedTabs.io">
             <section x-show="liveRunInteractionTab === 'io'" class="min-h-0 flex-1 overflow-hidden" data-live-run-process-panel>
               <section class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-slate-950/40">
                   <template x-if="liveRunProcessTerminalEvents().length === 0">
@@ -292,7 +312,9 @@
                   </div>
               </section>
             </section>
+            </template>
 
+            <template x-if="liveRunMountedTabs.replay">
             <section x-show="liveRunInteractionTab === 'replay'" class="min-h-0 flex-1 overflow-hidden">
               <div class="grid h-full min-h-0 min-w-0 xl:grid-cols-[minmax(0,1fr)_26rem]">
                 <div class="min-h-0 min-w-0 overflow-auto border-b border-slate-800 bg-slate-950/40 xl:border-b-0 xl:border-r">
@@ -447,6 +469,7 @@
                 </aside>
               </div>
             </section>
+            </template>
           </section>
         </main>
       </div>
@@ -507,6 +530,7 @@
                       </template>
                     </section>
 
+                    <template x-if="item.current">
                     <section class="border-t border-slate-800 pt-3">
                       <p class="field-label">内容</p>
 
@@ -518,16 +542,29 @@
                                 <span class="mono-field truncate" x-text="part.part_id || part.id"></span>
                                 <span class="mono-field shrink-0" x-text="part.mime_type || part.kind"></span>
                               </div>
-                              <div x-show="terminalEventPartIsText(part)" class="terminal-markdown text-slate-200" x-html="terminalEventPartMarkdownHtml(part)"></div>
-                              <button x-show="terminalEventPartIsImage(part) && terminalEventPartMediaUrl(item.event, part)" type="button" class="group relative inline-flex max-w-full items-center justify-center overflow-hidden border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(item.event, part)">
-                                <img class="max-h-44 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventPartMediaUrl(item.event, part)" :alt="terminalEventPartFileName(part)" loading="lazy" />
-                              </button>
-                              <audio x-show="terminalEventPartIsAudio(part) && terminalEventPartMediaUrl(item.event, part)" class="w-full" controls preload="metadata" :src="terminalEventPartMediaUrl(item.event, part)"></audio>
-                              <video x-show="terminalEventPartIsVideo(part) && terminalEventPartMediaUrl(item.event, part)" class="max-h-44 w-full border border-slate-700 bg-black object-contain" controls preload="metadata" :src="terminalEventPartMediaUrl(item.event, part)"></video>
-                              <div x-show="!terminalEventPartIsText(part) && !terminalEventPartIsImage(part) && !terminalEventPartIsAudio(part) && !terminalEventPartIsVideo(part)" class="flex min-w-0 items-center gap-2 text-slate-200">
-                                <span class="material-symbols-outlined shrink-0 text-[18px]">draft</span>
-                                <span class="truncate text-sm" x-text="terminalEventPartFileName(part)"></span>
-                              </div>
+                              <template x-if="terminalEventPartPresentationKind(part) === 'text'">
+                                <div class="terminal-markdown text-slate-200" x-html="terminalEventPartMarkdownHtml(part)"></div>
+                              </template>
+                              <template x-if="terminalEventPartPresentationKind(part) === 'image' && terminalEventPartMediaUrl(item.event, part)">
+                                <button type="button" class="group relative inline-flex max-w-full items-center justify-center overflow-hidden border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(item.event, part)">
+                                  <img class="max-h-44 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventPartMediaUrl(item.event, part)" :alt="terminalEventPartFileName(part)" loading="lazy" decoding="async" />
+                                </button>
+                              </template>
+                              <template x-if="terminalEventPartPresentationKind(part) === 'audio' && terminalEventPartMediaUrl(item.event, part)">
+                                <audio class="w-full" controls preload="none" :src="terminalEventPartMediaUrl(item.event, part)"></audio>
+                              </template>
+                              <template x-if="terminalEventPartPresentationKind(part) === 'video' && terminalEventPartMediaUrl(item.event, part)">
+                                <video class="max-h-44 w-full border border-slate-700 bg-black object-contain" controls preload="none" :src="terminalEventPartMediaUrl(item.event, part)"></video>
+                              </template>
+                              <template x-if="terminalEventPartPresentationKind(part) === 'pdf' && terminalEventPartMediaUrl(item.event, part)">
+                                <iframe class="h-52 w-full border border-slate-700 bg-slate-950" :src="terminalEventPartMediaUrl(item.event, part)" :title="terminalEventPartFileName(part)" loading="lazy"></iframe>
+                              </template>
+                              <template x-if="terminalEventPartPresentationKind(part) === 'file'">
+                                <div class="flex min-w-0 items-center gap-2 text-slate-200">
+                                  <span class="material-symbols-outlined shrink-0 text-[18px]">draft</span>
+                                  <span class="truncate text-sm" x-text="terminalEventPartFileName(part)"></span>
+                                </div>
+                              </template>
                             </div>
                           </template>
                         </div>
@@ -535,23 +572,41 @@
 
                       <template x-if="!terminalEventHasParts(item.event)">
                         <div class="mt-2 space-y-2">
-                          <button x-show="terminalEventIsImage(item.event) && terminalEventMediaUrl(item.event)" type="button" class="group relative inline-flex max-w-full items-center justify-center overflow-hidden border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(item.event)">
-                            <img class="max-h-52 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventMediaUrl(item.event)" :alt="terminalEventFileName(item.event)" loading="lazy" />
-                          </button>
-                          <audio x-show="terminalEventIsAudio(item.event) && terminalEventMediaUrl(item.event)" class="w-full" controls preload="metadata" :src="terminalEventMediaUrl(item.event)"></audio>
-                          <video x-show="terminalEventIsVideo(item.event) && terminalEventMediaUrl(item.event)" class="max-h-52 w-full border border-slate-700 bg-black object-contain" controls preload="metadata" :src="terminalEventMediaUrl(item.event)"></video>
-                          <iframe x-show="terminalEventIsPdf(item.event) && terminalEventMediaUrl(item.event)" class="h-52 w-full border border-slate-700 bg-slate-950" :src="terminalEventMediaUrl(item.event)" :title="terminalEventFileName(item.event)"></iframe>
-                          <div x-show="terminalEventIsGenericFile(item.event)" class="flex min-w-0 items-center gap-2 border border-slate-700 bg-slate-950/40 px-2.5 py-2 text-slate-200">
-                            <span class="material-symbols-outlined shrink-0 text-[20px]" x-text="terminalEventFileIcon(item.event)"></span>
-                            <span class="min-w-0 flex-1">
-                              <span class="block truncate text-sm font-medium" x-text="terminalEventFileName(item.event)"></span>
-                              <span class="mono-field block truncate" x-text="terminalEventFileMeta(item.event)"></span>
-                            </span>
-                          </div>
+                          <template x-if="terminalEventIsImage(item.event) && terminalEventMediaUrl(item.event)">
+                            <button type="button" class="group relative inline-flex max-w-full items-center justify-center overflow-hidden border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(item.event)">
+                              <img class="max-h-52 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventMediaUrl(item.event)" :alt="terminalEventFileName(item.event)" loading="lazy" decoding="async" />
+                            </button>
+                          </template>
+                          <template x-if="terminalEventIsAudio(item.event) && terminalEventMediaUrl(item.event)">
+                            <audio class="w-full" controls preload="none" :src="terminalEventMediaUrl(item.event)"></audio>
+                          </template>
+                          <template x-if="terminalEventIsVideo(item.event) && terminalEventMediaUrl(item.event)">
+                            <video class="max-h-52 w-full border border-slate-700 bg-black object-contain" controls preload="none" :src="terminalEventMediaUrl(item.event)"></video>
+                          </template>
+                          <template x-if="terminalEventIsPdf(item.event) && terminalEventMediaUrl(item.event)">
+                            <iframe class="h-52 w-full border border-slate-700 bg-slate-950" :src="terminalEventMediaUrl(item.event)" :title="terminalEventFileName(item.event)" loading="lazy"></iframe>
+                          </template>
+                          <template x-if="terminalEventIsGenericFile(item.event)">
+                            <div class="flex min-w-0 items-center gap-2 border border-slate-700 bg-slate-950/40 px-2.5 py-2 text-slate-200">
+                              <span class="material-symbols-outlined shrink-0 text-[20px]" x-text="terminalEventFileIcon(item.event)"></span>
+                              <span class="min-w-0 flex-1">
+                                <span class="block truncate text-sm font-medium" x-text="terminalEventFileName(item.event)"></span>
+                                <span class="mono-field block truncate" x-text="terminalEventFileMeta(item.event)"></span>
+                              </span>
+                            </div>
+                          </template>
                           <pre class="max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-slate-200" x-text="liveRunProcessEventDetailText(item.event)"></pre>
                         </div>
                       </template>
                     </section>
+                    </template>
+
+                    <template x-if="!item.current">
+                      <section class="border-t border-slate-800 pt-3">
+                        <p class="field-label">内容摘要</p>
+                        <p class="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-sm leading-5 text-slate-300" x-text="liveRunProcessEventSummary(item.event)"></p>
+                      </section>
+                    </template>
                   </div>
                 </template>
               </div>
@@ -562,7 +617,8 @@
     </div>
   </template>
 
-  <div x-show="terminalMediaPreview.open" x-cloak class="fixed inset-0 z-50 flex min-h-0 items-center justify-center bg-black/80 p-4" @click.self="closeTerminalMediaPreview()" @keydown.escape.window="closeTerminalMediaPreview()">
+  <template x-if="terminalMediaPreview.open">
+  <div class="fixed inset-0 z-50 flex min-h-0 items-center justify-center bg-black/80 p-4" @click.self="closeTerminalMediaPreview()" @keydown.escape.window="closeTerminalMediaPreview()">
     <section class="flex max-h-[92vh] w-full max-w-[96vw] flex-col overflow-hidden rounded-md border border-slate-800 bg-slate-950">
       <header class="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3">
         <div class="min-w-0">
@@ -574,9 +630,12 @@
         </button>
       </header>
       <div class="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-black">
-        <img x-show="terminalMediaPreview.kind === 'image'" class="h-auto w-auto max-h-[calc(92vh-3rem)] max-w-full object-contain" :src="terminalMediaPreview.src" :alt="terminalMediaPreview.title" />
+        <template x-if="terminalMediaPreview.kind === 'image'">
+          <img class="h-auto w-auto max-h-[calc(92vh-3rem)] max-w-full object-contain" :src="terminalMediaPreview.src" :alt="terminalMediaPreview.title" loading="lazy" decoding="async" />
+        </template>
       </div>
     </section>
   </div>
+  </template>
 </div>
 </template>

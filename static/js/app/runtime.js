@@ -115,34 +115,49 @@
 
       async loadRunLive(runId) {
         this.busy.liveRun = true;
+        let loadGeneration = null;
         try {
           const isSameRun = this.liveRunLoadedRunId === runId;
+          if (isSameRun && this.liveRun?.id === runId) {
+            loadGeneration = this._liveRunLoadGeneration;
+            this.syncLiveRunInteractionTabFromRoute(true);
+            await this.ensureLiveRunInteractionTabData(this.liveRunInteractionTab, runId);
+            if (this._liveRunLoadGeneration !== loadGeneration || this.liveRun?.id !== runId) {
+              return;
+            }
+            this.connectRunWebSocket(runId);
+            return;
+          }
+
+          this.destroyLiveRunView();
+          this.busy.liveRun = true;
+          loadGeneration = this._liveRunLoadGeneration;
+          this.syncLiveRunInteractionTabFromRoute(false);
           if (!isSameRun) {
             this.selectedLiveRunReplayItemKey = "";
             this.selectedLiveRunProcessEventKey = "";
           }
-          const [run, bindings, terminalSession, terminalEvents, traceEvents, replayDetail] = await Promise.all([
+          const [run, bindings, terminalSession] = await Promise.all([
             this.apiRequest(`/runs/${runId}`),
             this.apiRequest(`/runs/${runId}/bindings`),
-            this.apiRequest(`/terminal/sessions/${runId}`),
-            this.apiRequest(`/terminal/sessions/${runId}/events`),
-            this.apiRequest(`/runs/${runId}/trace-events`),
-            this.apiRequest(`/replay/runs/${runId}`)
+            this.apiRequest(`/terminal/sessions/${runId}`)
           ]);
+          if (this._liveRunLoadGeneration !== loadGeneration) {
+            return;
+          }
           this.liveRun = run;
           this.liveRunLoadedRunId = runId;
           this.liveRunBindings = bindings;
           this.liveRunTerminalSession = terminalSession.terminal_session;
-          this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq([], terminalEvents);
-          this.updateLiveRunLatestTerminalSeq();
-          this.ensureLiveRunProcessSelection();
-          this.scrollTerminalTranscriptToBottom();
-          this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq([], traceEvents);
-          this.replayDetail = replayDetail;
-          this.syncLiveRunInteractionTabFromRoute(isSameRun);
+          await this.ensureLiveRunInteractionTabData(this.liveRunInteractionTab, runId);
+          if (this._liveRunLoadGeneration !== loadGeneration || this.liveRun?.id !== runId) {
+            return;
+          }
           this.connectRunWebSocket(runId);
         } finally {
-          this.busy.liveRun = false;
+          if (loadGeneration === null || this._liveRunLoadGeneration === loadGeneration) {
+            this.busy.liveRun = false;
+          }
         }
       },
 
@@ -151,32 +166,215 @@
         const allowedTabs = new Set(["terminal", "io", "replay"]);
         if (this.route?.params?.view === "replay") {
           this.liveRunInteractionTab = "replay";
-          return;
-        }
-        if (!isSameRun || !allowedTabs.has(this.liveRunInteractionTab)) {
+        } else if (!isSameRun || !allowedTabs.has(this.liveRunInteractionTab)) {
           this.liveRunInteractionTab = "terminal";
         }
+        this.markLiveRunInteractionTabMounted(this.liveRunInteractionTab);
+      },
+
+
+      markLiveRunInteractionTabMounted(tabName) {
+        if (!["terminal", "io", "replay"].includes(tabName)) {
+          return;
+        }
+        this.liveRunMountedTabs = {
+          ...this.liveRunMountedTabs,
+          [tabName]: true
+        };
+      },
+
+
+      async selectLiveRunInteractionTab(tabName) {
+        if (!["terminal", "io", "replay"].includes(tabName)) {
+          return;
+        }
+        if (this.liveRunInteractionTab !== tabName) {
+          this.pauseLiveRunMedia();
+          this.closeTerminalMediaPreview();
+          this.closeLiveRunProcessEventDrawer();
+        }
+        this.liveRunInteractionTab = tabName;
+        this.markLiveRunInteractionTabMounted(tabName);
+        try {
+          await this.ensureLiveRunInteractionTabData(tabName, this.liveRun?.id || "");
+        } catch (error) {
+          this.showNotice("error", error.message || "运行数据加载失败。");
+        }
+        if (tabName === "terminal") {
+          this.scrollTerminalTranscriptToBottom();
+        }
+      },
+
+
+      async ensureLiveRunInteractionTabData(tabName, runId) {
+        if (!runId) {
+          return;
+        }
+        if (["terminal", "io"].includes(tabName)) {
+          await this.loadLiveRunTerminalEvents(runId);
+          return;
+        }
+        if (tabName === "replay") {
+          await this.loadLiveRunReplay(runId);
+        }
+      },
+
+
+      async loadLiveRunTerminalEvents(runId) {
+        if (!runId || this.liveRunTerminalEventsLoadedRunId === runId) {
+          return;
+        }
+        if (this._liveRunTerminalEventsRequest?.runId === runId) {
+          await this._liveRunTerminalEventsRequest.promise;
+          return;
+        }
+        const promise = this.apiRequest(`/terminal/sessions/${runId}/events`);
+        this._liveRunTerminalEventsRequest = { runId, promise };
+        try {
+          const terminalEvents = await promise;
+          if (this.liveRun?.id !== runId) {
+            return;
+          }
+          this.mergeTerminalEvents(terminalEvents);
+          this.liveRunTerminalEventsLoadedRunId = runId;
+        } finally {
+          if (this._liveRunTerminalEventsRequest?.promise === promise) {
+            this._liveRunTerminalEventsRequest = null;
+          }
+        }
+      },
+
+
+      async loadLiveRunReplay(runId) {
+        if (!runId || this.liveRunReplayLoadedRunId === runId) {
+          return;
+        }
+        if (this._liveRunReplayRequest?.runId === runId) {
+          const currentRequest = this._liveRunReplayRequest;
+          await currentRequest.promise;
+          if (
+            this.liveRun?.id === runId &&
+            this.liveRunReplayLoadedRunId !== runId &&
+            Number(this._liveRunReplayGeneration || 0) !== currentRequest.generation
+          ) {
+            if (this._liveRunReplayRequest === currentRequest) {
+              this._liveRunReplayRequest = null;
+            }
+            await this.loadLiveRunReplay(runId);
+          }
+          return;
+        }
+        const generation = Number(this._liveRunReplayGeneration || 0);
+        const promise = (async () => {
+          const replayDetail = await this.apiRequest(`/replay/runs/${runId}`);
+          if (
+            this.liveRun?.id !== runId ||
+            Number(this._liveRunReplayGeneration || 0) !== generation
+          ) {
+            return;
+          }
+          this.replayDetail = replayDetail;
+          this.liveRunReplayLoadedRunId = runId;
+        })();
+        this._liveRunReplayRequest = { runId, promise, generation };
+        try {
+          await promise;
+        } finally {
+          if (this._liveRunReplayRequest?.promise === promise) {
+            this._liveRunReplayRequest = null;
+          }
+        }
+      },
+
+
+      async refreshLiveRunSummary(runId) {
+        if (!runId || this.liveRun?.id !== runId) {
+          return;
+        }
+        const [run, terminalSession] = await Promise.all([
+          this.apiRequest(`/runs/${runId}`),
+          this.apiRequest(`/terminal/sessions/${runId}`)
+        ]);
+        if (this.liveRun?.id !== runId) {
+          return;
+        }
+        this.liveRun = run;
+        this.liveRunTerminalSession = terminalSession.terminal_session;
+        this.updateLiveRunLatestTerminalSeq();
+      },
+
+
+      destroyLiveRunView() {
+        this._liveRunLoadGeneration = Number(this._liveRunLoadGeneration || 0) + 1;
+        this._liveRunReplayGeneration = Number(this._liveRunReplayGeneration || 0) + 1;
+        if (this.busy) {
+          this.busy.liveRun = false;
+          this.busy.terminalInput = false;
+        }
+        if (this._liveRunReplayRefreshTimer) {
+          clearTimeout(this._liveRunReplayRefreshTimer);
+          this._liveRunReplayRefreshTimer = null;
+        }
+        this.pauseLiveRunMedia();
+        this.releaseTerminalEventObjectUrls(this.liveRunTerminalEvents);
+        this.releaseTerminalInputAttachmentObjectUrls(this.terminalInputAttachments());
+        this.disconnectRunWebSocket();
+        this.closeTerminalMediaPreview();
+        this.liveRun = null;
+        this.liveRunBindings = [];
+        this.liveRunTerminalSession = null;
+        this.liveRunTerminalEvents = [];
+        this.liveRunTraceEvents = [];
+        this.liveRunInteractionTab = "terminal";
+        this.liveRunMountedTabs = { terminal: false, io: false, replay: false };
+        this.liveRunLoadedRunId = "";
+        this.liveRunTerminalEventsLoadedRunId = "";
+        this.liveRunReplayLoadedRunId = "";
+        this.selectedLiveRunReplayItemKey = "";
+        this.selectedLiveRunProcessEventKey = "";
+        this.replayDetail = null;
+        this.terminalInputForm.payload = "";
+        this.terminalInputForm.attachments = [];
+        this._liveRunTerminalEventsRequest = null;
+        this._liveRunReplayRequest = null;
+        this._liveRunTerminalReconcileRequest = null;
+      },
+
+
+      pauseLiveRunMedia() {
+        if (typeof document === "undefined") {
+          return;
+        }
+        document.querySelectorAll("[data-run-live-view] audio, [data-run-live-view] video").forEach((element) => {
+          if (typeof element.pause === "function") {
+            element.pause();
+          }
+        });
       },
 
 
       async sendTerminalInput() {
         const runId = this.liveRun?.id;
+        const viewGeneration = Number(this._liveRunLoadGeneration || 0);
         const textPayload = this.terminalInputText();
         const attachments = this.terminalInputAttachments();
         if (!runId || !this.canSendTerminalInput()) {
           return;
         }
         this.busy.terminalInput = true;
+        const reconcileFromSeq = this.nextTerminalReconcileFromSeq();
         const optimisticEvent = this.buildOptimisticTerminalInputEvent(runId, textPayload, attachments);
         let acceptedByServer = false;
         this.mergeTerminalEvents([optimisticEvent]);
         this.terminalInputForm.payload = "";
-        this.clearTerminalInputAttachments();
+        this.clearTerminalInputAttachments({ revokeObjectUrls: false });
         try {
           if (attachments.length) {
             const result = await this.sendTerminalRuntimeMultipartEvent(runId, textPayload, attachments, optimisticEvent.external_event_id);
             acceptedByServer = true;
-            this.mergeTerminalEvents([result.event]);
+            if (this.liveRun?.id === runId && Number(this._liveRunLoadGeneration || 0) === viewGeneration) {
+              this.mergeTerminalEvents([result.event]);
+            }
           } else {
             const response = await this.apiRequest(`/terminal/sessions/${runId}/events`, {
               method: "POST",
@@ -190,29 +388,39 @@
               })
             });
             acceptedByServer = true;
-            this.mergeTerminalEvents([response.event]);
+            if (this.liveRun?.id === runId && Number(this._liveRunLoadGeneration || 0) === viewGeneration) {
+              this.mergeTerminalEvents([response.event]);
+            }
           }
-          await this.loadRunLive(runId);
+          if (this.liveRun?.id !== runId || Number(this._liveRunLoadGeneration || 0) !== viewGeneration) {
+            return;
+          }
+          await this.refreshLiveRunSummary(runId).catch(() => {});
         } catch (error) {
-          if (!acceptedByServer) {
-            acceptedByServer = await this.reconcileTerminalInputAcceptance(runId, optimisticEvent.external_event_id);
+          if (this.liveRun?.id !== runId || Number(this._liveRunLoadGeneration || 0) !== viewGeneration) {
+            return;
           }
           if (!acceptedByServer) {
-            this.removeOptimisticTerminalEvent(optimisticEvent.id);
+            acceptedByServer = await this.reconcileTerminalInputAcceptance(
+              runId,
+              optimisticEvent.external_event_id,
+              reconcileFromSeq
+            );
+          }
+          if (!acceptedByServer) {
+            this.removeOptimisticTerminalEvent(optimisticEvent.id, { revokeObjectUrls: false });
             this.terminalInputForm.payload = textPayload;
             this.terminalInputForm.attachments = attachments;
           } else {
-            try {
-              await this.loadRunLive(runId);
-            } catch {
-              // The accepted terminal event remains the source of truth; a later refresh can recover run state.
-            }
+            await this.refreshLiveRunSummary(runId).catch(() => {});
           }
           if (!acceptedByServer) {
             this.showNotice("error", error.message || "终端输入发送失败。");
           }
         } finally {
-          this.busy.terminalInput = false;
+          if (this.liveRun?.id === runId && Number(this._liveRunLoadGeneration || 0) === viewGeneration) {
+            this.busy.terminalInput = false;
+          }
         }
       },
 
@@ -230,7 +438,10 @@
       },
 
 
-      clearTerminalInputAttachments() {
+      clearTerminalInputAttachments({ revokeObjectUrls = true } = {}) {
+        if (revokeObjectUrls) {
+          this.releaseTerminalInputAttachmentObjectUrls(this.terminalInputAttachments());
+        }
         this.terminalInputForm.attachments = [];
         if (this.$refs?.terminalInputFile) {
           this.$refs.terminalInputFile.value = "";
@@ -240,9 +451,7 @@
 
       removeTerminalInputAttachment(attachmentId) {
         const removed = this.terminalInputAttachments().find((attachment) => attachment.id === attachmentId);
-        if (removed?.preview_url) {
-          URL.revokeObjectURL(removed.preview_url);
-        }
+        this.releaseTerminalInputAttachmentObjectUrls(removed ? [removed] : []);
         this.terminalInputForm.attachments = this.terminalInputAttachments().filter((attachment) => attachment.id !== attachmentId);
       },
 
@@ -277,24 +486,51 @@
         if (this.liveRunWs && this.liveRunWsRunId === runId && this.liveRunWs.readyState === WebSocket.OPEN) {
           return;
         }
-        this.disconnectRunWebSocket();
+        if (this._liveRunWsReconnectTimer) {
+          clearTimeout(this._liveRunWsReconnectTimer);
+          this._liveRunWsReconnectTimer = null;
+        }
+        const previousSocket = this.liveRunWs;
+        this.liveRunWs = null;
+        if (previousSocket) {
+          previousSocket.close();
+        }
         this.liveRunWsRunId = runId;
         this.liveRunWsStatus = "connecting";
         const socket = new WebSocket(resolveWsUrl(this.apiBaseUrl, `/ws/runs/${runId}`));
         this.liveRunWs = socket;
         socket.addEventListener("open", () => {
+          if (this.liveRunWs !== socket) {
+            return;
+          }
           this.liveRunWsStatus = "open";
+          const isReconnect = Boolean(this._liveRunWsHasOpened);
+          this._liveRunWsHasOpened = true;
+          this._liveRunWsReconnectAttempt = 0;
+          if (this.liveRunMountedTabs.terminal || this.liveRunMountedTabs.io) {
+            this.reconcileLiveRunTerminalEvents(runId, this.nextTerminalReconcileFromSeq()).catch(() => {});
+          }
+          if (this.liveRunInteractionTab === "replay") {
+            this.reconcileLiveRunReplayAfterSocketOpen(runId).catch(() => {});
+          } else if (isReconnect) {
+            this.refreshLiveRunSummary(runId).catch(() => {});
+          }
         });
         socket.addEventListener("message", (event) => {
+          if (this.liveRunWs !== socket || this.liveRunWsRunId !== runId || this.liveRun?.id !== runId) {
+            return;
+          }
           try {
-            this.handleRunWsEvent(JSON.parse(event.data));
+            this.handleRunWsEvent(JSON.parse(event.data), runId);
           } catch {
             // Ignore malformed runtime stream payloads; REST remains the recovery path.
           }
         });
         socket.addEventListener("close", () => {
           if (this.liveRunWs === socket) {
+            this.liveRunWs = null;
             this.liveRunWsStatus = "closed";
+            this.scheduleRunWebSocketReconnect(runId);
           }
         });
         socket.addEventListener("error", () => {
@@ -306,27 +542,108 @@
 
 
       disconnectRunWebSocket() {
-        if (this.liveRunWs) {
-          this.liveRunWs.close();
+        if (this._liveRunWsReconnectTimer) {
+          clearTimeout(this._liveRunWsReconnectTimer);
+          this._liveRunWsReconnectTimer = null;
         }
+        const socket = this.liveRunWs;
         this.liveRunWs = null;
         this.liveRunWsRunId = "";
         this.liveRunWsStatus = "idle";
+        this._liveRunWsReconnectAttempt = 0;
+        this._liveRunWsHasOpened = false;
+        if (socket) {
+          socket.close();
+        }
       },
 
 
-      handleRunWsEvent(event) {
+      scheduleRunWebSocketReconnect(runId) {
+        if (!runId || this.liveRun?.id !== runId || this.liveRunWsRunId !== runId) {
+          return;
+        }
+        const attempt = Number(this._liveRunWsReconnectAttempt || 0);
+        const delay = Math.min(10000, 500 * (2 ** attempt));
+        this._liveRunWsReconnectAttempt = attempt + 1;
+        this._liveRunWsReconnectTimer = setTimeout(() => {
+          this._liveRunWsReconnectTimer = null;
+          if (this.liveRun?.id === runId && this.liveRunWsRunId === runId) {
+            this.connectRunWebSocket(runId);
+          }
+        }, delay);
+      },
+
+
+      handleRunWsEvent(event, expectedRunId = "") {
         if (!event || event.event_type === "ws.connected") {
           return;
         }
+        const activeRunId = String(this.liveRun?.id || "");
+        const eventRunIds = [expectedRunId, event.run_id, event.payload?.run_id]
+          .filter(Boolean)
+          .map((value) => String(value));
+        if (!activeRunId || eventRunIds.some((runId) => runId !== activeRunId)) {
+          return;
+        }
         if (event.event_type === "terminal.event.appended" && event.payload) {
+          const expectedSeq = this.nextTerminalReconcileFromSeq();
+          const incomingSeq = Number(event.payload.seq_no) || 0;
+          if (
+            incomingSeq > expectedSeq &&
+            (this.liveRunMountedTabs.terminal || this.liveRunMountedTabs.io)
+          ) {
+            this.reconcileLiveRunTerminalEvents(this.liveRun?.id || "", expectedSeq).catch(() => {});
+          }
           this.mergeTerminalEvents([event.payload]);
+          this.liveRunReplayLoadedRunId = "";
+          if (this.liveRunInteractionTab === "replay") {
+            this.scheduleLiveRunReplayRefresh(activeRunId);
+          }
         }
         if (event.event_type === "trace.event.appended" && event.payload) {
           this.liveRunTraceEvents = window.PSOPRuntimeEvents.mergeBySeq(this.liveRunTraceEvents, [event.payload]);
+          this.liveRunReplayLoadedRunId = "";
+          if (this.liveRunInteractionTab === "replay") {
+            this.scheduleLiveRunReplayRefresh(activeRunId);
+          }
         }
         if (["binding.resolved", "binding.updated"].includes(event.event_type) && event.payload?.bindings) {
           this.liveRunBindings = window.PSOPRuntimeEvents.mergeById(this.liveRunBindings, event.payload.bindings);
+        }
+      },
+
+
+      scheduleLiveRunReplayRefresh(runId) {
+        if (!runId || this.liveRun?.id !== runId) {
+          return;
+        }
+        this._liveRunReplayGeneration = Number(this._liveRunReplayGeneration || 0) + 1;
+        this.liveRunReplayLoadedRunId = "";
+        if (this._liveRunReplayRefreshTimer) {
+          clearTimeout(this._liveRunReplayRefreshTimer);
+        }
+        this._liveRunReplayRefreshTimer = setTimeout(() => {
+          this._liveRunReplayRefreshTimer = null;
+          if (this.liveRun?.id === runId && this.liveRunInteractionTab === "replay") {
+            this.loadLiveRunReplay(runId).catch(() => {});
+          }
+        }, 100);
+      },
+
+
+      async reconcileLiveRunReplayAfterSocketOpen(runId) {
+        if (!runId || this.liveRun?.id !== runId || this.liveRunInteractionTab !== "replay") {
+          return;
+        }
+        const replayRun = this.replayDetail?.run?.id === runId ? this.replayDetail.run : null;
+        await this.refreshLiveRunSummary(runId);
+        if (!replayRun || this.liveRun?.id !== runId || this.liveRunInteractionTab !== "replay") {
+          return;
+        }
+        const changed = ["latest_terminal_seq", "latest_trace_seq", "latest_snapshot_seq", "status"]
+          .some((key) => String(replayRun[key] ?? "") !== String(this.liveRun?.[key] ?? ""));
+        if (changed) {
+          this.scheduleLiveRunReplayRefresh(runId);
         }
       },
 
@@ -338,9 +655,21 @@
             .filter((event) => event && !event._optimistic && Number.isFinite(Number(event.seq_no)))
             .map((event) => Number(event.seq_no))
         );
-        const baseEvents = realIncomingSeqs.size
-          ? this.liveRunTerminalEvents.filter((event) => !realIncomingSeqs.has(Number(event.seq_no)))
-          : this.liveRunTerminalEvents;
+        const realIncomingExternalIds = new Set(
+          incoming
+            .filter((event) => event && !event._optimistic && event.external_event_id)
+            .map((event) => String(event.external_event_id))
+        );
+        const replacedOptimisticEvents = this.liveRunTerminalEvents.filter(
+          (event) =>
+            event?._optimistic &&
+            (realIncomingSeqs.has(Number(event.seq_no)) || realIncomingExternalIds.has(String(event.external_event_id || "")))
+        );
+        this.releaseTerminalEventObjectUrls(replacedOptimisticEvents);
+        const replacedOptimisticIds = new Set(replacedOptimisticEvents.map((event) => event.id));
+        const baseEvents = this.liveRunTerminalEvents.filter(
+          (event) => !realIncomingSeqs.has(Number(event.seq_no)) && !replacedOptimisticIds.has(event.id)
+        );
         this.liveRunTerminalEvents = window.PSOPRuntimeEvents.mergeBySeq(baseEvents, incoming);
         this.updateLiveRunLatestTerminalSeq();
         this.ensureLiveRunProcessSelection();
@@ -353,7 +682,10 @@
           return;
         }
         const eventSeqs = this.liveRunTerminalEvents.map((event) => Number(event.seq_no) || 0);
-        const latestSeq = eventSeqs.length ? Math.max(...eventSeqs) : Number(this.liveRun.latest_terminal_seq || 0);
+        const latestSeq = Math.max(
+          Number(this.liveRun.latest_terminal_seq || 0),
+          ...eventSeqs
+        );
         this.liveRun.latest_terminal_seq = latestSeq || 0;
       },
 
@@ -365,6 +697,19 @@
             ...this.liveRunTerminalEvents.map((event) => Number(event.seq_no) || 0)
           ) + 1
         );
+      },
+
+
+      nextTerminalReconcileFromSeq() {
+        const realSeqs = new Set(this.liveRunTerminalEvents
+          .filter((event) => !event?._optimistic)
+          .map((event) => Number(event.seq_no) || 0)
+          .filter((seqNo) => seqNo > 0));
+        let expectedSeq = 1;
+        while (realSeqs.has(expectedSeq)) {
+          expectedSeq += 1;
+        }
+        return expectedSeq;
       },
 
 
@@ -441,7 +786,9 @@
         }
         attachments.forEach((attachment, index) => {
           const file = attachment.file;
-          const previewUrl = URL.createObjectURL(file);
+          const previewUrl = String(attachment.preview_url || "").startsWith("blob:")
+            ? attachment.preview_url
+            : URL.createObjectURL(file);
           attachment.preview_url = previewUrl;
           parts.push({
             part_id: `file_${index + 1}`,
@@ -481,27 +828,96 @@
       },
 
 
-      removeOptimisticTerminalEvent(eventId) {
+      removeOptimisticTerminalEvent(eventId, { revokeObjectUrls = true } = {}) {
+        const removedEvents = this.liveRunTerminalEvents.filter((event) => event.id === eventId);
+        if (revokeObjectUrls) {
+          this.releaseTerminalEventObjectUrls(removedEvents);
+        }
         this.liveRunTerminalEvents = this.liveRunTerminalEvents.filter((event) => event.id !== eventId);
         this.updateLiveRunLatestTerminalSeq();
       },
 
 
-      async reconcileTerminalInputAcceptance(runId, externalEventId) {
+      async reconcileTerminalInputAcceptance(runId, externalEventId, fromSeq = 1) {
         if (!runId || !externalEventId) {
           return false;
         }
         try {
-          const events = await this.apiRequest(`/terminal/sessions/${runId}/events`);
+          const normalizedFromSeq = Math.max(1, Number(fromSeq) || 1);
+          const events = await this.apiRequest(`/terminal/sessions/${runId}/events?from_seq=${normalizedFromSeq}`);
           const acceptedEvent = events.find((event) => event.external_event_id === externalEventId);
           if (!acceptedEvent) {
             return false;
           }
-          this.mergeTerminalEvents([acceptedEvent]);
+          if (this.liveRun?.id === runId) {
+            this.mergeTerminalEvents([acceptedEvent]);
+          }
           return true;
         } catch {
           return false;
         }
+      },
+
+
+      async reconcileLiveRunTerminalEvents(runId, fromSeq = 1) {
+        if (!runId || this.liveRun?.id !== runId) {
+          return;
+        }
+        const normalizedFromSeq = Math.max(1, Number(fromSeq) || 1);
+        const requestKey = `${runId}:${normalizedFromSeq}`;
+        if (this._liveRunTerminalReconcileRequest?.key === requestKey) {
+          await this._liveRunTerminalReconcileRequest.promise;
+          return;
+        }
+        const promise = this.apiRequest(
+          `/terminal/sessions/${runId}/events?from_seq=${normalizedFromSeq}`
+        );
+        this._liveRunTerminalReconcileRequest = { key: requestKey, promise };
+        try {
+          const events = await promise;
+          if (this.liveRun?.id === runId) {
+            this.mergeTerminalEvents(events);
+          }
+        } finally {
+          if (this._liveRunTerminalReconcileRequest?.promise === promise) {
+            this._liveRunTerminalReconcileRequest = null;
+          }
+        }
+      },
+
+
+      releaseTerminalInputAttachmentObjectUrls(attachments) {
+        const urls = (attachments || []).map((attachment) => attachment?.preview_url).filter(Boolean);
+        this.revokeTerminalObjectUrls(urls);
+      },
+
+
+      releaseTerminalEventObjectUrls(events) {
+        const urls = [];
+        (events || []).forEach((event) => {
+          this.terminalEventParts(event).forEach((part) => {
+            const metadata = part?.metadata && typeof part.metadata === "object" ? part.metadata : {};
+            if (part?._local_url) {
+              urls.push(part._local_url);
+            }
+            if (metadata.preview_url) {
+              urls.push(metadata.preview_url);
+            }
+          });
+        });
+        this.revokeTerminalObjectUrls(urls);
+      },
+
+
+      revokeTerminalObjectUrls(urls) {
+        if (typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
+          return;
+        }
+        new Set(urls || []).forEach((url) => {
+          if (String(url).startsWith("blob:")) {
+            URL.revokeObjectURL(url);
+          }
+        });
       },
 
 
@@ -590,23 +1006,88 @@
       },
 
 
+      terminalPresentationKind(mimeType = "", fallbackKind = "") {
+        const normalizedMimeType = String(mimeType || "").split(";", 1)[0].trim().toLowerCase();
+        const normalizedFallbackKind = String(fallbackKind || "").trim().toLowerCase();
+        const genericMimeTypes = new Set(["", "application/octet-stream", "binary/octet-stream", "multipart/mixed"]);
+
+        if (!genericMimeTypes.has(normalizedMimeType)) {
+          if (normalizedMimeType.startsWith("image/")) {
+            return "image";
+          }
+          if (normalizedMimeType.startsWith("audio/")) {
+            return "audio";
+          }
+          if (normalizedMimeType.startsWith("video/")) {
+            return "video";
+          }
+          if (normalizedMimeType === "application/pdf") {
+            return "pdf";
+          }
+          if (
+            normalizedMimeType.startsWith("text/") ||
+            normalizedMimeType === "application/json" ||
+            normalizedMimeType.endsWith("+json")
+          ) {
+            return "text";
+          }
+          return "file";
+        }
+
+        if (["text", "image", "audio", "video", "pdf", "file"].includes(normalizedFallbackKind)) {
+          return normalizedFallbackKind;
+        }
+        if (normalizedFallbackKind.includes(".image.")) {
+          return "image";
+        }
+        if (normalizedFallbackKind.includes(".audio.")) {
+          return "audio";
+        }
+        if (normalizedFallbackKind.includes(".video.")) {
+          return "video";
+        }
+        if (normalizedFallbackKind.includes(".text.")) {
+          return "text";
+        }
+        if (normalizedFallbackKind.includes(".pdf.")) {
+          return "pdf";
+        }
+        return "file";
+      },
+
+
+      terminalEventPartPresentationKind(part) {
+        return this.terminalPresentationKind(this.terminalEventPartMimeType(part), part?.kind);
+      },
+
+
       terminalEventPartIsText(part) {
-        return String(part?.kind || "").toLowerCase() === "text" || this.terminalEventPartMimeType(part).startsWith("text/");
+        return this.terminalEventPartPresentationKind(part) === "text";
       },
 
 
       terminalEventPartIsImage(part) {
-        return String(part?.kind || "").toLowerCase() === "image" || this.terminalEventPartMimeType(part).startsWith("image/");
+        return this.terminalEventPartPresentationKind(part) === "image";
       },
 
 
       terminalEventPartIsAudio(part) {
-        return String(part?.kind || "").toLowerCase() === "audio" || this.terminalEventPartMimeType(part).startsWith("audio/");
+        return this.terminalEventPartPresentationKind(part) === "audio";
       },
 
 
       terminalEventPartIsVideo(part) {
-        return String(part?.kind || "").toLowerCase() === "video" || this.terminalEventPartMimeType(part).startsWith("video/");
+        return this.terminalEventPartPresentationKind(part) === "video";
+      },
+
+
+      terminalEventPartIsPdf(part) {
+        return this.terminalEventPartPresentationKind(part) === "pdf";
+      },
+
+
+      terminalEventPartIsFile(part) {
+        return this.terminalEventPartPresentationKind(part) === "file";
       },
 
 
@@ -707,6 +1188,14 @@
       },
 
 
+      terminalEventPresentationKind(event) {
+        return this.terminalPresentationKind(
+          this.terminalEventPresentationMimeType(event),
+          event?.kind || event?.event_kind
+        );
+      },
+
+
       terminalEventPayloadObject(event) {
         const payload = event?.payload_inline;
         return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
@@ -801,17 +1290,17 @@
 
 
       terminalEventIsImage(event) {
-        return this.terminalEventPresentationMimeType(event).startsWith("image/");
+        return this.terminalEventPresentationKind(event) === "image";
       },
 
 
       terminalEventIsAudio(event) {
-        return this.terminalEventPresentationMimeType(event).startsWith("audio/");
+        return this.terminalEventPresentationKind(event) === "audio";
       },
 
 
       terminalEventIsVideo(event) {
-        return this.terminalEventPresentationMimeType(event).startsWith("video/");
+        return this.terminalEventPresentationKind(event) === "video";
       },
 
 
@@ -822,21 +1311,15 @@
 
 
       terminalEventIsPdf(event) {
-        return this.terminalEventPresentationMimeType(event) === "application/pdf";
+        return this.terminalEventPresentationKind(event) === "pdf";
       },
 
 
       terminalEventIsGenericFile(event) {
-        const mimeType = this.terminalEventPresentationMimeType(event);
-        const eventKind = String(event?.event_kind || "").toLowerCase();
         return Boolean(
           this.terminalEventMediaUrl(event) &&
-            !this.terminalEventIsImage(event) &&
-            !this.terminalEventIsAudio(event) &&
-            !this.terminalEventIsVideo(event) &&
-            !this.terminalEventIsPdf(event) &&
-            !this.terminalEventIsJson(event) &&
-            (event?.artifact_object_id || eventKind.includes(".file.") || ["application/pdf", "application/octet-stream"].includes(mimeType))
+            this.terminalEventPresentationKind(event) === "file" &&
+            !this.terminalEventIsJson(event)
         );
       },
 
@@ -1254,24 +1737,15 @@
 
 
       liveRunProcessPartKind(part) {
-        const kind = String(part?.kind || "").toLowerCase();
+        const presentationKind = this.terminalEventPartPresentationKind(part);
+        if (presentationKind === "pdf") {
+          return "file";
+        }
         const mimeType = this.terminalEventPartMimeType(part);
-        if (kind === "image" || mimeType.startsWith("image/")) {
-          return "image";
-        }
-        if (kind === "audio" || mimeType.startsWith("audio/")) {
-          return "audio";
-        }
-        if (kind === "video" || mimeType.startsWith("video/")) {
-          return "video";
-        }
-        if (kind === "text" || mimeType.startsWith("text/")) {
-          return "text";
-        }
         if (mimeType === "application/json" || mimeType.endsWith("+json")) {
           return "data";
         }
-        return "file";
+        return presentationKind;
       },
 
 

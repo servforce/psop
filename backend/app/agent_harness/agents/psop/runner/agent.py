@@ -41,7 +41,12 @@ def make_runner_agent(context: AgentBuildContext):
     return create_psop_agent(
         model=context.create_model(),
         tools=tools,
-        middleware=build_middlewares(context.definition, context.event_writer),
+        middleware=build_middlewares(
+            context.definition,
+            context.event_writer,
+            deadline_monotonic=context.invocation.deadline_monotonic,
+            before_model_call=context.refresh_provider_deadline,
+        ),
         system_prompt=apply_prompt_template(
             system_prompt=context.system_prompt,
             memory_prompt=context.memory_prompt,

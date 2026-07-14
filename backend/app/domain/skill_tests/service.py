@@ -407,7 +407,7 @@ class SkillTestService:
         return self._build_run_response(scenario_run)
 
     def process_driver_job(self, session: Session, job_id: str) -> SkillTestScenarioRunResponse:
-        job = self.job_repository.get_runtime_job(session, job_id)
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
         if not job:
             raise SkillNotFoundError("未找到测试时间轴 Driver Job。", details={"job_id": job_id})
         scenario_run_id = job.payload.get("scenario_run_id")
@@ -423,6 +423,38 @@ class SkillTestService:
         self._sync_driver_job_metrics(session, job, str(scenario_run_id))
         session.commit()
         return response
+
+    def finalize_exhausted_timeline_driver_job(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+        error_message: str,
+    ) -> bool:
+        """Idempotently fail the scenario run without committing the reaper transaction."""
+
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
+        if job is None or job.job_type != TIMELINE_DRIVER_JOB_TYPE:
+            return False
+        scenario_run_id = str((job.payload or {}).get("scenario_run_id") or "")
+        if not scenario_run_id:
+            return False
+        scenario_run = self.repository.get_scenario_run_for_update(session, scenario_run_id)
+        if scenario_run is None or scenario_run.driver_status in {"completed", "failed", "cancelled"}:
+            return False
+
+        reason = error_message.strip() or "Timeline driver job attempts exhausted."
+        scenario_run.status = "failed"
+        scenario_run.driver_status = "failed"
+        scenario_run.ended_at = scenario_run.ended_at or now_utc()
+        scenario_run.result_summary = {
+            **(scenario_run.result_summary or {}),
+            "status": "failed",
+            "reason": "timeline_driver_job_attempts_exhausted",
+            "error_message": reason,
+            "job_id": job.id,
+        }
+        return True
 
     def process_timeline_driver_for_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRunResponse:
         scenario_run = self._get_scenario_run(session, scenario_run_id)

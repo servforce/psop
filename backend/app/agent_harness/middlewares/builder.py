@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from langchain.agents.middleware import AgentMiddleware
 
 from app.agent_harness.events import AgentEventWriter
@@ -18,7 +20,13 @@ DEFAULT_MIDDLEWARE_ORDER = [
 ]
 
 
-def build_middlewares(definition: AgentDefinition, event_writer: AgentEventWriter) -> list[AgentMiddleware]:
+def build_middlewares(
+    definition: AgentDefinition,
+    event_writer: AgentEventWriter,
+    *,
+    deadline_monotonic: float | None = None,
+    before_model_call: Callable[[], None] | None = None,
+) -> list[AgentMiddleware]:
     configured = _enabled_middleware(definition)
     middlewares: list[AgentMiddleware] = []
     for name, config in configured:
@@ -29,6 +37,8 @@ def build_middlewares(definition: AgentDefinition, event_writer: AgentEventWrite
                 ModelCallEventMiddleware(
                     event_writer,
                     max_model_calls=_optional_positive_int(config.get("max_model_calls")),
+                    deadline_monotonic=deadline_monotonic,
+                    before_model_call=before_model_call,
                 )
             )
         elif name == "token_usage":
@@ -38,6 +48,7 @@ def build_middlewares(definition: AgentDefinition, event_writer: AgentEventWrite
                 ToolCallMiddleware(
                     event_writer,
                     max_error_counts=_tool_error_limits(config.get("max_error_counts")),
+                    deadline_monotonic=deadline_monotonic,
                 )
             )
         else:

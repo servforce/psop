@@ -438,8 +438,7 @@
         this.loadingPage = true;
         this.clearNotice();
         if (!["run-live", "skill-run-live", "skill-debug-live"].includes(this.route.name)) {
-          this.disconnectRunWebSocket();
-          this.replayDetail = null;
+          this.destroyLiveRunView();
         }
         if (this.route.name !== "skill-test-scenario-review") {
           this.stopSkillTestReviewPlayback?.();

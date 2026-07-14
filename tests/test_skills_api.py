@@ -1,31 +1,51 @@
 from __future__ import annotations
 
+import asyncio
 import copy
+import inspect
+import io
 import json
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import Request, UploadFile
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 
 from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
 from app.agent_harness.models.scripted_compiler_chat_model import ScriptedCompilerChatModel
 from app.agent_harness.models.scripted_runner_chat_model import ScriptedRunnerChatModel
 from app.agent_harness.service import AgentHarnessService
+from app.api.routes.runtime import (
+    _stream_terminal_content_response,
+    get_terminal_event_content,
+    get_terminal_event_part_content,
+)
 from app.app import create_app
 from app.core.config import Settings
 from app.domain.jobs.models import RuntimeJob
+from app.domain.runtime.ingest import TerminalEventIngestService, run_object_store_io
+from app.domain.runtime.schemas import AppendTerminalEventRequest
 from app.domain.runtime.service import RuntimeService
+from app.domain.runtime.media import TerminalContentDescriptor
 from app.domain.skills import raw_materials
 from app.domain.skills import video_analysis
 from app.domain.skills import service as skills_service_module
 from app.domain.skills.models import SkillDefinition, SkillRawMaterial, SkillRawMaterialAnalysis, SkillRawMaterialGeneration
 from app.domain.skill_tests.models import SkillTestExpectationEvaluation
 from app.domain.skill_tests.service import SkillTestService
-from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
+from app.domain.skills.exceptions import (
+    PayloadTooLargeError,
+    SkillsGatewayError,
+    SkillsGatewayTimeoutError,
+    SkillValidationError,
+)
 from app.gateway.asr import AsrTranscription
 from app.gateway.inference import LlmAttachment, LlmCompletion
-from app.infra.object_store import StoredObject
+from app.infra.object_store import ObjectDownload, ObjectStat, StoredObject
 from app.gateway.gitlab import GitLabProjectInfo, RepositoryFile, RepositoryTreeEntry, SkillSourceBundle
 from app.infra.database import DatabaseManager
 
@@ -519,6 +539,8 @@ class FakeObjectStore:
     def __init__(self) -> None:
         self.uploads: list[dict[str, object]] = []
         self.objects: dict[tuple[str, str], bytes] = {}
+        self.opens: list[dict[str, object]] = []
+        self.downloads: list[ObjectDownload] = []
 
     def upload_bytes(
         self,
@@ -546,13 +568,595 @@ class FakeObjectStore:
             metadata=metadata or {},
         )
 
+    def upload_stream(
+        self,
+        *,
+        object_key: str,
+        stream,
+        media_type: str,
+        size_bytes: int | None = None,
+        checksum: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> StoredObject:
+        stream.seek(0)
+        content = stream.read()
+        return self.upload_bytes(
+            object_key=object_key,
+            content=content,
+            media_type=media_type,
+            metadata=metadata,
+        )
+
     def download_bytes(self, *, bucket: str, object_key: str) -> bytes:
         return self.objects[(bucket, object_key)]
+
+    def stat_object(self, *, bucket: str, object_key: str) -> ObjectStat:
+        content = self.objects[(bucket, object_key)]
+        return ObjectStat(
+            bucket=bucket,
+            object_key=object_key,
+            media_type="application/octet-stream",
+            size_bytes=len(content),
+            etag=f"etag-{len(content)}",
+        )
+
+    def open_download(
+        self,
+        *,
+        bucket: str,
+        object_key: str,
+        byte_range: tuple[int, int] | None = None,
+    ) -> ObjectDownload:
+        self.opens.append(
+            {
+                "bucket": bucket,
+                "object_key": object_key,
+                "byte_range": byte_range,
+            }
+        )
+        content = self.objects[(bucket, object_key)]
+        if byte_range is not None:
+            total_size = len(content)
+            content = content[byte_range[0] : byte_range[1] + 1]
+            content_range = f"bytes {byte_range[0]}-{byte_range[1]}/{total_size}"
+        else:
+            content_range = ""
+        download = ObjectDownload(
+            body=io.BytesIO(content),
+            size_bytes=len(content),
+            media_type="application/octet-stream",
+            etag=f"etag-{len(content)}",
+            content_range=content_range,
+        )
+        self.downloads.append(download)
+        return download
+
+    def delete_object(self, *, bucket: str, object_key: str) -> None:
+        self.objects.pop((bucket, object_key), None)
 
 
 class FailingObjectStore(FakeObjectStore):
     def upload_bytes(self, **_) -> StoredObject:
         raise RuntimeError("object store offline")
+
+    def upload_stream(self, **_) -> StoredObject:
+        raise RuntimeError("object store offline")
+
+
+def _content_request(**headers: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/content",
+            "headers": [(key.replace("_", "-").encode(), value.encode()) for key, value in headers.items()],
+        }
+    )
+
+
+async def _streaming_response_content(response) -> bytes:
+    return b"".join([chunk async for chunk in response.body_iterator])
+
+
+def test_terminal_content_stream_uses_s3_range_and_closes_reader() -> None:
+    object_store = FakeObjectStore()
+    object_store.objects[("test-bucket", "terminal/photo.png")] = b"0123456789"
+    descriptor = TerminalContentDescriptor(
+        artifact_object_id="artifact-1",
+        bucket="test-bucket",
+        object_key="terminal/photo.png",
+        mime_type="image/png",
+        filename="photo.png",
+        size_bytes=10,
+        checksum="sha256-10",
+    )
+
+    response = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(range="bytes=2-5"),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+    content = asyncio.run(_streaming_response_content(response))
+
+    assert response.status_code == 206
+    assert response.headers["content-range"] == "bytes 2-5/10"
+    assert response.headers["content-length"] == "4"
+    assert response.headers["etag"] == '"sha256-10"'
+    assert response.headers["cache-control"] == "private, max-age=86400, immutable"
+    assert object_store.opens == [
+        {"bucket": "test-bucket", "object_key": "terminal/photo.png", "byte_range": (2, 5)}
+    ]
+    assert content == b"2345"
+    assert object_store.downloads[0].body.closed
+
+
+def test_terminal_content_endpoints_are_async_and_do_not_hold_anyio_workers_for_s3() -> None:
+    assert inspect.iscoroutinefunction(get_terminal_event_content)
+    assert inspect.iscoroutinefunction(get_terminal_event_part_content)
+
+
+def test_terminal_content_cache_and_invalid_range_do_not_open_object() -> None:
+    object_store = FakeObjectStore()
+    object_store.objects[("test-bucket", "terminal/photo.png")] = b"0123456789"
+    descriptor = TerminalContentDescriptor(
+        artifact_object_id="artifact-1",
+        bucket="test-bucket",
+        object_key="terminal/photo.png",
+        mime_type="image/png",
+        filename="photo.png",
+        size_bytes=10,
+        checksum="sha256-10",
+    )
+
+    cached = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(if_none_match='"sha256-10"'),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+    malformed = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(range="bytes=0-1,4-5"),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+    unsatisfied = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(range="bytes=100-200"),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+
+    assert cached.status_code == 304
+    assert malformed.status_code == 416
+    assert unsatisfied.status_code == 416
+    assert malformed.headers["content-range"] == "bytes */10"
+    assert object_store.opens == []
+
+
+@pytest.mark.parametrize(
+    ("range_header", "expected_range", "expected_content"),
+    [
+        ("bytes=3-", (3, 9), b"3456789"),
+        ("bytes=-3", (7, 9), b"789"),
+    ],
+)
+def test_terminal_content_supports_open_ended_and_suffix_ranges(
+    range_header: str,
+    expected_range: tuple[int, int],
+    expected_content: bytes,
+) -> None:
+    object_store = FakeObjectStore()
+    object_store.objects[("test-bucket", "terminal/photo.png")] = b"0123456789"
+    descriptor = TerminalContentDescriptor(
+        artifact_object_id="artifact-1",
+        bucket="test-bucket",
+        object_key="terminal/photo.png",
+        mime_type="image/png",
+        filename="photo.png",
+        size_bytes=10,
+        checksum="sha256-10",
+    )
+
+    response = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(range=range_header),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+
+    assert response.status_code == 206
+    assert object_store.opens[0]["byte_range"] == expected_range
+    assert asyncio.run(_streaming_response_content(response)) == expected_content
+
+
+def test_terminal_content_if_range_mismatch_falls_back_to_full_response() -> None:
+    object_store = FakeObjectStore()
+    object_store.objects[("test-bucket", "terminal/photo.png")] = b"0123456789"
+    descriptor = TerminalContentDescriptor(
+        artifact_object_id="artifact-1",
+        bucket="test-bucket",
+        object_key="terminal/photo.png",
+        mime_type="image/png",
+        filename="photo.png",
+        size_bytes=10,
+        checksum="sha256-10",
+    )
+
+    response = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(range="bytes=0-2", if_range='"different"'),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-length"] == "10"
+    assert object_store.opens[0]["byte_range"] is None
+    assert asyncio.run(_streaming_response_content(response)) == b"0123456789"
+
+
+def test_terminal_content_rejects_object_store_that_ignores_range() -> None:
+    class IgnoredRangeObjectStore(FakeObjectStore):
+        def open_download(self, *, bucket: str, object_key: str, byte_range=None) -> ObjectDownload:
+            content = self.objects[(bucket, object_key)]
+            download = ObjectDownload(
+                body=io.BytesIO(content),
+                size_bytes=len(content),
+                media_type="application/octet-stream",
+                etag="etag-full",
+                content_range="",
+            )
+            self.downloads.append(download)
+            return download
+
+    object_store = IgnoredRangeObjectStore()
+    object_store.objects[("test-bucket", "terminal/photo.png")] = b"0123456789"
+    descriptor = TerminalContentDescriptor(
+        artifact_object_id="artifact-1",
+        bucket="test-bucket",
+        object_key="terminal/photo.png",
+        mime_type="image/png",
+        filename="photo.png",
+        size_bytes=10,
+        checksum="sha256-10",
+    )
+
+    with pytest.raises(SkillsGatewayError):
+        asyncio.run(
+            _stream_terminal_content_response(
+                request=_content_request(range="bytes=2-5"),
+                descriptor=descriptor,
+                object_store=object_store,
+                error_details={"run_id": "run-1"},
+            )
+        )
+
+    assert object_store.downloads[0].body.closed
+
+
+def test_terminal_content_reader_closes_on_read_error_and_consumer_cancel() -> None:
+    class RaisingBody(io.BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            raise OSError("stream failed")
+
+    class ReaderObjectStore(FakeObjectStore):
+        def __init__(self, body) -> None:
+            super().__init__()
+            self.body = body
+
+        def open_download(self, *, bucket: str, object_key: str, byte_range=None) -> ObjectDownload:
+            download = ObjectDownload(
+                body=self.body,
+                size_bytes=len(self.body.getvalue()),
+                media_type="application/octet-stream",
+                etag="etag-reader",
+            )
+            self.downloads.append(download)
+            return download
+
+    async def response_for(store: ReaderObjectStore, size: int):
+        return await _stream_terminal_content_response(
+            request=_content_request(),
+            descriptor=TerminalContentDescriptor(
+                artifact_object_id="artifact-reader",
+                bucket="test-bucket",
+                object_key="terminal/reader.bin",
+                mime_type="application/octet-stream",
+                filename="reader.bin",
+                size_bytes=size,
+                checksum="sha256-reader",
+            ),
+            object_store=store,
+            error_details={"run_id": "run-1"},
+        )
+
+    failing_store = ReaderObjectStore(RaisingBody(b"failure"))
+    failing_response = asyncio.run(response_for(failing_store, 7))
+    with pytest.raises(OSError, match="stream failed"):
+        asyncio.run(_streaming_response_content(failing_response))
+    assert failing_store.body.closed
+
+    async def cancel_consumer() -> ReaderObjectStore:
+        store = ReaderObjectStore(io.BytesIO(b"x" * (300 * 1024)))
+        response = await response_for(store, 300 * 1024)
+        iterator = response.body_iterator
+        assert len(await anext(iterator)) == 256 * 1024
+        await iterator.aclose()
+        return store
+
+    cancelled_store = asyncio.run(cancel_consumer())
+    assert cancelled_store.body.closed
+
+
+def test_terminal_multipart_rejects_request_body_over_limit_before_db_access() -> None:
+    client, _, _ = create_test_client()
+    client.app.state.settings.terminal_event_max_request_bytes = 128
+
+    with client:
+        response = client.post(
+            "/api/v1/terminal/sessions/missing-run/events",
+            data={"event": json.dumps({"text": "x" * 256})},
+            files=[("files", ("photo.png", b"image", "image/png"))],
+        )
+
+    assert response.status_code == 413
+    assert response.json()["code"] == "payload_too_large"
+    assert client.app.state.object_store.uploads == []
+
+
+@pytest.mark.parametrize("multipart", [False, True])
+def test_terminal_event_manual_model_validation_returns_skill_422(multipart: bool) -> None:
+    client, _, _ = create_test_client()
+    event = {"direction": "x" * 33, "text": "现场证据"}
+
+    with client:
+        if multipart:
+            response = client.post(
+                "/api/v1/terminal/sessions/missing-run/events",
+                data={"event": json.dumps(event, ensure_ascii=False)},
+                files=[("files", ("photo.png", b"image", "image/png"))],
+            )
+        else:
+            response = client.post(
+                "/api/v1/terminal/sessions/missing-run/events",
+                json=event,
+            )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "skill_validation_error"
+    assert response.json()["details"]["errors"][0]["type"] == "string_too_long"
+
+
+def test_terminal_multipart_rejects_more_than_four_files_before_upload() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        response = client.post(
+            "/api/v1/terminal/sessions/missing-run/events",
+            data={"event": json.dumps({"text": "现场证据"}, ensure_ascii=False)},
+            files=[
+                ("files", (f"photo-{index}.png", b"image", "image/png"))
+                for index in range(5)
+            ],
+        )
+
+    assert response.status_code == 413
+    assert response.json()["code"] == "payload_too_large"
+    assert response.json()["details"] == {"max_files": 4, "file_count": 5}
+    assert client.app.state.object_store.uploads == []
+
+
+class _NoDbTerminalEventIngestService(TerminalEventIngestService):
+    def _preflight(self, run_id: str, external_event_id: str | None):
+        return None
+
+
+class _SecondUploadFailsObjectStore(FakeObjectStore):
+    def upload_stream(self, **kwargs) -> StoredObject:
+        if len(self.uploads) == 1:
+            raise RuntimeError("second upload failed")
+        return super().upload_stream(**kwargs)
+
+
+class _TimeoutUploadObjectStore(FakeObjectStore):
+    def upload_stream(self, **_) -> StoredObject:
+        raise TimeoutError("object store timed out")
+
+
+class _CancelledUploadObjectStore(FakeObjectStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.read_after_release = False
+
+    def upload_stream(self, **kwargs) -> StoredObject:
+        self.started.set()
+        assert self.release.wait(timeout=2)
+        self.read_after_release = True
+        return super().upload_stream(**kwargs)
+
+
+def _upload_file(filename: str, content: bytes, mime_type: str = "image/png") -> UploadFile:
+    return UploadFile(
+        file=io.BytesIO(content),
+        filename=filename,
+        headers=Headers({"content-type": mime_type}),
+    )
+
+
+def _no_db_ingest(object_store: FakeObjectStore) -> _NoDbTerminalEventIngestService:
+    return _NoDbTerminalEventIngestService(
+        settings=create_test_settings(),
+        database_manager=None,  # type: ignore[arg-type]
+        object_store=object_store,  # type: ignore[arg-type]
+        runtime_service=None,  # type: ignore[arg-type]
+    )
+
+
+def test_terminal_upload_cleans_previous_objects_when_later_upload_fails() -> None:
+    object_store = _SecondUploadFailsObjectStore()
+    ingest = _no_db_ingest(object_store)
+    uploads = [
+        ("files", _upload_file("first.png", b"first-image")),
+        ("files", _upload_file("second.png", b"second-image")),
+    ]
+
+    with pytest.raises(SkillsGatewayError):
+        asyncio.run(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=uploads,
+                idempotency_key=None,
+            )
+        )
+
+    assert len(object_store.uploads) == 1
+    assert object_store.objects == {}
+
+
+def test_terminal_upload_maps_explicit_timeout_to_504_error() -> None:
+    ingest = _no_db_ingest(_TimeoutUploadObjectStore())
+
+    with pytest.raises(SkillsGatewayTimeoutError):
+        asyncio.run(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=[("files", _upload_file("photo.png", b"image"))],
+                idempotency_key=None,
+            )
+        )
+
+
+def test_terminal_upload_cancellation_waits_for_transfer_and_removes_uuid_object() -> None:
+    object_store = _CancelledUploadObjectStore()
+    ingest = _no_db_ingest(object_store)
+    upload = _upload_file("photo.png", b"image")
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=[("files", upload)],
+                idempotency_key=None,
+            )
+        )
+        await asyncio.to_thread(object_store.started.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        object_store.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await upload.close()
+
+    asyncio.run(scenario())
+
+    assert object_store.read_after_release
+    assert object_store.objects == {}
+
+
+def test_terminal_upload_enforces_per_file_limit_while_hashing_stream() -> None:
+    object_store = FakeObjectStore()
+    ingest = _no_db_ingest(object_store)
+    ingest.settings.terminal_event_max_file_bytes = 4
+
+    with pytest.raises(PayloadTooLargeError):
+        asyncio.run(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=[("files", _upload_file("photo.png", b"12345"))],
+                idempotency_key=None,
+            )
+        )
+
+    assert object_store.uploads == []
+
+
+def test_terminal_upload_enforces_total_limit_before_s3_upload() -> None:
+    object_store = FakeObjectStore()
+    ingest = _no_db_ingest(object_store)
+    ingest.settings.terminal_event_max_file_bytes = 4
+    ingest.settings.terminal_event_max_total_file_bytes = 6
+
+    with pytest.raises(PayloadTooLargeError):
+        asyncio.run(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=[
+                    ("files", _upload_file("first.png", b"1234")),
+                    ("files", _upload_file("second.png", b"567")),
+                ],
+                idempotency_key=None,
+            )
+        )
+
+    assert object_store.uploads == []
+
+
+@pytest.mark.parametrize(
+    "upload",
+    [
+        pytest.param(_upload_file("empty.png", b""), id="empty"),
+        pytest.param(_upload_file("document.pdf", b"pdf", "application/pdf"), id="unsupported-mime"),
+    ],
+)
+def test_terminal_upload_rejects_empty_and_unsupported_media(upload: UploadFile) -> None:
+    object_store = FakeObjectStore()
+    ingest = _no_db_ingest(object_store)
+
+    with pytest.raises(SkillValidationError):
+        asyncio.run(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=[("files", upload)],
+                idempotency_key=None,
+            )
+        )
+
+    assert object_store.uploads == []
+
+
+def test_terminal_object_store_io_does_not_block_event_loop() -> None:
+    async def scenario() -> float:
+        gaps: list[float] = []
+        finished = False
+
+        async def ticker() -> None:
+            previous = asyncio.get_running_loop().time()
+            while not finished:
+                await asyncio.sleep(0.005)
+                current = asyncio.get_running_loop().time()
+                gaps.append(current - previous)
+                previous = current
+
+        ticker_task = asyncio.create_task(ticker())
+        await run_object_store_io(FakeObjectStore(), time.sleep, 0.3)
+        finished = True
+        await ticker_task
+        return max(gaps)
+
+    assert asyncio.run(scenario()) < 0.1
 
 
 def build_test_formal_v5_artifact() -> dict:
@@ -2048,6 +2652,21 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
             },
             files=[("files", ("debug-photo.png", b"debug-image", "image/png"))],
         )
+        upload_count_after_first_append = len(client.app.state.object_store.uploads)
+        duplicate_upload_response = client.post(
+            f"/api/v1/terminal/sessions/{run_id}/events",
+            data={
+                "event": json.dumps(
+                    {
+                        "direction": "input",
+                        "text": "幂等重试不应重复上传",
+                        "external_event_id": "terminal-debug-upload-000001",
+                    },
+                    ensure_ascii=False,
+                )
+            },
+            files=[("files", ("retry-photo.png", b"different-image", "image/png"))],
+        )
         uploaded_event = upload_response.json()["event"]
         uploaded_image_part = next(part for part in uploaded_event["parts"] if part["kind"] == "image")
         uploaded_content_response = client.get(
@@ -2056,6 +2675,10 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         uploaded_content_range_response = client.get(
             f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content",
             headers={"Range": "bytes=0-4"},
+        )
+        uploaded_content_cached_response = client.get(
+            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content",
+            headers={"If-None-Match": uploaded_content_response.headers["etag"]},
         )
         run_after_upload_response = client.get(f"/api/v1/runs/{run_id}")
         process_runtime_run_for_test(client, run_id)
@@ -2077,6 +2700,9 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert persisted_context["debug_context"]["kind"] == "skill_debug"
     assert initial_run_response.json()["status"] == "waiting_runtime"
     assert upload_response.status_code == 202
+    assert duplicate_upload_response.status_code == 202
+    assert duplicate_upload_response.json()["event_id"] == upload_response.json()["event_id"]
+    assert len(client.app.state.object_store.uploads) == upload_count_after_first_append
     assert uploaded_event["event_kind"] == "terminal.multimodal.input.v1"
     assert uploaded_event["mime_type"] == "multipart/mixed"
     assert [part["kind"] for part in uploaded_event["parts"]] == ["text", "image"]
@@ -2085,9 +2711,14 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert "object_key" not in uploaded_image_part["metadata"]
     assert uploaded_content_response.status_code == 200
     assert uploaded_content_response.headers["content-type"] == "image/png"
+    assert uploaded_content_response.headers["cache-control"] == "private, max-age=86400, immutable"
+    assert uploaded_content_response.headers["etag"]
     assert uploaded_content_response.content == b"debug-image"
     assert uploaded_content_range_response.status_code == 206
+    assert uploaded_content_range_response.headers["content-range"] == "bytes 0-4/11"
     assert uploaded_content_range_response.content == b"debug"
+    assert uploaded_content_cached_response.status_code == 304
+    assert uploaded_content_cached_response.content == b""
     assert run_after_upload_response.json()["status"] == "waiting_runtime"
     assert final_run_response.json()["status"] == "succeeded"
     assert any(event["event_kind"] == "terminal.multimodal.input.v1" for event in terminal_events_response.json())
