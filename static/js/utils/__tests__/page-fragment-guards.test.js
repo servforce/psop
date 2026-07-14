@@ -55,6 +55,8 @@ test("run live page provides a responsive task status panel", () => {
   expect(html).toContain('class="flex shrink-0 items-center gap-3 border-b border-slate-800 bg-slate-950/80 px-3 py-2 text-left xl:hidden"');
   expect(html).toContain("liveRunTaskStatus.current_checkpoint.requirements");
   expect(html).toContain("任务状态加载失败");
+  expect(html).not.toContain(">当前任务</p>");
+  expect(html).not.toContain("task?.version_no");
   expect(html).toContain("<summary");
   expect(html).toContain("运行信息");
   expect(runtimeJs).toContain("/runs/${runId}/task-status");
