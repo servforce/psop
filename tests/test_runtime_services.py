@@ -180,6 +180,74 @@ def test_compiler_emits_mvp_formal_v5_artifact(runtime_stack) -> None:
     assert any(item.code == "compile.agent.prompt_pack" for item in diagnostics)
 
 
+def test_runtime_projects_compiled_runner_turn_contract_without_inference(runtime_stack) -> None:
+    _, _, _, _, _, runtime_service = runtime_stack
+    artifact_payload = build_test_formal_v5_artifact()
+    artifact_payload["skill"] = {
+        "key": "computer-installation",
+        "name": "安装电脑主机",
+        "description": "指导用户完成台式电脑主机安装。",
+        "version_no": 3,
+    }
+    node = next(item for item in artifact_payload["nodes"] if item["id"] == "instruct_collect_context")
+    run = Run(id="run-turn-context", latest_snapshot_seq=0)
+    token = {
+        "phase": "instruct_collect_context",
+        "input_envelope": {},
+        "facts": {},
+        "observations": {},
+        "control": {},
+        "terminal": {"events": []},
+        "trace": [],
+        "metadata": {"terminal_cursor": 0},
+    }
+
+    context = runtime_service._build_runner_context(
+        run=run,
+        node=node,
+        token=token,
+        artifact_payload=artifact_payload,
+    )
+    turn_context = runtime_service._build_runner_turn_context(
+        run=run,
+        node=node,
+        mode="terminal_guidance",
+        context=context,
+    )
+
+    assert turn_context["turn_kind"] == "first_step_instruction"
+    assert turn_context["task_identity"] == {
+        "skill_key": "computer-installation",
+        "name": "安装电脑主机",
+        "description": "指导用户完成台式电脑主机安装。",
+        "version": 3,
+    }
+    assert turn_context["stage_position"] == {
+        "current": 1,
+        "total": 1,
+        "workflow_step_id": "collect_context",
+    }
+    assert turn_context["current_workflow_step"]["title"] == "收集上下文"
+    assert turn_context["previous_evaluation"] == {}
+    assert turn_context["runtime_contract_slice"]["applicability"] == artifact_payload["runtime_contract"]["applicability"]
+
+    legacy_node = json.loads(json.dumps(node, ensure_ascii=False))
+    legacy_node["interaction"].pop("runner_turn_kind")
+    legacy_context = runtime_service._build_runner_context(
+        run=run,
+        node=legacy_node,
+        token=token,
+        artifact_payload=artifact_payload,
+    )
+    legacy_turn_context = runtime_service._build_runner_turn_context(
+        run=run,
+        node=legacy_node,
+        mode="terminal_guidance",
+        context=legacy_context,
+    )
+    assert legacy_turn_context["turn_kind"] == ""
+
+
 def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
     settings = create_test_settings().model_copy(
         update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
@@ -2626,6 +2694,7 @@ def _add_second_wait_checkpoint_to_artifact(artifact_payload: dict) -> dict:
             "guard": {"phase_is": "instruct_second_step"},
             "actor": {"name": "agent.llm"},
             "interaction": {
+                "runner_turn_kind": "step_instruction",
                 "output_to_terminal": True,
                 "wait_after_output": True,
                 "checkpoint_id": "second_step_evidence",
@@ -2657,7 +2726,7 @@ def _add_second_wait_checkpoint_to_artifact(artifact_payload: dict) -> dict:
             "kind": "llm",
             "guard": {"phase_is": "evaluate_second_step"},
             "actor": {"name": "agent.llm"},
-            "interaction": {"evaluation": True},
+            "interaction": {"runner_turn_kind": "evidence_evaluation", "evaluation": True},
             "projection": {
                 "system_template": "只输出 JSON decision。evaluate_second_step",
                 "user_template": "根据 token.control.wait.evidence 判断 second_step 是否完成。当前 Token：{{token}}",

@@ -203,7 +203,10 @@ class SkillCompileAgent:
                 ),
                 "business_node_rule": (
                     "每个 workflow step 必须编译为 instruct_<step_id> 和 evaluate_<step_id> 两个节点。"
-                    "instruct 节点必须输出到终端并进入 wait checkpoint；evaluate 节点必须消费 terminal evidence 并输出 JSON decision。"
+                    "首个 instruct 的 interaction.runner_turn_kind 必须是 first_step_instruction，"
+                    "其余 instruct 必须是 step_instruction。instruct 节点必须输出到终端并进入 wait checkpoint；"
+                    "evaluate 节点必须标记 evidence_evaluation，消费 terminal evidence 并输出 JSON decision；"
+                    "final_verify 必须标记 final_verification。"
                 ),
                 "node_sequence_rule": (
                     "start -> instruct_<first_step> -> wait -> evaluate_<first_step> -> "

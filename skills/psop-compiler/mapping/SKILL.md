@@ -10,7 +10,8 @@
 - scaffold 返回 `artifact_ref` / `candidate_ref` 时，后续 `validate_formal_v5` 和 `submit_candidate` 必须优先传引用，不要复制完整 EG JSON。
 - `start` 节点只初始化 Session Token，不承载业务判断。
 - 每个业务 workflow step 生成 `instruct_<step_id>` 和 `evaluate_<step_id>`。
-- `instruct_<step_id>` 面向用户输出当前现实步骤指令，设置 wait checkpoint，并等待现场证据。
+- 首个 `instruct_<step_id>` 标记为 `first_step_instruction`，后续 `instruct_<step_id>` 标记为 `step_instruction`；不新增额外节点。
+- instruct 节点设置 wait checkpoint 并等待现场证据。具体终端表达策略由 Runner Agent 负责，Compiler 不在 projection 中重复定义。
 - `evaluate_<step_id>` 消费用户证据和 token，输出 `proceed`、`retry`、`need_more_evidence`、`abort` 或 `complete`。
 - `final_verify` 必须在成功 terminal 前验证 completion criteria。
 - `terminal` 只在成功或失败终止条件满足时写入最终状态和输出。

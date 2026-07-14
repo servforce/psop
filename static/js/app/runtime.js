@@ -1586,7 +1586,10 @@
 
 
       terminalEventActorLabel(event) {
-        return String(event?.direction || "").toLowerCase() === "output" ? "Runtime" : "用户";
+        if (String(event?.direction || "").toLowerCase() !== "output") {
+          return "用户";
+        }
+        return event?.source_ref?.agent_key === "psop.runner" ? "执行助手" : "Runtime";
       },
 
 

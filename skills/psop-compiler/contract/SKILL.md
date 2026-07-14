@@ -73,6 +73,8 @@ artifact 必须包含：
 - `actor.name = "agent.llm"`
 - `guard = {"phase_is": "instruct_<step_id>"}`
 - `interaction.output_to_terminal = true`
+- 首个 instruct 的 `interaction.runner_turn_kind = "first_step_instruction"`
+- 其余 instruct 的 `interaction.runner_turn_kind = "step_instruction"`
 - `interaction.wait_after_output = true`
 - `interaction.resume_phase = "evaluate_<step_id>"`
 - `interaction.expected_inputs` 非空
@@ -85,6 +87,7 @@ artifact 必须包含：
 - `actor.name = "agent.llm"`
 - `guard = {"phase_is": "evaluate_<step_id>"}`
 - `interaction.evaluation = true`
+- `interaction.runner_turn_kind = "evidence_evaluation"`
 - `projection.user_template` 非空且包含 `{{token}}`
 - `merge` 必须包含 `{"op":"set","path":"observations.evaluate_<step_id>","from":"observation"}`
 - `merge` 必须能根据评估结果设置下一阶段，例如 `{"op":"set","path":"phase","from":"observation.next_phase"}`
@@ -95,6 +98,8 @@ artifact 必须包含：
 - 每个 step 的 `instruct_*` 和 `evaluate_*`
 - `final_verify`
 - `terminal`
+
+`final_verify.interaction.runner_turn_kind` 必须是 `final_verification`。回合类型只约束 Runner 的表达任务，不改变 guard、wait checkpoint、transition、merge 或 Runtime 状态主权。
 
 ## guard / merge 约束
 

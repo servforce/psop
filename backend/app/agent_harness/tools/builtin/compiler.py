@@ -811,7 +811,7 @@ def _scaffold_artifact(
     for index, step in enumerate(workflow_steps):
         step_id = step["id"]
         next_phase = f"instruct_{workflow_steps[index + 1]['id']}" if index + 1 < len(workflow_steps) else "final_verify"
-        nodes.append(_instruct_node(step))
+        nodes.append(_instruct_node(step, first_step=index == 0))
         nodes.append(_evaluate_node(step, next_phase))
         dependency_graph_for_view.append({"from": f"instruct_{step_id}", "to": f"evaluate_{step_id}"})
         dependency_graph_for_view.append({"from": f"evaluate_{step_id}", "to": next_phase})
@@ -879,15 +879,17 @@ def _start_node(first_step_id: str) -> dict[str, Any]:
     }
 
 
-def _instruct_node(step: dict[str, Any]) -> dict[str, Any]:
+def _instruct_node(step: dict[str, Any], *, first_step: bool) -> dict[str, Any]:
     step_id = step["id"]
     node_id = f"instruct_{step_id}"
+    runner_turn_kind = "first_step_instruction" if first_step else "step_instruction"
     return {
         "id": node_id,
         "kind": "llm",
         "guard": {"phase_is": node_id},
         "actor": {"name": "agent.llm"},
         "interaction": {
+            "runner_turn_kind": runner_turn_kind,
             "output_to_terminal": True,
             "wait_after_output": True,
             "checkpoint_id": f"{step_id}_evidence",
@@ -897,12 +899,13 @@ def _instruct_node(step: dict[str, Any]) -> dict[str, Any]:
             "resume_phase": f"evaluate_{step_id}",
         },
         "projection": {
-            "system_template": f"你是 PSOP Runtime 当前阶段指令节点：{step['title']}。只输出当前阶段可执行动作、证据要求和安全提醒。",
+            "system_template": f"处理 PSOP Runtime 当前阶段指令节点：{step['title']}，并提交结构化 observation。",
             "user_template": (
+                f"回合类型：{runner_turn_kind}\n"
                 f"当前阶段：{step['title']}\n"
                 f"阶段目标：{step['goal']}\n"
                 f"source evidence：{step['source_evidence']}\n"
-                "要求：不要一次性输出后续阶段；说明本阶段需要用户提交的证据；发现安全风险时要求暂停。\n"
+                f"期望证据：{json.dumps(step['expected_evidence'], ensure_ascii=False)}\n"
                 "当前 Token：{{token}}"
             ),
         },
@@ -920,6 +923,7 @@ def _evaluate_node(step: dict[str, Any], next_phase: str) -> dict[str, Any]:
         "guard": {"phase_is": node_id},
         "actor": {"name": "agent.llm"},
         "interaction": {
+            "runner_turn_kind": "evidence_evaluation",
             "evaluation": True,
             "transitions": {
                 "proceed": next_phase,
@@ -951,6 +955,7 @@ def _final_verify_node() -> dict[str, Any]:
         "guard": {"phase_is": "final_verify"},
         "actor": {"name": "agent.llm"},
         "interaction": {
+            "runner_turn_kind": "final_verification",
             "evaluation": True,
             "transitions": {
                 "proceed": "terminal",

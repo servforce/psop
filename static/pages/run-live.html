@@ -211,7 +211,6 @@
                           <div class="mb-1 flex flex-wrap items-center gap-2" :class="terminalEventMetaClass(event)">
                             <span class="text-xs font-semibold text-slate-100" x-text="terminalEventActorLabel(event)"></span>
                             <span class="mono-field" x-text="formatDateTime(event.occurred_at)"></span>
-                            <span class="mono-field" x-text="`#${event.seq_no}`"></span>
                             <span x-show="event._optimistic_status === 'sent'" class="status-badge border-emerald-500/25 bg-emerald-500/10 text-emerald-200">已发送</span>
                           </div>
                           <div class="overflow-hidden rounded-md" :class="terminalEventBubbleClass(event)">

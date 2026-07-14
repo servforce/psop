@@ -1201,6 +1201,7 @@ def build_test_formal_v5_artifact() -> dict:
                 "guard": {"phase_is": "instruct_collect_context"},
                 "actor": {"name": "agent.llm"},
                 "interaction": {
+                    "runner_turn_kind": "first_step_instruction",
                     "output_to_terminal": True,
                     "wait_after_output": True,
                     "checkpoint_id": "collect_context_evidence",
@@ -1231,7 +1232,7 @@ def build_test_formal_v5_artifact() -> dict:
                 "kind": "llm",
                 "guard": {"phase_is": "evaluate_collect_context"},
                 "actor": {"name": "agent.llm"},
-                "interaction": {"evaluation": True},
+                "interaction": {"runner_turn_kind": "evidence_evaluation", "evaluation": True},
                 "projection": {
                     "system_template": "只输出 JSON decision。evaluate_collect_context",
                     "user_template": (
@@ -1250,7 +1251,7 @@ def build_test_formal_v5_artifact() -> dict:
                 "kind": "llm",
                 "guard": {"phase_is": "final_verify"},
                 "actor": {"name": "agent.llm"},
-                "interaction": {"evaluation": True},
+                "interaction": {"runner_turn_kind": "final_verification", "evaluation": True},
                 "projection": {
                     "system_template": "只输出 JSON decision。final_verify",
                     "user_template": "根据 completion_criteria 与当前 Token 做最终验证。当前 Token：{{token}}",

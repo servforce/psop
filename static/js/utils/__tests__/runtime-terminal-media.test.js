@@ -143,6 +143,17 @@ test("image-only terminal messages render without a framed bubble", () => {
   expect(app.terminalEventBubbleClass(imageWithCaption)).toContain("bg-[#262626] px-2.5 py-2");
 });
 
+test("terminal transcript labels runner output as assistant and keeps user input distinct", () => {
+  const app = createRuntimeHarness();
+
+  expect(app.terminalEventActorLabel({ direction: "input" })).toBe("用户");
+  expect(app.terminalEventActorLabel({
+    direction: "output",
+    source_ref: { agent_key: "psop.runner" }
+  })).toBe("执行助手");
+  expect(app.terminalEventActorLabel({ direction: "output", source_ref: { kind: "runtime" } })).toBe("Runtime");
+});
+
 test("run live media nodes are lazy, mutually gated, and use no metadata preload", () => {
   const html = fs.readFileSync(runLivePagePath, "utf8");
   const imageTags = html.match(/<img\b[^>]*>/g) || [];

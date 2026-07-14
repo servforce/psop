@@ -185,6 +185,20 @@ def _validate_source_refs(source_refs: list[str], invocation_context: dict[str, 
             if checkpoint_id not in _runtime_contract_wait_checkpoint_ids(invocation_context):
                 raise ValueError(f"source_refs 引用了不存在的 wait checkpoint：{ref}")
             continue
+        if ref in {
+            "runtime_contract.execution_goal",
+            "runtime_contract.applicability",
+            "runtime_contract.safety_constraints",
+            "runtime_contract.completion_criteria",
+        }:
+            field_name = ref.removeprefix("runtime_contract.")
+            if not _path_exists(_dict_value(invocation_context, "runtime_contract"), field_name):
+                raise ValueError(f"source_refs 引用了不存在的 runtime contract 字段：{ref}")
+            continue
+        if ref.startswith("task_identity."):
+            if not _path_exists(_dict_value(invocation_context, "task_identity"), ref.removeprefix("task_identity.")):
+                raise ValueError(f"source_refs 引用了不存在的 task identity 路径：{ref}")
+            continue
         if ref.startswith("prompt_view."):
             if not _path_exists(_dict_value(invocation_context, "prompt_view"), ref.removeprefix("prompt_view.")):
                 raise ValueError(f"source_refs 引用了不存在的 prompt view 路径：{ref}")

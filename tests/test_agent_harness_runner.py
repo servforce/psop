@@ -80,7 +80,9 @@ def test_psop_runner_config_and_prompt_guard_observation_format() -> None:
     assert "`prompt_view.*`" in prompt
     assert "`current_checkpoint.*`" in prompt
     assert "`trace_summary:N`" in prompt
-    assert "不要在 `source_refs` 中使用 `runtime_contract.safety_constraints`" in prompt
+    assert "`runtime_contract.safety_constraints`" in prompt
+    assert "`task_identity.*`" in prompt
+    assert "`first_step_instruction`" in prompt
     assert '"decision": "need_more_evidence"' in prompt
     assert '`decision: "continue"`' in prompt
     assert '`decision: "complete"`' in prompt
@@ -374,12 +376,21 @@ def test_runner_observation_validates_strict_source_refs() -> None:
         {"checkpoint_id": "collect_context_evidence", "workflow_step_id": "collect_context"}
     ]
     context["trace_summary"] = [{"seq_no": 7, "event_type": "runtime.wait_checkpoint.entered"}]
+    context["task_identity"] = {"name": "测试 Skill", "description": "测试任务", "version": 1}
+    context["runtime_contract"]["applicability"] = {"applies_when": ["测试现场"]}
+    context["runtime_contract"]["safety_constraints"] = ["确认安全后继续。"]
+    context["runtime_contract"]["completion_criteria"] = ["当前步骤完成。"]
     context["terminal_cursor"] = 1
     observation = _valid_runner_observation()
     observation["source_refs"] = [
         "runtime_contract.workflow_steps.collect_context",
         "runtime_contract.expected_evidence.collect_context",
         "runtime_contract.wait_checkpoints.collect_context_evidence",
+        "task_identity.name",
+        "runtime_contract.execution_goal",
+        "runtime_contract.applicability",
+        "runtime_contract.safety_constraints",
+        "runtime_contract.completion_criteria",
         "prompt_view.node.id",
         "current_checkpoint.checkpoint_id",
         "trace_summary:7",

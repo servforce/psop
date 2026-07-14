@@ -210,7 +210,7 @@ def validate_and_normalize_artifact(candidate: Any) -> FormalValidationResult:
         diagnostics.append(_error("halt 至少需要 success 或 failure 条件。", "halt"))
 
     runtime_contract = artifact.get("runtime_contract")
-    workflow_step_ids: set[str] = set()
+    workflow_step_ids: list[str] = []
     if not isinstance(runtime_contract, dict):
         diagnostics.append(_error("runtime_contract 必须是对象。", "runtime_contract"))
     else:
@@ -499,7 +499,7 @@ def _validate_token_path(value: str, token_fields: set[str], path: str) -> list[
     return []
 
 
-def _validate_workflow_contract(runtime_contract: dict[str, Any], node_ids: set[str]) -> tuple[list[FormalDiagnostic], set[str]]:
+def _validate_workflow_contract(runtime_contract: dict[str, Any], node_ids: set[str]) -> tuple[list[FormalDiagnostic], list[str]]:
     diagnostics: list[FormalDiagnostic] = []
     required_fields = [
         "execution_goal",
@@ -526,9 +526,10 @@ def _validate_workflow_contract(runtime_contract: dict[str, Any], node_ids: set[
                 location={"path": "runtime_contract.workflow_steps"},
             )
         )
-        return diagnostics, set()
+        return diagnostics, []
 
     step_ids: set[str] = set()
+    ordered_step_ids: list[str] = []
     for index, step in enumerate(workflow_steps):
         path = f"runtime_contract.workflow_steps[{index}]"
         if not isinstance(step, dict):
@@ -568,6 +569,7 @@ def _validate_workflow_contract(runtime_contract: dict[str, Any], node_ids: set[
                 )
             )
         step_ids.add(step_id)
+        ordered_step_ids.append(step_id)
 
     wait_checkpoints = runtime_contract.get("wait_checkpoints")
     if isinstance(wait_checkpoints, list):
@@ -586,16 +588,17 @@ def _validate_workflow_contract(runtime_contract: dict[str, Any], node_ids: set[
             )
     else:
         diagnostics.append(_workflow_error("runtime_contract.wait_checkpoints 必须是数组。", "runtime_contract.wait_checkpoints"))
-    return diagnostics, step_ids
+    return diagnostics, ordered_step_ids
 
 
-def _validate_workflow_nodes(nodes: list[Any], workflow_step_ids: set[str]) -> list[FormalDiagnostic]:
+def _validate_workflow_nodes(nodes: list[Any], workflow_step_ids: list[str]) -> list[FormalDiagnostic]:
     if not workflow_step_ids:
         return []
 
     diagnostics: list[FormalDiagnostic] = []
     node_map = {str(node.get("id")): node for node in nodes if isinstance(node, dict) and node.get("id")}
-    if any(step_id in node_map for step_id in workflow_step_ids):
+    workflow_step_id_set = set(workflow_step_ids)
+    if any(step_id in node_map for step_id in workflow_step_id_set):
         diagnostics.append(
             _workflow_error(
                 "新编译产物不允许把 workflow step 直接编译为同名线性业务节点；必须使用 instruct_<step_id> / evaluate_<step_id> 结构。",
@@ -603,10 +606,20 @@ def _validate_workflow_nodes(nodes: list[Any], workflow_step_ids: set[str]) -> l
             )
         )
 
-    if "final_verify" not in node_map:
+    final_verify = node_map.get("final_verify")
+    if not final_verify:
         diagnostics.append(_workflow_error("terminal(success) 前必须存在 final_verify 或等价最终验证节点。", "nodes.final_verify"))
+    else:
+        final_interaction = final_verify.get("interaction")
+        if not isinstance(final_interaction, dict) or final_interaction.get("runner_turn_kind") != "final_verification":
+            diagnostics.append(
+                _workflow_error(
+                    "`final_verify` 必须声明 interaction.runner_turn_kind=final_verification。",
+                    "nodes[final_verify].interaction.runner_turn_kind",
+                )
+            )
 
-    for step_id in sorted(workflow_step_ids):
+    for step_index, step_id in enumerate(workflow_step_ids):
         instruct_id = f"instruct_{step_id}"
         evaluate_id = f"evaluate_{step_id}"
         instruct = node_map.get(instruct_id)
@@ -620,6 +633,14 @@ def _validate_workflow_nodes(nodes: list[Any], workflow_step_ids: set[str]) -> l
         if not isinstance(instruct_interaction, dict):
             diagnostics.append(_workflow_error(f"`{instruct_id}` 必须声明 interaction。", f"nodes[{instruct_id}].interaction"))
             instruct_interaction = {}
+        expected_turn_kind = "first_step_instruction" if step_index == 0 else "step_instruction"
+        if instruct_interaction.get("runner_turn_kind") != expected_turn_kind:
+            diagnostics.append(
+                _workflow_error(
+                    f"`{instruct_id}` 必须声明 interaction.runner_turn_kind={expected_turn_kind}。",
+                    f"nodes[{instruct_id}].interaction.runner_turn_kind",
+                )
+            )
         if instruct_interaction.get("output_to_terminal") is not True:
             diagnostics.append(
                 _workflow_error(f"`{instruct_id}` 必须 output_to_terminal=true。", f"nodes[{instruct_id}].interaction.output_to_terminal")
@@ -646,6 +667,13 @@ def _validate_workflow_nodes(nodes: list[Any], workflow_step_ids: set[str]) -> l
         evaluate_interaction = evaluate.get("interaction")
         if not isinstance(evaluate_interaction, dict) or evaluate_interaction.get("evaluation") is not True:
             diagnostics.append(_workflow_error(f"`{evaluate_id}` 必须声明 interaction.evaluation=true。", f"nodes[{evaluate_id}].interaction"))
+        if not isinstance(evaluate_interaction, dict) or evaluate_interaction.get("runner_turn_kind") != "evidence_evaluation":
+            diagnostics.append(
+                _workflow_error(
+                    f"`{evaluate_id}` 必须声明 interaction.runner_turn_kind=evidence_evaluation。",
+                    f"nodes[{evaluate_id}].interaction.runner_turn_kind",
+                )
+            )
         projection = evaluate.get("projection")
         if not isinstance(projection, dict) or not projection.get("user_template"):
             diagnostics.append(_workflow_error(f"`{evaluate_id}` 必须包含 projection.user_template。", f"nodes[{evaluate_id}].projection"))

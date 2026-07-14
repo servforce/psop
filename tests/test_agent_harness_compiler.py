@@ -249,8 +249,17 @@ def test_compiler_build_formal_v5_scaffold_creates_valid_candidate(tmp_path) -> 
     node_ids = {node["id"] for node in candidate["artifact"]["nodes"]}
     assert "instruct_collect_context" in node_ids
     assert "evaluate_verify_result" in node_ids
+    instruct_collect_context = next(node for node in candidate["artifact"]["nodes"] if node["id"] == "instruct_collect_context")
+    instruct_verify_result = next(node for node in candidate["artifact"]["nodes"] if node["id"] == "instruct_verify_result")
     evaluate_collect_context = next(node for node in candidate["artifact"]["nodes"] if node["id"] == "evaluate_collect_context")
     final_verify = next(node for node in candidate["artifact"]["nodes"] if node["id"] == "final_verify")
+    assert instruct_collect_context["interaction"]["runner_turn_kind"] == "first_step_instruction"
+    assert instruct_verify_result["interaction"]["runner_turn_kind"] == "step_instruction"
+    assert "回合类型：first_step_instruction" in instruct_collect_context["projection"]["user_template"]
+    assert "专业温和" not in instruct_collect_context["projection"]["user_template"]
+    assert "首次协作" not in instruct_collect_context["projection"]["system_template"]
+    assert evaluate_collect_context["interaction"]["runner_turn_kind"] == "evidence_evaluation"
+    assert final_verify["interaction"]["runner_turn_kind"] == "final_verification"
     assert evaluate_collect_context["interaction"]["transitions"] == {
         "proceed": "instruct_verify_result",
         "complete": "terminal",
@@ -282,6 +291,16 @@ def test_compiler_build_formal_v5_scaffold_creates_valid_candidate(tmp_path) -> 
     )
     assert submit_result["status"] == "success"
     assert sandbox.resolve_virtual_path("/mnt/psop/outputs/compiler-result.json").exists()
+
+    invalid_artifact = json.loads(json.dumps(candidate["artifact"], ensure_ascii=False))
+    invalid_second_instruct = next(node for node in invalid_artifact["nodes"] if node["id"] == "instruct_verify_result")
+    invalid_second_instruct["interaction"]["runner_turn_kind"] = "first_step_instruction"
+    invalid_validation = validate_and_normalize_artifact(invalid_artifact)
+    assert invalid_validation.has_errors
+    assert any(
+        "runner_turn_kind=step_instruction" in diagnostic.message
+        for diagnostic in invalid_validation.diagnostics
+    )
 
 
 def test_compiler_submit_candidate_rejects_invalid_payload(tmp_path) -> None:

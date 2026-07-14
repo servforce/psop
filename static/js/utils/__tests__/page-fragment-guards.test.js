@@ -44,6 +44,12 @@ test("run live page is read-only and uses interaction data tabs", () => {
   expect(html).not.toContain("sendTerminalInput()");
   expect(html).toContain("terminalEventParts(event)");
   expect(html).toContain("terminalEventPartMediaUrl(event, part)");
+  const terminalTranscript = html.slice(
+    html.indexOf('x-ref="terminalTranscriptScroll"'),
+    html.indexOf('x-show="liveRunInteractionTab === \'replay\'"')
+  );
+  expect(terminalTranscript).not.toContain('`#${event.seq_no}`');
+  expect(html).toContain('`#${selectedLiveRunReplayItem().seq_no}`');
 });
 
 test("run live page provides a responsive task status panel", () => {

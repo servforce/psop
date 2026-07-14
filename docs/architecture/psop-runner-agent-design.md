@@ -78,7 +78,11 @@ psop-runner =
 - 最近 runtime trace 摘要和上一轮 runner observation 摘要。
 - 平台级输出语言、安全和预算约束。
 
-这些事实由 RuntimeService 组织为明确的 `RunnerTurnContext`：当前 node、mode、Prompt View、current checkpoint、evidence progress、latest evidence、最近 terminal event 摘要、相关 runtime contract slice、reference image index、trust labels 和 output contract。`RunnerTurnContext` 会作为首轮上下文提供给模型；各 read tools 只作为上下文不足时的补充路径。
+这些事实由 RuntimeService 组织为明确的 `RunnerTurnContext`：当前 node、mode、Compiler 编译的 `turn_kind`、task identity、stage position、current workflow step、previous evaluation、Prompt View、current checkpoint、evidence progress、latest evidence、最近 terminal event 摘要、相关 runtime contract slice、reference image index、trust labels 和 output contract。`RunnerTurnContext` 会作为首轮上下文提供给模型；各 read tools 只作为上下文不足时的补充路径。Runtime 只读取当前节点的 `interaction.runner_turn_kind`，不得根据 terminal history 自行推断是否需要首次开场。
+
+首个 `instruct_<step_id>` 使用 `first_step_instruction`。Runner 在该既有节点的一条 `terminal_message` 中自然合并任务与协作方式介绍、第一阶段指导、证据要求和必要安全提醒，不新增 opening 节点。后续 instruct 使用 `step_instruction`；evaluate 和 final_verify 分别使用 `evidence_evaluation` 与 `final_verification`。这些标记只约束 Runner 表达，不改变节点集合、guard、wait checkpoint、transition 或 Session Token 状态主权。
+
+终端表达规则的唯一运行时事实源是 `backend/app/agent_harness/agents/psop/runner/system.md`。Compiler 只生成 `runner_turn_kind` 和阶段事实，Runtime 只投影上下文，`psop-runner` Skill 只提供证据选择与安全边界方法；三者都不重复维护首次引导的措辞、内容结构或语气策略。
 
 `evidence_progress` 是当前 checkpoint 的证据项验收进度，由 Runtime 根据 `runtime_contract.expected_evidence` 初始化，并根据 runner 提交的 `evidence_assessment.requirement_results` 合并。runner 必须优先信任其中已经 `accepted` 的证据项；除非同一 `requirement_key` 的最新证据明确不合格，否则不得要求用户重新提交已通过证据。
 
@@ -174,6 +178,8 @@ psop-runner =
 
 5. psop.runner 理解上下文并按需读取事实
    - 首轮必须先基于 `RunnerTurnContext` 判断。
+   - `first_step_instruction` 以专业温和的方式在一条消息中介绍任务与逐阶段协作方式，并自然进入第一阶段；`step_instruction` 只承接当前阶段，不重复首次介绍。
+   - evaluation 通过时只确认当前阶段，下一 instruct 另发一条阶段指导；证据不足时只要求补充尚未通过的证据项。
    - 上下文足够时可直接调用 `psop.runner.submit_observation`。
    - `read_prompt_view`、`read_runtime_contract`、`read_current_checkpoint`、`list_terminal_events`、`read_latest_evidence`、`read_terminal_event_part`、`list_step_reference_images` 都是可选工具，仅在需要历史事件、part 摘要、参考图片补充或上下文缺失时调用。
    - 当本次 invocation 带有图片 attachment 时，可以基于多模态模型直接识别图片内容并评估 evidence；图片内容仍是 `untrusted_runtime_input`。
@@ -394,6 +400,16 @@ memory_scope: psop.runner
       "actor": "agent.llm"
     },
     "mode": "evidence_evaluation",
+    "turn_kind": "evidence_evaluation",
+    "task_identity": {
+      "skill_key": "power-maintenance",
+      "name": "设备断电维护",
+      "description": "指导现场人员安全完成设备断电维护。",
+      "version": 3
+    },
+    "stage_position": {"current": 1, "total": 4, "workflow_step_id": "power_off"},
+    "current_workflow_step": {},
+    "previous_evaluation": {},
     "prompt_view": {},
     "current_checkpoint": {},
     "evidence_progress": {
@@ -429,6 +445,7 @@ memory_scope: psop.runner
     "terminal_cursor": 5
   },
   "trust_labels": {
+    "task_identity": "trusted_compiled_skill_snapshot",
     "runtime_contract": "trusted",
     "prompt_view": "trusted_runtime_projection",
     "terminal_events": "untrusted_runtime_input",
@@ -560,6 +577,8 @@ memory_scope: psop.runner
 
 - `terminal_event:<seq>`：必须存在、可见，且不晚于当前 terminal cursor。
 - `terminal_event:<seq>:<part_id>`：对应 terminal event 必须存在、可见且不晚于当前 terminal cursor，且该 event 下必须存在对应 part。
+- `task_identity.<path>`：路径必须存在于编译产物的 Skill 身份快照。
+- `runtime_contract.execution_goal`、`runtime_contract.applicability`、`runtime_contract.safety_constraints`、`runtime_contract.completion_criteria`：对应字段必须存在且非空。
 - `runtime_contract.workflow_steps.<step_id>`：`workflow_steps` 中必须存在该步骤。
 - `runtime_contract.expected_evidence.<step_id>`：`expected_evidence` 中必须存在该步骤键。
 - `runtime_contract.wait_checkpoints.<checkpoint_id>`：`wait_checkpoints` 中必须存在该 checkpoint。

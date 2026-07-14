@@ -1348,7 +1348,7 @@ class RuntimeService:
                         mime_type=str(interaction.get("output_mime_type") or "text/markdown"),
                         payload_inline=terminal_message,
                         binding_id=None,
-                        source_ref={"kind": "runtime", "node_id": str(node.get("id"))},
+                        source_ref={"kind": "runtime", "node_id": str(node.get("id")), "agent_key": "psop.runner"},
                     )
 
         if self._node_is_evaluation(node):
@@ -3451,12 +3451,14 @@ class RuntimeService:
         control = token.get("control") if isinstance(token.get("control"), dict) else {}
         return {
             "trust_labels": {
+                "task_identity": "trusted_compiled_skill_snapshot",
                 "runtime_contract": "trusted",
                 "prompt_view": "trusted_runtime_projection",
                 "terminal_events": "untrusted_runtime_input",
                 "input_attachments": "untrusted_runtime_input",
             },
             "prompt_view": self._runner_prompt_view(run=run, node=node, token=token),
+            "task_identity": self._runner_task_identity(artifact_payload),
             "runtime_contract": runtime_contract,
             "step_reference_images": self._runner_step_reference_images(node=node, token=token, runtime_contract=runtime_contract),
             "current_checkpoint": self._runner_current_checkpoint(run=run, node=node, token=token),
@@ -3485,6 +3487,18 @@ class RuntimeService:
         prompt_view = context.get("prompt_view") if isinstance(context.get("prompt_view"), dict) else {}
         runtime_contract = context.get("runtime_contract") if isinstance(context.get("runtime_contract"), dict) else {}
         terminal_events = context.get("terminal_events") if isinstance(context.get("terminal_events"), list) else []
+        interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
+        current_checkpoint = context.get("current_checkpoint") if isinstance(context.get("current_checkpoint"), dict) else {}
+        workflow_steps = runtime_contract.get("workflow_steps") if isinstance(runtime_contract.get("workflow_steps"), list) else []
+        workflow_step_id = str(current_checkpoint.get("workflow_step_id") or interaction.get("workflow_step_id") or "")
+        current_workflow_step: dict[str, Any] = {}
+        stage_index = 0
+        for index, step in enumerate(workflow_steps, start=1):
+            if isinstance(step, dict) and str(step.get("id") or "") == workflow_step_id:
+                current_workflow_step = dict(step)
+                stage_index = index
+                break
+        projected_control = prompt_view.get("control") if isinstance(prompt_view.get("control"), dict) else {}
         return {
             "run_id": run.id,
             "node": {
@@ -3493,8 +3507,21 @@ class RuntimeService:
                 "actor": _actor_name(node.get("actor")),
             },
             "mode": mode,
+            "turn_kind": str(interaction.get("runner_turn_kind") or ""),
+            "task_identity": context.get("task_identity") if isinstance(context.get("task_identity"), dict) else {},
+            "stage_position": {
+                "current": stage_index,
+                "total": len(workflow_steps),
+                "workflow_step_id": workflow_step_id,
+            },
+            "current_workflow_step": current_workflow_step,
+            "previous_evaluation": (
+                projected_control.get("latest_evaluation")
+                if isinstance(projected_control.get("latest_evaluation"), dict)
+                else {}
+            ),
             "prompt_view": prompt_view,
-            "current_checkpoint": context.get("current_checkpoint") if isinstance(context.get("current_checkpoint"), dict) else {},
+            "current_checkpoint": current_checkpoint,
             "evidence_progress": context.get("evidence_progress") if isinstance(context.get("evidence_progress"), dict) else {},
             "latest_evidence": context.get("latest_evidence") if isinstance(context.get("latest_evidence"), dict) else {},
             "recent_terminal_events": [
@@ -3521,10 +3548,21 @@ class RuntimeService:
     def _runner_runtime_contract_slice(self, runtime_contract: dict[str, Any]) -> dict[str, Any]:
         return {
             "execution_goal": runtime_contract.get("execution_goal") or "",
+            "applicability": runtime_contract.get("applicability") if isinstance(runtime_contract.get("applicability"), dict) else {},
             "workflow_steps": runtime_contract.get("workflow_steps") if isinstance(runtime_contract.get("workflow_steps"), list) else [],
             "expected_evidence": runtime_contract.get("expected_evidence") if isinstance(runtime_contract.get("expected_evidence"), dict) else {},
             "safety_constraints": runtime_contract.get("safety_constraints") if isinstance(runtime_contract.get("safety_constraints"), list) else [],
             "completion_criteria": runtime_contract.get("completion_criteria") if isinstance(runtime_contract.get("completion_criteria"), list) else [],
+        }
+
+    @staticmethod
+    def _runner_task_identity(artifact_payload: dict[str, Any]) -> dict[str, Any]:
+        skill = artifact_payload.get("skill") if isinstance(artifact_payload.get("skill"), dict) else {}
+        return {
+            "skill_key": str(skill.get("key") or ""),
+            "name": str(skill.get("name") or ""),
+            "description": str(skill.get("description") or ""),
+            "version": skill.get("version_no") if skill.get("version_no") is not None else skill.get("version"),
         }
 
     def _runner_transition_contract(self, *, artifact_payload: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:

@@ -905,6 +905,7 @@ agent.skill.resource.loaded
 
 - 每个 workflow step 必须有稳定语义 ID、title、goal、source_evidence 和 expected_evidence。
 - 每个 workflow step 由 scaffold tool 生成 `instruct_<step_id>` 和 `evaluate_<step_id>`。
+- 首个 instruct 标记 `interaction.runner_turn_kind=first_step_instruction`，后续 instruct 标记 `step_instruction`；evaluate 与 final_verify 分别标记 `evidence_evaluation`、`final_verification`。
 - 每个 instruct/evaluate 节点必须写入 `observations.<node_id>`。
 - `final_verify` 和 `terminal` 必须由 scaffold 保留。
 - validator error 优先通过重新调用 scaffold tool 修复。
@@ -922,7 +923,8 @@ agent.skill.resource.loaded
 映射规则：
 
 - `start` 节点只初始化 Session Token，不承载业务判断。
-- `instruct_<step_id>` 节点面向用户输出当前现实步骤指令，并设置 wait checkpoint。
+- 首个 `instruct_<step_id>` 标记为 `first_step_instruction`，后续 instruct 标记为 `step_instruction`；不得为开场新增节点。
+- instruct 节点设置 wait checkpoint。Compiler projection 只承载当前阶段、目标、source evidence 和 expected evidence，不定义终端措辞或对话风格；具体表达由 Runner Agent system prompt 唯一负责。
 - `evaluate_<step_id>` 节点消费现场证据和 token，输出 `proceed | retry | need_more_evidence | abort | complete`。
 - `evaluate_<step_id>` 节点必须声明 `interaction.transitions.proceed` 指向下一个 `instruct_<next_step_id>` 或 `final_verify`，`complete` 和 `abort` 指向 `terminal` 或 EG 声明的终止节点。
 - `final_verify` 必须在 terminal(success) 前验证 completion_criteria。
@@ -1000,6 +1002,7 @@ compiler Skill 包必须满足以下治理要求：
 - `runtime_contract.workflow_steps` 必须非空。
 - 每个 workflow step 必须有关联 source evidence。
 - 每个 workflow step 必须存在 `instruct_<step_id>` 和 `evaluate_<step_id>`。
+- 只有首个 instruct 可以使用 `first_step_instruction`；其余 instruct、evaluate 和 final_verify 必须使用各自规定的 `runner_turn_kind`。
 - `expected_evidence`、`wait_checkpoints`、`completion_criteria`、`recovery_paths` 必须和 workflow steps 对应。
 - evaluate / final_verify 节点必须在 projection 中暴露 `{{token}}` 或等价 token 投影。
 - evaluate / final_verify 节点必须声明 `interaction.transitions`，transition target 必须存在于 artifact nodes。

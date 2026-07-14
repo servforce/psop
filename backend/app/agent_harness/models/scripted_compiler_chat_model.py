@@ -252,6 +252,7 @@ def _artifact() -> dict[str, Any]:
                 "guard": {"phase_is": "instruct_collect_context"},
                 "actor": {"name": "agent.llm"},
                 "interaction": {
+                    "runner_turn_kind": "first_step_instruction",
                     "output_to_terminal": True,
                     "wait_after_output": True,
                     "checkpoint_id": "collect_context_evidence",
@@ -281,6 +282,7 @@ def _artifact() -> dict[str, Any]:
                 "guard": {"phase_is": "evaluate_collect_context"},
                 "actor": {"name": "agent.llm"},
                 "interaction": {
+                    "runner_turn_kind": "evidence_evaluation",
                     "evaluation": True,
                     "transitions": {
                         "proceed": "final_verify",
@@ -304,6 +306,7 @@ def _artifact() -> dict[str, Any]:
                 "guard": {"phase_is": "final_verify"},
                 "actor": {"name": "agent.llm"},
                 "interaction": {
+                    "runner_turn_kind": "final_verification",
                     "evaluation": True,
                     "transitions": {
                         "proceed": "terminal",
