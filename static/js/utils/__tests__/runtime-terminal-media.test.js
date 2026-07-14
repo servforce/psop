@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
-const { mergeById, mergeBySeq } = require("../runtime-events.node.cjs");
+const { mergeById, mergeBySeq, shouldReplaceTaskStatus } = require("../runtime-events.node.cjs");
 
 const runtimePath = path.join(__dirname, "../../app/runtime.js");
 const runLivePagePath = path.join(__dirname, "../../../pages/run-live.html");
@@ -36,7 +36,7 @@ function loadRuntimeMethods({ urlApi, documentApi } = {}) {
   const context = {
     window: {
       PSOPConsoleHelpers: helpers,
-      PSOPRuntimeEvents: { mergeById, mergeBySeq }
+      PSOPRuntimeEvents: { mergeById, mergeBySeq, shouldReplaceTaskStatus }
     }
   };
   if (urlApi) {
@@ -56,6 +56,8 @@ function createRuntimeHarness(options = {}) {
     ...loadRuntimeMethods(options),
     apiBaseUrl: "/api/v1",
     liveRun: { id: "run-1" },
+    liveRunTaskStatus: null,
+    liveRunTaskStatusError: "",
     liveRunBindings: [],
     liveRunTerminalSession: null,
     liveRunTerminalEvents: [],
@@ -63,6 +65,7 @@ function createRuntimeHarness(options = {}) {
     liveRunInteractionTab: "terminal",
     liveRunMountedTabs: { terminal: false, io: false, replay: false },
     liveRunLoadedRunId: "",
+    liveRunTaskStatusLoadedRunId: "",
     liveRunTerminalEventsLoadedRunId: "",
     liveRunReplayLoadedRunId: "",
     replayDetail: null,
@@ -76,6 +79,7 @@ function createRuntimeHarness(options = {}) {
     _liveRunWsHasOpened: false,
     _liveRunReplayRefreshTimer: null,
     _liveRunReplayGeneration: 0,
+    liveRunTaskPanelOpen: false,
     $nextTick(callback) {
       callback();
     },
@@ -114,6 +118,31 @@ test("terminal presentation kind is mutually exclusive and gives concrete MIME p
   ].filter(Boolean)).toHaveLength(1);
 });
 
+test("image-only terminal messages render without a framed bubble", () => {
+  const app = createRuntimeHarness();
+  const multipartImage = {
+    parts: [{ part_id: "image_1", kind: "image", mime_type: "image/png", artifact_object_id: "object-1" }]
+  };
+  const legacyImage = {
+    event_kind: "terminal.image.input.v1",
+    mime_type: "image/png",
+    artifact_object_id: "object-2"
+  };
+  const imageWithCaption = {
+    parts: [{
+      part_id: "image_1",
+      kind: "image",
+      mime_type: "image/png",
+      artifact_object_id: "object-3",
+      text: "现场照片"
+    }]
+  };
+
+  expect(app.terminalEventBubbleClass(multipartImage)).toContain("bg-transparent p-0");
+  expect(app.terminalEventBubbleClass(legacyImage)).toContain("bg-transparent p-0");
+  expect(app.terminalEventBubbleClass(imageWithCaption)).toContain("bg-[#262626] px-2.5 py-2");
+});
+
 test("run live media nodes are lazy, mutually gated, and use no metadata preload", () => {
   const html = fs.readFileSync(runLivePagePath, "utf8");
   const imageTags = html.match(/<img\b[^>]*>/g) || [];
@@ -144,6 +173,9 @@ test("direct replay loads replay on demand without loading terminal history or t
     requests.push(pathname);
     if (pathname === "/runs/run-1") {
       return { id: "run-1", latest_terminal_seq: 0 };
+    }
+    if (pathname === "/runs/run-1/task-status") {
+      return { run_id: "run-1", snapshot_seq: 0, updated_at: "2026-01-01T00:00:00Z", stages: [] };
     }
     if (pathname === "/runs/run-1/bindings") {
       return [];
@@ -254,6 +286,115 @@ test("websocket events from a stale run are ignored", () => {
   );
 
   expect(app.mergeTerminalEvents).not.toHaveBeenCalled();
+});
+
+test("task status websocket updates are ordered and isolated by run", () => {
+  const app = createRuntimeHarness();
+  app.liveRun = { id: "run-1", status: "running" };
+  app.liveRunTaskStatus = {
+    run_id: "run-1",
+    snapshot_seq: 4,
+    updated_at: "2026-01-01T00:00:00Z",
+    run_status: "running"
+  };
+
+  app.handleRunWsEvent({
+    event_type: "run.task_status.updated",
+    run_id: "run-1",
+    payload: {
+      run_id: "run-1",
+      snapshot_seq: 5,
+      updated_at: "2026-01-01T00:00:01Z",
+      run_status: "waiting_input"
+    }
+  });
+  app.handleRunWsEvent({
+    event_type: "run.task_status.updated",
+    run_id: "run-old",
+    payload: {
+      run_id: "run-old",
+      snapshot_seq: 99,
+      updated_at: "2026-01-01T00:00:02Z",
+      run_status: "failed"
+    }
+  }, "run-old");
+  app.handleRunWsEvent({
+    event_type: "run.task_status.updated",
+    run_id: "run-1",
+    payload: {
+      run_id: "run-1",
+      snapshot_seq: 4,
+      updated_at: "2026-01-01T00:00:03Z",
+      run_status: "failed"
+    }
+  });
+
+  expect(app.liveRunTaskStatus.snapshot_seq).toBe(5);
+  expect(app.liveRunTaskStatus.run_status).toBe("waiting_input");
+  expect(app.liveRun.status).toBe("waiting_input");
+});
+
+test("task status REST recovery cannot overwrite a newer websocket snapshot", async () => {
+  const app = createRuntimeHarness();
+  app.liveRun = { id: "run-1", status: "waiting_input" };
+  app.liveRunTaskStatus = {
+    run_id: "run-1",
+    snapshot_seq: 5,
+    updated_at: "2026-01-01T00:00:05Z",
+    run_status: "waiting_input"
+  };
+  app.apiRequest = jest.fn(async () => ({
+    run_id: "run-1",
+    snapshot_seq: 4,
+    updated_at: "2026-01-01T00:00:06Z",
+    run_status: "running"
+  }));
+
+  await app.refreshLiveRunTaskStatus("run-1");
+
+  expect(app.liveRunTaskStatus.snapshot_seq).toBe(5);
+  expect(app.liveRun.status).toBe("waiting_input");
+});
+
+test("task status load failure leaves the terminal view available", async () => {
+  const app = createRuntimeHarness();
+  app.liveRun = null;
+  app.apiRequest = jest.fn(async (pathname) => {
+    if (pathname === "/runs/run-1") {
+      return { id: "run-1", status: "waiting_input" };
+    }
+    if (pathname === "/runs/run-1/task-status") {
+      throw new Error("status unavailable");
+    }
+    if (pathname === "/runs/run-1/bindings") {
+      return [];
+    }
+    if (pathname === "/terminal/sessions/run-1") {
+      return { terminal_session: { id: "session-1", status: "open" } };
+    }
+    if (pathname === "/terminal/sessions/run-1/events") {
+      return [];
+    }
+    throw new Error(`unexpected request: ${pathname}`);
+  });
+
+  await app.loadRunLive("run-1");
+
+  expect(app.liveRun.id).toBe("run-1");
+  expect(app.liveRunTaskStatus).toBeNull();
+  expect(app.liveRunTaskStatusError).toBe("status unavailable");
+  expect(app.connectRunWebSocket).toHaveBeenCalledWith("run-1");
+});
+
+test("aborted runs are terminal and reject further input", () => {
+  const app = createRuntimeHarness();
+  app.liveRun = { id: "run-1", status: "aborted" };
+  app.liveRunTerminalSession = { id: "session-1", status: "open" };
+  app.terminalInputForm.payload = "继续";
+
+  expect(app.terminalRunEnded()).toBe(true);
+  expect(app.canSendTerminalInput()).toBe(false);
+  expect(app.terminalInputDisabledReason()).toContain("已中止");
 });
 
 test("active replay schedules a debounced refresh when websocket data changes", () => {
@@ -372,10 +513,12 @@ test("late run loads cannot overwrite a newer run", async () => {
   const oldLoad = app.loadRunLive("run-old");
   const newLoad = app.loadRunLive("run-new");
   deferred.get("/runs/run-new")({ id: "run-new" });
+  deferred.get("/runs/run-new/task-status")({ run_id: "run-new", snapshot_seq: 0, updated_at: "2026-01-01T00:00:00Z" });
   deferred.get("/runs/run-new/bindings")([]);
   deferred.get("/terminal/sessions/run-new")({ terminal_session: { id: "session-new" } });
   await newLoad;
   deferred.get("/runs/run-old")({ id: "run-old" });
+  deferred.get("/runs/run-old/task-status")({ run_id: "run-old", snapshot_seq: 0, updated_at: "2026-01-01T00:00:00Z" });
   deferred.get("/runs/run-old/bindings")([]);
   deferred.get("/terminal/sessions/run-old")({ terminal_session: { id: "session-old" } });
   await oldLoad;

@@ -50,6 +50,7 @@ from app.domain.runtime.schemas import (
     ResolveRunBindingsRequest,
     RunCapabilityBindingResponse,
     RunResponse,
+    RunTaskStatusResponse,
     SessionTokenSnapshotResponse,
     TerminalEventAppendResponse,
     TerminalEventPartInput,
@@ -147,6 +148,15 @@ def get_run(
     service: RuntimeService = Depends(get_runtime_service),
 ) -> RunResponse:
     return service.get_run(session, run_id)
+
+
+@runs_router.get("/{run_id}/task-status", response_model=RunTaskStatusResponse)
+def get_run_task_status(
+    run_id: str,
+    session: Session = Depends(get_db_session),
+    service: RuntimeService = Depends(get_runtime_service),
+) -> RunTaskStatusResponse:
+    return service.get_run_task_status(session, run_id)
 
 
 @runs_router.get("/{run_id}/snapshots", response_model=list[SessionTokenSnapshotResponse])

@@ -116,6 +116,7 @@
       async loadRunLive(runId) {
         this.busy.liveRun = true;
         let loadGeneration = null;
+        let taskStatusError = "";
         try {
           const isSameRun = this.liveRunLoadedRunId === runId;
           if (isSameRun && this.liveRun?.id === runId) {
@@ -137,8 +138,12 @@
             this.selectedLiveRunReplayItemKey = "";
             this.selectedLiveRunProcessEventKey = "";
           }
-          const [run, bindings, terminalSession] = await Promise.all([
+          const [run, taskStatus, bindings, terminalSession] = await Promise.all([
             this.apiRequest(`/runs/${runId}`),
+            this.apiRequest(`/runs/${runId}/task-status`).catch((error) => {
+              taskStatusError = error?.message || "任务状态加载失败。";
+              return null;
+            }),
             this.apiRequest(`/runs/${runId}/bindings`),
             this.apiRequest(`/terminal/sessions/${runId}`)
           ]);
@@ -146,7 +151,10 @@
             return;
           }
           this.liveRun = run;
+          this.liveRunTaskStatus = taskStatus;
+          this.liveRunTaskStatusError = taskStatusError;
           this.liveRunLoadedRunId = runId;
+          this.liveRunTaskStatusLoadedRunId = runId;
           this.liveRunBindings = bindings;
           this.liveRunTerminalSession = terminalSession.terminal_session;
           await this.ensureLiveRunInteractionTabData(this.liveRunInteractionTab, runId);
@@ -304,6 +312,27 @@
       },
 
 
+      async refreshLiveRunTaskStatus(runId) {
+        if (!runId || this.liveRun?.id !== runId) {
+          return;
+        }
+        let taskStatus;
+        try {
+          taskStatus = await this.apiRequest(`/runs/${runId}/task-status`);
+        } catch (error) {
+          if (this.liveRun?.id === runId) {
+            this.liveRunTaskStatusError = error?.message || "任务状态加载失败。";
+          }
+          throw error;
+        }
+        if (this.liveRun?.id !== runId) {
+          return;
+        }
+        this.applyLiveRunTaskStatus(taskStatus);
+        this.liveRunTaskStatusLoadedRunId = runId;
+      },
+
+
       destroyLiveRunView() {
         this._liveRunLoadGeneration = Number(this._liveRunLoadGeneration || 0) + 1;
         this._liveRunReplayGeneration = Number(this._liveRunReplayGeneration || 0) + 1;
@@ -321,6 +350,8 @@
         this.disconnectRunWebSocket();
         this.closeTerminalMediaPreview();
         this.liveRun = null;
+        this.liveRunTaskStatus = null;
+        this.liveRunTaskStatusError = "";
         this.liveRunBindings = [];
         this.liveRunTerminalSession = null;
         this.liveRunTerminalEvents = [];
@@ -328,6 +359,7 @@
         this.liveRunInteractionTab = "terminal";
         this.liveRunMountedTabs = { terminal: false, io: false, replay: false };
         this.liveRunLoadedRunId = "";
+        this.liveRunTaskStatusLoadedRunId = "";
         this.liveRunTerminalEventsLoadedRunId = "";
         this.liveRunReplayLoadedRunId = "";
         this.selectedLiveRunReplayItemKey = "";
@@ -338,6 +370,7 @@
         this._liveRunTerminalEventsRequest = null;
         this._liveRunReplayRequest = null;
         this._liveRunTerminalReconcileRequest = null;
+        this.liveRunTaskPanelOpen = false;
       },
 
 
@@ -515,6 +548,9 @@
           } else if (isReconnect) {
             this.refreshLiveRunSummary(runId).catch(() => {});
           }
+          if (isReconnect) {
+            this.refreshLiveRunTaskStatus(runId).catch(() => {});
+          }
         });
         socket.addEventListener("message", (event) => {
           if (this.liveRunWs !== socket || this.liveRunWsRunId !== runId || this.liveRun?.id !== runId) {
@@ -610,6 +646,32 @@
         if (["binding.resolved", "binding.updated"].includes(event.event_type) && event.payload?.bindings) {
           this.liveRunBindings = window.PSOPRuntimeEvents.mergeById(this.liveRunBindings, event.payload.bindings);
         }
+        if (event.event_type === "run.task_status.updated" && event.payload) {
+          this.applyLiveRunTaskStatus(event.payload);
+        }
+      },
+
+
+      applyLiveRunTaskStatus(taskStatus) {
+        if (!taskStatus || String(taskStatus.run_id || "") !== String(this.liveRun?.id || "")) {
+          return false;
+        }
+        if (!window.PSOPRuntimeEvents.shouldReplaceTaskStatus(this.liveRunTaskStatus, taskStatus)) {
+          return false;
+        }
+        this.liveRunTaskStatus = taskStatus;
+        this.liveRunTaskStatusError = "";
+        this.liveRunTaskStatusLoadedRunId = String(taskStatus.run_id || "");
+        if (this.liveRun) {
+          this.liveRun = { ...this.liveRun, status: taskStatus.run_status || this.liveRun.status };
+        }
+        if (["succeeded", "failed", "aborted", "cancelled", "canceled"].includes(String(taskStatus.run_status || "").toLowerCase())) {
+          if (this.liveRunTerminalSession) {
+            this.liveRunTerminalSession = { ...this.liveRunTerminalSession, status: "closed" };
+          }
+          this.refreshLiveRunSummary(taskStatus.run_id).catch(() => {});
+        }
+        return true;
       },
 
 
@@ -922,7 +984,132 @@
 
 
       terminalRunEnded() {
-        return ["succeeded", "failed", "cancelled", "canceled"].includes(String(this.liveRun?.status || "").toLowerCase());
+        return ["succeeded", "failed", "aborted", "cancelled", "canceled"].includes(String(this.liveRun?.status || "").toLowerCase());
+      },
+
+
+      openLiveRunTaskPanel() {
+        this.liveRunTaskPanelOpen = true;
+      },
+
+
+      closeLiveRunTaskPanel() {
+        this.liveRunTaskPanelOpen = false;
+      },
+
+
+      liveRunCurrentTaskStage() {
+        const currentStageId = String(this.liveRunTaskStatus?.current_stage_id || "");
+        return (this.liveRunTaskStatus?.stages || []).find((stage) => String(stage.id || "") === currentStageId) || null;
+      },
+
+
+      taskActivityLabel(status) {
+        return {
+          initializing: "正在准备任务",
+          running: "任务执行中",
+          waiting_input: "等待现场输入",
+          finalizing: "正在完成核验",
+          succeeded: "任务已完成",
+          failed: "任务执行失败",
+          aborted: "任务已中止",
+          cancelled: "任务已取消",
+          canceled: "任务已取消"
+        }[String(status || "").toLowerCase()] || "状态未知";
+      },
+
+
+      taskActivityTone(status) {
+        const normalized = String(status || "").toLowerCase();
+        if (normalized === "succeeded") {
+          return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
+        }
+        if (["failed", "aborted", "cancelled", "canceled"].includes(normalized)) {
+          return "border-rose-500/25 bg-rose-500/10 text-rose-200";
+        }
+        if (normalized === "waiting_input") {
+          return "border-amber-500/25 bg-amber-500/10 text-amber-200";
+        }
+        return "border-sky-500/25 bg-sky-500/10 text-sky-200";
+      },
+
+
+      taskStageLabel(status) {
+        return {
+          pending: "未开始",
+          in_progress: "进行中",
+          waiting_input: "等待输入",
+          completed: "已完成",
+          failed: "失败",
+          aborted: "已中止",
+          cancelled: "已取消"
+        }[String(status || "").toLowerCase()] || "未知";
+      },
+
+
+      taskStageTone(status) {
+        const normalized = String(status || "").toLowerCase();
+        if (normalized === "completed") {
+          return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+        }
+        if (["failed", "aborted", "cancelled"].includes(normalized)) {
+          return "border-rose-500/30 bg-rose-500/10 text-rose-200";
+        }
+        if (normalized === "waiting_input") {
+          return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+        }
+        if (normalized === "in_progress") {
+          return "border-sky-500/30 bg-sky-500/10 text-sky-200";
+        }
+        return "border-slate-700 bg-slate-900/70 text-slate-400";
+      },
+
+
+      taskStageIcon(status) {
+        return {
+          completed: "check",
+          in_progress: "play_arrow",
+          waiting_input: "hourglass_top",
+          failed: "error",
+          aborted: "block",
+          cancelled: "close"
+        }[String(status || "").toLowerCase()] || "circle";
+      },
+
+
+      taskEvidenceTone(status) {
+        const normalized = String(status || "").toLowerCase();
+        if (normalized === "accepted") {
+          return "text-emerald-300";
+        }
+        if (normalized === "rejected") {
+          return "text-rose-300";
+        }
+        if (normalized === "ambiguous") {
+          return "text-amber-300";
+        }
+        return "text-slate-500";
+      },
+
+
+      taskEvidenceIcon(status) {
+        return {
+          accepted: "check_circle",
+          rejected: "cancel",
+          ambiguous: "help"
+        }[String(status || "").toLowerCase()] || "radio_button_unchecked";
+      },
+
+
+      taskExpectedInputLabel(item) {
+        const value = String(item?.kind || item?.event_kind || item?.mime_type || "evidence");
+        return {
+          text: "文字",
+          image: "图片",
+          audio: "音频",
+          video: "视频",
+          file: "文件"
+        }[value.toLowerCase()] || value;
       },
 
 
@@ -977,6 +1164,9 @@
         }
         if (this.liveRun.status === "succeeded") {
           return "当前运行已成功结束，不能继续发送输入。";
+        }
+        if (this.liveRun.status === "aborted") {
+          return "当前运行已中止，不能继续发送输入。";
         }
         if (["cancelled", "canceled"].includes(String(this.liveRun.status || "").toLowerCase())) {
           return "当前运行已取消，不能继续发送输入。";
@@ -1426,9 +1616,24 @@
 
 
       terminalEventBubbleClass(event) {
+        if (this.terminalEventIsImageOnly(event)) {
+          return "w-fit max-w-full bg-transparent p-0";
+        }
         return String(event?.direction || "").toLowerCase() === "input"
-          ? "w-fit max-w-full bg-[#262626]"
-          : "w-fit max-w-full bg-[#262626]";
+          ? "w-fit max-w-full bg-[#262626] px-2.5 py-2"
+          : "w-fit max-w-full bg-[#262626] px-2.5 py-2";
+      },
+
+
+      terminalEventIsImageOnly(event) {
+        const parts = this.terminalEventParts(event);
+        if (parts.length) {
+          return parts.every((part) => (
+            this.terminalEventPartPresentationKind(part) === "image" &&
+            !this.terminalEventPartDisplayText(part)
+          ));
+        }
+        return this.terminalEventIsImage(event) && !this.terminalEventDisplayText(event);
       },
 
 

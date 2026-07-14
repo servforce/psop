@@ -12,7 +12,7 @@ from collections.abc import Callable
 
 
 LOGGER = logging.getLogger(__name__)
-_POSTGRES_EVENT_TYPES = {"terminal.event.appended", "trace.event.appended"}
+_POSTGRES_EVENT_TYPES = {"terminal.event.appended", "trace.event.appended", "run.task_status.updated"}
 _CLOSE_SENTINEL = object()
 
 
@@ -60,13 +60,15 @@ class PostgresRuntimeEventSink:
     def publish(self, event: dict[str, Any]) -> None:
         if self._closed or event.get("event_type") not in _POSTGRES_EVENT_TYPES:
             return
+        event_type = str(event.get("event_type") or "")
         hint = {
-            "event_type": str(event.get("event_type") or ""),
+            "event_type": event_type,
             "run_id": str(event.get("run_id") or ""),
-            "seq_no": int(event.get("seq_no") or 0),
             "source_id": self.source_id,
         }
-        if not hint["run_id"] or hint["seq_no"] <= 0:
+        sequence_key = "snapshot_seq" if event_type == "run.task_status.updated" else "seq_no"
+        hint[sequence_key] = int(event.get("seq_no") or 0)
+        if not hint["run_id"] or (event_type != "run.task_status.updated" and hint[sequence_key] <= 0):
             return
         try:
             self._queue.put_nowait(hint)

@@ -48,6 +48,7 @@ from app.domain.runtime.schemas import (
     ResolveRunBindingsRequest,
     RunCapabilityBindingResponse,
     RunResponse,
+    RunTaskStatusResponse,
     SessionTokenSnapshotResponse,
     TerminalEventAppendResponse,
     TerminalEventResponse,
@@ -572,6 +573,7 @@ class RuntimeService:
                             previous_terminal_seq=publish_terminal_seq,
                             previous_trace_seq=publish_trace_seq,
                             terminal_directions={"output"},
+                            publish_task_status=True,
                         )
                         LOGGER.info("runtime loop entered wait checkpoint")
                         return run
@@ -582,6 +584,7 @@ class RuntimeService:
                         previous_terminal_seq=publish_terminal_seq,
                         previous_trace_seq=publish_trace_seq,
                         terminal_directions={"output"},
+                        publish_task_status=True,
                     )
                 else:
                     raise RuntimeError(f"Runtime exceeded max_steps={max_steps}.")
@@ -603,6 +606,7 @@ class RuntimeService:
                     previous_terminal_seq=publish_terminal_seq,
                     previous_trace_seq=publish_trace_seq,
                     terminal_directions={"output"},
+                    publish_task_status=True,
                 )
                 LOGGER.info("runtime loop aborted", extra={"final_output_length": len(run.final_output or "")})
                 return run
@@ -625,6 +629,7 @@ class RuntimeService:
                 previous_terminal_seq=publish_terminal_seq,
                 previous_trace_seq=publish_trace_seq,
                 terminal_directions={"output"},
+                publish_task_status=True,
             )
             LOGGER.info("runtime loop succeeded", extra={"final_output_length": len(run.final_output or "")})
             return run
@@ -648,6 +653,7 @@ class RuntimeService:
                     previous_terminal_seq=publish_terminal_seq,
                     previous_trace_seq=publish_trace_seq,
                     terminal_directions={"output"},
+                    publish_task_status=True,
                 )
                 LOGGER.exception("runtime turn processing failed; returned to waiting input", extra={"error": str(exc)})
                 return run
@@ -686,6 +692,7 @@ class RuntimeService:
                 previous_terminal_seq=publish_terminal_seq,
                 previous_trace_seq=publish_trace_seq,
                 terminal_directions={"output"},
+                publish_task_status=True,
             )
             LOGGER.exception("runtime loop failed", extra={"error": str(exc)})
             return run
@@ -742,6 +749,7 @@ class RuntimeService:
             previous_terminal_seq=previous_terminal_seq,
             previous_trace_seq=previous_trace_seq,
             terminal_directions={"output"},
+            publish_task_status=True,
         )
         return True
 
@@ -774,6 +782,24 @@ class RuntimeService:
         if not run:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
         return self._build_run_response(session, run)
+
+    def get_run_task_status(self, session: Session, run_id: str) -> RunTaskStatusResponse:
+        run = self.repository.get_run(session, run_id)
+        if not run:
+            raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
+
+        artifact = self.repository.get_artifact(session, run.compile_artifact_id)
+        artifact_object = self.repository.get_artifact_object(session, artifact.artifact_object_id) if artifact else None
+        artifact_payload = artifact_object.content_json if artifact_object and isinstance(artifact_object.content_json, dict) else {}
+        snapshot = self.repository.get_latest_snapshot(session, run.id)
+        token = snapshot.token_payload if snapshot and isinstance(snapshot.token_payload, dict) else {}
+        return self._build_run_task_status_response(
+            session=session,
+            run=run,
+            artifact_payload=artifact_payload,
+            token=token,
+            snapshot=snapshot,
+        )
 
     def cancel_run(self, session: Session, run_id: str, *, reason: str = "cancelled by user") -> RunResponse:
         job = self.job_repository.get_runtime_job_by_dedupe_key_for_update(
@@ -817,6 +843,7 @@ class RuntimeService:
             run_id=run_id,
             previous_terminal_seq=previous_terminal_seq,
             previous_trace_seq=previous_trace_seq,
+            publish_task_status=True,
         )
         return self._build_run_response(session, run)
 
@@ -836,6 +863,16 @@ class RuntimeService:
         ]
 
     def runtime_event_envelope(self, session: Session, *, event_type: str, run_id: str, seq_no: int) -> dict[str, Any] | None:
+        if event_type == "run.task_status.updated":
+            response = self.get_run_task_status(session, run_id)
+            return {
+                "event_type": event_type,
+                "run_id": run_id,
+                "invocation_id": None,
+                "seq_no": response.snapshot_seq,
+                "occurred_at": response.updated_at.isoformat(),
+                "payload": response.model_dump(mode="json"),
+            }
         if event_type == "terminal.event.appended":
             record = self.repository.get_terminal_event_by_seq(session, run_id, seq_no)
             response = self._build_terminal_event_response(session, record) if record is not None else None
@@ -2861,6 +2898,7 @@ class RuntimeService:
         previous_terminal_seq: int,
         previous_trace_seq: int,
         terminal_directions: set[str] | None = None,
+        publish_task_status: bool = False,
     ) -> tuple[int, int]:
         self._validate_active_job_lease(session)
         session.flush()
@@ -2878,6 +2916,7 @@ class RuntimeService:
                 terminal_upper_seq=terminal_upper_seq,
                 trace_upper_seq=trace_upper_seq,
                 terminal_directions=terminal_directions,
+                publish_task_status=publish_task_status,
             )
         except Exception:
             session.rollback()
@@ -2900,6 +2939,7 @@ class RuntimeService:
         terminal_upper_seq: int,
         trace_upper_seq: int,
         terminal_directions: set[str] | None = None,
+        publish_task_status: bool = False,
     ) -> None:
         for event in self.repository.list_terminal_events(
             session,
@@ -2917,6 +2957,18 @@ class RuntimeService:
                     "invocation_id": None,
                     "seq_no": response.seq_no,
                     "occurred_at": response.occurred_at.isoformat(),
+                    "payload": response.model_dump(mode="json"),
+                }
+            )
+        if publish_task_status:
+            response = self.get_run_task_status(session, run_id)
+            self.runtime_event_sink.publish(
+                {
+                    "event_type": "run.task_status.updated",
+                    "run_id": run_id,
+                    "invocation_id": None,
+                    "seq_no": response.snapshot_seq,
+                    "occurred_at": response.updated_at.isoformat(),
                     "payload": response.model_dump(mode="json"),
                 }
             )
@@ -4155,6 +4207,218 @@ class RuntimeService:
             ended_at=run.ended_at,
             updated_at=run.updated_at,
         )
+
+    def _build_run_task_status_response(
+        self,
+        *,
+        session: Session,
+        run: Run,
+        artifact_payload: dict[str, Any],
+        token: dict[str, Any],
+        snapshot: SessionTokenSnapshot | None,
+    ) -> RunTaskStatusResponse:
+        runtime_contract = (
+            artifact_payload.get("runtime_contract")
+            if isinstance(artifact_payload.get("runtime_contract"), dict)
+            else {}
+        )
+        raw_steps = runtime_contract.get("workflow_steps")
+        workflow_steps = (
+            [item for item in raw_steps if isinstance(item, dict) and str(item.get("id") or "")]
+            if isinstance(raw_steps, list)
+            else []
+        )
+        observations = token.get("observations") if isinstance(token.get("observations"), dict) else {}
+        control = token.get("control") if isinstance(token.get("control"), dict) else {}
+        wait = control.get("wait") if isinstance(control.get("wait"), dict) else {}
+        active_wait = bool(wait) and (
+            str(token.get("status") or "") == "waiting" or run.status == "waiting_input"
+        )
+        current_stage_id = str(wait.get("workflow_step_id") or "") if active_wait else ""
+        step_ids = {str(item.get("id") or "") for item in workflow_steps}
+        if current_stage_id not in step_ids:
+            current_stage_id = self._workflow_step_id_from_phase(
+                str(token.get("phase") or run.runtime_phase or ""),
+                step_ids,
+            )
+
+        completed_ids: set[str] = set()
+        for step_id in step_ids:
+            evaluation = observations.get(f"evaluate_{step_id}")
+            if isinstance(evaluation, dict) and str(evaluation.get("decision") or "").lower() in {
+                "proceed",
+                "complete",
+            }:
+                completed_ids.add(step_id)
+        if not current_stage_id and run.status in {"failed", "aborted", "cancelled", "canceled"}:
+            started_incomplete = [
+                str(item.get("id") or "")
+                for item in workflow_steps
+                if str(item.get("id") or "") not in completed_ids
+                and (
+                    f"instruct_{item.get('id')}" in observations
+                    or f"evaluate_{item.get('id')}" in observations
+                )
+            ]
+            current_stage_id = started_incomplete[-1] if started_incomplete else ""
+
+        latest_evaluation = (
+            control.get("latest_evaluation")
+            if isinstance(control.get("latest_evaluation"), dict)
+            else {}
+        )
+        terminal_stage_status = {
+            "failed": "failed",
+            "aborted": "aborted",
+            "cancelled": "cancelled",
+            "canceled": "cancelled",
+        }.get(run.status)
+        stages: list[dict[str, Any]] = []
+        for index, step in enumerate(workflow_steps, start=1):
+            step_id = str(step.get("id") or "")
+            if step_id in completed_ids:
+                status = "completed"
+            elif step_id == current_stage_id and terminal_stage_status:
+                status = terminal_stage_status
+            elif step_id == current_stage_id and active_wait:
+                status = "waiting_input"
+            elif step_id == current_stage_id:
+                status = "in_progress"
+            else:
+                status = "pending"
+
+            status_reason = ""
+            if step_id == current_stage_id:
+                if terminal_stage_status:
+                    status_reason = run.exit_reason
+                elif active_wait:
+                    status_reason = str(wait.get("reason") or "")
+                elif str(latest_evaluation.get("node_id") or "") == f"evaluate_{step_id}":
+                    status_reason = str(latest_evaluation.get("reason") or "")
+            stages.append(
+                {
+                    "id": step_id,
+                    "index": index,
+                    "title": str(step.get("title") or step_id),
+                    "goal": str(step.get("goal") or ""),
+                    "status": status,
+                    "status_reason": status_reason,
+                }
+            )
+
+        completed = len(completed_ids & step_ids)
+        total = len(workflow_steps)
+        current_checkpoint = self._build_run_task_checkpoint(
+            wait=wait if active_wait else {},
+            control=control,
+            artifact_payload=artifact_payload,
+            current_stage_id=current_stage_id,
+        )
+        skill_snapshot = artifact_payload.get("skill") if isinstance(artifact_payload.get("skill"), dict) else {}
+        skill_definition = self.repository.get_skill_definition(session, run.skill_definition_id)
+        skill_version = self.repository.get_skill_version(session, run.skill_version_id)
+        activity_status = self._run_task_activity_status(
+            run_status=run.status,
+            token_status=str(token.get("status") or ""),
+            has_current_stage=bool(current_stage_id),
+            completed=completed,
+            total=total,
+        )
+        return RunTaskStatusResponse(
+            run_id=run.id,
+            snapshot_seq=snapshot.seq_no if snapshot else run.latest_snapshot_seq,
+            updated_at=run.updated_at,
+            run_status=run.status,
+            activity_status=activity_status,
+            task={
+                "skill_key": str(skill_snapshot.get("key") or (skill_definition.key if skill_definition else "")),
+                "skill_name": str(skill_snapshot.get("name") or (skill_definition.name if skill_definition else "")),
+                "version_no": skill_snapshot.get("version_no") or (skill_version.version_no if skill_version else None),
+                "execution_goal": str(runtime_contract.get("execution_goal") or ""),
+            },
+            progress={
+                "completed": completed,
+                "total": total,
+                "percent": round(completed * 100 / total) if total else 0,
+            },
+            current_stage_id=current_stage_id,
+            stages=stages,
+            current_checkpoint=current_checkpoint,
+        )
+
+    def _build_run_task_checkpoint(
+        self,
+        *,
+        wait: dict[str, Any],
+        control: dict[str, Any],
+        artifact_payload: dict[str, Any],
+        current_stage_id: str,
+    ) -> dict[str, Any] | None:
+        if not wait or not current_stage_id:
+            return None
+        progress = control.get("evidence_progress") if isinstance(control.get("evidence_progress"), dict) else {}
+        if not self._evidence_progress_matches_wait(progress, wait):
+            raw_requirements = self._evidence_requirements_for_workflow_step(
+                artifact_payload=artifact_payload,
+                workflow_step_id=current_stage_id,
+            )
+            requirements = [{**item, "status": "missing", "reason": ""} for item in raw_requirements]
+        else:
+            requirements = [item for item in progress.get("requirements", []) if isinstance(item, dict)]
+        normalized_requirements = [
+            {
+                "requirement_key": str(item.get("requirement_key") or ""),
+                "description": str(item.get("description") or item.get("requirement_key") or ""),
+                "kind": str(item.get("kind") or ""),
+                "status": str(item.get("status") or "missing"),
+                "reason": str(item.get("reason") or ""),
+            }
+            for item in requirements
+            if str(item.get("requirement_key") or "")
+        ]
+        return {
+            "checkpoint_id": str(wait.get("checkpoint_id") or ""),
+            "reason": str(wait.get("reason") or ""),
+            "expected_inputs": wait.get("expected_inputs") if isinstance(wait.get("expected_inputs"), list) else [],
+            "accepted_requirements": sum(item["status"] == "accepted" for item in normalized_requirements),
+            "total_requirements": len(normalized_requirements),
+            "requirements": normalized_requirements,
+        }
+
+    @staticmethod
+    def _workflow_step_id_from_phase(phase: str, step_ids: set[str]) -> str:
+        for prefix in ("instruct_", "evaluate_"):
+            if phase.startswith(prefix) and phase.removeprefix(prefix) in step_ids:
+                return phase.removeprefix(prefix)
+        return ""
+
+    @staticmethod
+    def _run_task_activity_status(
+        *,
+        run_status: str,
+        token_status: str,
+        has_current_stage: bool,
+        completed: int,
+        total: int,
+    ) -> str:
+        terminal_status = {
+            "succeeded": "succeeded",
+            "failed": "failed",
+            "aborted": "aborted",
+            "cancelled": "cancelled",
+            "canceled": "cancelled",
+        }.get(run_status)
+        if terminal_status:
+            return terminal_status
+        if run_status == "waiting_input" or token_status == "waiting":
+            return "waiting_input"
+        if total and completed == total:
+            return "finalizing"
+        if has_current_stage:
+            return "running"
+        if run_status in {"waiting_runtime", "queued"}:
+            return "initializing"
+        return "running"
 
     def _run_wait_context(self, session: Session, run: Run) -> dict[str, Any]:
         snapshots = self.repository.list_snapshots(session, run.id)

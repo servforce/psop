@@ -153,6 +153,14 @@ def test_postgres_notify_delivers_runtime_hint(postgres_job_store) -> None:
         assert received[-1]["event_type"] == "terminal.event.appended"
         assert received[-1]["run_id"] == "run-1"
         assert received[-1]["seq_no"] == 12
+
+        delivered.clear()
+        sink.publish({"event_type": "run.task_status.updated", "run_id": "run-1", "seq_no": 0})
+        assert delivered.wait(5)
+        assert received[-1]["event_type"] == "run.task_status.updated"
+        assert received[-1]["run_id"] == "run-1"
+        assert received[-1]["snapshot_seq"] == 0
+        assert "payload" not in received[-1]
     finally:
         listener.close()
         sink.close()

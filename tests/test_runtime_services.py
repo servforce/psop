@@ -1372,6 +1372,181 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
     assert "runtime.final.completed" in [item.event_type for item in replay.timeline]
 
 
+def test_runtime_task_status_projects_waiting_stage_and_current_evidence(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-task-status",
+                name="Runtime Task Status",
+                description="Validate the terminal task status projection.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Task status projection test"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="runtime-task-status",
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        runtime_service.process_run(session, invocation.run_id or "")
+        waiting_status = runtime_service.get_run_task_status(session, invocation.run_id or "")
+
+        snapshot = runtime_service.repository.get_latest_snapshot(session, invocation.run_id or "")
+        assert snapshot is not None
+        token = json.loads(json.dumps(snapshot.token_payload, ensure_ascii=False))
+        requirements = token["control"]["evidence_progress"]["requirements"]
+        requirements[0].update(
+            {
+                "status": "accepted",
+                "reason": "文字说明已确认。",
+                "accepted_event_refs": ["terminal_event:1"],
+            }
+        )
+        requirements[1].update({"status": "ambiguous", "reason": "图片角度不足。"})
+        snapshot.token_payload = token
+        session.commit()
+        partial_status = runtime_service.get_run_task_status(session, invocation.run_id or "")
+
+        forked = runtime_service.fork_invocation_from_snapshot(
+            session,
+            source_run_id=invocation.run_id or "",
+            snapshot_seq=snapshot.seq_no,
+            terminal_seq=0,
+            terminal_context={"terminal_kind": "web"},
+        )
+        forked_status = runtime_service.get_run_task_status(session, forked.run_id or "")
+
+        runtime_service.cancel_run(session, invocation.run_id or "", reason="operator cancelled")
+        cancelled_status = runtime_service.get_run_task_status(session, invocation.run_id or "")
+
+    assert waiting_status.activity_status == "waiting_input"
+    assert waiting_status.current_stage_id == "collect_context"
+    assert waiting_status.stages[0].status == "waiting_input"
+    assert waiting_status.current_checkpoint is not None
+    assert waiting_status.current_checkpoint.total_requirements == 3
+    assert waiting_status.current_checkpoint.accepted_requirements == 0
+    assert {item.status for item in waiting_status.current_checkpoint.requirements} == {"missing"}
+
+    assert partial_status.current_checkpoint is not None
+    assert partial_status.current_checkpoint.accepted_requirements == 1
+    assert [item.status for item in partial_status.current_checkpoint.requirements[:2]] == ["accepted", "ambiguous"]
+    assert partial_status.current_checkpoint.requirements[0].reason == "文字说明已确认。"
+    assert "accepted_event_refs" not in partial_status.model_dump_json()
+    assert forked_status.progress == partial_status.progress
+    assert forked_status.current_stage_id == partial_status.current_stage_id
+    assert forked_status.current_checkpoint == partial_status.current_checkpoint
+
+    assert cancelled_status.run_status == "cancelled"
+    assert cancelled_status.activity_status == "cancelled"
+    assert cancelled_status.stages[0].status == "cancelled"
+    assert cancelled_status.stages[0].status_reason == "operator cancelled"
+
+
+def test_runtime_task_status_projects_multistage_finalizing_terminal_and_legacy_states(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="runtime-task-status-states",
+                name="Runtime Task Status States",
+                description="Validate multistage and compatibility task status projection.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Task status states test"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key="runtime-task-status-states",
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        run = runtime_service.repository.get_run(session, invocation.run_id or "")
+        snapshot = runtime_service.repository.get_latest_snapshot(session, invocation.run_id or "")
+        artifact = runtime_service.repository.get_artifact(session, run.compile_artifact_id if run else "")
+        artifact_object = session.get(ArtifactObject, artifact.artifact_object_id if artifact else "")
+        assert run is not None
+        assert snapshot is not None
+        assert artifact_object is not None
+
+        artifact_payload = json.loads(json.dumps(artifact_object.content_json, ensure_ascii=False))
+        artifact_payload["runtime_contract"]["workflow_steps"].append(
+            {"id": "verify_power", "title": "检查供电", "goal": "确认供电状态。"}
+        )
+        artifact_payload["runtime_contract"]["expected_evidence"]["verify_power"] = [
+            {"requirement_key": "power_photo", "description": "供电状态照片", "kind": "image"}
+        ]
+        artifact_object.content_json = artifact_payload
+
+        token = json.loads(json.dumps(snapshot.token_payload, ensure_ascii=False))
+        token["status"] = "running"
+        token["phase"] = "instruct_verify_power"
+        token["observations"]["evaluate_collect_context"] = {"decision": "proceed"}
+        token.setdefault("control", {}).pop("wait", None)
+        snapshot.token_payload = token
+        run.status = "running"
+        run.runtime_phase = "instruct_verify_power"
+        session.commit()
+        advancing_status = runtime_service.get_run_task_status(session, run.id)
+
+        run.status = "failed"
+        run.exit_reason = "power check failed"
+        session.commit()
+        failed_status = runtime_service.get_run_task_status(session, run.id)
+
+        run.status = "aborted"
+        run.exit_reason = "unsafe environment"
+        session.commit()
+        aborted_status = runtime_service.get_run_task_status(session, run.id)
+
+        final_token = json.loads(json.dumps(snapshot.token_payload, ensure_ascii=False))
+        final_token["phase"] = "final_verify"
+        final_token["observations"]["evaluate_verify_power"] = {"decision": "complete"}
+        snapshot.token_payload = final_token
+        run.status = "running"
+        run.runtime_phase = "final_verify"
+        run.exit_reason = ""
+        session.commit()
+        finalizing_status = runtime_service.get_run_task_status(session, run.id)
+
+        legacy_payload = json.loads(json.dumps(artifact_object.content_json, ensure_ascii=False))
+        legacy_payload["runtime_contract"].pop("workflow_steps", None)
+        artifact_object.content_json = legacy_payload
+        session.commit()
+        legacy_status = runtime_service.get_run_task_status(session, run.id)
+
+    assert advancing_status.progress.model_dump() == {"completed": 1, "total": 2, "percent": 50}
+    assert [stage.status for stage in advancing_status.stages] == ["completed", "in_progress"]
+    assert advancing_status.current_stage_id == "verify_power"
+    assert failed_status.activity_status == "failed"
+    assert failed_status.stages[1].status == "failed"
+    assert failed_status.stages[1].status_reason == "power check failed"
+    assert aborted_status.activity_status == "aborted"
+    assert aborted_status.stages[1].status == "aborted"
+    assert finalizing_status.activity_status == "finalizing"
+    assert finalizing_status.current_stage_id == ""
+    assert finalizing_status.progress.percent == 100
+    assert [stage.status for stage in finalizing_status.stages] == ["completed", "completed"]
+    assert legacy_status.stages == []
+    assert legacy_status.progress.total == 0
+    assert legacy_status.current_stage_id == ""
+
+
 def test_runtime_service_batches_inputs_that_arrive_before_first_checkpoint(runtime_stack) -> None:
     database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
 
@@ -1705,7 +1880,7 @@ def test_terminal_event_append_refreshes_stale_run_before_assigning_seq(runtime_
     assert refreshed_run.latest_terminal_seq == 2
 
 
-def test_runtime_service_publishes_terminal_and_trace_events_after_commit(runtime_stack) -> None:
+def test_runtime_service_publishes_terminal_trace_and_task_status_events_after_commit(runtime_stack) -> None:
     database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
     sink = RecordingRuntimeEventSink()
     service = RuntimeService(
@@ -1756,6 +1931,12 @@ def test_runtime_service_publishes_terminal_and_trace_events_after_commit(runtim
         service.process_run(session, invocation.run_id or "")
         process_events = list(sink.events)
         terminal_events = service.list_terminal_events(session, invocation.run_id or "")
+        hydrated_task_status_event = service.runtime_event_envelope(
+            session,
+            event_type="run.task_status.updated",
+            run_id=invocation.run_id or "",
+            seq_no=0,
+        )
 
     assert any(event["event_type"] == "trace.event.appended" for event in create_events)
     assert [event["event_type"] for event in append_events] == ["terminal.event.appended"]
@@ -1767,6 +1948,15 @@ def test_runtime_service_publishes_terminal_and_trace_events_after_commit(runtim
     assert [event["payload"]["direction"] for event in output_messages] == ["output"] * len(output_messages)
     assert [event["seq_no"] for event in output_messages] == sorted(event["seq_no"] for event in output_messages)
     assert any(event["event_type"] == "trace.event.appended" for event in process_events)
+    task_status_messages = [event for event in process_events if event["event_type"] == "run.task_status.updated"]
+    assert task_status_messages
+    assert task_status_messages[-1]["payload"]["run_status"] == "succeeded"
+    assert task_status_messages[-1]["payload"]["progress"] == {"completed": 1, "total": 1, "percent": 100}
+    assert task_status_messages[-1]["payload"]["snapshot_seq"] == task_status_messages[-2]["payload"]["snapshot_seq"]
+    assert task_status_messages[-1]["payload"]["updated_at"] >= task_status_messages[-2]["payload"]["updated_at"]
+    assert hydrated_task_status_event is not None
+    assert hydrated_task_status_event["event_type"] == "run.task_status.updated"
+    assert hydrated_task_status_event["payload"]["run_status"] == "succeeded"
 
 
 def test_runtime_service_publish_uses_precommit_upper_bounds(runtime_stack) -> None:

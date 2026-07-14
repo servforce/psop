@@ -46,6 +46,22 @@ test("run live page is read-only and uses interaction data tabs", () => {
   expect(html).toContain("terminalEventPartMediaUrl(event, part)");
 });
 
+test("run live page provides a responsive task status panel", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
+  const runtimeJs = fs.readFileSync(path.join(__dirname, "../../app/runtime.js"), "utf8");
+
+  expect(html).toContain('aria-label="任务状态"');
+  expect(html).toContain("liveRunTaskPanelOpen ? 'flex' : 'hidden xl:flex'");
+  expect(html).toContain('class="flex shrink-0 items-center gap-3 border-b border-slate-800 bg-slate-950/80 px-3 py-2 text-left xl:hidden"');
+  expect(html).toContain("liveRunTaskStatus.current_checkpoint.requirements");
+  expect(html).toContain("任务状态加载失败");
+  expect(html).toContain("<summary");
+  expect(html).toContain("运行信息");
+  expect(runtimeJs).toContain("/runs/${runId}/task-status");
+  expect(runtimeJs).toContain('"run.task_status.updated"');
+  expect(runtimeJs).toContain('"succeeded", "failed", "aborted", "cancelled", "canceled"');
+});
+
 test("skill detail page does not expose the debug tab", () => {
   const html = fs.readFileSync(path.join(__dirname, "../../../pages/skill-detail.html"), "utf8");
 

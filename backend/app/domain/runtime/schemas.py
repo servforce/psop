@@ -60,6 +60,58 @@ class RunResponse(BaseModel):
     updated_at: datetime
 
 
+class RunTaskIdentityResponse(BaseModel):
+    skill_key: str = ""
+    skill_name: str = ""
+    version_no: int | None = None
+    execution_goal: str = ""
+
+
+class RunTaskProgressResponse(BaseModel):
+    completed: int = 0
+    total: int = 0
+    percent: int = 0
+
+
+class RunTaskStageResponse(BaseModel):
+    id: str
+    index: int
+    title: str
+    goal: str = ""
+    status: str
+    status_reason: str = ""
+
+
+class RunTaskEvidenceRequirementResponse(BaseModel):
+    requirement_key: str
+    description: str
+    kind: str = ""
+    status: str
+    reason: str = ""
+
+
+class RunTaskCheckpointResponse(BaseModel):
+    checkpoint_id: str
+    reason: str = ""
+    expected_inputs: list[dict[str, Any]] = Field(default_factory=list)
+    accepted_requirements: int = 0
+    total_requirements: int = 0
+    requirements: list[RunTaskEvidenceRequirementResponse] = Field(default_factory=list)
+
+
+class RunTaskStatusResponse(BaseModel):
+    run_id: str
+    snapshot_seq: int
+    updated_at: datetime
+    run_status: str
+    activity_status: str
+    task: RunTaskIdentityResponse
+    progress: RunTaskProgressResponse
+    current_stage_id: str = ""
+    stages: list[RunTaskStageResponse] = Field(default_factory=list)
+    current_checkpoint: RunTaskCheckpointResponse | None = None
+
+
 class SessionTokenSnapshotResponse(BaseModel):
     id: str
     run_id: str

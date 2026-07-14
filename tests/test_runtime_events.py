@@ -61,3 +61,30 @@ def test_broadcaster_continues_after_one_bad_notification(monkeypatch) -> None:
     broadcast.assert_awaited_once()
     assert broadcast.await_args.args[0] == "run-1"
     assert broadcast.await_args.args[1]["seq_no"] == 2
+
+
+def test_broadcaster_hydrates_task_status_hint_before_broadcast(monkeypatch) -> None:
+    class FakeBus:
+        def __init__(self) -> None:
+            self.events = [
+                {"event_type": "run.task_status.updated", "run_id": "run-1", "snapshot_seq": 4},
+                {"event_type": "runtime.event_bus.closed"},
+            ]
+
+        async def next_event(self):
+            return self.events.pop(0)
+
+    hydrated = {
+        "event_type": "run.task_status.updated",
+        "run_id": "run-1",
+        "seq_no": 5,
+        "payload": {"run_id": "run-1", "snapshot_seq": 5, "run_status": "waiting_input"},
+    }
+    hydrate = lambda _app, _event: hydrated
+    monkeypatch.setattr(app_module, "_hydrate_runtime_event", hydrate)
+    broadcast = AsyncMock()
+    monkeypatch.setattr(run_ws_hub, "broadcast", broadcast)
+
+    asyncio.run(app_module._broadcast_runtime_events(SimpleNamespace(), FakeBus()))
+
+    broadcast.assert_awaited_once_with("run-1", hydrated)

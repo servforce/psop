@@ -1,5 +1,5 @@
 <template x-if="liveRun">
-<div class="h-full min-h-0" data-run-live-view>
+<div class="h-full min-h-0" data-run-live-view @keydown.escape.window="closeLiveRunTaskPanel()">
   <section class="panel rounded-none border-0">
     <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
       <div class="flex min-w-0 items-center">
@@ -30,80 +30,154 @@
       </div>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-hidden">
-      <div class="grid h-full min-h-0 min-w-0 xl:grid-cols-[22rem_minmax(0,1fr)]">
-        <aside class="min-h-0 min-w-0 overflow-auto border-b border-slate-200 bg-slate-50 p-5 xl:border-b-0 xl:border-r">
-          <dl class="space-y-4 text-sm">
-            <div>
-              <dt class="field-label">Run ID</dt>
-              <dd class="mt-1 mono-field break-all" x-text="liveRun.id"></dd>
-            </div>
-            <div>
-              <dt class="field-label">状态</dt>
-              <dd class="mt-1 font-medium text-slate-950" x-text="formatStatus(liveRun.status)"></dd>
-            </div>
-            <div>
-              <dt class="field-label">阶段</dt>
-              <dd class="mt-1 mono-field" x-text="liveRun.runtime_phase"></dd>
-            </div>
-            <div>
-              <dt class="field-label">当前现实步骤</dt>
-              <dd class="mt-1 text-sm font-medium text-slate-950" x-text="liveRun.current_step || '准备任务上下文'"></dd>
-            </div>
-            <div>
-              <dt class="field-label">等待原因</dt>
-              <dd class="mt-1 text-sm leading-6 text-slate-700" x-text="liveRun.wait_reason || 'Runtime 正在推进或尚未进入等待点。'"></dd>
-            </div>
-            <div>
-              <dt class="field-label">期望输入</dt>
-              <dd class="mt-2 space-y-2">
-                <template x-for="item in liveRun.expected_inputs || []" :key="JSON.stringify(item)">
-                  <span class="status-badge bg-slate-100 text-slate-700" x-text="item.kind || item.event_kind || item.mime_type || 'evidence'"></span>
-                </template>
-                <p class="mono-field" x-show="!(liveRun.expected_inputs || []).length">text / image / video / file</p>
-              </dd>
-            </div>
-            <div x-show="liveRun.latest_evaluation && liveRun.latest_evaluation.decision">
-              <dt class="field-label">最近评估</dt>
-              <dd class="mt-2 rounded-lg border border-slate-200 bg-white p-3">
-                <p class="text-sm font-semibold text-slate-950" x-text="liveRun.latest_evaluation.decision"></p>
-                <p class="mt-1 text-xs leading-5 text-slate-600" x-text="liveRun.latest_evaluation.reason"></p>
-              </dd>
-            </div>
-            <div>
-              <dt class="field-label">Terminal Session</dt>
-              <dd class="mt-1 mono-field break-all" x-text="liveRun.terminal_session_id || 'N/A'"></dd>
-            </div>
-            <div>
-              <dt class="field-label">实时连接</dt>
-              <dd class="mt-1">
-                <span class="status-badge" :class="statusBadgeTone(liveRunWsStatus === 'open' ? 'succeeded' : liveRunWsStatus === 'connecting' ? 'running' : liveRunWsStatus)" x-text="wsStatusLabel(liveRunWsStatus)"></span>
-              </dd>
-            </div>
-            <div>
-              <dt class="field-label">Artifact</dt>
-              <dd class="mt-1 mono-field break-all" x-text="liveRun.compile_artifact_id"></dd>
-            </div>
-            <div>
-              <dt class="field-label">Binding</dt>
-              <dd class="mt-2 space-y-2">
-                <template x-for="binding in liveRunBindings" :key="binding.id">
-                  <div class="rounded-lg border border-slate-200 bg-white p-3">
-                    <p class="text-xs font-semibold text-slate-950" x-text="binding.requirement_key"></p>
-                    <p class="mt-1 mono-field break-all" x-text="`${binding.capability} -> ${binding.target_kind}`"></p>
-                  </div>
-                </template>
-              </dd>
-            </div>
-            <div>
-              <dt class="field-label">最终输出</dt>
-              <dd class="mt-2 whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700" x-text="liveRun.final_output || '运行中...'"></dd>
-            </div>
-          </dl>
-        </aside>
+	    <div class="relative min-h-0 flex-1 overflow-hidden">
+	      <div class="grid h-full min-h-0 min-w-0 xl:grid-cols-[22rem_minmax(0,1fr)]">
+	        <div x-cloak x-show="liveRunTaskPanelOpen" x-transition.opacity class="absolute inset-0 z-30 bg-black/60 xl:hidden" @click="closeLiveRunTaskPanel()"></div>
 
-        <main class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-          <section class="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950/20">
+	        <aside
+	          class="absolute inset-y-0 left-0 z-40 h-full min-h-0 w-[min(22rem,calc(100%-2rem))] min-w-0 flex-col overflow-hidden border-r border-slate-800 bg-slate-950 shadow-2xl xl:static xl:z-auto xl:flex xl:w-auto xl:shadow-none"
+	          :class="liveRunTaskPanelOpen ? 'flex' : 'hidden xl:flex'"
+	          aria-label="任务状态"
+	        >
+	          <header class="shrink-0 border-b border-slate-800 px-4 py-4">
+	            <div class="flex items-start justify-between gap-3">
+	              <div class="min-w-0">
+	                <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-orange-300">当前任务</p>
+	                <h2 class="mt-1 truncate text-base font-semibold text-slate-100" x-text="liveRunTaskStatus?.task?.skill_name || '任务状态'"></h2>
+	                <p class="mt-1 font-mono text-[11px] text-slate-500" x-show="liveRunTaskStatus?.task?.version_no" x-text="`v${liveRunTaskStatus?.task?.version_no || ''}`"></p>
+	              </div>
+	              <button type="button" class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-700 text-slate-300 transition hover:bg-slate-900 xl:hidden" title="关闭任务状态" @click="closeLiveRunTaskPanel()">
+	                <span class="material-symbols-outlined text-[18px]">close</span>
+	              </button>
+	            </div>
+	            <p class="mt-3 text-sm leading-6 text-slate-300" x-text="liveRunTaskStatus?.task?.execution_goal || 'Runtime 正在准备任务上下文。'"></p>
+	            <div class="mt-3 flex items-center justify-between gap-3">
+	              <span class="rounded-full border px-2.5 py-1 text-[11px] font-semibold" :class="taskActivityTone(liveRunTaskStatus?.activity_status)" x-text="taskActivityLabel(liveRunTaskStatus?.activity_status)"></span>
+	              <span class="font-mono text-xs tabular-nums text-slate-400" x-text="`${liveRunTaskStatus?.progress?.completed || 0} / ${liveRunTaskStatus?.progress?.total || 0}`"></span>
+	            </div>
+	            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800" role="progressbar" :aria-valuenow="liveRunTaskStatus?.progress?.percent || 0" aria-valuemin="0" aria-valuemax="100">
+	              <div class="h-full rounded-full bg-orange-400 transition-[width] duration-200" :style="`width: ${liveRunTaskStatus?.progress?.percent || 0}%`"></div>
+	            </div>
+	          </header>
+
+	          <div class="min-h-0 flex-1 overflow-y-auto">
+	            <template x-if="liveRunTaskStatusError">
+	              <div class="mx-4 mt-4 rounded-md border border-rose-500/25 bg-rose-500/10 px-3 py-3 text-xs leading-5 text-rose-200">
+	                <p class="font-semibold">任务状态加载失败</p>
+	                <p class="mt-1 text-rose-200/80" x-text="liveRunTaskStatusError"></p>
+	                <button type="button" class="mt-2 font-semibold text-rose-100 underline underline-offset-2" @click="refreshLiveRunTaskStatus(liveRun.id).catch(() => {})">重新加载</button>
+	              </div>
+	            </template>
+	            <template x-if="!(liveRunTaskStatus?.stages || []).length">
+	              <div class="px-4 py-8 text-center">
+	                <span class="material-symbols-outlined text-[28px] text-slate-600">route</span>
+	                <p class="mt-2 text-sm text-slate-400" x-text="liveRunTaskStatusError ? '任务状态暂不可用，终端交互不受影响。' : '该运行没有可展示的业务阶段。'"></p>
+	              </div>
+	            </template>
+
+	            <ol class="divide-y divide-slate-800">
+	              <template x-for="stage in liveRunTaskStatus?.stages || []" :key="stage.id">
+	                <li class="px-4 py-3" :class="stage.id === liveRunTaskStatus?.current_stage_id ? 'bg-slate-900/55' : ''">
+	                  <div class="flex items-start gap-3">
+	                    <span class="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border" :class="taskStageTone(stage.status)">
+	                      <span class="material-symbols-outlined text-[16px]" x-text="taskStageIcon(stage.status)"></span>
+	                    </span>
+	                    <div class="min-w-0 flex-1">
+	                      <div class="flex items-start justify-between gap-2">
+	                        <div class="min-w-0">
+	                          <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500" x-text="`阶段 ${stage.index}`"></p>
+	                          <p class="mt-0.5 text-sm font-semibold leading-5 text-slate-100" x-text="stage.title"></p>
+	                        </div>
+	                        <span class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold" :class="taskStageTone(stage.status)" x-text="taskStageLabel(stage.status)"></span>
+	                      </div>
+
+	                      <template x-if="stage.id === liveRunTaskStatus?.current_stage_id">
+	                        <div class="mt-3 space-y-3 border-l border-slate-700 pl-3">
+	                          <p class="text-xs leading-5 text-slate-300" x-show="stage.goal" x-text="stage.goal"></p>
+	                          <p class="text-xs leading-5 text-amber-200" x-show="stage.status_reason" x-text="stage.status_reason"></p>
+
+	                          <template x-if="liveRunTaskStatus?.current_checkpoint">
+	                            <div class="space-y-3">
+	                              <div x-show="(liveRunTaskStatus.current_checkpoint.expected_inputs || []).length">
+	                                <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">期望输入</p>
+	                                <div class="mt-1.5 flex flex-wrap gap-1.5">
+	                                  <template x-for="item in liveRunTaskStatus.current_checkpoint.expected_inputs || []" :key="JSON.stringify(item)">
+	                                    <span class="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] text-slate-300" x-text="taskExpectedInputLabel(item)"></span>
+	                                  </template>
+	                                </div>
+	                              </div>
+
+	                              <div x-show="(liveRunTaskStatus.current_checkpoint.requirements || []).length">
+	                                <div class="flex items-center justify-between gap-2">
+	                                  <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">当前证据</p>
+	                                  <span class="font-mono text-[10px] text-slate-500" x-text="`${liveRunTaskStatus.current_checkpoint.accepted_requirements} / ${liveRunTaskStatus.current_checkpoint.total_requirements}`"></span>
+	                                </div>
+	                                <ul class="mt-1.5 space-y-2">
+	                                  <template x-for="requirement in liveRunTaskStatus.current_checkpoint.requirements || []" :key="requirement.requirement_key">
+	                                    <li class="flex items-start gap-2 text-xs leading-5">
+	                                      <span class="material-symbols-outlined mt-0.5 shrink-0 text-[16px]" :class="taskEvidenceTone(requirement.status)" x-text="taskEvidenceIcon(requirement.status)"></span>
+	                                      <span class="min-w-0">
+	                                        <span class="block text-slate-300" x-text="requirement.description"></span>
+	                                        <span class="block text-[11px] text-slate-500" x-show="requirement.reason" x-text="requirement.reason"></span>
+	                                      </span>
+	                                    </li>
+	                                  </template>
+	                                </ul>
+	                              </div>
+	                            </div>
+	                          </template>
+	                        </div>
+	                      </template>
+	                    </div>
+	                  </div>
+	                </li>
+	              </template>
+	            </ol>
+
+	            <details class="border-t border-slate-800 px-4 py-3 text-sm">
+	              <summary class="cursor-pointer text-xs font-semibold text-slate-400">运行信息</summary>
+	              <dl class="mt-3 space-y-3">
+	                <div>
+	                  <dt class="field-label">Run ID</dt>
+	                  <dd class="mt-1 mono-field break-all" x-text="liveRun.id"></dd>
+	                </div>
+	                <div>
+	                  <dt class="field-label">Runtime Phase</dt>
+	                  <dd class="mt-1 mono-field break-all" x-text="liveRun.runtime_phase"></dd>
+	                </div>
+	                <div>
+	                  <dt class="field-label">实时连接</dt>
+	                  <dd class="mt-1"><span class="status-badge" :class="statusBadgeTone(liveRunWsStatus === 'open' ? 'succeeded' : liveRunWsStatus === 'connecting' ? 'running' : liveRunWsStatus)" x-text="wsStatusLabel(liveRunWsStatus)"></span></dd>
+	                </div>
+	                <div>
+	                  <dt class="field-label">Artifact</dt>
+	                  <dd class="mt-1 mono-field break-all" x-text="liveRun.compile_artifact_id"></dd>
+	                </div>
+	                <div>
+	                  <dt class="field-label">Bindings</dt>
+	                  <dd class="mt-1 space-y-1">
+	                    <template x-for="binding in liveRunBindings" :key="binding.id">
+	                      <p class="mono-field break-all" x-text="`${binding.requirement_key}: ${binding.capability} -> ${binding.target_kind}`"></p>
+	                    </template>
+	                  </dd>
+	                </div>
+	              </dl>
+	            </details>
+	          </div>
+	        </aside>
+
+	        <main class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+	          <button type="button" class="flex shrink-0 items-center gap-3 border-b border-slate-800 bg-slate-950/80 px-3 py-2 text-left xl:hidden" @click="openLiveRunTaskPanel()">
+	            <span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border" :class="taskActivityTone(liveRunTaskStatus?.activity_status)">
+	              <span class="material-symbols-outlined text-[18px]">fact_check</span>
+	            </span>
+	            <span class="min-w-0 flex-1">
+	              <span class="block truncate text-sm font-semibold text-slate-100" x-text="liveRunCurrentTaskStage()?.title || liveRunTaskStatus?.task?.skill_name || '任务状态'"></span>
+	              <span class="block truncate text-[11px] text-slate-400" x-text="`${taskActivityLabel(liveRunTaskStatus?.activity_status)} · ${liveRunTaskStatus?.progress?.completed || 0}/${liveRunTaskStatus?.progress?.total || 0}`"></span>
+	            </span>
+	            <span class="material-symbols-outlined shrink-0 text-[18px] text-slate-400">chevron_right</span>
+	          </button>
+	          <section class="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950/20">
             <div class="flex h-11 shrink-0 items-center overflow-x-auto overflow-y-hidden border-b border-slate-200 bg-white">
               <button type="button" class="detail-tab h-11" :class="liveRunInteractionTab === 'terminal' ? 'detail-tab-active' : ''" @click="selectLiveRunInteractionTab('terminal')">
                 <span class="material-symbols-outlined text-[18px]">forum</span>
@@ -142,7 +216,7 @@
                             <span class="mono-field" x-text="`#${event.seq_no}`"></span>
                             <span x-show="event._optimistic_status === 'sent'" class="status-badge border-emerald-500/25 bg-emerald-500/10 text-emerald-200">已发送</span>
                           </div>
-                          <div class="overflow-hidden rounded-md px-2.5 py-2" :class="terminalEventBubbleClass(event)">
+                          <div class="overflow-hidden rounded-md" :class="terminalEventBubbleClass(event)">
                             <template x-if="terminalEventHasParts(event)">
                               <div class="space-y-2">
                                 <template x-for="part in terminalEventParts(event)" :key="part.part_id || part.id">
@@ -152,7 +226,7 @@
                                     </template>
                                     <template x-if="terminalEventPartPresentationKind(part) === 'image' && terminalEventPartMediaUrl(event, part)">
                                     <figure class="space-y-1.5">
-                                      <button type="button" class="group relative inline-flex max-w-md items-center justify-center overflow-hidden rounded-md border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(event, part)">
+                                      <button type="button" class="group relative inline-flex max-w-md items-center justify-center overflow-hidden rounded-md bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(event, part)">
                                         <img class="max-h-72 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventPartMediaUrl(event, part)" :alt="terminalEventPartFileName(part)" loading="lazy" decoding="async" />
                                       </button>
                                       <figcaption x-show="terminalEventPartDisplayText(part)" class="terminal-markdown" x-html="terminalEventPartMarkdownHtml(part)"></figcaption>
@@ -186,7 +260,7 @@
 
                             <template x-if="!terminalEventHasParts(event) && terminalEventIsImage(event) && terminalEventMediaUrl(event)">
                               <figure class="space-y-2">
-                                <button type="button" class="group relative inline-flex max-w-md items-center justify-center overflow-hidden rounded-md border border-slate-700 bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(event)">
+                                <button type="button" class="group relative inline-flex max-w-md items-center justify-center overflow-hidden rounded-md bg-black" title="放大查看图片" aria-label="放大查看图片" @click="openTerminalMediaPreview(event)">
                                   <img class="max-h-72 max-w-full object-contain transition group-hover:scale-[1.01]" :src="terminalEventMediaUrl(event)" :alt="terminalEventFileName(event) || 'terminal image'" loading="lazy" decoding="async" />
                                   <span class="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-md bg-slate-950/80 text-slate-100 opacity-0 transition group-hover:opacity-100">
                                     <span class="material-symbols-outlined text-[18px]">zoom_in</span>

@@ -23,6 +23,9 @@ class RuntimeRepository:
     def get_skill_definition_by_key(self, session: Session, skill_key: str) -> SkillDefinition | None:
         return session.scalar(select(SkillDefinition).where(SkillDefinition.key == skill_key))
 
+    def get_skill_definition(self, session: Session, skill_id: str) -> SkillDefinition | None:
+        return session.get(SkillDefinition, skill_id)
+
     def get_skill_version(self, session: Session, version_id: str | None) -> SkillVersion | None:
         if not version_id:
             return None
@@ -186,6 +189,14 @@ class RuntimeRepository:
                 .where(SessionTokenSnapshot.run_id == run_id)
                 .order_by(SessionTokenSnapshot.seq_no.asc())
             ).all()
+        )
+
+    def get_latest_snapshot(self, session: Session, run_id: str) -> SessionTokenSnapshot | None:
+        return session.scalar(
+            select(SessionTokenSnapshot)
+            .where(SessionTokenSnapshot.run_id == run_id)
+            .order_by(SessionTokenSnapshot.seq_no.desc())
+            .limit(1)
         )
 
     def list_trace_events(self, session: Session, run_id: str, event_type: str | None = None) -> list[TraceEvent]:

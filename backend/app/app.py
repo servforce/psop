@@ -140,7 +140,11 @@ async def _broadcast_runtime_events(app: FastAPI, runtime_event_bus: AsyncioRunt
         if AsyncioRuntimeEventBus.is_closed_event(event):
             return
         try:
-            if "payload" not in event and event.get("event_type") in {"terminal.event.appended", "trace.event.appended"}:
+            if "payload" not in event and event.get("event_type") in {
+                "terminal.event.appended",
+                "trace.event.appended",
+                "run.task_status.updated",
+            }:
                 event = await asyncio.to_thread(_hydrate_runtime_event, app, event)
                 if event is None:
                     continue
@@ -164,7 +168,7 @@ def _hydrate_runtime_event(app: FastAPI, hint: dict) -> dict | None:
             session,
             event_type=str(hint.get("event_type") or ""),
             run_id=str(hint.get("run_id") or ""),
-            seq_no=int(hint.get("seq_no") or 0),
+            seq_no=int(hint.get("seq_no") or hint.get("snapshot_seq") or 0),
         )
 
 

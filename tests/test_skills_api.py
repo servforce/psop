@@ -2460,6 +2460,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         run_id = invocation_payload["run_id"]
 
         initial_run_response = client.get(f"/api/v1/runs/{run_id}")
+        initial_task_status_response = client.get(f"/api/v1/runs/{run_id}/task-status")
         binding_requirements_response = client.get(f"/api/v1/runs/{run_id}/binding-requirements")
         bindings_response = client.get(f"/api/v1/runs/{run_id}/bindings")
         terminal_session_response = client.get(f"/api/v1/terminal/sessions/{run_id}")
@@ -2478,6 +2479,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         jobs_after_append_response = client.get("/api/v1/runtime/jobs")
         process_runtime_run_for_test(client, run_id)
         run_response = client.get(f"/api/v1/runs/{run_id}")
+        task_status_response = client.get(f"/api/v1/runs/{run_id}/task-status")
         trace_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
         terminal_events_after_append_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
@@ -2519,6 +2521,18 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert initial_run_payload["latest_terminal_seq"] == 0
     assert initial_run_payload["current_step"] == ""
     assert initial_run_payload["checkpoint_id"] == ""
+    assert initial_task_status_response.status_code == 200
+    initial_task_status = initial_task_status_response.json()
+    assert initial_task_status["task"] == {
+        "skill_key": "issue-one-demo",
+        "skill_name": "Issue One Demo",
+        "version_no": 1,
+        "execution_goal": "帮助用户在现实世界完成当前 Skill 目标。",
+    }
+    assert initial_task_status["activity_status"] == "initializing"
+    assert initial_task_status["progress"] == {"completed": 0, "total": 1, "percent": 0}
+    assert initial_task_status["stages"][0]["title"] == "人工修订上下文收集"
+    assert initial_task_status["stages"][0]["status"] == "pending"
     assert terminal_events_response.status_code == 200
     assert terminal_events_response.json() == []
     assert terminal_append_response.status_code == 202
@@ -2534,6 +2548,13 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert run_payload["latest_trace_seq"] == 7
     assert len(run_payload["binding_summary"]) == 2
     assert "测试任务已完成" in run_payload["final_output"]
+    task_status = task_status_response.json()
+    assert task_status["run_status"] == "succeeded"
+    assert task_status["activity_status"] == "succeeded"
+    assert task_status["progress"] == {"completed": 1, "total": 1, "percent": 100}
+    assert task_status["current_stage_id"] == ""
+    assert task_status["stages"][0]["status"] == "completed"
+    assert task_status["current_checkpoint"] is None
     assert fake_inference.calls == []
 
     event_types = [event["event_type"] for event in trace_response.json()]
@@ -2943,7 +2964,15 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
             new_trace_events = [
                 event for event in trace_after_process_response.json() if event["seq_no"] > initial_trace_seq
             ]
-            process_messages = [websocket.receive_json() for _ in range(len(output_events) + len(new_trace_events))]
+            process_messages = []
+            for _ in range(32):
+                message = websocket.receive_json()
+                process_messages.append(message)
+                if (
+                    message["event_type"] == "run.task_status.updated"
+                    and message["payload"]["run_status"] == "succeeded"
+                ):
+                    break
 
     assert invocation_response.status_code == 201
     assert connected["event_type"] == "ws.connected"
@@ -2956,6 +2985,12 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
     assert [message["payload"]["direction"] for message in messages] == ["input"]
     assert [message["event_type"] for message in process_messages].count("terminal.event.appended") == len(output_events)
     assert [message["event_type"] for message in process_messages].count("trace.event.appended") == len(new_trace_events)
+    task_status_messages = [
+        message for message in process_messages if message["event_type"] == "run.task_status.updated"
+    ]
+    assert task_status_messages
+    assert task_status_messages[-1]["payload"]["run_status"] == "succeeded"
+    assert task_status_messages[-1]["payload"]["progress"]["percent"] == 100
     output_messages = [message for message in process_messages if message["event_type"] == "terminal.event.appended"]
     assert [message["payload"]["direction"] for message in output_messages] == ["output"] * len(output_events)
     assert any("测试任务已完成" in str(message["payload"]["payload_inline"]) for message in output_messages)

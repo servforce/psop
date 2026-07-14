@@ -37,6 +37,7 @@ PSOP 采用确定性 Runtime 与受治理 Agent Harness 结合的架构。
 7. Runtime LLM / evidence evaluation 节点通过 `psop.runner` 进入 Agent Harness；compiler、skill test judge、素材分析等非 Runtime Runner 域服务可继续使用 `LlmInferenceGateway`。
 8. Agent Harness 负责 builder、compiler、tester、audit、eval 的统一定义、运行、tools、MCP、Agent Skills、memory、sandbox、事件与产物治理。
 9. Runtime 推进必须由 `runtime_job` worker 执行；router 不直接执行长耗时 Runtime、LLM 或 agent 调用。
+10. Task Status 是由固定编译产物、最新 Session Token snapshot 和 Run 生命周期生成的可重建 read model，不获得独立状态主权。
 
 ## 3. 当前系统基线
 
@@ -257,7 +258,33 @@ Runtime 同步所有 terminal facts，但 terminal input 只有在符合当前 w
 
 `control.terminal_consumption` 只回答“某条 input 是否已经被当前 checkpoint 消费”，不回答“它满足了哪一项证据要求”。多证据 checkpoint 的验收进度由 `control.evidence_progress` 记录：Runtime 根据 `runtime_contract.expected_evidence[workflow_step_id]` 初始化证据项，并在每次 runner observation 返回后合并 `evidence_assessment.requirement_results`。已 `accepted` 的证据项是当前 checkpoint 的正式进度，后续 runner 不应要求用户重复提交；只有同一 `requirement_key` 被明确标记为 `rejected` 时，才会把该证据项改为不通过。
 
-### 4.6 Agent Harness Objects
+### 4.6 Task Status 投影
+
+Task Status 是面向现场终端的业务任务投影。它只展示编译产物
+`runtime_contract.workflow_steps` 定义的有序业务阶段，不把 `instruct_*`、
+`evaluate_*` 等 EG 内部节点暴露为用户步骤。投影来源固定为：
+
+```text
+Run.compile_artifact_id -> immutable PSOP-EG revision
+Run.id -> latest session_token_snapshot
+Run -> lifecycle status / updated_at
+                    ↓
+          RunTaskStatusResponse
+```
+
+Skill 名称、版本、任务目标、阶段与预期证据来自 Run 绑定的编译产物；当前
+phase、wait checkpoint、evaluation observation 和证据验收进度来自最新 Session
+Token；成功、失败、中止和取消来自 Run。投影不新增进度表，不解析 trace 文案，
+也不向终端返回模型隐藏推理、原始 observation 或对象存储内部引用。旧编译产物
+缺少 `workflow_steps` 时返回空阶段列表，既有 Terminal 与 Replay 能力不受影响。
+
+终端通过 `GET /api/v1/runs/{run_id}/task-status` 恢复完整状态，通过
+`run.task_status.updated` 接收实时更新。跨进程 PostgreSQL `NOTIFY/LISTEN` 只传
+`event_type`、`run_id`、`snapshot_seq` 提示，API 进程重新读取权威事实并水化完整
+payload 后广播。客户端按 `snapshot_seq` 排序；同一 snapshot 下以 `updated_at`
+接受稍后的 Run 生命周期更新。
+
+### 4.7 Agent Harness Objects
 
 新增对象：
 
@@ -282,6 +309,7 @@ flowchart TB
         PromptsUI[Agent Prompts]
         TasksUI[Tasks]
         RunUI[Run Live / Replay]
+        TaskPanel[Task Status Panel]
         AgentUI[Agent Runs / Artifacts]
     end
 
@@ -323,6 +351,7 @@ flowchart TB
     end
 
     UI --> API
+    TaskPanel --> Routes
     API --> Domain
     API --> Harness
     Harness --> Domain
@@ -352,6 +381,7 @@ flowchart TB
 - 追加 snapshot 和 trace。
 - 追加 terminal output。
 - 处理 wait、success、aborted、failed、cancelled。
+- 从固定 EG revision、最新 Session Token 和 Run 构建 Task Status 投影。
 - 构建 replay detail。
 
 RuntimeService 的同步边界：
@@ -391,7 +421,7 @@ Runtime 写终端输出前必须先完成 transition 校验。对于 evaluation 
 
 如果 terminal input 在首次 Runtime 推进前已经入库，RuntimeService 仍先从初始 EG 节点推进；该 input 直到首个 wait checkpoint 建立后才会被批量交付并消费，避免首个终端输入既触发 Runtime 初始化又被初始化提示提前解释。进入后续 checkpoint 后，历史 input 默认不能跨 checkpoint 自动复用。
 
-worker 在每个节点执行完 `_append_runtime_step()` 后提交本节点新增 snapshot、trace 和 terminal output。若节点未进入 wait/success/failure，提交并发布后继续下一节点；若节点进入 wait/success/failure，先设置 Run/Job 状态，再提交并发布。REST 仍是权威恢复路径，WebSocket 只发布增量提示。
+worker 在每个节点执行完 `_append_runtime_step()` 后提交本节点新增 snapshot、trace 和 terminal output。若节点未进入 wait/success/failure，提交并发布后继续下一节点；若节点进入 wait/success/failure，先设置 Run/Job 状态，再提交并发布。正式状态提交后同时发布 `run.task_status.updated`；普通 terminal input 入库和只更新 binding 不重复发布任务状态。REST 仍是权威恢复路径，WebSocket 只发布增量提示。
 
 单节点的总预算由 `runtime_step_timeout_seconds` 控制，附件准备、所有 continuation、
 model 与 tool 调用共享同一 monotonic deadline。Runner provider 禁用内层自动重试，

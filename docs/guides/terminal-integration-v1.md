@@ -79,6 +79,14 @@ ws(s)://<psop-host>/ws/runs/{run_id}
 
 某个 Run 的终端会话。会话为 `open` 时终端可以继续提交输入；Run 结束后会话会变为 `closed`。
 
+### Task Status
+
+面向现场用户的任务状态 read model。它展示 Skill、任务目标、业务阶段进度、当前
+checkpoint 和结构化证据要求。阶段来自编译产物 `runtime_contract.workflow_steps`，
+不包含 `instruct_*`、`evaluate_*` 等 Runtime 内部节点；调试细节继续通过 Replay
+查看。Task Status 可从 Run 绑定的编译产物、最新 Session Token 和 Run 生命周期
+重新构建，因此终端不得把它当作可编辑状态或自行根据 trace 推断阶段。
+
 ### TerminalEvent
 
 终端输入或输出事件。客户端必须使用服务端返回的 `seq_no` 排序，不要使用客户端时间戳排序。
@@ -115,9 +123,10 @@ sequenceDiagram
     API-->>T: invocation_id, run_id, terminal_session_id
 
     T->>API: GET /runs/{run_id}
+    T->>API: GET /runs/{run_id}/task-status
     T->>API: GET /terminal/sessions/{run_id}
     T->>API: GET /terminal/sessions/{run_id}/events
-    API-->>T: Run 通常处于 waiting_runtime/start；TerminalSession open，可输入；历史事件可能为空
+    API-->>T: Run、Task Status、TerminalSession；历史事件可能为空
 
     T->>WS: connect /ws/runs/{run_id}
     WS-->>T: ws.connected
@@ -135,12 +144,14 @@ sequenceDiagram
         Note over API: API 只持久化 input event 并调度 runtime_job
         Note over API: Runtime 输出由 worker 异步产生
         T->>API: GET /runs/{run_id}
+        T->>API: GET /runs/{run_id}/task-status
         T->>API: GET /terminal/sessions/{run_id}/events?from_seq=last_seq+1
         API-->>T: 最新状态和缺失事件
     end
 
     opt 断线或页面刷新
         T->>API: GET /runs/{run_id}
+        T->>API: GET /runs/{run_id}/task-status
         T->>API: GET /terminal/sessions/{run_id}
         T->>API: GET /terminal/sessions/{run_id}/events?from_seq=last_seq+1
         API-->>T: 恢复状态并补齐事件
@@ -151,7 +162,7 @@ sequenceDiagram
 推荐流程：
 
 1. 创建 Invocation，保存 `run_id` 与 `terminal_session_id`。
-2. 读取 Run、TerminalSession 和历史 TerminalEvent。
+2. 并行读取 Run、Task Status、TerminalSession 和历史 TerminalEvent。
 3. 连接 WebSocket。
 4. 用户发送纯文本时，调用终端事件追加接口并提交 JSON。
 5. 用户同时发送文本、图片、音频或视频时，仍调用同一个终端事件追加接口，提交 `multipart/form-data`。
@@ -325,6 +336,78 @@ GET /api/v1/runs/{run_id}
 | `final_output` | 成功或中止后的最终输出。 |
 | `exit_reason` | 失败、取消或中止原因。 |
 | `created_at` / `started_at` / `ended_at` / `updated_at` | 生命周期时间。 |
+
+读取面向终端的任务状态：
+
+```http
+GET /api/v1/runs/{run_id}/task-status
+```
+
+响应示例：
+
+```json
+{
+  "run_id": "run-id",
+  "snapshot_seq": 4,
+  "updated_at": "2026-07-14T10:00:00Z",
+  "run_status": "waiting_input",
+  "activity_status": "waiting_input",
+  "task": {
+    "skill_key": "install-pc-host",
+    "skill_name": "安装 PC 主机",
+    "version_no": 3,
+    "execution_goal": "安全完成主机安装并核验现场结果。"
+  },
+  "progress": {"completed": 2, "total": 5, "percent": 40},
+  "current_stage_id": "inspect_power",
+  "stages": [
+    {
+      "id": "inspect_power",
+      "index": 3,
+      "title": "检查供电状态",
+      "goal": "确认设备已经断电。",
+      "status": "waiting_input",
+      "status_reason": "等待上传断电后的现场照片。"
+    }
+  ],
+  "current_checkpoint": {
+    "checkpoint_id": "inspect_power_evidence",
+    "reason": "等待上传断电后的现场照片。",
+    "expected_inputs": [{"kind": "image"}],
+    "accepted_requirements": 1,
+    "total_requirements": 2,
+    "requirements": [
+      {
+        "requirement_key": "power_photo",
+        "description": "断电后的设备照片",
+        "kind": "image",
+        "status": "accepted",
+        "reason": ""
+      }
+    ]
+  }
+}
+```
+
+阶段状态语义：
+
+| `stages[].status` | 说明 |
+| --- | --- |
+| `pending` | 尚未进入该业务阶段。 |
+| `in_progress` | 正在执行该阶段的指令或评估节点。 |
+| `waiting_input` | 当前阶段有活动 checkpoint，等待现场输入。 |
+| `completed` | 对应评估节点已经提交 `proceed` 或 `complete`。 |
+| `failed` / `aborted` / `cancelled` | Run 在当前活动阶段以相应状态结束。 |
+
+`activity_status=finalizing` 表示所有业务阶段已经完成，但 Runtime 仍在进行最终核验。
+此时进度可以是 100%，终端应继续显示“正在完成核验”，不要误报 Run 已成功。
+进度只按已完成业务阶段数计算，不代表耗时比例，也不应用于推算 ETA。旧产物没有
+`workflow_steps` 时，`stages=[]`、进度为 `0/0`；终端应显示明确空状态并继续提供
+Terminal 与 Replay。
+
+`current_checkpoint.requirements` 只包含当前 checkpoint 的结构化证据状态。证据状态
+为 `missing`、`accepted`、`rejected` 或 `ambiguous`；不要从 Terminal 文案、trace
+或隐藏的 observation 推断证据完成情况。
 
 读取终端会话：
 
@@ -904,6 +987,9 @@ ws.onmessage = (message) => {
   if (event.event_type === "terminal.event.appended") {
     mergeTerminalEvent(event.payload);
   }
+  if (event.event_type === "run.task_status.updated") {
+    mergeTaskStatus(event.payload);
+  }
 };
 
 ws.onclose = () => {
@@ -921,10 +1007,10 @@ WebSocket 服务端消息统一外层结构：
 
 | 字段 | 说明 |
 | --- | --- |
-| `event_type` | 事件类型，例如 `ws.connected`、`terminal.event.appended`、`trace.event.appended`。 |
+| `event_type` | 事件类型，例如 `ws.connected`、`terminal.event.appended`、`trace.event.appended`、`run.task_status.updated`。 |
 | `run_id` | 当前 Run ID。 |
 | `invocation_id` | 当前版本通常为 `null`，终端侧无需依赖。 |
-| `seq_no` | 事件序号。对 `terminal.event.appended`，与 `payload.seq_no` 一致；连接确认事件为 `0`。 |
+| `seq_no` | 事件序号。对 `terminal.event.appended`，与 `payload.seq_no` 一致；对 `run.task_status.updated`，与 `payload.snapshot_seq` 一致；连接确认事件为 `0`。 |
 | `occurred_at` | 事件发生时间。连接确认事件可能为 `null`。 |
 | `payload` | 事件载荷。不同 `event_type` 的结构不同。 |
 
@@ -997,6 +1083,13 @@ WebSocket 服务端消息统一外层结构：
 | `payload.created_at` | 服务端创建时间。 |
 
 Runtime trace 增量会以 `trace.event.appended` 推送，终端可用于调试面板或实时日志；普通终端 UI 不需要依赖它完成恢复。
+
+任务状态增量使用 `run.task_status.updated`。其 `payload` 与
+`GET /runs/{run_id}/task-status` 完全同构，`seq_no` 与 `payload.snapshot_seq` 对齐。
+客户端先比较 `snapshot_seq`：丢弃更小序号；相同序号再比较 `updated_at`，接受更新
+时间更晚的 payload。这允许 terminal 节点提交后，Run 在 snapshot 不增加的情况下
+从 `running` 正确更新为 `succeeded`。如果发现序号异常、页面首次加载或 WebSocket
+重连，应重新请求 Task Status REST，不应通过 trace 补算。
 
 ```json
 {
@@ -1126,6 +1219,7 @@ Runner 参考图片输出推送示例：
 - WebSocket 只作为增量提示通道，REST 是状态恢复和完整数据读取的权威来源。
 - 一次输入可能先触发一个 input `terminal.event.appended`，稍后再由 worker 按节点提交触发多个 output `terminal.event.appended` 和 `trace.event.appended`；客户端应逐条合并，而不是假定一次 REST 请求只对应一个 WebSocket 消息。
 - 收到 WebSocket 事件后，按 `payload.id` 去重，按 `payload.seq_no` 排序。
+- 收到 `run.task_status.updated` 后，按 `snapshot_seq`、`updated_at` 合并完整任务状态 payload。
 - 如果需要完整事件字段，收到推送后再调用 `/terminal/sessions/{run_id}/events?from_seq=...` 拉取。
 - 断线重连后，用本地最大 `seq_no + 1` 调用 `/terminal/sessions/{run_id}/events?from_seq=...` 补齐缺失事件。
 - 客户端不需要向 WebSocket 发送业务消息。
@@ -1160,15 +1254,17 @@ terminal-001-20260525-000001
 | `run_id` | 恢复当前运行。 |
 | `terminal_session_id` | 展示会话状态。 |
 | `latest_terminal_seq` | 拉取缺失终端事件。 |
+| Task Status 的 `snapshot_seq`、`updated_at` | 过滤乱序实时更新；重连后仍以 REST 返回值恢复。 |
 | 已发送但未确认的 `external_event_id` | 恢复乐观输入状态。 |
 
 恢复流程：
 
 1. 调用 `GET /api/v1/runs/{run_id}` 获取最新 Run。
-2. 调用 `GET /api/v1/terminal/sessions/{run_id}` 获取会话状态。
-3. 调用 `GET /api/v1/terminal/sessions/{run_id}/events?from_seq=<last_seq+1>` 补齐终端事件。
-4. 对本地未确认输入，用 `external_event_id` 在事件列表中查找；找到则标记为已确认，找不到则允许用户重试。
-5. 重新连接 WebSocket。
+2. 调用 `GET /api/v1/runs/{run_id}/task-status` 恢复完整任务面板。
+3. 调用 `GET /api/v1/terminal/sessions/{run_id}` 获取会话状态。
+4. 调用 `GET /api/v1/terminal/sessions/{run_id}/events?from_seq=<last_seq+1>` 补齐终端事件。
+5. 对本地未确认输入，用 `external_event_id` 在事件列表中查找；找到则标记为已确认，找不到则允许用户重试。
+6. 重新连接 WebSocket。
 
 ## 错误处理
 
@@ -1206,8 +1302,9 @@ PSOP 业务错误通常返回：
 
 终端侧应至少支持以下展示：
 
-- 当前运行状态。
-- 当前等待原因和期望输入。
+- Skill 名称、版本、任务目标和当前 activity 状态。
+- 已完成阶段数、总阶段数和按阶段计数的进度条。
+- 全部业务阶段，以及当前阶段的目标、等待原因、期望输入和证据 checklist。
 - 用户文本输入。
 - 系统文本输出。
 - 同一条输入事件内的图片、音频、视频 part。
@@ -1220,6 +1317,8 @@ PSOP 业务错误通常返回：
 - 同一个事件 `id` 只展示一次。
 - 输出、输入、媒体 part、错误信息应有清晰区分。
 - 同一个输入事件的 `parts[]` 应在同一条用户消息内整体展示。
+- `completed`、运行中、`waiting_input`、异常状态建议分别使用绿色、蓝色、琥珀色、红色语义色。
+- 窄屏优先保留 transcript，通过任务摘要按钮打开状态抽屉；运行 ID、artifact、binding 和连接信息默认折叠。
 - Run 失败时展示 `exit_reason`。
 - Run 被中止时优先展示 `final_output`，没有最终输出时展示 `exit_reason`。
 
@@ -1230,12 +1329,12 @@ PSOP 业务错误通常返回：
 | 项目 | 验收标准 |
 | --- | --- |
 | 创建运行 | 能通过 `skill_key` 创建 Invocation，并得到 `run_id`。 |
-| 状态加载 | 能读取 Run、TerminalSession 和 TerminalEvent。 |
+| 状态加载 | 能读取 Run、Task Status、TerminalSession 和 TerminalEvent。 |
 | 文本输入 | 能发送带 text part 的 `terminal.multimodal.input.v1`，并通过 `external_event_id` 确认服务端接收。 |
 | 多模态输入 | 能通过 `/events` multipart 在同一事件内发送文本和至少一种图片、音频或视频 part，并在事件流中同气泡展示。 |
 | 媒体读取 | 能通过 `/events/{event_id}/parts/{part_id}/content` 展示媒体内容。 |
-| 实时提示 | 能连接 `/ws/runs/{run_id}` 并处理 `terminal.event.appended`。 |
-| 断线恢复 | WebSocket 断开后能通过 REST 补齐缺失事件。 |
+| 实时提示 | 能连接 `/ws/runs/{run_id}` 并处理 `terminal.event.appended` 与 `run.task_status.updated`。 |
+| 断线恢复 | WebSocket 断开后能通过 REST 补齐缺失事件并恢复 Task Status。 |
 | 结束保护 | Run 结束或 TerminalSession 关闭后禁止继续输入。 |
 | 幂等重试 | 网络超时后用相同事件 ID 重试，不产生重复消息。 |
 | 错误展示 | 能展示服务端 `message` 与关键 `details`。 |
