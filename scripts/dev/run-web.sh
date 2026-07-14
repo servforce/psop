@@ -9,7 +9,7 @@ REPO_ROOT="$(resolve_repo_root)"
 load_psop_env "${REPO_ROOT}"
 derive_local_integration_defaults
 
-bash "${SCRIPT_DIR}/require-node.sh"
+source "${SCRIPT_DIR}/require-node.sh"
 bash "${SCRIPT_DIR}/require-web-deps.sh"
 
 cd "${REPO_ROOT}/static"

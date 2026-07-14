@@ -159,7 +159,7 @@ test("button tooltips cover schedule and basic-principle icons", () => {
   methods.ensureButtonTooltip(principleButton.element);
 
   expect(scheduleButton.attrs.title).toBe("时钟事件");
-  expect(principleButton.attrs.title).toBe("基本原则");
+  expect(principleButton.attrs.title).toBe("智能体");
 });
 
 test("button tooltips keep explicit accessibility labels", () => {

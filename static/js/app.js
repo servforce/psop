@@ -13,6 +13,10 @@
       return { name: "skills-list", params: {} };
     }
 
+    if (normalized === "/admin/tasks") {
+      return { name: "tasks-list", params: {} };
+    }
+
     const detailMatch = normalized.match(/^\/admin\/skills\/([^/]+)$/);
     if (detailMatch) {
       return {
@@ -29,6 +33,14 @@
       };
     }
 
+    const skillRunReplayMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/runs\/([^/]+)\/live\/replay$/);
+    if (skillRunReplayMatch) {
+      return {
+        name: "skill-run-live",
+        params: { skillId: skillRunReplayMatch[1], runId: skillRunReplayMatch[2], view: "replay" }
+      };
+    }
+
     const skillDebugRunLiveMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/debug\/runs\/([^/]+)\/live$/);
     if (skillDebugRunLiveMatch) {
       return {
@@ -40,8 +52,8 @@
     const skillReplayRunMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/runs\/([^/]+)\/replay$/);
     if (skillReplayRunMatch) {
       return {
-        name: "skill-replay-detail",
-        params: { skillId: skillReplayRunMatch[1], runId: skillReplayRunMatch[2] }
+        name: "skill-run-live",
+        params: { skillId: skillReplayRunMatch[1], runId: skillReplayRunMatch[2], view: "replay" }
       };
     }
 
@@ -66,6 +78,14 @@
       return {
         name: "skill-test-scenario",
         params: { skillId: skillTestScenarioMatch[1], scenarioId: skillTestScenarioMatch[2] }
+      };
+    }
+
+    const skillCompilerArtifactMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/compiler\/artifacts\/([^/]+)$/);
+    if (skillCompilerArtifactMatch) {
+      return {
+        name: "skill-compiler-artifact",
+        params: { skillId: skillCompilerArtifactMatch[1], artifactId: skillCompilerArtifactMatch[2] }
       };
     }
 
@@ -102,13 +122,18 @@
       return { name: "run-live", params: { runId: runLiveMatch[1] } };
     }
 
+    const runReplayMatch = normalized.match(/^\/admin\/runs\/([^/]+)\/live\/replay$/);
+    if (runReplayMatch) {
+      return { name: "run-live", params: { runId: runReplayMatch[1], view: "replay" } };
+    }
+
     if (normalized === "/admin/replay") {
       return { name: "replay-list", params: {} };
     }
 
     const replayRunMatch = normalized.match(/^\/admin\/replay\/runs\/([^/]+)$/);
     if (replayRunMatch) {
-      return { name: "replay-detail", params: { runId: replayRunMatch[1] } };
+      return { name: "run-live", params: { runId: replayRunMatch[1], view: "replay" } };
     }
 
     return { name: "skills-list", params: {} };
@@ -116,6 +141,10 @@
 
   function buildSkillDetailPath(skillId) {
     return `/admin/skills/${skillId}`;
+  }
+
+  function buildTasksPath() {
+    return "/admin/tasks";
   }
 
   function buildRunLivePath(runId) {
@@ -131,11 +160,11 @@
   }
 
   function buildReplayPath(runId) {
-    return `/admin/replay/runs/${runId}`;
+    return `/admin/runs/${runId}/live/replay`;
   }
 
   function buildSkillReplayPath(skillId, runId) {
-    return `/admin/skills/${skillId}/runs/${runId}/replay`;
+    return `/admin/skills/${skillId}/runs/${runId}/live/replay`;
   }
 
   function buildSkillTestScenarioPath(skillId, scenarioId) {
@@ -154,6 +183,10 @@
     return `/admin/compiler/artifacts/${artifactId}`;
   }
 
+  function buildSkillCompilerArtifactPath(skillId, artifactId) {
+    return `/admin/skills/${skillId}/compiler/artifacts/${artifactId}`;
+  }
+
   function buildAgentPromptPath(definitionId) {
     return `/admin/agent-prompts/${definitionId}`;
   }
@@ -168,7 +201,7 @@
     }
 
     if (window.location.port === "4173") {
-      return "http://127.0.0.1:8001/api/v1";
+      return "http://127.0.0.1:8011/api/v1";
     }
 
     return "/api/v1";
@@ -402,15 +435,18 @@
       rawMaterialsLoadedSkillId: null,
       rawMaterials: [],
       rawMaterialDetail: null,
-      selectedRawMaterialIds: [],
-      rawMaterialUploadMode: "file",
-      rawMaterialUploadFile: null,
+      rawMaterialAnalysis: null,
+      rawMaterialDetailTab: "analysis",
+      rawMaterialUploadFiles: [],
+      rawMaterialUploadItems: [],
+      rawMaterialUploadSelectedIndex: 0,
+      rawMaterialUploadNameAutoFilled: false,
+      rawMaterialUploadProgress: null,
+      rawMaterialUploadError: "",
       rawMaterialUploadForm: {
         name: "",
         description: "",
-        material_kind: "",
-        source_note: "",
-        source_url: ""
+        source_note: ""
       },
       rawMaterialUploadModalOpen: false,
       rawMaterialGenerateModalOpen: false,
@@ -418,6 +454,37 @@
         user_description: ""
       },
       rawMaterialGenerationResult: null,
+      builderAgentPanel: {
+        open: false,
+        status: "idle",
+        userInput: "",
+        submittedInput: "",
+        generationId: "",
+        jobId: "",
+        agentRunId: "",
+        startedAt: "",
+        elapsedMs: 0,
+        processExpanded: true,
+        timeline: null,
+        steps: [],
+        result: null,
+        errorMessage: "",
+        sseConnected: false,
+        usingPolling: false,
+        lastEventAt: "",
+        resultRefreshed: false
+      },
+      builderAgentEventSource: null,
+      builderAgentPollTimer: null,
+      builderAgentElapsedTimer: null,
+      rawMaterialImagePreview: {
+        open: false,
+        src: "",
+        title: "",
+        description: "",
+        timestamp_ms: null,
+        frame_source: ""
+      },
       publishRecordsLoadedSkillId: null,
       publishRecords: [],
       publishEventSource: null,
@@ -457,7 +524,6 @@
       compilerArtifactNodeJsonDraft: "",
       compilerArtifactNodeJsonError: "",
       bpmnViewer: null,
-      compilerArtifactWorkspaceOpen: false,
       agentPrompts: [],
       agentPromptDetail: null,
       agentPromptBindings: [],
@@ -471,6 +537,17 @@
         requested_from: "",
         requested_to: ""
       },
+      tasks: [],
+      taskStats: null,
+      taskLastLoadedAt: "",
+      taskPollTimer: null,
+      taskFilters: {
+        job_type: "",
+        status: "",
+        q: "",
+        created_from: "",
+        created_to: ""
+      },
       publishFilters: {
         status: "",
         published_from: "",
@@ -482,6 +559,7 @@
         requested_to: ""
       },
       runtimeFilters: {
+        status: "",
         created_from: "",
         created_to: ""
       },
@@ -537,15 +615,42 @@
         selected_data_object_ids: []
       },
       invocations: [],
+      skillRuns: [],
       replayRuns: [],
       liveRun: null,
+      liveRunTaskStatus: null,
+      liveRunTaskStatusError: "",
       liveRunBindings: [],
       liveRunTerminalSession: null,
       liveRunTerminalEvents: [],
       liveRunTraceEvents: [],
+      liveRunInteractionTab: "terminal",
+      liveRunMountedTabs: {
+        terminal: false,
+        io: false,
+        replay: false
+      },
+      liveRunLoadedRunId: "",
+      liveRunTaskStatusLoadedRunId: "",
+      liveRunTerminalEventsLoadedRunId: "",
+      liveRunReplayLoadedRunId: "",
+      selectedLiveRunReplayItemKey: "",
+      selectedLiveRunProcessEventKey: "",
+      terminalMediaPreview: {
+        open: false,
+        kind: "",
+        src: "",
+        title: "",
+        description: ""
+      },
       liveRunWs: null,
       liveRunWsRunId: "",
       liveRunWsStatus: "idle",
+      liveRunTaskPanelOpen: false,
+      _liveRunLoadGeneration: 0,
+      _liveRunWsHasOpened: false,
+      _liveRunReplayRefreshTimer: null,
+      _liveRunReplayGeneration: 0,
       replayDetail: null,
       invocationForm: {
         skill_key: "",
@@ -556,7 +661,7 @@
       },
       terminalInputForm: {
         payload: "",
-        file: null
+        attachments: []
       },
       copyFeedback: {},
       buttonTooltipInstalled: false,
@@ -564,6 +669,7 @@
       centerToast: null,
       centerToastTimer: null,
       notice: null,
+      createFormError: "",
       createForm: {
         name: "",
         description: ""
@@ -573,11 +679,9 @@
       },
       filters: {
         search: "",
-        status: "",
+        published_state: "",
         created_from: "",
-        created_to: "",
-        published_from: "",
-        published_to: ""
+        created_to: ""
       },
       metadataForm: {
         name: "",
@@ -617,6 +721,7 @@
         repositoryCreate: false,
         rawMaterials: false,
         rawMaterialDetail: false,
+        rawMaterialAnalyze: false,
         rawMaterialUpload: false,
         rawMaterialDelete: false,
         rawMaterialGenerate: false,
@@ -632,6 +737,7 @@
         agentPromptAction: false,
         manualCompile: false,
         invocations: false,
+        skillRuns: false,
         createInvocation: false,
         liveRun: false,
         terminalInput: false,
@@ -643,6 +749,7 @@
         skillTestEvaluate: false,
         skillTestSendData: false,
         skillTestCancel: false,
+        tasks: false,
         replayRuns: false,
         replayDetail: false
       }
@@ -653,6 +760,7 @@
     normalizePath,
     resolveAdminRoute,
     buildSkillDetailPath,
+    buildTasksPath,
     buildRunLivePath,
     buildSkillRunLivePath,
     buildSkillDebugRunLivePath,
@@ -662,6 +770,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildSkillCompilerArtifactPath,
     buildAgentPromptPath,
     generateSkillKey,
     resolveApiBaseUrl,
@@ -682,6 +791,7 @@
       ...window.PSOPConsoleCompilerMethods,
       ...window.PSOPConsoleAgentPromptMethods,
       ...window.PSOPConsoleSkillTestMethods,
+      ...window.PSOPConsoleTasksMethods,
       ...window.PSOPConsoleRuntimeMethods,
       ...window.PSOPConsoleFormatMethods
     };

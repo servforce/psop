@@ -20,6 +20,7 @@
     <script defer src="/js/app/compiler.js"></script>
     <script defer src="/js/app/agent-prompts.js"></script>
     <script defer src="/js/app/skill-test.js"></script>
+    <script defer src="/js/app/tasks.js"></script>
     <script defer src="/js/app/runtime.js"></script>
     <script defer src="/js/app/formatters.js"></script>
     <script defer src="/node_modules/alpinejs/dist/cdn.min.js"></script>
@@ -52,7 +53,7 @@
               <button
                 type="button"
                 class="sidebar-link"
-                :class="[['skills-list', 'skill-detail', 'skill-run-live', 'skill-debug-live', 'skill-replay-detail', 'skill-test-scenario-new', 'skill-test-scenario', 'skill-test-scenario-review'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                :class="[['skills-list', 'skill-detail', 'skill-compiler-artifact', 'skill-run-live', 'skill-debug-live', 'skill-test-scenario-new', 'skill-test-scenario', 'skill-test-scenario-review'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
                 title="Skills"
                 @click="navigate('/admin/skills')"
               >
@@ -63,11 +64,21 @@
                 type="button"
                 class="sidebar-link"
                 :class="[['agent-prompts-list', 'agent-prompt-detail'].includes(route.name) ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
-                title="基本原则"
+                title="智能体"
                 @click="navigate('/admin/agent-prompts')"
               >
                 <span class="material-symbols-outlined text-[20px]">smart_toy</span>
-                <span x-show="!sidebarCollapsed" x-transition.opacity>基本原则</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>智能体</span>
+              </button>
+              <button
+                type="button"
+                class="sidebar-link"
+                :class="[route.name === 'tasks-list' ? 'sidebar-link-active' : '', sidebarCollapsed ? 'justify-center px-0' : '']"
+                title="任务"
+                @click="navigate('/admin/tasks')"
+              >
+                <span class="material-symbols-outlined text-[20px]">task_alt</span>
+                <span x-show="!sidebarCollapsed" x-transition.opacity>任务</span>
               </button>
             </nav>
         </aside>
@@ -116,17 +127,17 @@
               </template>
 
               <div id="skills-list-page" class="h-full" x-show="!loadingPage && route.name === 'skills-list'"></div>
-              <div id="skill-detail-page" class="h-full" x-show="!loadingPage && ['skill-detail', 'skill-test-scenario-new'].includes(route.name) && currentSkill"></div>
+              <div id="tasks-page" class="h-full" x-show="!loadingPage && route.name === 'tasks-list'"></div>
+              <div id="skill-detail-page" class="h-full" x-show="!loadingPage && route.name === 'skill-detail' && currentSkill"></div>
               <div id="compiler-list-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-list'"></div>
-              <div id="compiler-artifact-page" class="h-full" x-show="!loadingPage && route.name === 'compiler-artifact' && compilerArtifact"></div>
+              <div id="compiler-artifact-page" class="h-full" x-show="!loadingPage && ['compiler-artifact', 'skill-compiler-artifact'].includes(route.name) && compilerArtifact"></div>
               <div id="agent-prompts-list-page" class="h-full" x-show="!loadingPage && route.name === 'agent-prompts-list'"></div>
               <div id="agent-prompt-detail-page" class="h-full" x-show="!loadingPage && route.name === 'agent-prompt-detail' && agentPromptDetail"></div>
               <div id="invocations-list-page" class="h-full" x-show="!loadingPage && route.name === 'invocations-list'"></div>
               <div id="run-live-page" class="h-full" x-show="!loadingPage && ['run-live', 'skill-run-live', 'skill-debug-live'].includes(route.name) && liveRun"></div>
-              <div id="skill-test-scenario-page" class="h-full" x-show="!loadingPage && route.name === 'skill-test-scenario' && currentSkill && skillTestCase"></div>
+              <div id="skill-test-scenario-page" class="h-full" x-show="!loadingPage && ['skill-test-scenario', 'skill-test-scenario-new'].includes(route.name) && currentSkill && (skillTestCase || route.name === 'skill-test-scenario-new')"></div>
               <div id="skill-test-scenario-review-page" class="h-full" x-show="!loadingPage && route.name === 'skill-test-scenario-review' && currentSkill && skillTestReview"></div>
               <div id="replay-list-page" class="h-full" x-show="!loadingPage && route.name === 'replay-list'"></div>
-              <div id="replay-detail-page" class="h-full" x-show="!loadingPage && ['replay-detail', 'skill-replay-detail'].includes(route.name) && replayDetail"></div>
             </section>
         </main>
 

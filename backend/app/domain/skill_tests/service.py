@@ -11,13 +11,19 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agent_harness.service import AgentHarnessService
 from app.core.config import Settings
 from app.domain.agent_prompts.service import AgentPromptService
-from app.domain.compiler.models import ArtifactObject
+from app.domain.compiler.models import ArtifactObject, EgCompileArtifact
 from app.domain.jobs.models import RuntimeJob
 from app.domain.jobs.repository import JobRepository
 from app.domain.runtime.models import Run
-from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest, InvocationResponse
+from app.domain.runtime.schemas import (
+    AppendTerminalEventRequest,
+    CreateInvocationRequest,
+    InvocationResponse,
+    TerminalEventPartInput,
+)
 from app.domain.runtime.service import RuntimeService
 from app.domain.skill_tests.models import (
     SkillTestAsset,
@@ -46,7 +52,7 @@ from app.domain.skill_tests.schemas import (
 )
 from app.domain.skills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.domain.skills.models import SkillDefinition, now_utc
-from app.gateway.inference import LlmInferenceGateway
+from app.gateway.inference import LlmInferenceGateway, TEXT_ROUTE_KEY
 from app.infra.object_store import ObjectStoreService
 
 
@@ -103,12 +109,19 @@ class SkillTestService:
         runtime_service: RuntimeService | None = None,
         job_repository: JobRepository | None = None,
         agent_prompt_service: AgentPromptService | None = None,
+        agent_harness_service: AgentHarnessService | None = None,
     ) -> None:
         self.settings = settings
         self.inference_gateway = inference_gateway
         self.object_store = object_store
         self.repository = repository or SkillTestRepository()
-        self.runtime_service = runtime_service or RuntimeService(settings=settings, inference_gateway=inference_gateway)
+        self.agent_harness_service = agent_harness_service or AgentHarnessService(settings=settings)
+        self.runtime_service = runtime_service or RuntimeService(
+            settings=settings,
+            inference_gateway=inference_gateway,
+            object_store=object_store,
+            agent_harness_service=self.agent_harness_service,
+        )
         self.job_repository = job_repository or JobRepository()
         self.agent_prompt_service = agent_prompt_service or AgentPromptService()
 
@@ -303,6 +316,7 @@ class SkillTestService:
             )
 
         timeline = self._normalize_timeline(payload.timeline_override or scenario.timeline, duration_ms=scenario.duration_ms)
+        target_artifact = self._resolve_target_artifact(session, skill_id, scenario)
         started_at = now_utc()
         scenario_run = SkillTestScenarioRun(
             skill_definition_id=skill_id,
@@ -333,7 +347,7 @@ class SkillTestService:
                 CreateInvocationRequest(
                     skill_key=skill.key,
                     version_selector=scenario.target_version_selector or "latest",
-                    compile_artifact_id=scenario.target_compile_artifact_id,
+                    compile_artifact_id=target_artifact.id,
                     input_envelope={},
                     gateway_type="terminal",
                     terminal_context=terminal_context,
@@ -393,7 +407,7 @@ class SkillTestService:
         return self._build_run_response(scenario_run)
 
     def process_driver_job(self, session: Session, job_id: str) -> SkillTestScenarioRunResponse:
-        job = self.job_repository.get_runtime_job(session, job_id)
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
         if not job:
             raise SkillNotFoundError("未找到测试时间轴 Driver Job。", details={"job_id": job_id})
         scenario_run_id = job.payload.get("scenario_run_id")
@@ -406,8 +420,41 @@ class SkillTestService:
         elif job.status == "running":
             job.status = "pending"
         job.last_error = ""
+        self._sync_driver_job_metrics(session, job, str(scenario_run_id))
         session.commit()
         return response
+
+    def finalize_exhausted_timeline_driver_job(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+        error_message: str,
+    ) -> bool:
+        """Idempotently fail the scenario run without committing the reaper transaction."""
+
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
+        if job is None or job.job_type != TIMELINE_DRIVER_JOB_TYPE:
+            return False
+        scenario_run_id = str((job.payload or {}).get("scenario_run_id") or "")
+        if not scenario_run_id:
+            return False
+        scenario_run = self.repository.get_scenario_run_for_update(session, scenario_run_id)
+        if scenario_run is None or scenario_run.driver_status in {"completed", "failed", "cancelled"}:
+            return False
+
+        reason = error_message.strip() or "Timeline driver job attempts exhausted."
+        scenario_run.status = "failed"
+        scenario_run.driver_status = "failed"
+        scenario_run.ended_at = scenario_run.ended_at or now_utc()
+        scenario_run.result_summary = {
+            **(scenario_run.result_summary or {}),
+            "status": "failed",
+            "reason": "timeline_driver_job_attempts_exhausted",
+            "error_message": reason,
+            "job_id": job.id,
+        }
+        return True
 
     def process_timeline_driver_for_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRunResponse:
         scenario_run = self._get_scenario_run(session, scenario_run_id)
@@ -676,15 +723,46 @@ class SkillTestService:
         *,
         scheduled_at: datetime,
     ):
+        if isinstance(event.get("parts"), list) and event["parts"]:
+            parts = self._terminal_parts_for_timeline_event(session, scenario_run, event)
+            return self.runtime_service.append_terminal_event(
+                session,
+                scenario_run.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.multimodal.input.v1",
+                    mime_type="multipart/mixed",
+                    payload_inline=self._payload_for_timeline_parts(parts),
+                    parts=parts,
+                    source={"kind": "skill_test_timeline_driver"},
+                    external_event_id=f"skill-test-scenario-run:{scenario_run.id}:timeline:{event['id']}",
+                    occurred_at=scheduled_at,
+                ),
+                process_after_append=False,
+            )
+
         asset_id = event.get("asset_id")
         artifact_object_id = event.get("artifact_object_id")
         payload_inline = event.get("payload_inline")
+        parts: list[TerminalEventPartInput] = []
         if asset_id:
             asset = self.repository.get_asset(session, str(asset_id))
             if not asset or asset.scenario_id != scenario_run.scenario_id:
                 raise SkillValidationError("时间轴事件引用的测试资源不存在。", details={"asset_id": asset_id})
             artifact_object_id = asset.artifact_object_id
             payload_inline = self._payload_for_asset_event(event, asset)
+            event = {**event, "mime_type": asset.mime_type}
+            parts = [
+                TerminalEventPartInput(
+                    part_id="asset_1",
+                    kind=self._part_kind_for_mime_type(asset.mime_type),
+                    mime_type=asset.mime_type,
+                    artifact_object_id=asset.artifact_object_id,
+                    size_bytes=asset.size_bytes,
+                    checksum=asset.checksum,
+                    metadata=self._metadata_for_asset_part(asset),
+                )
+            ]
         return self.runtime_service.append_terminal_event(
             session,
             scenario_run.run_id or "",
@@ -694,12 +772,71 @@ class SkillTestService:
                 mime_type=str(event.get("mime_type") or self._default_mime_for_lane(str(event.get("lane_id") or ""))),
                 payload_inline=payload_inline,
                 artifact_object_id=artifact_object_id,
+                parts=parts,
                 source={"kind": "skill_test_timeline_driver"},
                 external_event_id=f"skill-test-scenario-run:{scenario_run.id}:timeline:{event['id']}",
                 occurred_at=scheduled_at,
             ),
             process_after_append=False,
         )
+
+    def _terminal_parts_for_timeline_event(
+        self,
+        session: Session,
+        scenario_run: SkillTestScenarioRun,
+        event: dict[str, Any],
+    ) -> list[TerminalEventPartInput]:
+        parts: list[TerminalEventPartInput] = []
+        seen_part_ids: set[str] = set()
+        for index, raw_part in enumerate(event.get("parts") or []):
+            if not isinstance(raw_part, dict):
+                raise SkillValidationError("时间轴事件 part 必须是对象。", details={"event_id": event.get("id"), "index": index})
+            kind = str(raw_part.get("kind") or "").strip().lower()
+            part_id = str(raw_part.get("part_id") or f"part_{index + 1}").strip()
+            if not part_id or part_id in seen_part_ids:
+                raise SkillValidationError("时间轴事件 part_id 必须唯一。", details={"event_id": event.get("id"), "part_id": part_id})
+            seen_part_ids.add(part_id)
+            if kind == "text":
+                parts.append(
+                    TerminalEventPartInput(
+                        part_id=part_id,
+                        kind="text",
+                        mime_type=str(raw_part.get("mime_type") or "text/plain"),
+                        text=str(raw_part.get("text") or raw_part.get("payload_inline") or ""),
+                        metadata=self._part_metadata(raw_part),
+                    )
+                )
+                continue
+
+            asset_id = str(raw_part.get("asset_id") or "").strip()
+            if not asset_id:
+                raise SkillValidationError("多模态时间轴 part 必须引用 asset_id。", details={"event_id": event.get("id"), "part_id": part_id})
+            asset = self.repository.get_asset(session, asset_id)
+            if not asset or asset.scenario_id != scenario_run.scenario_id:
+                raise SkillValidationError("时间轴 part 引用的测试资源不存在。", details={"asset_id": asset_id, "part_id": part_id})
+            resolved_kind = kind or self._part_kind_for_mime_type(asset.mime_type)
+            if resolved_kind not in {"image", "video", "audio"}:
+                raise SkillValidationError("多模态时间轴 part 仅支持 image/video/audio。", details={"part_id": part_id, "kind": resolved_kind})
+            if not asset.mime_type.startswith(f"{resolved_kind}/"):
+                raise SkillValidationError(
+                    "时间轴 part kind 与资源 MIME 不匹配。",
+                    details={"part_id": part_id, "kind": resolved_kind, "mime_type": asset.mime_type},
+                )
+            parts.append(
+                TerminalEventPartInput(
+                    part_id=part_id,
+                    kind=resolved_kind,
+                    mime_type=asset.mime_type,
+                    text=str(raw_part.get("text") or ""),
+                    artifact_object_id=asset.artifact_object_id,
+                    size_bytes=asset.size_bytes,
+                    checksum=asset.checksum,
+                    metadata={**self._metadata_for_asset_part(asset), **self._part_metadata(raw_part)},
+                )
+            )
+        if not parts:
+            raise SkillValidationError("时间轴多模态事件必须至少包含一个 part。", details={"event_id": event.get("id")})
+        return parts
 
     def _evaluate_expectation(
         self,
@@ -719,7 +856,7 @@ class SkillTestService:
             usage_key="skill_test.semantic_judge",
             fallback_ref="skill_test/semantic_judge/v1",
         )
-        route_key = str(policy.get("route_key") or prompt_pack.route_key or "skill-test-judge")
+        route_key = str(policy.get("route_key") or prompt_pack.route_key or TEXT_ROUTE_KEY)
         prompt_payload = self._build_judge_prompt_payload(
             expectation=expectation,
             scoped_outputs=scoped_outputs,
@@ -766,7 +903,7 @@ class SkillTestService:
             confidence = self._coerce_confidence(parsed.get("confidence"))
             reason = str(parsed.get("reason") or reason)
             raw_refs = parsed.get("evidence_refs")
-            evidence_refs = raw_refs if isinstance(raw_refs, list) else []
+            evidence_refs = self._normalize_evidence_refs(raw_refs)
         except Exception as exc:
             raw_response = {"request": request_snapshot, "error": str(exc), "error_type": exc.__class__.__name__}
             reason = f"Judge 调用失败或响应非法：{exc.__class__.__name__}"
@@ -906,6 +1043,30 @@ class SkillTestService:
         if not version or version.skill_definition_id != skill_id:
             raise SkillValidationError("指定编译产物不属于当前 Skill。", details={"compile_artifact_id": artifact_id})
 
+    def _resolve_target_artifact(self, session: Session, skill_id: str, scenario: SkillTestScenario) -> EgCompileArtifact:
+        if scenario.target_compile_artifact_id:
+            artifact = self.repository.get_artifact(session, scenario.target_compile_artifact_id)
+            if not artifact or artifact.status != "ready":
+                raise SkillValidationError(
+                    "指定编译产物不存在或尚不可运行。",
+                    details={"compile_artifact_id": scenario.target_compile_artifact_id},
+                )
+            version = self.repository.get_skill_version(session, artifact.skill_version_id)
+            if not version or version.skill_definition_id != skill_id:
+                raise SkillValidationError(
+                    "指定编译产物不属于当前 Skill。",
+                    details={"compile_artifact_id": scenario.target_compile_artifact_id},
+                )
+            return artifact
+
+        artifact = self.repository.get_latest_ready_artifact_for_skill(session, skill_id)
+        if not artifact:
+            raise SkillValidationError(
+                "当前 Skill 尚无可测试编译产物，请先编译 draft 或发布版本。",
+                details={"skill_id": skill_id, "target_version_selector": scenario.target_version_selector or "latest"},
+            )
+        return artifact
+
     @staticmethod
     def _normalize_timeline_lanes(lanes: Any) -> list[dict[str, Any]]:
         raw_lanes = [dict(item) for item in lanes if isinstance(item, dict) and item.get("id")] if isinstance(lanes, list) else []
@@ -965,6 +1126,10 @@ class SkillTestService:
         else:
             normalized["event_kind"] = str(event.get("event_kind") or self._default_event_kind_for_lane(lane_id))
             normalized["mime_type"] = str(event.get("mime_type") or self._default_mime_for_lane(lane_id))
+            if isinstance(event.get("parts"), list) and event["parts"]:
+                normalized["parts"] = self._normalize_timeline_event_parts(event["parts"], event_id=event_id)
+                normalized["event_kind"] = "terminal.multimodal.input.v1"
+                normalized["mime_type"] = "multipart/mixed"
             if self._is_sensor_lane(lane_id):
                 normalized["payload_inline"] = self._normalize_sensor_payload(
                     lane_id=lane_id,
@@ -974,9 +1139,32 @@ class SkillTestService:
         return normalized
 
     @staticmethod
+    def _normalize_timeline_event_parts(parts: Any, *, event_id: str) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        seen_part_ids: set[str] = set()
+        for index, part in enumerate(parts if isinstance(parts, list) else []):
+            if not isinstance(part, dict):
+                raise SkillValidationError("时间轴事件 part 必须是对象。", details={"event_id": event_id, "index": index})
+            next_part = dict(part)
+            part_id = str(next_part.get("part_id") or f"part_{index + 1}").strip()
+            if not part_id or part_id in seen_part_ids:
+                raise SkillValidationError("时间轴事件 part_id 必须唯一。", details={"event_id": event_id, "part_id": part_id})
+            seen_part_ids.add(part_id)
+            kind = str(next_part.get("kind") or "").strip().lower()
+            if kind not in {"text", "image", "video", "audio"}:
+                raise SkillValidationError("时间轴事件 part kind 仅支持 text/image/video/audio。", details={"event_id": event_id, "kind": kind})
+            next_part["part_id"] = part_id
+            next_part["kind"] = kind
+            next_part["mime_type"] = str(next_part.get("mime_type") or ("text/plain" if kind == "text" else f"{kind}/*"))
+            normalized.append(next_part)
+        if not normalized:
+            raise SkillValidationError("时间轴多模态事件必须至少包含一个 part。", details={"event_id": event_id})
+        return normalized
+
+    @staticmethod
     def _normalize_judge_policy(value: dict[str, Any] | None) -> dict[str, Any]:
         policy = dict(value or {})
-        policy.setdefault("route_key", "skill-test-judge")
+        policy.setdefault("route_key", TEXT_ROUTE_KEY)
         policy.setdefault("confidence_threshold", 0.7)
         policy.setdefault("inconclusive_as", "failed")
         return policy
@@ -1078,7 +1266,7 @@ class SkillTestService:
         raw_payload = event.get("payload_inline")
         payload = raw_payload.copy() if isinstance(raw_payload, dict) else {}
         if isinstance(raw_payload, str) and raw_payload.strip():
-            payload["caption"] = raw_payload.strip()
+            payload["description"] = raw_payload.strip()
         result = {
             "asset_id": asset.id,
             "artifact_object_id": asset.artifact_object_id,
@@ -1102,6 +1290,48 @@ class SkillTestService:
             }
         )
         return result
+
+    @staticmethod
+    def _part_metadata(raw_part: dict[str, Any]) -> dict[str, Any]:
+        metadata = raw_part.get("metadata")
+        return dict(metadata) if isinstance(metadata, dict) else {}
+
+    @staticmethod
+    def _metadata_for_asset_part(asset: SkillTestAsset) -> dict[str, Any]:
+        return {
+            "asset_id": asset.id,
+            "filename": asset.filename,
+            "name": asset.name,
+            "description": asset.description,
+            "mime_type": asset.mime_type,
+        }
+
+    @staticmethod
+    def _part_kind_for_mime_type(mime_type: str) -> str:
+        if mime_type.startswith("image/"):
+            return "image"
+        if mime_type.startswith("video/"):
+            return "video"
+        if mime_type.startswith("audio/"):
+            return "audio"
+        return "text" if mime_type.startswith("text/") else "file"
+
+    @staticmethod
+    def _payload_for_timeline_parts(parts: list[TerminalEventPartInput]) -> dict[str, Any]:
+        summary = "\n".join(
+            filter(
+                None,
+                [
+                    part.text
+                    or str((part.metadata or {}).get("name") or (part.metadata or {}).get("filename") or "")
+                    for part in parts
+                ],
+            )
+        )
+        return {
+            "summary": summary,
+            "part_count": len(parts),
+        }
 
     @staticmethod
     def _default_event_kind_for_lane(lane_id: str) -> str:
@@ -1376,13 +1606,19 @@ class SkillTestService:
         asset_ids = []
         seen_asset_ids = set()
         for event in timeline.get("events", []):
-            if not isinstance(event, dict) or not event.get("asset_id"):
+            if not isinstance(event, dict):
                 continue
-            asset_id = str(event["asset_id"])
-            if asset_id in seen_asset_ids:
-                continue
-            seen_asset_ids.add(asset_id)
-            asset_ids.append(asset_id)
+            event_asset_ids = []
+            if event.get("asset_id"):
+                event_asset_ids.append(str(event["asset_id"]))
+            for part in event.get("parts") or []:
+                if isinstance(part, dict) and part.get("asset_id"):
+                    event_asset_ids.append(str(part["asset_id"]))
+            for asset_id in event_asset_ids:
+                if asset_id in seen_asset_ids:
+                    continue
+                seen_asset_ids.add(asset_id)
+                asset_ids.append(asset_id)
         if not asset_ids:
             return timeline
 
@@ -1417,6 +1653,17 @@ class SkillTestService:
             asset_id = str(remapped.get("asset_id") or "")
             if asset_id in asset_id_map:
                 remapped["asset_id"] = asset_id_map[asset_id]
+            remapped_parts = []
+            for part in remapped.get("parts") or []:
+                if not isinstance(part, dict):
+                    continue
+                next_part = dict(part)
+                part_asset_id = str(next_part.get("asset_id") or "")
+                if part_asset_id in asset_id_map:
+                    next_part["asset_id"] = asset_id_map[part_asset_id]
+                remapped_parts.append(next_part)
+            if remapped_parts:
+                remapped["parts"] = remapped_parts
             remapped_events.append(remapped)
         return self._normalize_timeline(
             {
@@ -1493,7 +1740,7 @@ class SkillTestService:
             status=evaluation.status,
             confidence=evaluation.confidence,
             reason=evaluation.reason,
-            evidence_refs=evaluation.evidence_refs,
+            evidence_refs=SkillTestService._normalize_evidence_refs(evaluation.evidence_refs),
             judge_provider=evaluation.judge_provider,
             judge_model=evaluation.judge_model,
             prompt_hash=evaluation.prompt_hash,
@@ -1623,10 +1870,42 @@ class SkillTestService:
             status=evaluation.status,
             confidence=evaluation.confidence,
             reason=evaluation.reason,
-            evidence_refs=evaluation.evidence_refs,
+            evidence_refs=SkillTestService._normalize_evidence_refs(evaluation.evidence_refs),
             judge_provider=evaluation.judge_provider,
             judge_model=evaluation.judge_model,
             prompt_hash=evaluation.prompt_hash,
             raw_response=evaluation.raw_response,
             created_at=evaluation.created_at,
         )
+
+    @staticmethod
+    def _normalize_evidence_refs(value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        refs: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                refs.append(item)
+                continue
+            ref = str(item or "").strip()
+            if ref:
+                refs.append({"kind": "raw", "ref": ref})
+        return refs
+
+    def _sync_driver_job_metrics(self, session: Session, job: RuntimeJob, scenario_run_id: str) -> None:
+        evaluations = self.repository.list_expectation_evaluations(session, scenario_run_id)
+        totals = {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        for evaluation in evaluations:
+            usage = (evaluation.raw_response or {}).get("usage")
+            if not isinstance(usage, dict):
+                continue
+            token_seen = False
+            for key in ("input_tokens", "output_tokens", "total_tokens"):
+                value = usage.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    totals[key] += value
+                    token_seen = True
+            if token_seen:
+                totals["llm_calls"] += 1
+        if totals["llm_calls"] > 0:
+            job.metrics = {**(job.metrics or {}), **totals}

@@ -1,0 +1,147 @@
+<div class="h-full min-h-0">
+  <section class="panel rounded-none border-0">
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <nav class="breadcrumb-bar border-0 pb-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
+        <button type="button" class="breadcrumb-link font-medium text-slate-100" @click="navigate('/admin/tasks')">任务</button>
+      </nav>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/45 px-3 py-2">
+      <div class="flex items-stretch gap-2 overflow-x-auto whitespace-nowrap">
+        <div class="min-w-24 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] text-slate-500">总数</p>
+          <p class="text-lg font-semibold leading-6 text-slate-100" x-text="taskStatsNumber(taskStats?.total)"></p>
+        </div>
+        <div class="min-w-24 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] text-slate-500">待处理</p>
+          <p class="text-lg font-semibold leading-6 text-amber-200" x-text="taskStatsNumber(taskStats?.pending)"></p>
+        </div>
+        <div class="min-w-24 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] text-slate-500">运行中</p>
+          <p class="text-lg font-semibold leading-6 text-sky-200" x-text="taskStatsNumber(taskStats?.running)"></p>
+        </div>
+        <div class="min-w-24 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] text-slate-500">成功</p>
+          <p class="text-lg font-semibold leading-6 text-emerald-200" x-text="taskStatsNumber(taskStats?.succeeded)"></p>
+        </div>
+        <div class="min-w-28 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] text-slate-500">失败/取消</p>
+          <p class="text-lg font-semibold leading-6 text-rose-200" x-text="taskStatsNumber((taskStats?.failed || 0) + (taskStats?.cancelled || 0))"></p>
+        </div>
+        <div class="min-w-24 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] text-slate-500">成功率</p>
+          <p class="text-lg font-semibold leading-6 text-slate-100" x-text="taskSuccessRateLabel()"></p>
+        </div>
+        <div class="min-w-28 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] text-slate-500">平均</p>
+          <p class="text-lg font-semibold leading-6 text-slate-100" x-text="taskStatsDuration(taskStats?.avg_duration_ms)"></p>
+        </div>
+        <div class="min-w-28 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] text-slate-500">P95</p>
+          <p class="text-lg font-semibold leading-6 text-slate-100" x-text="taskStatsDuration(taskStats?.p95_duration_ms)"></p>
+        </div>
+        <div class="min-w-28 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] text-slate-500">最长</p>
+          <p class="text-lg font-semibold leading-6 text-slate-100" x-text="taskStatsDuration(taskStats?.max_duration_ms)"></p>
+        </div>
+        <div class="min-w-24 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <p class="text-[11px] text-slate-500">Token</p>
+          <p class="text-lg font-semibold leading-6 text-slate-100" x-text="taskStatsTokenLabel()"></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
+        <label class="field-block w-36 shrink-0">
+          <span class="field-label">类型</span>
+          <select x-model="taskFilters.job_type" class="input-field h-9 py-0" @change="applyTaskFilters()">
+            <option value="">全部</option>
+            <template x-for="option in taskTypeOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="field-block w-32 shrink-0">
+          <span class="field-label">状态</span>
+          <select x-model="taskFilters.status" class="input-field h-9 py-0" @change="applyTaskFilters()">
+            <option value="">全部</option>
+            <template x-for="option in taskStatusOptions()" :key="option.value">
+              <option :value="option.value" x-text="option.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="field-block shrink-0">
+          <span class="field-label">时间</span>
+          <span class="flex items-center gap-1.5">
+            <input x-model="taskFilters.created_from" type="date" class="input-field h-9 w-36 py-0" @change="applyTaskFilters()" />
+            <span class="text-xs text-slate-500">至</span>
+            <input x-model="taskFilters.created_to" type="date" class="input-field h-9 w-36 py-0" @change="applyTaskFilters()" />
+          </span>
+        </label>
+        <label class="field-block min-w-56 flex-1">
+          <span class="field-label">关键词</span>
+          <input
+            x-model="taskFilters.q"
+            class="input-field h-9 py-0"
+            placeholder="Job ID / 类型 / 关联 ID"
+            @keydown.enter.prevent="applyTaskFilters()"
+          />
+        </label>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" title="刷新" aria-label="刷新" :disabled="busy.tasks" @click="refreshTasks()">
+          <span class="material-symbols-outlined text-[18px]">refresh</span>
+        </button>
+        <button type="button" class="button-secondary h-9 shrink-0 px-3" title="重置筛选" aria-label="重置筛选" @click="resetTaskFilters()">
+          <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="grid gap-3 border-b border-slate-800 bg-slate-950/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500" style="grid-template-columns: minmax(0,0.95fr) minmax(0,0.9fr) 5rem minmax(0,1.25fr) 6.25rem 6rem 5.25rem 10.75rem;">
+      <span>Job ID</span>
+      <span>类型</span>
+      <span class="text-center">状态</span>
+      <span>进度</span>
+      <span class="text-center">时长</span>
+      <span class="text-center">Token</span>
+      <span class="text-center">Attempt</span>
+      <span class="text-center">更新时间</span>
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+      <template x-if="tasks.length === 0">
+        <div class="empty-state h-full min-h-80">
+          <span class="material-symbols-outlined text-[32px] text-slate-400">task_alt</span>
+          <p class="mt-3 text-base font-medium text-slate-100">暂无匹配任务</p>
+        </div>
+      </template>
+
+      <template x-if="tasks.length > 0">
+        <div class="divide-y divide-slate-800">
+          <template x-for="task in tasks" :key="task.id">
+            <article class="grid h-11 items-center gap-3 bg-slate-950/20 px-3 text-sm transition hover:bg-slate-900/50" style="grid-template-columns: minmax(0,0.95fr) minmax(0,0.9fr) 5rem minmax(0,1.25fr) 6.25rem 6rem 5.25rem 10.75rem;" :title="taskErrorSummary(task) || task.id">
+              <div class="mono-field min-w-0 truncate" x-text="taskJobIdLabel(task)"></div>
+              <div class="min-w-0 truncate font-semibold text-slate-100" x-text="jobTypeLabel(task.job_type)"></div>
+              <div class="flex min-w-0 justify-center">
+                <span class="status-badge" :class="statusBadgeTone(task.status)" x-text="formatStatus(task.status)"></span>
+              </div>
+              <div class="flex min-w-0 items-center gap-2">
+                <span class="min-w-0 flex-1 truncate text-slate-300" x-text="jobProgressLabel(task)"></span>
+                <span class="mono-field shrink-0" x-text="jobProgressPercentLabel(task)"></span>
+                <span class="h-1.5 w-16 shrink-0 rounded-full bg-slate-800">
+                  <span class="block h-full rounded-full bg-sky-400" :style="{ width: jobProgressBarWidth(task) }"></span>
+                </span>
+              </div>
+              <div class="truncate text-center text-slate-300" x-text="taskDurationLabel(task)"></div>
+              <div class="truncate text-center text-slate-300" x-text="taskTokenLabel(task)"></div>
+              <div class="mono-field text-center" x-text="`${task.attempt_no || 0}/${task.max_attempts || 0}`"></div>
+              <div class="mono-field truncate text-center" x-text="formatDateTime(task.updated_at)"></div>
+            </article>
+          </template>
+        </div>
+      </template>
+    </div>
+  </section>
+</div>

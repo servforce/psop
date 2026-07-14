@@ -51,7 +51,7 @@ class TerminalCapability(BaseModel):
 class LlmCapability(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    route_key: str = "default"
+    route_key: str = "text"
     required: bool = True
 
 

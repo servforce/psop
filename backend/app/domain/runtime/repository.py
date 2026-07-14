@@ -10,6 +10,7 @@ from app.domain.runtime.models import (
     SessionTokenSnapshot,
     SkillInvocation,
     TerminalEvent,
+    TerminalEventPart,
     TerminalSession,
     TraceEvent,
 )
@@ -21,6 +22,9 @@ class RuntimeRepository:
 
     def get_skill_definition_by_key(self, session: Session, skill_key: str) -> SkillDefinition | None:
         return session.scalar(select(SkillDefinition).where(SkillDefinition.key == skill_key))
+
+    def get_skill_definition(self, session: Session, skill_id: str) -> SkillDefinition | None:
+        return session.get(SkillDefinition, skill_id)
 
     def get_skill_version(self, session: Session, version_id: str | None) -> SkillVersion | None:
         if not version_id:
@@ -65,6 +69,14 @@ class RuntimeRepository:
     def get_run(self, session: Session, run_id: str) -> Run | None:
         return session.get(Run, run_id)
 
+    def get_run_for_update(self, session: Session, run_id: str) -> Run | None:
+        return session.scalar(
+            select(Run)
+            .where(Run.id == run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
     def get_run_for_invocation(self, session: Session, invocation_id: str) -> Run | None:
         return session.scalar(select(Run).where(Run.invocation_id == invocation_id))
 
@@ -86,6 +98,35 @@ class RuntimeRepository:
             query = query.where(TerminalEvent.seq_no <= to_seq)
         query = query.order_by(TerminalEvent.seq_no.asc())
         return list(session.scalars(query).all())
+
+    def get_terminal_event(self, session: Session, event_id: str) -> TerminalEvent | None:
+        return session.get(TerminalEvent, event_id)
+
+    def list_terminal_event_parts(self, session: Session, event_id: str) -> list[TerminalEventPart]:
+        return list(
+            session.scalars(
+                select(TerminalEventPart)
+                .where(TerminalEventPart.terminal_event_id == event_id)
+                .order_by(TerminalEventPart.order_index.asc())
+            ).all()
+        )
+
+    def get_terminal_event_part(self, session: Session, part_id: str) -> TerminalEventPart | None:
+        return session.get(TerminalEventPart, part_id)
+
+    def get_terminal_event_part_by_public_id(
+        self,
+        session: Session,
+        *,
+        terminal_event_id: str,
+        part_id: str,
+    ) -> TerminalEventPart | None:
+        return session.scalar(
+            select(TerminalEventPart).where(
+                TerminalEventPart.terminal_event_id == terminal_event_id,
+                TerminalEventPart.part_id == part_id,
+            )
+        )
 
     def get_terminal_event_by_external_id(
         self,
@@ -150,9 +191,27 @@ class RuntimeRepository:
             ).all()
         )
 
+    def get_latest_snapshot(self, session: Session, run_id: str) -> SessionTokenSnapshot | None:
+        return session.scalar(
+            select(SessionTokenSnapshot)
+            .where(SessionTokenSnapshot.run_id == run_id)
+            .order_by(SessionTokenSnapshot.seq_no.desc())
+            .limit(1)
+        )
+
     def list_trace_events(self, session: Session, run_id: str, event_type: str | None = None) -> list[TraceEvent]:
         query = select(TraceEvent).where(TraceEvent.run_id == run_id)
         if event_type:
             query = query.where(TraceEvent.event_type == event_type)
         query = query.order_by(TraceEvent.seq_no.asc())
         return list(session.scalars(query).all())
+
+    def get_trace_event_by_seq(self, session: Session, run_id: str, seq_no: int) -> TraceEvent | None:
+        return session.scalar(
+            select(TraceEvent).where(TraceEvent.run_id == run_id, TraceEvent.seq_no == seq_no).limit(1)
+        )
+
+    def get_terminal_event_by_seq(self, session: Session, run_id: str, seq_no: int) -> TerminalEvent | None:
+        return session.scalar(
+            select(TerminalEvent).where(TerminalEvent.run_id == run_id, TerminalEvent.seq_no == seq_no).limit(1)
+        )

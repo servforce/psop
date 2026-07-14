@@ -27,7 +27,8 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
 17. evaluate 节点和 final_verify 节点禁止只写“根据 token.xxx 判断”但不暴露 `{{token}}`；否则 Runtime Agent 无法看到真实证据，产物不可接受。
 18. applicability 必须与 Skill 的 name、description、execution_goal 和 source_evidence 保持一致。不得把 Skill 标题、描述或主目标中的核心适用场景写入 does_not_apply_when；只有 SKILL.md/README.md 明确排除的场景才可写入 does_not_apply_when。
 19. policies 不得写死 `max_llm_calls=8` 这类固定小上限。LLM 调用预算必须根据 workflow_steps 动态推导：happy path 至少需要 `2 * workflow_steps.length + 1` 次 LLM 调用（每步 instruct/evaluate，加 final_verify），并需要为 retry / need_more_evidence 预留弹性。当前阶段优先不输出 `max_llm_calls` 硬上限；如果必须输出，只能输出由步骤数推导出的宽松值，不得小于 `2 * workflow_steps.length + 1`。
-20. dependency_graph_for_view 只能表达真实可能由 guard、merge 与明确 next_phase 产生的展示边。不得添加 speculation、debug hint 或“可能可恢复”但 artifact 中没有明确 phase 写入路径的边；特别是 final_verify 只能连向 terminal，除非 final_verify 的输出格式、合法 next_phase 和 merge 明确允许回到某个 instruct 节点。
+20. dependency_graph_for_view 只能表达真实可能由 guard、merge 与明确 interaction.transitions 产生的展示边。不得添加 speculation、debug hint 或“可能可恢复”但 artifact 中没有明确 transition 支撑的边；特别是 final_verify 只能连向 terminal，除非 final_verify 有明确 transition 回到某个 instruct 节点。
+21. 所有 Runtime LLM 节点的用户可见自然语言必须使用简体中文。JSON 字段名和 decision 枚举保持英文；next_phase 只是兼容可选字段，可留空；reason、terminal_message、final_response、summary 等自然语言字段值必须使用简体中文。
 
 必需 JSON 顶层字段：
 - artifact_version：建议 `psop-eg-formal-v5/llm-compiler-mvp-v1`
@@ -59,18 +60,18 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
    - wait_reason
    - expected_inputs，列出可接受的 text/image/video/audio/file/sensor 等证据类型
    - resume_phase="evaluate_<step_id>"
-   - projection.user_template 必须包含当前步骤目标、来自 Skill source 的依据、当前安全边界或注意事项，以及 `当前 Token：{{token}}`，以便 Runtime Agent 只输出当前步骤指令而不重新规划整个 Skill。
-7. 每个 evaluate 节点必须是 llm，必须包含 interaction.evaluation=true。它消费 token.control.wait.evidence、terminal.events 和当前步骤标准，只能输出 JSON object：
+   - projection.user_template 必须包含当前步骤目标、来自 Skill source 的依据、当前安全边界或注意事项、用户可见输出必须使用简体中文，以及 `当前 Token：{{token}}`，以便 Runtime Agent 只输出当前步骤指令而不重新规划整个 Skill。
+7. 每个 evaluate 节点必须是 llm，必须包含 interaction.evaluation=true，并通过 interaction.transitions 声明 proceed/complete/abort 对应的合法下一 Runtime phase。它消费 token.control.wait.evidence、terminal.events 和当前步骤标准，只能输出 JSON object：
    - decision: proceed | retry | need_more_evidence | abort | complete
    - reason
-   - next_phase：proceed/complete 时必须给出下一 phase
+   - next_phase：兼容可选字段，默认空字符串，不能作为正式推进依据
    - terminal_message：需要反馈给用户的中间说明，可为空
-   - projection.user_template 必须包含当前 workflow_step_id、该步骤完成标准、可恢复失败路径、安全停止条件、合法 next_phase 映射，以及 `当前 Token：{{token}}`。如果不包含 `{{token}}`，evaluate 节点无权判断证据。
+   - projection.user_template 必须包含当前 workflow_step_id、该步骤完成标准、可恢复失败路径、安全停止条件、合法 decision 语义、reason/terminal_message 必须使用简体中文，以及 `当前 Token：{{token}}`。如果不包含 `{{token}}`，evaluate 节点无权判断证据。
 8. retry 或 need_more_evidence 代表继续等待当前 checkpoint；proceed 进入下一步 instruct；complete 进入 final_verify。
-9. final_verify 必须在 terminal(success) 前验证 completion_criteria。final_verify 的 projection.user_template 必须包含 completion_criteria、安全停止条件、所有步骤 observations 的检查要求，以及 `当前 Token：{{token}}`。terminal 节点只在最终完成标准被验证后写 outputs.final_response 与 status=success。
-10. 对每个 evaluate 节点，next_phase 映射必须符合实际工作流：proceed 指向下一个 `instruct_<next_step>` 或 final_verify；retry / need_more_evidence 不应推进到下一步；abort 表示运行失败或不适用，terminal_message 应说明停止原因，next_phase 可为空；complete 可用于用户已经越过中间步骤并一次性提交最终结果的情况，通常进入 final_verify。
+9. final_verify 必须在 terminal(success) 前验证 completion_criteria。final_verify 的 projection.user_template 必须包含 completion_criteria、安全停止条件、所有步骤 observations 的检查要求、reason/terminal_message 必须使用简体中文，以及 `当前 Token：{{token}}`。terminal 节点只在最终完成标准被验证后写 outputs.final_response 与 status=success。
+10. 对每个 evaluate 节点，interaction.transitions 必须符合实际工作流：proceed 指向下一个 `instruct_<next_step>` 或 final_verify；retry / need_more_evidence 不通过 transition 推进，而是继续等待当前 checkpoint；abort 指向 terminal 或明确的 abort terminal 节点；complete 指向 terminal。
 11. policies 应描述调度、超时和预算策略，但不要把 `max_llm_calls` 固定为模板默认值。推荐写 `{"selection":"priority_then_order","max_steps": <由节点数和重试弹性推导的宽松值>, "llm_budget":{"mode":"dynamic_by_workflow_steps","happy_path_calls": 2 * workflow_steps.length + 1, "hard_limit": null}}`。
-12. dependency_graph_for_view 是展示辅助图，不是运行时固定边；但它必须与节点 projection 中声明的合法 next_phase 和 merge 写入保持一致。evaluate 节点可以展示 proceed / retry / need_more_evidence / complete 的真实目标；abort 如果不写 phase，不应画到 terminal(success)。
+12. dependency_graph_for_view 是展示辅助图，不是新 artifact 的权威转移来源；但它必须与节点 interaction.transitions 保持一致。evaluate 节点可以展示 proceed / complete / abort 的真实目标；retry / need_more_evidence 表示当前 checkpoint 继续等待，不应画成进入下一业务步骤。
 
 规范化 DSL 示例：
 - guard 必须写为 {"phase_is":"llm"}，禁止写 {"op":"phase_is","value":"llm"}。
@@ -83,9 +84,9 @@ Runtime Agent 不直接解释 SKILL.md；它只根据编译后的 Execution Grap
 {
   "nodes": [
     {"id":"start","kind":"start","guard":{"phase_is":"start"},"actor":{"name":"runtime.start"},"merge":[{"op":"set","path":"phase","value":"instruct_diagnose_problem"}]},
-    {"id":"instruct_diagnose_problem","kind":"llm","guard":{"phase_is":"instruct_diagnose_problem"},"actor":{"name":"agent.llm"},"interaction":{"output_to_terminal":true,"wait_after_output":true,"checkpoint_id":"diagnose_problem_evidence","workflow_step_id":"diagnose_problem","wait_reason":"等待用户提交现场证据。","expected_inputs":[{"kind":"text"},{"kind":"image"}],"resume_phase":"evaluate_diagnose_problem"},"projection":{"system_template":"输出当前现实步骤指令。","user_template":"步骤目标：...\n依据：...\n当前 Token：{{token}}"},"merge":[{"op":"set","path":"observations.instruct_diagnose_problem","from":"observation"}]},
-    {"id":"evaluate_diagnose_problem","kind":"llm","guard":{"phase_is":"evaluate_diagnose_problem"},"actor":{"name":"agent.llm"},"interaction":{"evaluation":true},"projection":{"system_template":"只输出 JSON decision。","user_template":"workflow_step_id：diagnose_problem\n完成标准：...\n可恢复失败路径：证据不足时 decision=need_more_evidence，问题不适用时 decision=abort。\n合法 next_phase：proceed -> instruct_next_step；need_more_evidence/retry -> waiting；abort -> 空字符串并在 terminal_message 说明停止原因。\n当前 Token：{{token}}\n输出 JSON：{\"decision\":\"proceed|retry|need_more_evidence|abort|complete\",\"reason\":\"...\",\"next_phase\":\"...\",\"terminal_message\":\"...\"}"},"merge":[{"op":"set","path":"observations.evaluate_diagnose_problem","from":"observation"},{"op":"set","path":"phase","from":"observation.next_phase"}]},
-    {"id":"final_verify","kind":"llm","guard":{"phase_is":"final_verify"},"actor":{"name":"agent.llm"},"interaction":{"evaluation":true},"projection":{"system_template":"只输出 JSON decision。","user_template":"最终完成标准：...\n安全停止条件：...\n请根据所有步骤 observations、terminal.events 与最新证据判断是否全部满足。\n当前 Token：{{token}}\n输出 JSON：{\"decision\":\"complete|abort\",\"reason\":\"...\",\"next_phase\":\"terminal\",\"terminal_message\":\"...\"}"},"merge":[{"op":"set","path":"observations.final_verify","from":"observation"},{"op":"set","path":"phase","from":"observation.next_phase"},{"op":"set","path":"outputs.final_response","from":"observation.terminal_message"}]},
+    {"id":"instruct_diagnose_problem","kind":"llm","guard":{"phase_is":"instruct_diagnose_problem"},"actor":{"name":"agent.llm"},"interaction":{"output_to_terminal":true,"wait_after_output":true,"checkpoint_id":"diagnose_problem_evidence","workflow_step_id":"diagnose_problem","wait_reason":"等待用户提交现场证据。","expected_inputs":[{"kind":"text"},{"kind":"image"}],"resume_phase":"evaluate_diagnose_problem"},"projection":{"system_template":"输出当前现实步骤指令。","user_template":"步骤目标：...\n依据：...\n语言要求：用户可见输出必须使用简体中文。\n当前 Token：{{token}}"},"merge":[{"op":"set","path":"observations.instruct_diagnose_problem","from":"observation"}]},
+    {"id":"evaluate_diagnose_problem","kind":"llm","guard":{"phase_is":"evaluate_diagnose_problem"},"actor":{"name":"agent.llm"},"interaction":{"evaluation":true,"transitions":{"proceed":"instruct_next_step","complete":"terminal","abort":"terminal"}},"projection":{"system_template":"只输出 JSON decision。","user_template":"workflow_step_id：diagnose_problem\n完成标准：...\n可恢复失败路径：证据不足时 decision=need_more_evidence，问题不适用时 decision=abort。\nRuntime 会根据 interaction.transitions 推进下一节点；next_phase 留空。\n语言要求：JSON 字段名和枚举值保持英文，reason 与 terminal_message 必须使用简体中文。\n当前 Token：{{token}}\n输出 JSON：{\"decision\":\"proceed|retry|need_more_evidence|abort|complete\",\"reason\":\"...\",\"next_phase\":\"\",\"terminal_message\":\"...\"}"},"merge":[{"op":"set","path":"observations.evaluate_diagnose_problem","from":"observation"}]},
+    {"id":"final_verify","kind":"llm","guard":{"phase_is":"final_verify"},"actor":{"name":"agent.llm"},"interaction":{"evaluation":true,"transitions":{"proceed":"terminal","complete":"terminal","abort":"terminal"}},"projection":{"system_template":"只输出 JSON decision。","user_template":"最终完成标准：...\n安全停止条件：...\n请根据所有步骤 observations、terminal.events 与最新证据判断是否全部满足。\n语言要求：JSON 字段名和枚举值保持英文，reason 与 terminal_message 必须使用简体中文。\n当前 Token：{{token}}\n输出 JSON：{\"decision\":\"complete|abort\",\"reason\":\"...\",\"next_phase\":\"\",\"terminal_message\":\"...\"}"},"merge":[{"op":"set","path":"observations.final_verify","from":"observation"},{"op":"set","path":"outputs.final_response","from":"observation.terminal_message"}]},
     {"id":"terminal","kind":"terminal","guard":{"phase_is":"terminal"},"actor":{"name":"runtime.terminal"},"merge":[{"op":"set","path":"outputs.final_response","from":"observation.final_response"},{"op":"set","path":"status","value":"success"}]}
   ],
   "runtime_contract": {

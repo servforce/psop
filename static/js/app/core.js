@@ -276,7 +276,7 @@
           save: "保存",
           science: "测试",
           send: "发送",
-          smart_toy: "基本原则",
+          smart_toy: "智能体",
           terminal: "调试",
           upload_file: "上传文件"
         };
@@ -320,6 +320,7 @@
       async loadPageFragments() {
         const fragments = [
           ["skills-list-page", "/pages/skills-list.html"],
+          ["tasks-page", "/pages/tasks.html"],
           ["skill-detail-page", "/pages/skill-detail.html"],
           ["compiler-list-page", "/pages/compiler-list.html"],
           ["compiler-artifact-page", "/pages/compiler-artifact-detail.html"],
@@ -330,7 +331,6 @@
           ["skill-test-scenario-page", "/pages/skill-test-scenario-detail.html"],
           ["skill-test-scenario-review-page", "/pages/skill-test-scenario-review.html"],
           ["replay-list-page", "/pages/replay-list.html"],
-          ["replay-detail-page", "/pages/replay-detail.html"],
           ["create-skill-modal-page", "/pages/create-skill-modal.html"],
           ["publish-skill-drawer-page", "/pages/publish-skill-drawer.html"],
           ["delete-skill-modal-page", "/pages/delete-skill-modal.html"]
@@ -377,6 +377,7 @@
 
       openCreateModal() {
         this.createForm = { name: "", description: "" };
+        this.createFormError = "";
         this.createModalOpen = true;
       },
 
@@ -387,6 +388,7 @@
         }
 
         this.createModalOpen = false;
+        this.createFormError = "";
       },
 
 
@@ -436,13 +438,20 @@
         this.loadingPage = true;
         this.clearNotice();
         if (!["run-live", "skill-run-live", "skill-debug-live"].includes(this.route.name)) {
-          this.disconnectRunWebSocket();
+          this.destroyLiveRunView();
         }
         if (this.route.name !== "skill-test-scenario-review") {
           this.stopSkillTestReviewPlayback?.();
           this.stopSkillTestReviewPolling?.();
         }
-        if (this.route.name !== "compiler-artifact") {
+        if (this.route.name !== "tasks-list") {
+          this.stopTaskPolling?.();
+        }
+        if (this.route.name !== "skill-detail" || this.activeDetailTab !== "materials") {
+          this.stopBuilderAgentStreaming?.();
+          this.stopBuilderAgentElapsedTimer?.();
+        }
+        if (!["compiler-artifact", "skill-compiler-artifact"].includes(this.route.name)) {
           this.destroyCompilerArtifactViewer();
           this.compilerArtifact = null;
           this.compilerArtifactGraphModel = null;
@@ -459,6 +468,12 @@
             return;
           }
 
+          if (this.route.name === "tasks-list") {
+            this.currentSkill = null;
+            await this.loadTasksPage();
+            return;
+          }
+
           if (this.route.name === "skill-detail") {
             await this.loadSkillDetail(this.route.params.skillId);
             return;
@@ -472,16 +487,9 @@
           }
 
           if (this.route.name === "skill-debug-live") {
-            this.activeDetailTab = "debug";
-            await this.loadSkillDetail(this.route.params.skillId);
-            await this.loadRunLive(this.route.params.runId);
-            return;
-          }
-
-          if (this.route.name === "skill-replay-detail") {
             this.activeDetailTab = "runtime";
             await this.loadSkillDetail(this.route.params.skillId);
-            await this.loadReplayDetail(this.route.params.runId);
+            await this.loadRunLive(this.route.params.runId);
             return;
           }
 
@@ -512,6 +520,13 @@
             return;
           }
 
+          if (this.route.name === "skill-compiler-artifact") {
+            this.activeDetailTab = "compiler";
+            await this.loadSkillDetail(this.route.params.skillId);
+            await this.loadCompilerArtifact(this.route.params.artifactId);
+            return;
+          }
+
           if (this.route.name === "compiler-list") {
             this.currentSkill = null;
             await this.loadCompilerRequests();
@@ -538,7 +553,7 @@
 
           if (this.route.name === "invocations-list") {
             this.currentSkill = null;
-            await Promise.all([this.loadSkills(), this.loadInvocations()]);
+            await Promise.all([this.loadSkills({ useFilters: false }), this.loadInvocations()]);
             if (!this.invocationForm.skill_key && this.skills.length > 0) {
               this.invocationForm.skill_key = this.skills[0].key;
             }
@@ -557,10 +572,6 @@
             return;
           }
 
-          if (this.route.name === "replay-detail") {
-            this.currentSkill = null;
-            await this.loadReplayDetail(this.route.params.runId);
-          }
         } catch (error) {
           this.showNotice("error", error.message || "页面加载失败。");
         } finally {
@@ -573,8 +584,9 @@
       async apiRequest(pathname, options) {
         const requestOptions = options || {};
         const isFormData = requestOptions.body instanceof FormData;
+        const hasBody = requestOptions.body !== undefined && requestOptions.body !== null;
         const headers = {
-          ...(isFormData ? {} : { "Content-Type": "application/json" }),
+          ...(hasBody && !isFormData ? { "Content-Type": "application/json" } : {}),
           ...(requestOptions.headers || {})
         };
         let response;
@@ -730,9 +742,9 @@
         if (
           [
             "skill-detail",
+            "skill-compiler-artifact",
             "skill-run-live",
             "skill-debug-live",
-            "skill-replay-detail",
             "skill-test-scenario-new",
             "skill-test-scenario",
             "skill-test-scenario-review"
@@ -750,11 +762,14 @@
         if (this.route.name === "compiler-list") {
           return "编译";
         }
+        if (this.route.name === "tasks-list") {
+          return "任务";
+        }
         if (this.route.name === "compiler-artifact") {
           return "EG Artifact";
         }
         if (this.route.name === "agent-prompts-list") {
-          return "基本原则";
+          return "智能体";
         }
         if (this.route.name === "agent-prompt-detail") {
           return this.agentPromptDetail?.name || "Agent Prompt Pack";
@@ -763,10 +778,10 @@
           return "运行";
         }
         if (this.route.name === "run-live") {
-          return "运行现场";
+          return "运行详情";
         }
-        if (this.route.name === "replay-list" || this.route.name === "replay-detail") {
-          return "运行回放";
+        if (this.route.name === "replay-list") {
+          return "运行记录";
         }
 
         return "Skills";

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.compiler.schemas import CompileRequestResponse
 
@@ -42,6 +42,7 @@ class SkillSummaryResponse(BaseModel):
     repository_url: str
     default_branch: str
     manifest_path: str
+    is_published: bool
     latest_draft_head_sha: str | None = None
     latest_published_commit_sha: str | None = None
     latest_published_at: datetime | None = None
@@ -134,6 +135,22 @@ class PublishSkillResponse(BaseModel):
     compile_request: CompileRequestResponse | None = None
 
 
+class SkillRawMaterialDerivedAssetResponse(BaseModel):
+    id: str
+    raw_material_id: str
+    analysis_id: str
+    artifact_object_id: str
+    asset_kind: str
+    timestamp_ms: int
+    filename: str
+    mime_type: str
+    label: str
+    observations: list[Any] = Field(default_factory=list)
+    asset_metadata: dict[str, Any] = Field(default_factory=dict)
+    reference_path: str
+    created_at: datetime
+
+
 class SkillRawMaterialResponse(BaseModel):
     id: str
     skill_definition_id: str
@@ -147,15 +164,18 @@ class SkillRawMaterialResponse(BaseModel):
     status: str
     size_bytes: int
     checksum: str
-    parse_summary: str
-    processing_metadata: dict[str, Any]
     error_message: str
+    analysis_status: str | None = None
+    analysis_id: str | None = None
+    analysis_result_summary: str = ""
+    derived_asset_count: int = 0
     created_at: datetime
     updated_at: datetime
 
 
 class SkillRawMaterialDetailResponse(SkillRawMaterialResponse):
-    extracted_text: str
+    analysis_result: dict[str, Any] = Field(default_factory=dict)
+    derived_assets: list[SkillRawMaterialDerivedAssetResponse] = Field(default_factory=list)
 
 
 class DeleteSkillRawMaterialResponse(BaseModel):
@@ -164,13 +184,15 @@ class DeleteSkillRawMaterialResponse(BaseModel):
 
 
 class GenerateSkillDraftRequest(BaseModel):
-    material_ids: list[str] = Field(min_length=1)
+    model_config = ConfigDict(extra="forbid")
+
     user_description: str = Field(min_length=1, max_length=10000)
     base_commit_sha: str | None = Field(default=None, min_length=1)
 
 
 class SkillRawMaterialGenerationResponse(BaseModel):
     id: str
+    job_id: str | None = None
     skill_definition_id: str
     material_ids: list[str]
     user_description: str
@@ -185,3 +207,17 @@ class SkillRawMaterialGenerationResponse(BaseModel):
     committed_commit_sha: str
     error_message: str
     created_at: datetime
+
+
+class SkillRawMaterialAnalysisResponse(BaseModel):
+    id: str
+    raw_material_id: str
+    status: str
+    analysis_result: dict[str, Any]
+    error_message: str
+    error_details: dict[str, Any] = Field(default_factory=dict)
+    derived_assets: list[SkillRawMaterialDerivedAssetResponse] = Field(default_factory=list)
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime

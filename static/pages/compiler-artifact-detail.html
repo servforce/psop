@@ -1,57 +1,76 @@
+<template x-if="compilerArtifact">
 <div class="h-full min-h-0">
   <section class="panel rounded-none border-0">
-    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70">
-      <div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2">
-        <button type="button" class="button-secondary h-9 w-9 shrink-0" title="返回编译列表" aria-label="返回编译列表" @click="navigate('/admin/compiler')">
-          <span class="material-symbols-outlined text-[18px]">arrow_back</span>
-          <span>返回编译列表</span>
-        </button>
-        <div class="min-w-0 flex-1 basis-64">
-          <p class="truncate text-sm font-semibold text-slate-100">EG Artifact</p>
-          <p class="mono-field mt-0.5 truncate" x-text="compilerArtifact.id"></p>
+    <div class="shrink-0 border-b border-slate-800 bg-slate-950/70 px-3 py-2">
+      <div class="flex min-w-0 flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+        <nav class="breadcrumb-bar h-7 min-h-0 min-w-0 flex-1 flex-nowrap gap-1.5 overflow-hidden border-0 p-0 text-xs" aria-label="Breadcrumb">
+          <template x-if="route.name === 'skill-compiler-artifact' && currentSkill">
+            <span class="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5">
+              <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link min-w-0 truncate" @click="openCurrentSkillCompiler()" x-text="currentSkill.name"></button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link" @click="openCurrentSkillCompiler()">编译</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <span class="truncate font-semibold text-slate-100">EG Artifact</span>
+            </span>
+          </template>
+          <template x-if="route.name !== 'skill-compiler-artifact' || !currentSkill">
+            <span class="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5">
+              <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <button type="button" class="breadcrumb-link" @click="navigate('/admin/compiler')">编译</button>
+              <span class="material-symbols-outlined text-[15px] text-slate-400">chevron_right</span>
+              <span class="truncate font-semibold text-slate-100">EG Artifact</span>
+            </span>
+          </template>
+        </nav>
+        <div class="flex shrink-0 flex-wrap items-center gap-2">
+          <span class="status-badge h-8 px-2.5 py-0 text-[10px]" :class="statusBadgeTone(compilerArtifact.status)" x-text="formatStatus(compilerArtifact.status)"></span>
+          <div class="inline-flex shrink-0 overflow-hidden rounded-md border border-slate-800 bg-slate-950/60">
+            <button
+              type="button"
+              class="topbar-icon-button h-9 w-9 rounded-none border-0"
+              :class="compilerArtifactView === 'graph' ? 'bg-orange-500/10 text-orange-200' : ''"
+              title="图预览"
+              aria-label="图预览"
+              @click="selectCompilerArtifactView('graph')"
+            >
+              <span class="material-symbols-outlined text-[18px]">account_tree</span>
+            </button>
+            <button
+              type="button"
+              class="topbar-icon-button h-9 w-9 rounded-none border-0 border-l border-slate-800"
+              :class="compilerArtifactView === 'json' ? 'bg-orange-500/10 text-orange-200' : ''"
+              title="JSON 文本"
+              aria-label="JSON 文本"
+              @click="selectCompilerArtifactView('json')"
+            >
+              <span class="material-symbols-outlined text-[18px]">data_object</span>
+            </button>
+          </div>
         </div>
-        <div class="flex shrink-0 items-center gap-2">
-          <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">状态</span>
-          <span class="status-badge" :class="statusBadgeTone(compilerArtifact.status)" x-text="formatStatus(compilerArtifact.status)"></span>
-        </div>
-        <div class="flex min-w-0 shrink items-center gap-2">
+      </div>
+      <div class="mt-2 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+        <span class="mono-field max-w-full truncate" :title="compilerArtifact.id" x-text="compilerArtifact.id"></span>
+        <span class="inline-flex min-w-0 items-center gap-2">
           <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Formal</span>
           <span class="mono-field max-w-[14rem] truncate" x-text="compilerArtifact.formal_revision"></span>
-        </div>
-        <div class="flex shrink-0 items-center gap-2">
+        </span>
+        <span class="inline-flex shrink-0 items-center gap-2">
           <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">节点</span>
           <span class="text-sm font-semibold text-slate-100" x-text="compilerArtifactNodeCount()"></span>
-        </div>
-        <div class="flex shrink-0 items-center gap-2">
+        </span>
+        <span class="inline-flex shrink-0 items-center gap-2">
           <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">工作流步骤</span>
           <span class="text-sm font-semibold text-slate-100" x-text="compilerArtifactWorkflowCount()"></span>
-        </div>
-        <div class="flex shrink-0 items-center gap-2">
+        </span>
+        <span class="inline-flex shrink-0 items-center gap-2">
           <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">创建时间</span>
           <span class="mono-field whitespace-nowrap" x-text="formatDateTime(compilerArtifact.created_at)"></span>
-        </div>
-        <div class="ml-auto inline-flex shrink-0 overflow-hidden rounded-md border border-slate-800 bg-slate-950/60">
-          <button
-            type="button"
-            class="topbar-icon-button h-9 w-9 rounded-none border-0"
-            :class="compilerArtifactView === 'graph' ? 'bg-orange-500/10 text-orange-200' : ''"
-            title="图预览"
-            aria-label="图预览"
-            @click="selectCompilerArtifactView('graph')"
-          >
-            <span class="material-symbols-outlined text-[18px]">account_tree</span>
-          </button>
-          <button
-            type="button"
-            class="topbar-icon-button h-9 w-9 rounded-none border-0 border-l border-slate-800"
-            :class="compilerArtifactView === 'json' ? 'bg-orange-500/10 text-orange-200' : ''"
-            title="JSON 文本"
-            aria-label="JSON 文本"
-            @click="selectCompilerArtifactView('json')"
-          >
-            <span class="material-symbols-outlined text-[18px]">data_object</span>
-          </button>
-        </div>
+        </span>
       </div>
     </div>
 
@@ -266,3 +285,4 @@
     </div>
   </section>
 </div>
+</template>

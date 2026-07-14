@@ -1,7 +1,10 @@
+<template x-if="currentSkill && skillTestCase && skillTestReview">
 <div class="h-full min-h-0 overflow-hidden">
   <section class="flex h-full min-h-0 flex-col overflow-hidden border border-slate-800 bg-slate-950">
     <div class="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3">
       <nav class="breadcrumb-bar min-w-0 flex-1 flex-nowrap gap-1 border-0 p-0 text-xs" aria-label="Breadcrumb">
+        <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">工作台</button>
+        <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
         <button type="button" class="breadcrumb-link" @click="navigate('/admin/skills')">Skills</button>
         <span class="material-symbols-outlined text-[14px] text-slate-400">chevron_right</span>
         <button type="button" class="breadcrumb-link min-w-0 truncate" @click="navigate(`/admin/skills/${currentSkill.id}`); activeDetailTab = 'test'" x-text="currentSkill.name"></button>
@@ -13,6 +16,7 @@
         <span class="font-semibold text-slate-100">Review</span>
       </nav>
       <div class="flex shrink-0 items-center gap-2">
+        <span class="status-badge h-8 px-2.5 py-0 text-[10px]" :class="statusBadgeTone(skillTestRun?.status)" x-text="formatStatus(skillTestRun?.status)"></span>
         <button type="button" class="topbar-icon-button" title="播放/暂停" aria-label="播放/暂停" data-tooltip="播放/暂停" @click="toggleSkillTestReviewPlayback()">
           <span class="material-symbols-outlined text-[18px]" x-text="skillTestReviewPlaybackRunning ? 'pause' : 'play_arrow'"></span>
         </button>
@@ -31,7 +35,7 @@
           <span class="material-symbols-outlined text-[18px]" x-text="busy.skillTestCancel ? 'hourglass_empty' : 'stop_circle'"></span>
           <span class="sr-only">终止运行</span>
         </button>
-        <button type="button" class="topbar-icon-button" title="Replay" aria-label="Replay" data-tooltip="Replay" x-show="skillTestRun?.run_id" @click="navigate(`/admin/skills/${currentSkill.id}/runs/${skillTestRun.run_id}/replay`)">
+        <button type="button" class="topbar-icon-button" title="Replay" aria-label="Replay" data-tooltip="Replay" x-show="skillTestRun?.run_id" @click="navigate(runReplayPath(skillTestRun.run_id))">
           <span class="material-symbols-outlined text-[18px]">history</span>
           <span class="sr-only">Replay</span>
         </button>
@@ -42,7 +46,6 @@
       <section class="flex min-h-0 flex-col overflow-hidden">
         <div class="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3">
           <div class="flex min-w-0 items-center gap-2">
-            <span class="status-badge" :class="statusBadgeTone(skillTestRun?.status)" x-text="formatStatus(skillTestRun?.status)"></span>
             <span class="mono-field truncate" x-text="formatAssertionSummary(skillTestRun?.result_summary)"></span>
           </div>
           <span class="mono-field shrink-0" x-text="skillTestReviewProgressLabel()"></span>
@@ -329,7 +332,29 @@
                           </div>
                           <span class="mono-field" x-text="`#${event.seq_no}`"></span>
                         </div>
-                        <pre class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all border-l border-sky-400/60 bg-slate-900/35 px-3 py-3 text-xs leading-5 text-slate-200" x-text="formatTerminalPayload(event.payload_inline)"></pre>
+                        <template x-if="skillTestReviewTerminalEventHasParts(event)">
+                          <div class="mt-3 space-y-2 border-l border-sky-400/60 bg-slate-900/35 px-3 py-3">
+                            <template x-for="part in skillTestReviewTerminalEventParts(event)" :key="part.part_id || part.id">
+                              <div class="min-w-0 space-y-1.5">
+                                <div class="flex min-w-0 items-center gap-2">
+                                  <span class="material-symbols-outlined shrink-0 text-[16px] text-slate-400" x-text="skillTestTimelinePartIcon(part)"></span>
+                                  <p class="min-w-0 truncate text-xs text-slate-200" x-text="skillTestTimelinePartLabel(part)"></p>
+                                  <span class="mono-field shrink-0" x-text="skillTestTimelinePartMeta(part)"></span>
+                                </div>
+                                <template x-if="(part.kind === 'image' || String(part.mime_type || '').startsWith('image/')) && skillTestReviewTerminalPartMediaUrl(event, part)">
+                                  <img class="max-h-52 max-w-full border border-slate-800 bg-slate-950 object-contain" :src="skillTestReviewTerminalPartMediaUrl(event, part)" :alt="skillTestTimelinePartLabel(part)" />
+                                </template>
+                                <template x-if="(part.kind === 'audio' || String(part.mime_type || '').startsWith('audio/')) && skillTestReviewTerminalPartMediaUrl(event, part)">
+                                  <audio class="w-full" controls preload="metadata" :src="skillTestReviewTerminalPartMediaUrl(event, part)"></audio>
+                                </template>
+                                <template x-if="(part.kind === 'video' || String(part.mime_type || '').startsWith('video/')) && skillTestReviewTerminalPartMediaUrl(event, part)">
+                                  <video class="max-h-52 w-full border border-slate-800 bg-black object-contain" controls preload="metadata" :src="skillTestReviewTerminalPartMediaUrl(event, part)"></video>
+                                </template>
+                              </div>
+                            </template>
+                          </div>
+                        </template>
+                        <pre x-show="!skillTestReviewTerminalEventHasParts(event)" class="mt-3 max-w-full overflow-hidden whitespace-pre-wrap break-all border-l border-sky-400/60 bg-slate-900/35 px-3 py-3 text-xs leading-5 text-slate-200" x-text="formatTerminalPayload(event.payload_inline)"></pre>
                       </article>
                     </template>
                   </div>
@@ -415,3 +440,4 @@
     </div>
   </section>
 </div>
+</template>

@@ -1,3 +1,4 @@
+<template x-if="currentSkill">
 <div class="h-full min-h-0">
   <section class="panel rounded-none border-0">
     <div class="shrink-0 border-b border-slate-800 bg-slate-950">
@@ -24,10 +25,6 @@
         <button type="button" class="detail-tab" :class="activeDetailTab === 'compiler' ? 'detail-tab-active' : ''" @click="selectDetailTab('compiler')">
           <span class="material-symbols-outlined text-[15px]">account_tree</span>
           <span>编译</span>
-        </button>
-        <button type="button" class="detail-tab" :class="activeDetailTab === 'debug' ? 'detail-tab-active' : ''" @click="selectDetailTab('debug')">
-          <span class="material-symbols-outlined text-[15px]">terminal</span>
-          <span>调试</span>
         </button>
         <button type="button" class="detail-tab" :class="activeDetailTab === 'test' ? 'detail-tab-active' : ''" @click="selectDetailTab('test')">
           <span class="material-symbols-outlined text-[15px]">science</span>
@@ -202,8 +199,8 @@
 
               <div class="grid grid-cols-[minmax(0,1.4fr)_minmax(12rem,0.9fr)_10rem] border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                 <span>名称</span>
-                <span>最近提交</span>
-                <span>更新时间</span>
+                <span>来源</span>
+                <span>当前提交</span>
               </div>
 
               <div class="divide-y divide-slate-200">
@@ -214,7 +211,7 @@
                       <span class="material-symbols-outlined text-[20px] text-slate-400 transition group-hover:text-sky-600">drive_folder_upload</span>
                       <span class="transition group-hover:text-sky-800">返回上级</span>
                     </span>
-                    <span class="text-sm text-slate-400">N/A</span>
+                    <span class="text-sm text-slate-400">目录导航</span>
                     <span class="mono-field">N/A</span>
                   </button>
                 </template>
@@ -240,7 +237,7 @@
                       <span class="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-500 transition group-hover:border-sky-200 group-hover:bg-white group-hover:text-sky-700" x-text="repositoryEntryLabel(entry)"></span>
                     </span>
                     <span class="truncate text-sm text-slate-500 transition group-hover:text-sky-700">通过 PSOP WEB IDE 更新</span>
-                    <span class="mono-field whitespace-nowrap" x-text="formatDateTime(currentSkill.updated_at)"></span>
+                    <span class="mono-field whitespace-nowrap" x-text="formatShortId(currentSkill.latest_draft_head_sha || currentSkill.current_draft_version?.source_commit_sha)"></span>
                   </button>
                 </template>
               </div>
@@ -349,29 +346,27 @@
     </template>
 
     <template x-if="activeDetailTab === 'materials'">
-      <div class="panel-body !p-0">
+      <div class="panel-body h-full min-h-0 overflow-hidden !p-0">
         <section class="flex h-full min-h-0 flex-col overflow-hidden bg-slate-950">
-          <div class="grid min-h-0 flex-1 lg:grid-cols-[minmax(18rem,0.82fr)_minmax(0,1.18fr)]">
-            <section class="min-h-0 overflow-hidden border-b border-slate-800 bg-slate-950 lg:border-b-0 lg:border-r">
+          <div class="grid h-full min-h-0 flex-1 lg:grid-cols-[minmax(18rem,0.82fr)_minmax(0,1.18fr)]">
+            <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-b border-slate-800 bg-slate-950 lg:border-b-0 lg:border-r">
               <div class="flex flex-col gap-3 border-b border-slate-800 bg-slate-950/70 px-3 py-2 md:flex-row md:items-center md:justify-between">
                 <div class="min-w-0">
                   <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">素材</p>
                   <p class="mt-1 truncate text-sm text-slate-300">
                     <span x-text="rawMaterials.length"></span>
                     <span> 个素材</span>
-                    <span class="text-slate-600"> / </span>
-                    <span x-text="selectedRawMaterialIds.length"></span>
-                    <span> 个已选择</span>
+                    <span x-show="rawMaterials.length > 0">
+                      <span class="text-slate-600"> / </span>
+                      <span>全部参与生成</span>
+                    </span>
                   </p>
                 </div>
                 <div class="flex shrink-0 items-center gap-2">
-                  <button type="button" class="topbar-icon-button h-9 w-9" title="上传文件" aria-label="上传文件" @click="openRawMaterialUploadModal('file')">
+                  <button type="button" class="topbar-icon-button h-9 w-9" title="上传文件" aria-label="上传文件" @click="openRawMaterialUploadModal()">
                     <span class="material-symbols-outlined text-[18px]">upload_file</span>
                   </button>
-                  <button type="button" class="topbar-icon-button h-9 w-9" title="添加参考 URL" aria-label="添加参考 URL" @click="openRawMaterialUploadModal('url')">
-                    <span class="material-symbols-outlined text-[18px]">link</span>
-                  </button>
-                  <button type="button" class="topbar-icon-button h-9 w-9" title="生成 Skill" aria-label="生成 Skill" :disabled="selectedRawMaterialIds.length === 0" @click="openRawMaterialGenerateModal()">
+                  <button type="button" class="topbar-icon-button h-9 w-9" title="生成 Skill" aria-label="生成 Skill" :disabled="!canGenerateSkillDraftFromRawMaterials()" @click="openRawMaterialGenerateModal()">
                     <span class="material-symbols-outlined text-[18px]">auto_fix_high</span>
                   </button>
                   <button type="button" class="topbar-icon-button h-9 w-9" title="刷新素材" aria-label="刷新素材" :disabled="busy.rawMaterials" @click="loadRawMaterials(currentSkill.id, true)">
@@ -380,48 +375,51 @@
                 </div>
               </div>
 
-              <template x-if="busy.rawMaterials && rawMaterialsLoadedSkillId !== currentSkill.id">
-                <div class="empty-state py-14">
-                  <span class="material-symbols-outlined text-[30px] text-slate-500">sync</span>
-                  <p class="mt-3 text-sm text-slate-500">正在加载素材...</p>
-                </div>
-              </template>
-
-              <template x-if="!busy.rawMaterials && rawMaterials.length === 0">
-                <div class="empty-state py-14">
-                  <span class="material-symbols-outlined text-[30px] text-slate-500">inventory_2</span>
-                  <p class="mt-3 text-sm text-slate-500">暂无素材。</p>
-                </div>
-              </template>
-
-              <div class="min-h-0 overflow-auto">
-                <template x-for="material in rawMaterials" :key="material.id">
-                  <article class="group grid grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-center gap-2 border-b border-slate-800 px-3 py-3 transition hover:bg-slate-900/70" :class="rawMaterialDetail?.id === material.id ? 'bg-slate-900 shadow-[inset_3px_0_0_rgba(249,115,22,0.85)]' : ''">
-                    <label class="flex items-center justify-center" title="选择素材">
-                      <input type="checkbox" class="size-4 rounded border-slate-700 bg-slate-950 text-orange-500 focus:ring-orange-500/40" :checked="isRawMaterialSelected(material)" :disabled="material.status !== 'ready'" @change="toggleRawMaterialSelection(material)" />
-                    </label>
-                    <button type="button" class="min-w-0 text-left" @click="openRawMaterialDetail(material)">
-                      <div class="flex min-w-0 items-center gap-2">
-                        <span class="material-symbols-outlined text-[18px] text-slate-400" x-text="rawMaterialKindIcon(material.material_kind)"></span>
-                        <span class="truncate text-sm font-semibold text-slate-100" x-text="material.name"></span>
-                        <span class="status-badge shrink-0" :class="statusBadgeTone(material.status)" x-text="formatStatus(material.status)"></span>
-                      </div>
-                      <div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                        <span x-text="rawMaterialKindLabel(material.material_kind)"></span>
-                        <span class="mono-field" x-text="material.mime_type"></span>
-                        <span class="mono-field" x-text="formatBytes(material.size_bytes)"></span>
-                      </div>
-                      <p class="mt-1 truncate text-xs text-slate-400" x-text="material.parse_summary || material.error_message || material.filename"></p>
-                    </button>
-                    <button type="button" class="topbar-icon-button h-8 w-8 opacity-70 transition group-hover:opacity-100" title="移除素材" aria-label="移除素材" :disabled="busy.rawMaterialDelete" @click="deleteRawMaterial(material)">
-                      <span class="material-symbols-outlined text-[17px]">delete</span>
-                    </button>
-                  </article>
+              <div class="min-h-0 overflow-y-auto overflow-x-hidden">
+                <template x-if="busy.rawMaterials && rawMaterialsLoadedSkillId !== currentSkill.id">
+                  <div class="empty-state py-14">
+                    <span class="material-symbols-outlined text-[30px] text-slate-500">sync</span>
+                    <p class="mt-3 text-sm text-slate-500">正在加载素材...</p>
+                  </div>
                 </template>
+
+                <template x-if="!busy.rawMaterials && rawMaterials.length === 0">
+                  <div class="empty-state py-14">
+                    <span class="material-symbols-outlined text-[30px] text-slate-500">inventory_2</span>
+                    <p class="mt-3 text-sm text-slate-500">暂无素材。</p>
+                  </div>
+                </template>
+
+                <div class="min-h-0">
+                  <template x-for="material in rawMaterials" :key="material.id">
+                    <article class="group flex min-h-12 items-center gap-2 border-b border-slate-800 px-2.5 py-1.5 transition hover:bg-slate-900/70" :class="rawMaterialDetail?.id === material.id ? 'bg-slate-900 shadow-[inset_3px_0_0_rgba(249,115,22,0.85)]' : ''">
+                      <button type="button" class="flex min-w-0 flex-1 flex-col justify-center text-left" @click="openRawMaterialDetail(material)">
+                        <div class="flex min-w-0 items-center gap-1.5">
+                          <span class="material-symbols-outlined text-[15px] text-slate-400" x-text="rawMaterialKindIcon(material.material_kind)"></span>
+                          <span class="truncate text-[13px] font-semibold leading-4 text-slate-100" x-text="material.name"></span>
+                          <span class="status-badge shrink-0 px-2 py-0 text-[10px] tracking-wider" :class="statusBadgeTone(material.status)" x-text="formatStatus(material.status)"></span>
+                        </div>
+                        <div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0 text-[11px] leading-3 text-slate-500">
+                          <span x-text="rawMaterialKindLabel(material.material_kind)"></span>
+                          <span class="mono-field" x-text="material.mime_type"></span>
+                          <span class="mono-field" x-text="formatBytes(material.size_bytes)"></span>
+                        </div>
+                      </button>
+                      <div class="flex shrink-0 items-center justify-end gap-0.5 self-center">
+                        <button type="button" class="topbar-icon-button h-6 w-6 opacity-70 transition group-hover:opacity-100" title="重新解析素材" aria-label="重新解析素材" :disabled="busy.rawMaterialAnalyze || material.status === 'processing' || ['pending', 'running'].includes(material.analysis_status || material.status)" @click="analyzeRawMaterial(material)">
+                          <span class="material-symbols-outlined text-[16px]" :class="busy.rawMaterialAnalyze ? 'animate-spin' : ''" x-text="busy.rawMaterialAnalyze ? 'progress_activity' : 'restart_alt'"></span>
+                        </button>
+                        <button type="button" class="topbar-icon-button h-6 w-6 opacity-70 transition group-hover:opacity-100" title="移除素材" aria-label="移除素材" :disabled="busy.rawMaterialDelete" @click="deleteRawMaterial(material)">
+                          <span class="material-symbols-outlined text-[16px]">delete</span>
+                        </button>
+                      </div>
+                    </article>
+                  </template>
+                </div>
               </div>
             </section>
 
-            <section class="min-h-0 overflow-hidden bg-slate-950">
+            <section class="relative min-h-0 overflow-hidden bg-slate-950">
               <template x-if="!rawMaterialDetail && !busy.rawMaterialDetail">
                 <div class="empty-state min-h-[32rem]">
                   <span class="material-symbols-outlined text-[34px] text-slate-500">preview</span>
@@ -468,171 +466,400 @@
                     </div>
                   </div>
 
-                  <div class="grid min-h-0 flex-1 xl:grid-cols-2 xl:divide-x xl:divide-slate-800">
-                    <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
-                      <div class="flex h-10 items-center border-b border-slate-800 px-3">
-                        <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">解析结果</p>
+                  <div class="flex min-h-0 flex-1 flex-col">
+                    <div class="flex h-10 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950">
+                      <div class="flex h-full min-w-0 items-center overflow-x-auto">
+                        <button type="button" class="detail-tab" :class="rawMaterialDetailTab === 'preview' ? 'detail-tab-active' : ''" @click="selectRawMaterialDetailTab('preview')">
+                          <span class="material-symbols-outlined text-[16px]">preview</span>
+                          <span>原文件预览</span>
+                        </button>
+                        <button type="button" class="detail-tab" :class="rawMaterialDetailTab === 'analysis' ? 'detail-tab-active' : ''" @click="selectRawMaterialDetailTab('analysis')">
+                          <span class="material-symbols-outlined text-[16px]">analytics</span>
+                          <span>解析结果</span>
+                        </button>
                       </div>
-                      <div class="min-h-0 overflow-y-auto overflow-x-hidden px-3 py-3">
-                        <p class="text-sm leading-6 text-slate-200" x-text="rawMaterialDetail.parse_summary || '暂无解析摘要。'"></p>
-                        <template x-if="rawMaterialDetail.error_message">
-                          <p class="mt-3 border-l-2 border-rose-400 bg-rose-500/10 px-3 py-2 text-sm text-rose-200" x-text="rawMaterialDetail.error_message"></p>
+                      <a class="topbar-icon-button h-7 w-7 shrink-0" :href="rawMaterialContentUrl(rawMaterialDetail)" target="_blank" rel="noreferrer noopener" title="打开原文件" aria-label="打开原文件">
+                        <span class="material-symbols-outlined text-[16px]">open_in_new</span>
+                      </a>
+                    </div>
+
+                    <section x-show="rawMaterialDetailTab === 'analysis'" class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
+                      <p class="text-sm leading-6 text-slate-200" x-text="rawMaterialDetail.analysis_result?.summary || rawMaterialDetail.analysis_result_summary || '暂无解析摘要。'"></p>
+                      <template x-if="rawMaterialDetail.error_message">
+                        <p class="mt-3 border-l-2 border-rose-400 bg-rose-500/10 px-3 py-2 text-sm text-rose-200" x-text="rawMaterialDetail.error_message"></p>
+                      </template>
+                      <template x-if="rawMaterialDetail.analysis_result?.content?.text">
+                        <section class="mt-5 space-y-2">
+                          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">文本内容</p>
+                          <pre class="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-300" x-text="rawMaterialDetail.analysis_result.content.text"></pre>
+                        </section>
+                      </template>
+                      <div class="mt-5 space-y-4 border-t border-slate-800 pt-4">
+                        <template x-if="rawMaterialAnalysis?.error_details && Object.keys(rawMaterialAnalysis.error_details).length">
+                          <section class="space-y-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">失败详情</p>
+                            <pre class="max-h-52 overflow-auto whitespace-pre-wrap rounded-md border border-rose-500/20 bg-rose-500/10 px-3 py-2 font-mono text-xs leading-5 text-rose-100" x-text="formatJson(rawMaterialAnalysis.error_details)"></pre>
+                          </section>
                         </template>
-                        <pre class="mt-5 whitespace-pre-wrap font-mono text-xs leading-6 text-slate-300" x-text="rawMaterialDetail.extracted_text || '暂无可提取文本。'"></pre>
+                        <template x-if="rawMaterialDetail.analysis_result?.limitations?.length">
+                          <section class="space-y-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">限制</p>
+                            <ul class="space-y-1 text-xs leading-5 text-slate-300">
+                              <template x-for="item in rawMaterialDetail.analysis_result.limitations" :key="item">
+                                <li x-text="item"></li>
+                              </template>
+                            </ul>
+                          </section>
+                        </template>
+                        <template x-if="rawMaterialVisibleEvidenceItems().length">
+                          <section class="space-y-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">证据</p>
+                            <div class="space-y-2">
+                              <template x-for="item in rawMaterialVisibleEvidenceItems()" :key="item.id">
+                                <article class="rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2">
+                                  <div class="flex items-center justify-between gap-2">
+                                    <span class="mono-field" x-text="item.timestamp_ms != null ? `${Math.round((item.timestamp_ms || 0) / 1000)}s` : item.kind"></span>
+                                    <span class="status-badge" x-show="item.asset_metadata?.frame_source" x-text="rawMaterialFrameSourceLabel(item.asset_metadata?.frame_source)"></span>
+                                  </div>
+                                  <p class="mt-1 text-xs leading-5 text-slate-300" x-text="item.content"></p>
+                                </article>
+                              </template>
+                            </div>
+                          </section>
+                        </template>
+                        <template x-if="rawMaterialDetail.derived_assets?.length">
+                          <section class="space-y-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">关键帧图片分析</p>
+                            <div class="grid gap-3 sm:grid-cols-2">
+                              <template x-for="asset in rawMaterialDetail.derived_assets" :key="asset.id">
+                                <article class="overflow-hidden rounded-md border border-slate-800 bg-slate-900/40">
+                                  <button type="button" class="group relative block w-full overflow-hidden bg-black text-left" title="放大查看图片" aria-label="放大查看图片" @click="openRawMaterialImagePreview(asset)">
+                                    <img class="aspect-video w-full object-cover transition duration-150" :src="rawMaterialDerivedAssetContentUrl(asset)" :alt="asset.label || asset.filename" />
+                                    <span class="absolute right-2 top-2 flex size-7 items-center justify-center rounded-md border border-slate-700 bg-slate-950/70 text-slate-200 opacity-0 transition group-hover:opacity-100">
+                                      <span class="material-symbols-outlined text-[16px]">zoom_in</span>
+                                    </span>
+                                  </button>
+                                  <div class="space-y-1 px-2.5 py-2">
+                                    <div class="flex items-center justify-between gap-2">
+                                      <span class="mono-field" x-text="`${Math.round((asset.timestamp_ms || 0) / 1000)}s`"></span>
+                                      <span class="status-badge border-slate-700 bg-slate-950/40 text-slate-400" x-text="rawMaterialFrameSourceLabel(asset.asset_metadata?.frame_source) || '候选资产'"></span>
+                                    </div>
+                                    <p class="text-xs leading-5 text-slate-300" x-text="asset.label"></p>
+                                  </div>
+                                </article>
+                              </template>
+                            </div>
+                          </section>
+                        </template>
                       </div>
                     </section>
 
-                    <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
-                      <div class="flex h-10 items-center justify-between border-b border-slate-800 px-3">
-                        <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">原文件预览</p>
-                        <a class="topbar-icon-button h-7 w-7" :href="rawMaterialContentUrl(rawMaterialDetail)" target="_blank" rel="noreferrer noopener" title="打开原文件" aria-label="打开原文件">
-                          <span class="material-symbols-outlined text-[16px]">open_in_new</span>
-                        </a>
-                      </div>
-                      <div class="min-h-0 overflow-auto">
+                    <section x-show="rawMaterialDetailTab === 'preview'" class="min-h-0 flex-1 overflow-hidden">
+                      <div class="flex h-full min-h-0 items-center justify-center overflow-auto bg-black">
                         <template x-if="canPreviewRawMaterial('image')">
-                          <img class="max-h-[34rem] w-full object-contain" :src="rawMaterialContentUrl(rawMaterialDetail)" :alt="rawMaterialDetail.name" />
+                          <img class="h-full w-full object-contain" :src="rawMaterialContentUrl(rawMaterialDetail)" :alt="rawMaterialDetail.name" />
                         </template>
                         <template x-if="canPreviewRawMaterial('audio')">
-                          <audio class="mt-8 w-full" controls :src="rawMaterialContentUrl(rawMaterialDetail)"></audio>
+                          <audio class="w-full" controls :src="rawMaterialContentUrl(rawMaterialDetail)"></audio>
                         </template>
                         <template x-if="canPreviewRawMaterial('video')">
-                          <video class="max-h-[34rem] w-full bg-black" controls :src="rawMaterialContentUrl(rawMaterialDetail)"></video>
+                          <video class="h-full w-full bg-black object-contain" controls :src="rawMaterialContentUrl(rawMaterialDetail)"></video>
                         </template>
                         <template x-if="canPreviewRawMaterial('pdf')">
-                          <iframe class="h-[34rem] w-full border-0 bg-white" :src="rawMaterialContentUrl(rawMaterialDetail)" title="PDF 预览"></iframe>
+                          <iframe class="h-full w-full border-0 bg-white" :src="rawMaterialContentUrl(rawMaterialDetail)" title="PDF 预览"></iframe>
                         </template>
                         <template x-if="canPreviewRawMaterial('document')">
-                          <iframe class="h-full min-h-[18rem] w-full border-0 bg-white" :src="rawMaterialContentUrl(rawMaterialDetail)" :title="(rawMaterialDetail.name || '素材') + ' 预览'" sandbox referrerpolicy="no-referrer"></iframe>
+                          <iframe class="h-full w-full border-0 bg-white" :src="rawMaterialContentUrl(rawMaterialDetail)" :title="(rawMaterialDetail.name || '素材') + ' 预览'" sandbox referrerpolicy="no-referrer"></iframe>
                         </template>
                       </div>
                     </section>
                   </div>
                 </div>
               </template>
+
+              <template x-if="builderAgentPanel.open">
+                <div class="absolute inset-0 z-30 flex min-h-0 flex-col border-l border-slate-800 bg-[#18181b] shadow-2xl">
+                  <div class="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-800 bg-[#18181b] px-4 py-2">
+                    <div class="min-w-0">
+                      <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">PSOP Builder</p>
+                      <p class="mt-0.5 truncate text-sm font-semibold text-slate-100" x-text="builderAgentCurrentStageLabel()"></p>
+                    </div>
+                    <button type="button" class="topbar-icon-button h-8 w-8 shrink-0" title="关闭面板" aria-label="关闭面板" @click="closeRawMaterialGenerateModal()">
+                      <span class="material-symbols-outlined text-[17px]">close</span>
+                    </button>
+                  </div>
+
+                  <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+                    <template x-if="builderAgentPanel.submittedInput">
+                      <div class="flex justify-end">
+                        <p class="max-w-[82%] rounded-md bg-slate-700 px-3 py-2 text-sm leading-6 text-slate-100" x-text="builderAgentPanel.submittedInput"></p>
+                      </div>
+                    </template>
+
+                    <template x-if="builderAgentPanel.status === 'idle'">
+                      <div class="rounded-md border border-slate-800 bg-slate-900/50 px-3 py-3 text-sm leading-6 text-slate-300">
+                        <p>等待输入生成目标。</p>
+                      </div>
+                    </template>
+
+                    <template x-if="builderAgentPanel.status !== 'idle'">
+                      <section class="space-y-3">
+                        <button type="button" class="flex w-full items-center justify-between gap-3 border-b border-slate-800 pb-2 text-left" @click="builderAgentPanel.processExpanded = !builderAgentPanel.processExpanded">
+                          <span class="flex min-w-0 items-center gap-2">
+                            <span class="material-symbols-outlined text-[18px] text-orange-300" :class="isBuilderAgentRunning() ? 'animate-spin' : ''" x-text="isBuilderAgentRunning() ? 'progress_activity' : (builderAgentPanel.status === 'failed' ? 'error' : 'check_circle')"></span>
+                            <span class="truncate text-sm font-semibold text-slate-200" x-text="builderAgentWorkLabel()"></span>
+                          </span>
+                          <span class="material-symbols-outlined text-[18px] text-slate-500" x-text="builderAgentPanel.processExpanded ? 'expand_less' : 'expand_more'"></span>
+                        </button>
+
+                        <div class="h-1 overflow-hidden rounded-full bg-slate-800">
+                          <div class="h-full bg-orange-500 transition-all duration-300" :style="`width: ${builderAgentProgressPercent()}%`"></div>
+                        </div>
+
+                        <div x-show="builderAgentPanel.processExpanded" class="space-y-2">
+                          <template x-if="builderAgentPanel.steps.length === 0">
+                            <div class="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm text-slate-400">
+                              <span class="material-symbols-outlined animate-spin text-[17px]">progress_activity</span>
+                              <span>等待 Agent 运行事件...</span>
+                            </div>
+                          </template>
+                          <template x-for="step in builderAgentPanel.steps" :key="step.key">
+                            <article class="rounded-md border px-3 py-2" :class="builderAgentStepTone(step)">
+                              <div class="flex items-start gap-2">
+                                <span class="material-symbols-outlined mt-0.5 text-[17px]" :class="step.status === 'running' ? 'animate-spin' : ''" x-text="builderAgentStepIcon(step)"></span>
+                                <div class="min-w-0 flex-1">
+                                  <p class="truncate text-sm font-semibold" x-text="step.title"></p>
+                                  <p x-show="step.detail" class="mt-1 break-words text-xs leading-5 opacity-80" x-text="step.detail"></p>
+                                </div>
+                                <span class="mono-field shrink-0" x-show="step.duration_ms" x-text="formatDuration(step.duration_ms)"></span>
+                              </div>
+                            </article>
+                          </template>
+                        </div>
+                      </section>
+                    </template>
+
+                    <template x-if="builderAgentPanel.status === 'succeeded' && builderAgentPanel.result">
+                      <section class="space-y-4 border-t border-slate-800 pt-4">
+                        <div>
+                          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">最终输出</p>
+                          <p class="mt-2 text-sm leading-6 text-slate-200" x-text="builderAgentPanel.result.generation_reason || 'Skill 草稿已生成。'"></p>
+                        </div>
+                        <template x-if="builderAgentReviewNotes().length">
+                          <div>
+                            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Review Notes</p>
+                            <ul class="mt-2 space-y-1 text-sm leading-6 text-slate-300">
+                              <template x-for="note in builderAgentReviewNotes()" :key="note">
+                                <li x-text="note"></li>
+                              </template>
+                            </ul>
+                          </div>
+                        </template>
+                        <div class="grid gap-3 md:grid-cols-2">
+                          <section class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-3">
+                            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">生成文件</p>
+                            <div class="mt-2 max-h-40 overflow-y-auto">
+                              <template x-for="path in builderAgentFinalGeneratedFiles()" :key="path">
+                                <p class="mono-field mt-1 break-all" x-text="path"></p>
+                              </template>
+                            </div>
+                          </section>
+                          <section class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-3">
+                            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">参考图片</p>
+                            <div class="mt-2 max-h-40 overflow-y-auto">
+                              <template x-if="builderAgentFinalReferenceFiles().length === 0">
+                                <p class="text-xs text-slate-500">无参考图片文件。</p>
+                              </template>
+                              <template x-for="path in builderAgentFinalReferenceFiles()" :key="path">
+                                <p class="mono-field mt-1 break-all" x-text="path"></p>
+                              </template>
+                            </div>
+                          </section>
+                        </div>
+                        <div class="grid gap-3 md:grid-cols-2">
+                          <section class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-3">
+                            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">标准检索</p>
+                            <p class="mt-2 text-sm text-slate-300" x-text="builderAgentStandardSearchSummaryText()"></p>
+                          </section>
+                          <section class="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-3">
+                            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">提交与 Token</p>
+                            <p class="mono-field mt-2 break-all" x-text="builderAgentPanel.result.committed_commit_sha || 'N/A'"></p>
+                            <p class="mt-2 text-xs text-slate-400">
+                              <span>Token </span>
+                              <span class="mono-field" x-text="formatTokenUsage(builderAgentPanel.timeline?.token_usage)"></span>
+                            </p>
+                          </section>
+                        </div>
+                      </section>
+                    </template>
+
+                    <template x-if="builderAgentPanel.status === 'failed'">
+                      <section class="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-3 text-sm leading-6 text-rose-100">
+                        <p class="font-semibold">Builder Agent 运行失败</p>
+                        <p class="mt-1" x-text="builderAgentPanel.errorMessage || '请检查运行事件后重新生成。'"></p>
+                      </section>
+                    </template>
+                  </div>
+
+                  <form class="shrink-0 bg-[#18181b] px-4 pb-4 pt-2" x-show="!isBuilderAgentRunning()" @submit.prevent="generateSkillDraftFromRawMaterials()">
+                    <div class="overflow-hidden rounded-md border border-slate-700 bg-[#1f1f23] focus-within:border-orange-500/40 focus-within:ring-2 focus-within:ring-orange-500/20">
+                      <textarea x-model.trim="builderAgentPanel.userInput" class="min-h-20 w-full resize-none bg-transparent px-3 pb-1 pt-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500 disabled:opacity-60" placeholder="输入希望 Builder Agent 构建的 PSOP Skill 目标。" :disabled="busy.rawMaterialGenerate"></textarea>
+                      <div class="flex min-h-10 items-center justify-between gap-3 px-2.5 pb-2">
+                        <p class="min-w-0 truncate text-xs text-slate-500">
+                          <span x-show="builderAgentPanel.agentRunId">Run </span>
+                          <span class="mono-field" x-show="builderAgentPanel.agentRunId" x-text="formatShortId(builderAgentPanel.agentRunId)"></span>
+                          <span x-show="builderAgentPanel.usingPolling"> · polling</span>
+                        </p>
+                        <div class="flex shrink-0 items-center gap-1.5">
+                          <button type="button" class="topbar-icon-button h-8 w-8" title="重置" aria-label="重置" x-show="builderAgentPanel.status === 'succeeded' || builderAgentPanel.status === 'failed'" @click="restartBuilderAgentPanel()">
+                            <span class="material-symbols-outlined text-[17px]">restart_alt</span>
+                          </button>
+                          <button type="submit" class="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500 text-slate-950 transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:opacity-50" title="提交" aria-label="提交" :disabled="busy.rawMaterialGenerate || !builderAgentPanel.userInput || !canGenerateSkillDraftFromRawMaterials()">
+                            <span class="material-symbols-outlined text-[18px]">arrow_upward</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </form>
+                </div>
+              </template>
             </section>
           </div>
 
+          <template x-if="rawMaterialImagePreview.open">
+            <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95 px-4 py-6 backdrop-blur-sm" @click.self="closeRawMaterialImagePreview()" @keydown.escape.window="closeRawMaterialImagePreview()">
+              <section class="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-slate-700 bg-slate-950 shadow-xl">
+                <div class="flex h-12 items-center justify-between gap-3 border-b border-slate-800 px-3 py-2">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold text-slate-100" x-text="rawMaterialImagePreview.title"></p>
+                    <p class="mt-0.5 text-[11px] text-slate-500">
+                      <span x-show="rawMaterialImagePreview.timestamp_ms != null" class="mono-field" x-text="`${Math.round((rawMaterialImagePreview.timestamp_ms || 0) / 1000)}s`"></span>
+                      <span x-show="rawMaterialImagePreview.frame_source" class="ml-2" x-text="rawMaterialFrameSourceLabel(rawMaterialImagePreview.frame_source)"></span>
+                    </p>
+                  </div>
+                  <button type="button" class="topbar-icon-button h-8 w-8 shrink-0" title="关闭预览" aria-label="关闭预览" @click="closeRawMaterialImagePreview()">
+                    <span class="material-symbols-outlined text-[17px]">close</span>
+                  </button>
+                </div>
+                <div class="flex min-h-0 flex-1 items-center justify-center bg-black">
+                  <img class="max-h-[92vh] max-w-full object-contain" :src="rawMaterialImagePreview.src" :alt="rawMaterialImagePreview.title" />
+                </div>
+              </section>
+            </div>
+          </template>
+
           <template x-if="rawMaterialUploadModalOpen">
             <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-8 backdrop-blur-sm">
-              <section class="modal-panel max-w-3xl">
+              <section class="modal-panel max-h-[92vh] max-w-5xl overflow-hidden">
                 <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
                   <div>
-                    <p class="panel-kicker" x-text="rawMaterialUploadMode === 'file' ? '文件素材' : '参考 URL'"></p>
+                    <p class="panel-kicker">文件素材</p>
                     <h3 class="panel-title">新增素材</h3>
                   </div>
                   <button type="button" class="icon-button" title="关闭" aria-label="关闭" :disabled="busy.rawMaterialUpload" @click="closeRawMaterialUploadModal()">
                     <span class="material-symbols-outlined text-[18px]">close</span>
                   </button>
                 </div>
-                <form class="space-y-4 px-5 py-5" @submit.prevent="submitRawMaterial()">
-                  <div class="inline-flex overflow-hidden rounded-md border border-slate-200 bg-white">
-                    <button type="button" class="px-3 py-2 text-sm font-semibold transition" :class="rawMaterialUploadMode === 'file' ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-50'" @click="rawMaterialUploadMode = 'file'">
-                      <span>文件</span>
-                    </button>
-                    <button type="button" class="border-l border-slate-200 px-3 py-2 text-sm font-semibold transition" :class="rawMaterialUploadMode === 'url' ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-50'" @click="rawMaterialUploadMode = 'url'">
-                      <span>URL</span>
-                    </button>
+                <form class="flex max-h-[calc(92vh-5.5rem)] min-h-0 flex-col" @submit.prevent="submitRawMaterial()">
+                  <div class="grid min-h-0 flex-1 grid-cols-[18rem_minmax(0,1fr)] divide-x divide-slate-200">
+                    <aside class="flex min-h-0 flex-col bg-slate-50">
+                      <div class="border-b border-slate-200 px-4 py-3">
+                        <label class="button-secondary w-full cursor-pointer justify-center" :class="busy.rawMaterialUpload ? 'pointer-events-none opacity-60' : ''">
+                          <span class="material-symbols-outlined text-[18px]">upload_file</span>
+                          <span>选择文件</span>
+                          <input x-ref="rawMaterialFileInput" type="file" multiple class="sr-only" :disabled="busy.rawMaterialUpload" @change="handleRawMaterialFileChange($event)" />
+                        </label>
+                        <p class="mt-2 text-xs text-slate-500" x-text="rawMaterialUploadItems.length ? `${rawMaterialUploadItems.length} 个素材待上传` : '尚未选择素材文件'"></p>
+                      </div>
+                      <div class="min-h-0 flex-1 overflow-y-auto p-2">
+                        <template x-if="rawMaterialUploadItems.length === 0">
+                          <div class="flex h-full min-h-48 items-center justify-center px-4 text-center text-sm text-slate-500">
+                            <p>选择一个或多个文件后，这里会显示待上传素材列表。</p>
+                          </div>
+                        </template>
+                        <template x-for="(item, index) in rawMaterialUploadItems" :key="item.file.name + item.file.size + index">
+                          <div class="group flex items-start gap-1 rounded-md transition hover:bg-white" :class="rawMaterialUploadSelectedIndex === index ? 'bg-white shadow-sm ring-1 ring-orange-200' : ''">
+                            <button type="button" class="flex min-w-0 flex-1 items-start gap-2 px-2.5 py-2 text-left" :disabled="busy.rawMaterialUpload" @click="selectRawMaterialUploadItem(index)">
+                              <span class="material-symbols-outlined mt-0.5 text-[18px] text-slate-400">draft</span>
+                              <span class="min-w-0 flex-1">
+                                <span class="block truncate text-sm font-semibold text-slate-800" x-text="item.name || item.file.name"></span>
+                                <span class="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
+                                  <span x-text="formatBytes(item.file.size)"></span>
+                                  <span class="truncate" x-text="item.file.type || 'application/octet-stream'"></span>
+                                </span>
+                              </span>
+                            </button>
+                            <button type="button" class="mr-1 mt-2 rounded p-0.5 text-slate-400 opacity-0 transition hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100" title="移除" aria-label="移除" :disabled="busy.rawMaterialUpload" @click="removeRawMaterialUploadItem(index)">
+                              <span class="material-symbols-outlined text-[17px]">delete</span>
+                            </button>
+                          </div>
+                        </template>
+                      </div>
+                    </aside>
+
+                    <div class="min-h-0 overflow-y-auto px-5 py-5">
+                      <template x-if="rawMaterialUploadSelectedItem()">
+                        <div class="space-y-4">
+                          <div class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                            <p class="truncate font-semibold" x-text="rawMaterialUploadSelectedItem().file.name"></p>
+                            <p class="mt-1 text-xs text-slate-500">
+                              <span x-text="formatBytes(rawMaterialUploadSelectedItem().file.size)"></span>
+                              <span> · </span>
+                              <span x-text="rawMaterialUploadSelectedItem().file.type || 'application/octet-stream'"></span>
+                            </p>
+                          </div>
+
+                          <div class="grid gap-4 md:grid-cols-2">
+                            <label class="field-block">
+                              <span class="field-label">名称</span>
+                              <input x-model.trim="rawMaterialUploadForm.name" class="input-field" placeholder="默认使用文件名" :disabled="busy.rawMaterialUpload" @input="syncRawMaterialUploadSelectedItem()" />
+                            </label>
+                            <label class="field-block">
+                              <span class="field-label">文件格式</span>
+                              <div class="input-field flex cursor-default items-center text-slate-400" x-text="rawMaterialUploadSelectedItem().file.type || '由系统根据文件内容识别'"></div>
+                            </label>
+                          </div>
+                          <label class="field-block">
+                            <span class="field-label">描述</span>
+                            <textarea x-model.trim="rawMaterialUploadForm.description" class="textarea-field h-24" placeholder="补充这份素材的用途或重点。" :disabled="busy.rawMaterialUpload" @input="syncRawMaterialUploadSelectedItem()"></textarea>
+                          </label>
+                          <label class="field-block">
+                            <span class="field-label">来源说明</span>
+                            <input x-model.trim="rawMaterialUploadForm.source_note" class="input-field" placeholder="例如：现场 SOP、供应商手册、专家访谈纪要" :disabled="busy.rawMaterialUpload" @input="syncRawMaterialUploadSelectedItem()" />
+                          </label>
+                        </div>
+                      </template>
+                      <template x-if="!rawMaterialUploadSelectedItem()">
+                        <div class="flex min-h-72 items-center justify-center rounded-md border border-dashed border-slate-300 text-center text-sm text-slate-500">
+                          <p>请先在左侧添加素材文件。</p>
+                        </div>
+                      </template>
+                    </div>
                   </div>
 
-                  <template x-if="rawMaterialUploadMode === 'file'">
-                    <label class="field-block">
-                      <span class="field-label">素材文件</span>
-                      <input x-ref="rawMaterialFileInput" type="file" class="input-field" @change="handleRawMaterialFileChange($event)" />
-                    </label>
-                  </template>
-                  <template x-if="rawMaterialUploadMode === 'url'">
-                    <label class="field-block">
-                      <span class="field-label">参考 URL</span>
-                      <input x-model.trim="rawMaterialUploadForm.source_url" type="url" class="input-field" placeholder="https://example.com/reference" />
-                    </label>
-                  </template>
-
-                  <div class="grid gap-4 md:grid-cols-2">
-                    <label class="field-block">
-                      <span class="field-label">名称</span>
-                      <input x-model.trim="rawMaterialUploadForm.name" class="input-field" placeholder="可留空，默认使用文件名或 URL 标题" />
-                    </label>
-                    <label class="field-block">
-                      <span class="field-label">类型</span>
-                      <input x-model.trim="rawMaterialUploadForm.material_kind" class="input-field" placeholder="可留空，由系统识别" />
-                    </label>
-                  </div>
-                  <label class="field-block">
-                    <span class="field-label">描述</span>
-                    <textarea x-model.trim="rawMaterialUploadForm.description" class="textarea-field h-24" placeholder="补充这份素材的用途或重点。"></textarea>
-                  </label>
-                  <template x-if="rawMaterialUploadMode === 'file'">
-                    <label class="field-block">
-                      <span class="field-label">来源说明</span>
-                      <input x-model.trim="rawMaterialUploadForm.source_note" class="input-field" placeholder="例如：现场 SOP、供应商手册、专家访谈纪要" />
-                    </label>
-                  </template>
-
-                  <div class="flex justify-end gap-3 border-t border-slate-200 pt-4">
+                  <div class="space-y-3 border-t border-slate-200 px-5 py-4">
+                    <template x-if="rawMaterialUploadError">
+                      <p class="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700" x-text="rawMaterialUploadError"></p>
+                    </template>
+                    <template x-if="rawMaterialUploadProgress">
+                      <p class="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700" x-text="`正在上传 ${rawMaterialUploadProgress.current}/${rawMaterialUploadProgress.total}：${rawMaterialUploadProgress.filename}`"></p>
+                    </template>
+                    <div class="flex justify-end gap-3">
                     <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.rawMaterialUpload" @click="closeRawMaterialUploadModal()">
                       <span class="material-symbols-outlined text-[18px]">close</span>
                       <span>取消</span>
                     </button>
-                    <button type="submit" class="button-primary" title="保存素材" aria-label="保存素材" :disabled="busy.rawMaterialUpload">
+                    <button type="submit" class="button-primary" title="保存素材" aria-label="保存素材" :disabled="busy.rawMaterialUpload || rawMaterialUploadItems.length === 0">
                       <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterialUpload ? 'animate-spin' : ''" x-text="busy.rawMaterialUpload ? 'progress_activity' : 'add'"></span>
-                      <span x-text="busy.rawMaterialUpload ? '保存中...' : '保存素材'"></span>
+                      <span x-text="rawMaterialUploadProgress ? `保存中 ${rawMaterialUploadProgress.current}/${rawMaterialUploadProgress.total}` : '保存素材'"></span>
                     </button>
+                    </div>
                   </div>
                 </form>
               </section>
             </div>
           </template>
 
-          <template x-if="rawMaterialGenerateModalOpen">
-            <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-8 backdrop-blur-sm">
-              <section class="modal-panel max-w-3xl">
-                <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
-                  <div>
-                    <p class="panel-kicker">Skill 生成</p>
-                    <h3 class="panel-title">基于素材生成源码草稿</h3>
-                  </div>
-                  <button type="button" class="icon-button" title="关闭" aria-label="关闭" :disabled="busy.rawMaterialGenerate" @click="closeRawMaterialGenerateModal()">
-                    <span class="material-symbols-outlined text-[18px]">close</span>
-                  </button>
-                </div>
-                <form class="space-y-4 px-5 py-5" @submit.prevent="generateSkillDraftFromRawMaterials()">
-                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
-                    <p class="field-label">已选择素材</p>
-                    <div class="mt-2 flex flex-wrap gap-2">
-                      <template x-for="material in selectedRawMaterials()" :key="material.id">
-                        <span class="inline-flex max-w-full items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700">
-                          <span class="material-symbols-outlined text-[15px]" x-text="rawMaterialKindIcon(material.material_kind)"></span>
-                          <span class="truncate" x-text="material.name"></span>
-                        </span>
-                      </template>
-                    </div>
-                  </div>
-                  <label class="field-block">
-                    <span class="field-label">生成描述</span>
-                    <textarea x-model.trim="rawMaterialGenerateForm.user_description" class="textarea-field h-36" placeholder="请描述希望生成的 Skill 目标、使用场景、边界和输出风格。" required></textarea>
-                  </label>
-                  <template x-if="rawMaterialGenerationResult">
-                    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm leading-6 text-emerald-900">
-                      <p class="font-semibold">已提交 GitLab draft</p>
-                      <p class="mt-1 mono-field" x-text="rawMaterialGenerationResult.committed_commit_sha"></p>
-                      <p class="mt-2" x-text="rawMaterialGenerationResult.generation_reason"></p>
-                    </div>
-                  </template>
-                  <div class="flex justify-end gap-3 border-t border-slate-200 pt-4">
-                    <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.rawMaterialGenerate" @click="closeRawMaterialGenerateModal()">
-                      <span class="material-symbols-outlined text-[18px]">close</span>
-                      <span>取消</span>
-                    </button>
-                    <button type="submit" class="button-primary" title="生成源码草稿" aria-label="生成源码草稿" :disabled="busy.rawMaterialGenerate || !rawMaterialGenerateForm.user_description">
-                      <span class="material-symbols-outlined text-[18px]" :class="busy.rawMaterialGenerate ? 'animate-spin' : ''" x-text="busy.rawMaterialGenerate ? 'progress_activity' : 'auto_fix_high'"></span>
-                      <span x-text="busy.rawMaterialGenerate ? '生成中...' : '生成源码草稿'"></span>
-                    </button>
-                  </div>
-                </form>
-              </section>
-            </div>
-          </template>
         </section>
       </div>
     </template>
@@ -831,284 +1058,9 @@
     <template x-if="activeDetailTab === 'compiler'">
       <div class="panel-body !p-0">
         <section class="detail-section flex h-full min-h-0 flex-col overflow-hidden !p-0">
-          <template x-if="compilerArtifactWorkspaceOpen && busy.compilerArtifact">
-            <div class="empty-state min-h-[34rem] flex-1">
-              <span class="material-symbols-outlined text-[30px] text-slate-400">sync</span>
-              <p class="mt-3 text-sm text-slate-500">正在加载 EG artifact...</p>
-            </div>
-          </template>
-
-          <template x-if="compilerArtifactWorkspaceOpen && compilerArtifact && !busy.compilerArtifact">
-            <div class="flex h-full min-h-0 flex-col overflow-hidden rounded-none border-0 bg-slate-950">
-              <div class="shrink-0 border-b border-slate-800 bg-slate-950/70">
-                <div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2">
-                  <button type="button" class="button-secondary h-9 w-9 shrink-0" title="返回编译列表" aria-label="返回编译列表" @click="closeCompilerArtifactWorkspace()">
-                    <span class="material-symbols-outlined text-[18px]">arrow_back</span>
-                    <span>返回编译列表</span>
-                  </button>
-                  <div class="min-w-0 flex-1 basis-64">
-                    <p class="truncate text-sm font-semibold text-slate-100">EG Artifact</p>
-                    <p class="mono-field mt-0.5 truncate" x-text="compilerArtifact.id"></p>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-2">
-                    <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">状态</span>
-                    <span class="status-badge" :class="statusBadgeTone(compilerArtifact.status)" x-text="formatStatus(compilerArtifact.status)"></span>
-                  </div>
-                  <div class="flex min-w-0 shrink items-center gap-2">
-                    <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Formal</span>
-                    <span class="mono-field max-w-[14rem] truncate" x-text="compilerArtifact.formal_revision"></span>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-2">
-                    <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">节点</span>
-                    <span class="text-sm font-semibold text-slate-100" x-text="compilerArtifactNodeCount()"></span>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-2">
-                    <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">工作流步骤</span>
-                    <span class="text-sm font-semibold text-slate-100" x-text="compilerArtifactWorkflowCount()"></span>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-2">
-                    <span class="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">创建时间</span>
-                    <span class="mono-field whitespace-nowrap" x-text="formatDateTime(compilerArtifact.created_at)"></span>
-                  </div>
-                  <div class="ml-auto inline-flex shrink-0 overflow-hidden rounded-md border border-slate-800 bg-slate-950/60">
-                    <button
-                      type="button"
-                      class="topbar-icon-button h-9 w-9 rounded-none border-0"
-                      :class="compilerArtifactView === 'graph' ? 'bg-orange-500/10 text-orange-200' : ''"
-                      title="图预览"
-                      aria-label="图预览"
-                      @click="selectCompilerArtifactView('graph')"
-                    >
-                      <span class="material-symbols-outlined text-[18px]">account_tree</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="topbar-icon-button h-9 w-9 rounded-none border-0 border-l border-slate-800"
-                      :class="compilerArtifactView === 'json' ? 'bg-orange-500/10 text-orange-200' : ''"
-                      title="JSON 文本"
-                      aria-label="JSON 文本"
-                      @click="selectCompilerArtifactView('json')"
-                    >
-                      <span class="material-symbols-outlined text-[18px]">data_object</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <template x-if="compilerArtifactView === 'graph'">
-                <div class="relative min-h-0 flex-1 overflow-hidden">
-                  <div class="relative h-full min-h-[34rem]">
-                    <div
-                      id="skill-eg-bpmn-canvas"
-                      class="eg-bpmn-viewer h-full min-h-[34rem] bg-slate-950"
-                      x-effect="compilerArtifact && compilerArtifactView === 'graph' && queueCompilerArtifactGraphRender()"
-                    ></div>
-                    <template x-if="compilerArtifactGraphError">
-                      <div class="absolute inset-x-4 top-4 rounded-md border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100" x-text="compilerArtifactGraphError"></div>
-                    </template>
-                  </div>
-
-                  <template x-if="compilerArtifactNodeDrawerOpen && selectedArtifactNode()">
-                    <aside class="absolute inset-y-0 right-0 z-30 flex w-full max-w-[30rem] flex-col border-l border-slate-800 bg-slate-950/95 shadow-[0_0_48px_rgba(0,0,0,0.45)] backdrop-blur">
-                      <div class="flex shrink-0 items-start justify-between gap-3 border-b border-slate-800 px-4 py-2.5">
-                        <div>
-                          <div class="flex flex-wrap items-center gap-2">
-                            <span class="inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.16em]" :class="artifactNodeKindClass(selectedArtifactNode().kind)" x-text="selectedArtifactNode().kind"></span>
-                            <span class="mono-field" x-text="selectedArtifactNode().id"></span>
-                          </div>
-                          <p class="mt-2 text-sm font-semibold text-slate-100" x-text="selectedArtifactWorkflowStep()?.title || selectedArtifactNode().label || selectedArtifactNode().id"></p>
-                          <p class="mt-1 text-xs leading-5 text-slate-400" x-text="selectedArtifactWorkflowStep()?.goal || '该节点未提供 workflow step goal。'"></p>
-                        </div>
-                        <button type="button" class="topbar-icon-button shrink-0" title="关闭节点详情" aria-label="关闭节点详情" @click="closeCompilerArtifactNodeDrawer()">
-                          <span class="material-symbols-outlined text-[18px]">close</span>
-                        </button>
-                      </div>
-
-                      <div class="flex h-8 shrink-0 border-b border-slate-800">
-                        <button type="button" class="node-drawer-tab" :class="compilerArtifactNodeEditorTab === 'form' ? 'node-drawer-tab-active' : ''" @click="selectCompilerArtifactNodeEditorTab('form')">表单</button>
-                        <button type="button" class="node-drawer-tab" :class="compilerArtifactNodeEditorTab === 'json' ? 'node-drawer-tab-active' : ''" @click="selectCompilerArtifactNodeEditorTab('json')">JSON</button>
-                      </div>
-
-                      <div class="min-h-0 flex-1 overflow-y-auto">
-                        <template x-if="compilerArtifactNodeEditorTab === 'form'">
-                          <form class="divide-y divide-slate-800" @submit.prevent="saveCompilerArtifactNodeForm()">
-                            <section class="px-4 py-3">
-                              <p class="field-label mb-2">基础信息</p>
-                              <div class="grid grid-cols-2 gap-3">
-                                <label class="field-block">
-                                  <span class="field-label">节点 ID</span>
-                                  <input x-model="compilerArtifactNodeForm.id" class="input-field h-9 px-3 py-0 font-mono text-xs" readonly />
-                                </label>
-                                <label class="field-block">
-                                  <span class="field-label">类型</span>
-                                  <select x-model="compilerArtifactNodeForm.kind" class="select-field h-9">
-                                    <option value="start">start</option>
-                                    <option value="input">input</option>
-                                    <option value="llm">llm</option>
-                                    <option value="tool">tool</option>
-                                    <option value="terminal">terminal</option>
-                                    <option value="approval">approval</option>
-                                    <option value="timer">timer</option>
-                                    <option value="skill">skill</option>
-                                  </select>
-                                </label>
-                                <label class="field-block col-span-2">
-                                  <span class="field-label">节点标签</span>
-                                  <input x-model="compilerArtifactNodeForm.label" class="input-field h-9 px-3 py-0" placeholder="用于图中显示的短标签" />
-                                </label>
-                              </div>
-                            </section>
-
-                            <section class="px-4 py-3">
-                              <p class="field-label mb-2">工作流文案</p>
-                              <div class="space-y-3">
-                                <label class="field-block">
-                                  <span class="field-label">标题</span>
-                                  <input x-model="compilerArtifactNodeForm.workflow_title" class="input-field h-9 px-3 py-0" placeholder="面向执行人员展示的步骤标题" />
-                                </label>
-                                <label class="field-block">
-                                  <span class="field-label">目标说明</span>
-                                  <textarea x-model="compilerArtifactNodeForm.workflow_goal" rows="2" class="textarea-field auto-grow-field min-h-20 px-3 py-2" placeholder="说明该节点在业务流程中要完成什么"></textarea>
-                                </label>
-                              </div>
-                            </section>
-
-                            <section class="px-4 py-3">
-                              <p class="field-label mb-2">执行配置</p>
-                              <div class="space-y-3">
-                                <label class="field-block">
-                                  <span class="field-label">Actor</span>
-                                  <input x-model="compilerArtifactNodeForm.actor_name" class="input-field h-9 px-3 py-0 font-mono text-xs" placeholder="例如 agent.llm / runtime.input / capability.demo_tool" />
-                                </label>
-                                <label class="field-block">
-                                  <span class="field-label">Guard phase_is</span>
-                                  <input x-model="compilerArtifactNodeForm.guard_phase_is" class="input-field h-9 px-3 py-0 font-mono text-xs" placeholder="节点启用阶段标记" />
-                                </label>
-                                <label class="field-block">
-                                  <span class="field-label">System Prompt</span>
-                                  <textarea x-model="compilerArtifactNodeForm.projection_system_template" rows="3" class="textarea-field auto-grow-field min-h-24 px-3 py-2 font-mono text-xs" placeholder="LLM 节点的 system_template"></textarea>
-                                </label>
-                                <label class="field-block">
-                                  <span class="field-label">User Prompt</span>
-                                  <textarea x-model="compilerArtifactNodeForm.projection_user_template" rows="4" class="textarea-field auto-grow-field min-h-28 px-3 py-2 font-mono text-xs" placeholder="LLM 节点的 user_template"></textarea>
-                                </label>
-                              </div>
-                            </section>
-
-                            <section class="px-4 py-3">
-                              <p class="field-label mb-2">状态写回</p>
-                              <div class="grid grid-cols-2 gap-3">
-                                <label class="field-block col-span-2">
-                                  <span class="field-label">写入路径</span>
-                                  <input x-model="compilerArtifactNodeForm.merge_path" class="input-field h-9 px-3 py-0 font-mono text-xs" placeholder="Session Token path，例如 phase" />
-                                </label>
-                                <label class="field-block">
-                                  <span class="field-label">来源</span>
-                                  <input x-model="compilerArtifactNodeForm.merge_from" class="input-field h-9 px-3 py-0 font-mono text-xs" placeholder="observation.path" />
-                                </label>
-                                <label class="field-block">
-                                  <span class="field-label">固定值</span>
-                                  <input x-model="compilerArtifactNodeForm.merge_value" class="input-field h-9 px-3 py-0 font-mono text-xs" placeholder="JSON 或字符串" />
-                                </label>
-                              </div>
-                              <p class="mt-3 text-xs leading-5 text-slate-500">如果“来源”和“固定值”同时填写，保存时优先使用来源。</p>
-                            </section>
-                          </form>
-                        </template>
-
-                        <template x-if="compilerArtifactNodeEditorTab === 'json'">
-                          <div class="px-4 py-3">
-                            <label class="field-block">
-                              <span class="field-label">节点 JSON</span>
-                              <div class="json-editor-shell-auto rounded-none border-x-0">
-                                <pre class="json-highlight-layer px-3 py-3" aria-hidden="true" x-html="jsonHighlightHtml(compilerArtifactNodeJsonDraft)"></pre>
-                                <textarea
-                                  x-model="compilerArtifactNodeJsonDraft"
-                                  class="json-editor-input px-3 py-3"
-                                  spellcheck="false"
-                                ></textarea>
-                              </div>
-                            </label>
-                            <p class="mt-2 text-xs leading-5 text-rose-300" x-show="compilerArtifactNodeJsonError" x-text="compilerArtifactNodeJsonError"></p>
-                          </div>
-                        </template>
-                      </div>
-
-                      <div class="flex shrink-0 justify-end gap-2 border-t border-slate-800 px-3 py-2">
-                        <template x-if="compilerArtifactNodeEditorTab === 'form'">
-                          <div class="flex gap-2">
-                            <button type="button" class="button-secondary" title="重置表单" aria-label="重置表单" @click="resetCompilerArtifactNodeForm()">
-                              <span class="material-symbols-outlined text-[18px]">restart_alt</span>
-                              <span>重置表单</span>
-                            </button>
-                            <button type="button" class="button-primary" title="保存表单" aria-label="保存表单" :disabled="busy.compilerArtifactSave" @click="saveCompilerArtifactNodeForm()">
-                              <span class="material-symbols-outlined text-[18px]" x-text="busy.compilerArtifactSave ? 'sync' : 'save'"></span>
-                              <span>保存表单</span>
-                            </button>
-                          </div>
-                        </template>
-                        <template x-if="compilerArtifactNodeEditorTab === 'json'">
-                          <div class="flex gap-2">
-                            <button type="button" class="button-secondary" title="格式化 JSON" aria-label="格式化 JSON" @click="formatCompilerArtifactNodeJsonDraft()">
-                              <span class="material-symbols-outlined text-[18px]">format_indent_increase</span>
-                              <span>格式化 JSON</span>
-                            </button>
-                            <button type="button" class="button-secondary" title="重置 JSON" aria-label="重置 JSON" @click="resetCompilerArtifactNodeJsonDraft()">
-                              <span class="material-symbols-outlined text-[18px]">restart_alt</span>
-                              <span>重置 JSON</span>
-                            </button>
-                            <button type="button" class="button-primary" title="保存 JSON" aria-label="保存 JSON" :disabled="busy.compilerArtifactSave" @click="saveCompilerArtifactNode()">
-                              <span class="material-symbols-outlined text-[18px]" x-text="busy.compilerArtifactSave ? 'sync' : 'save'"></span>
-                              <span>保存 JSON</span>
-                            </button>
-                          </div>
-                        </template>
-                      </div>
-                    </aside>
-                  </template>
-                </div>
-              </template>
-
-              <template x-if="compilerArtifactView === 'json'">
-                <div class="flex min-h-0 flex-1 flex-col bg-slate-950">
-                  <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/60 px-4 py-3">
-                    <div class="min-w-0">
-                      <p class="text-xs leading-5 text-slate-400">编辑 EG artifact JSON 后保存；保存时会进行 JSON 语法与 formal-v5 结构校验。</p>
-                      <p class="mt-1 text-xs leading-5 text-rose-300" x-show="compilerArtifactJsonError" x-text="compilerArtifactJsonError"></p>
-                    </div>
-                    <div class="flex shrink-0 items-center gap-2">
-                      <button type="button" class="button-secondary" title="格式化 JSON" aria-label="格式化 JSON" @click="formatCompilerArtifactJsonDraft()">
-                        <span class="material-symbols-outlined text-[18px]">format_indent_increase</span>
-                        <span>格式化 JSON</span>
-                      </button>
-                      <button type="button" class="button-secondary" title="重置" aria-label="重置" @click="resetCompilerArtifactJsonDraft()">
-                        <span class="material-symbols-outlined text-[18px]">restart_alt</span>
-                        <span>重置</span>
-                      </button>
-                      <button type="button" class="button-primary" title="保存" aria-label="保存" :disabled="busy.compilerArtifactSave" @click="saveCompilerArtifactJson()">
-                        <span class="material-symbols-outlined text-[18px]" x-text="busy.compilerArtifactSave ? 'sync' : 'save'"></span>
-                        <span>保存</span>
-                      </button>
-                    </div>
-                  </div>
-                  <div class="json-editor-shell min-h-[30rem] flex-1 rounded-none border-0">
-                    <pre class="json-highlight-layer px-5 py-5" aria-hidden="true" x-html="jsonHighlightHtml(compilerArtifactJsonDraft)"></pre>
-                    <textarea
-                      x-model="compilerArtifactJsonDraft"
-                      class="json-editor-input px-5 py-5"
-                      spellcheck="false"
-                      @scroll="syncJsonHighlightScroll($event)"
-                    ></textarea>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </template>
-
-          <template x-if="!compilerArtifactWorkspaceOpen">
-            <div class="flex h-full min-h-0 flex-col">
-              <div class="shrink-0 border-b border-slate-800 bg-slate-950/45 px-3 py-2">
-                <div class="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
+          <div class="flex h-full min-h-0 flex-col">
+            <div class="shrink-0 border-b border-slate-800 bg-slate-950/45 px-3 py-2">
+              <div class="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
                 <select x-model="skillCompilerFilters.status" class="select-field w-36 shrink-0">
                   <option value="">全部状态</option>
                   <option value="pending">待处理</option>
@@ -1123,33 +1075,33 @@
                   <span class="material-symbols-outlined text-[18px]" :class="busy.manualCompile ? 'animate-spin' : ''" x-text="busy.manualCompile ? 'progress_activity' : 'account_tree'"></span>
                   <span x-text="busy.manualCompile ? '创建中...' : '编译'"></span>
                 </button>
-                </div>
               </div>
+            </div>
 
-              <template x-if="busy.compilerRequests">
-                <div class="empty-state py-14">
-                  <span class="material-symbols-outlined text-[30px] text-slate-400">sync</span>
-                  <p class="mt-3 text-sm text-slate-500">正在加载编译任务...</p>
+            <template x-if="busy.compilerRequests">
+              <div class="empty-state py-14">
+                <span class="material-symbols-outlined text-[30px] text-slate-400">sync</span>
+                <p class="mt-3 text-sm text-slate-500">正在加载编译任务...</p>
+              </div>
+            </template>
+
+            <template x-if="!busy.compilerRequests && currentSkillFilteredCompilerRequests().length === 0">
+              <div class="empty-state py-14">
+                <span class="material-symbols-outlined text-[30px] text-slate-400">account_tree</span>
+                <p class="mt-3 text-sm text-slate-500" x-text="currentSkillCompilerRequests().length > 0 ? '没有匹配的编译任务。' : '当前 Skill 尚无编译任务。'"></p>
+                <p class="mt-2 text-xs text-slate-500">可点击右上角编译按钮创建编译任务。</p>
+              </div>
+            </template>
+
+            <template x-if="currentSkillFilteredCompilerRequests().length > 0">
+              <div class="min-h-0 flex-1 overflow-auto rounded-none border-0 bg-slate-50">
+                <div class="grid min-w-[72rem] grid-cols-[minmax(16rem,1.4fr)_8rem_9rem_9rem_minmax(18rem,1fr)] border-b border-slate-200 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  <span>编译任务</span>
+                  <span>状态</span>
+                  <span>冻结 Commit</span>
+                  <span>Artifact</span>
+                  <span>时间</span>
                 </div>
-              </template>
-
-              <template x-if="!busy.compilerRequests && currentSkillFilteredCompilerRequests().length === 0">
-                <div class="empty-state py-14">
-                  <span class="material-symbols-outlined text-[30px] text-slate-400">account_tree</span>
-                  <p class="mt-3 text-sm text-slate-500" x-text="currentSkillCompilerRequests().length > 0 ? '没有匹配的编译任务。' : '当前 Skill 尚无编译任务。'"></p>
-                  <p class="mt-2 text-xs text-slate-500">可点击右上角编译按钮创建编译任务。</p>
-                </div>
-              </template>
-
-              <template x-if="currentSkillFilteredCompilerRequests().length > 0">
-                <div class="min-h-0 flex-1 overflow-auto rounded-none border-0 bg-slate-50">
-                  <div class="grid min-w-[72rem] grid-cols-[minmax(16rem,1.4fr)_8rem_9rem_9rem_minmax(18rem,1fr)] border-b border-slate-200 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    <span>编译任务</span>
-                    <span>状态</span>
-                    <span>冻结 Commit</span>
-                    <span>Artifact</span>
-                    <span>时间</span>
-                  </div>
 
                   <div class="divide-y divide-slate-200">
                     <template x-for="compileRequest in currentSkillFilteredCompilerRequests()" :key="compileRequest.id">
@@ -1180,87 +1132,8 @@
                     </template>
                   </div>
                 </div>
-              </template>
-            </div>
-          </template>
-        </section>
-      </div>
-    </template>
-
-    <template x-if="activeDetailTab === 'debug'">
-      <div class="min-h-0 flex-1 overflow-hidden">
-        <section class="grid h-full min-h-0 overflow-hidden lg:grid-cols-[minmax(22rem,0.78fr)_minmax(0,1.22fr)]">
-          <aside class="min-h-0 overflow-auto border-b border-slate-800 bg-slate-950/35 p-4 lg:border-b-0 lg:border-r">
-            <form class="space-y-4" @submit.prevent="createSkillDebugInvocation()">
-              <div class="border-b border-slate-800 pb-3">
-                <p class="text-sm font-semibold text-slate-100">模拟终端</p>
-                <p class="mono-field mt-1" x-text="currentSkill.latest_published_version ? `latest · ${formatShortId(currentSkill.latest_published_version.source_commit_sha)}` : '未发布'"></p>
-              </div>
-              <template x-if="!currentSkill.latest_published_version">
-                <div class="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-                  当前 Skill 尚未发布，无法启动调试。
-                </div>
-              </template>
-              <label class="field-block">
-                <span class="field-label">初始输入（可选）</span>
-                <textarea x-model="skillDebugForm.user_input" class="input-field min-h-40 resize-none" placeholder="补充终端环境、现场背景或第一条用户输入"></textarea>
-              </label>
-              <button type="submit" class="button-primary h-10 w-full gap-2 px-4" :disabled="busy.createInvocation || !currentSkill.latest_published_version">
-                <span class="material-symbols-outlined text-[18px]">play_circle</span>
-                <span x-text="busy.createInvocation ? '启动中...' : '启动调试'"></span>
-              </button>
-            </form>
-          </aside>
-
-          <main class="flex min-h-0 flex-col overflow-hidden">
-            <div class="flex shrink-0 items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/45 px-4 py-3">
-              <div>
-                <p class="text-sm font-semibold text-slate-100">调试历史</p>
-                <p class="mono-field" x-text="`${skillDebugInvocations().length} sessions`"></p>
-              </div>
-              <button type="button" class="button-secondary" title="刷新调试历史" aria-label="刷新调试历史" :disabled="busy.invocations" @click="currentSkill && loadInvocations(currentSkill.key)">
-                <span class="material-symbols-outlined text-[18px]">refresh</span>
-                <span>刷新</span>
-              </button>
-            </div>
-            <template x-if="busy.invocations">
-              <div class="empty-state flex-1 py-14">
-                <span class="material-symbols-outlined text-[30px] text-slate-400">sync</span>
-                <p class="mt-3 text-sm text-slate-500">正在加载调试历史...</p>
-              </div>
             </template>
-            <template x-if="!busy.invocations && skillDebugInvocations().length === 0">
-              <div class="empty-state flex-1 py-14">
-                <span class="material-symbols-outlined text-[30px] text-slate-400">terminal</span>
-                <p class="mt-3 text-sm text-slate-500">当前 Skill 尚无调试会话。</p>
-              </div>
-            </template>
-            <template x-if="!busy.invocations && skillDebugInvocations().length > 0">
-              <div class="min-h-0 flex-1 overflow-auto divide-y divide-slate-800">
-                <template x-for="invocation in skillDebugInvocations()" :key="invocation.id">
-                  <article
-                    class="grid cursor-pointer gap-3 px-4 py-3 transition hover:bg-slate-900/60 md:grid-cols-[minmax(16rem,1.2fr)_8rem_minmax(12rem,0.9fr)_auto] md:items-center"
-                    role="button"
-                    tabindex="0"
-                    @click="invocation.run_id && navigate(skillDebugRunLivePath(invocation.run_id))"
-                    @keydown.enter.prevent="invocation.run_id && navigate(skillDebugRunLivePath(invocation.run_id))"
-                    @keydown.space.prevent="invocation.run_id && navigate(skillDebugRunLivePath(invocation.run_id))"
-                  >
-                    <div class="min-w-0">
-                      <p class="mono-field truncate" x-text="invocation.id"></p>
-                      <p class="mt-1 truncate text-xs text-slate-500" x-text="invocation.input_envelope?.user_input || '无初始输入'"></p>
-                    </div>
-                    <span class="status-badge w-fit" :class="statusBadgeTone(invocation.status)" x-text="formatStatus(invocation.status)"></span>
-                    <span class="mono-field truncate" x-text="formatDateTime(invocation.created_at)"></span>
-                    <button type="button" class="button-secondary justify-self-start md:justify-self-end" title="打开调试现场" aria-label="打开调试现场" @click.stop="invocation.run_id && navigate(skillDebugRunLivePath(invocation.run_id))">
-                      <span class="material-symbols-outlined text-[18px]">open_in_new</span>
-                      <span>打开</span>
-                    </button>
-                  </article>
-                </template>
-              </div>
-            </template>
-          </main>
+          </div>
         </section>
       </div>
     </template>
@@ -1269,7 +1142,21 @@
       <div class="min-h-0 flex-1 overflow-auto">
         <section class="flex h-full min-h-0 flex-col overflow-hidden">
           <div class="shrink-0 overflow-x-auto border-b border-slate-800 bg-slate-950/45 px-3 py-2">
-            <div class="grid min-w-[58rem] grid-cols-[10rem_10rem_minmax(24rem,1fr)_2.5rem] items-end gap-2">
+            <div class="grid min-w-[68rem] grid-cols-[9rem_10rem_10rem_minmax(24rem,1fr)_2.5rem] items-end gap-2">
+              <label class="field-block gap-1">
+                <span class="field-label">状态</span>
+                <select x-model="runtimeFilters.status" class="select-field h-10 px-3 py-0" aria-label="运行状态" @change="loadSkillRuns(currentSkill.id, $event.target.value)">
+                  <option value="">全部状态</option>
+                  <option value="queued">排队中</option>
+                  <option value="waiting_runtime">等待运行</option>
+                  <option value="running">运行中</option>
+                  <option value="waiting_input">等待输入</option>
+                  <option value="succeeded">成功</option>
+                  <option value="failed">失败</option>
+                  <option value="aborted">已中止</option>
+                  <option value="cancelled">已取消</option>
+                </select>
+              </label>
               <label class="field-block gap-1">
                 <span class="field-label">创建开始</span>
                 <input x-model="runtimeFilters.created_from" type="date" class="input-field h-10 px-3 py-0" />
@@ -1310,51 +1197,46 @@
             </div>
           </template>
 
-          <template x-if="busy.invocations">
+          <template x-if="busy.skillRuns">
             <div class="empty-state flex-1 py-14">
               <span class="material-symbols-outlined text-[30px] text-slate-400">sync</span>
               <p class="mt-3 text-sm text-slate-500">正在加载运行记录...</p>
             </div>
           </template>
 
-          <template x-if="!busy.invocations && currentSkillFilteredInvocations().length === 0">
+          <template x-if="!busy.skillRuns && currentSkillFilteredRuns().length === 0">
             <div class="empty-state flex-1 py-14">
               <span class="material-symbols-outlined text-[30px] text-slate-400">play_circle</span>
-              <p class="mt-3 text-sm text-slate-500" x-text="currentSkillInvocations().length > 0 ? '没有匹配的运行记录。' : '当前 Skill 尚无运行记录。'"></p>
+              <p class="mt-3 text-sm text-slate-500" x-text="runtimeFilters.status || runtimeFilters.created_from || runtimeFilters.created_to ? '没有匹配的运行记录。' : '当前 Skill 尚无运行记录。'"></p>
               <p class="mt-2 text-xs text-slate-500">发布后可在这里建立运行连接，并进入运行现场查看执行过程。</p>
             </div>
           </template>
 
-          <template x-if="currentSkillFilteredInvocations().length > 0">
+          <template x-if="currentSkillFilteredRuns().length > 0">
             <div class="min-h-0 flex-1 overflow-auto">
-              <div class="grid min-w-[72rem] grid-cols-[minmax(16rem,1.4fr)_8rem_minmax(14rem,1fr)_10rem_minmax(14rem,1fr)] border-b border-slate-800 bg-slate-950/35 px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                <span>Invocation</span>
-                <span>状态</span>
+              <div class="grid min-w-[64rem] grid-cols-[minmax(18rem,1.4fr)_8rem_10rem_minmax(14rem,1fr)] border-b border-slate-800 bg-slate-950/35 px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                 <span>运行 ID</span>
+                <span>状态</span>
                 <span>Artifact</span>
                 <span>创建时间</span>
               </div>
 
               <div class="divide-y divide-slate-800">
-                <template x-for="invocation in currentSkillFilteredInvocations()" :key="invocation.id">
+                <template x-for="run in currentSkillFilteredRuns()" :key="run.id">
                   <article
-                    class="grid min-w-[72rem] cursor-pointer grid-cols-[minmax(16rem,1.4fr)_8rem_minmax(14rem,1fr)_10rem_minmax(14rem,1fr)] items-center gap-4 px-3 py-3 transition hover:bg-slate-900/60"
+                    class="grid min-w-[64rem] cursor-pointer grid-cols-[minmax(18rem,1.4fr)_8rem_10rem_minmax(14rem,1fr)] items-center gap-4 px-3 py-3 transition hover:bg-slate-900/60"
                     role="button"
                     tabindex="0"
-                    @click="invocation.run_id && navigate(skillRunLivePath(invocation.run_id))"
-                    @keydown.enter.prevent="invocation.run_id && navigate(skillRunLivePath(invocation.run_id))"
-                    @keydown.space.prevent="invocation.run_id && navigate(skillRunLivePath(invocation.run_id))"
+                    @click="navigate(skillRunLivePath(run.id))"
+                    @keydown.enter.prevent="navigate(skillRunLivePath(run.id))"
+                    @keydown.space.prevent="navigate(skillRunLivePath(run.id))"
                   >
-                    <div class="min-w-0">
-                      <p class="mono-field truncate" x-text="invocation.id"></p>
-                      <p class="mt-1 truncate text-xs text-slate-500" x-text="invocation.gateway_type || 'web'"></p>
-                    </div>
+                    <span class="mono-field truncate" x-text="run.id"></span>
                     <div>
-                      <span class="status-badge" :class="statusBadgeTone(invocation.status)" x-text="formatStatus(invocation.status)"></span>
+                      <span class="status-badge" :class="statusBadgeTone(run.status)" x-text="formatStatus(run.status)"></span>
                     </div>
-                    <span class="mono-field truncate" x-text="invocation.run_id || 'N/A'"></span>
-                    <span class="mono-field" x-text="formatShortId(invocation.compile_artifact_id)"></span>
-                    <span class="mono-field" x-text="formatDateTime(invocation.created_at)"></span>
+                    <span class="mono-field" x-text="formatShortId(run.compile_artifact_id)"></span>
+                    <span class="mono-field" x-text="formatDateTime(run.created_at)"></span>
                   </article>
                 </template>
               </div>
@@ -1366,193 +1248,7 @@
 
     <template x-if="activeDetailTab === 'test'">
       <div class="min-h-0 flex-1 overflow-hidden">
-        <section x-show="route.name === 'skill-test-scenario-new'" class="flex h-full min-h-0 flex-col overflow-hidden">
-          <div class="flex h-10 shrink-0 items-center gap-2 border-b border-slate-800 bg-slate-950/45 px-3">
-            <button type="button" class="topbar-icon-button h-8 w-8" title="返回列表" aria-label="返回列表" @click="navigate(`/admin/skills/${currentSkill.id}`); activeDetailTab = 'test'">
-              <span class="material-symbols-outlined text-[18px]">arrow_back</span>
-            </button>
-            <h2 class="truncate text-sm font-semibold text-slate-100">新增时序测试场景</h2>
-          </div>
-
-          <div class="min-h-0 flex-1 overflow-hidden">
-            <form class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_minmax(22rem,0.34fr)] divide-x divide-slate-800" @submit.prevent="createSkillTestCase()">
-              <section class="flex min-h-0 flex-col overflow-hidden">
-                <div class="min-h-0 flex-1 overflow-hidden p-3">
-                  <div class="flex h-full min-h-0 w-full flex-col">
-                    <div class="min-h-0 flex-1 overflow-y-auto overflow-x-visible pr-1">
-                      <template x-for="(lane, laneIndex) in skillTestTimelineLanes()" :key="lane.id">
-                      <div class="grid grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] border-b border-slate-800" :class="skillTestTimelineLaneHasExpandedEvent(lane.id) ? 'min-h-[22rem]' : 'min-h-16'">
-                        <div class="flex items-center justify-center border-r border-slate-800/60">
-                          <template x-if="shouldShowSkillTestTimelineLaneGroup(lane, laneIndex)">
-                            <span class="whitespace-nowrap text-sm font-semibold text-slate-300" x-text="skillTestTimelineLaneGroupLabel(lane.id)"></span>
-                          </template>
-                        </div>
-                        <div class="flex items-center gap-2 border-r border-slate-800/60 px-2 py-2">
-                          <span class="material-symbols-outlined rounded-md border p-1 text-[16px]" :class="skillTestTimelineLaneTone(lane.id)" x-text="skillTestTimelineLaneIcon(lane.id)"></span>
-                          <div class="min-w-0">
-                            <p class="truncate text-sm font-semibold leading-5 text-slate-100" x-text="skillTestTimelineLaneLabel(lane)"></p>
-                          </div>
-                        </div>
-                        <div class="relative overflow-visible px-3 transition" :class="skillTestTimelineLaneHasExpandedEvent(lane.id) ? 'min-h-[22rem]' : 'min-h-16 cursor-crosshair hover:bg-slate-900/35'" data-skill-test-timeline-track @click="canAddSkillTestTimelineEventToLane(lane.id) && addSkillTestTimelineEventFromLane($event, lane.id)">
-                          <template x-for="item in skillTestTimelineEventsForLane(lane.id)" :key="item.render_key">
-                            <div class="absolute top-1/2 z-20 max-w-[calc(100%-1.5rem)]" :class="isSkillTestTimelineEventExpanded(item.event) ? 'w-80 -translate-y-1/2' : 'w-20 -translate-x-1/2 -translate-y-1/2'" :style="isSkillTestTimelineEventExpanded(item.event) ? skillTestTimelineExpandedEventLeftStyle(item.event) : skillTestTimelineEventLeftStyle(item.event)" @click.stop @pointerdown.stop>
-                              <template x-if="!isSkillTestTimelineEventExpanded(item.event)">
-                                <button type="button" class="flex h-10 w-full items-center gap-2 overflow-hidden rounded-md border px-2 py-1 text-left shadow-sm transition hover:bg-slate-800" :class="skillTestTimelineEventFrameClass(item.event)" :aria-pressed="isSkillTestTimelineEventSelected(item.event)" data-tooltip="点击编辑；Ctrl/Cmd/Shift 点击多选；拖动已选事件可整体移动时间" @click.stop="handleSkillTestTimelineEventClick($event, item.event.id)" @pointerdown.stop.prevent="startSkillTestTimelineEventDrag($event, item.index)">
-                                  <span class="material-symbols-outlined shrink-0 text-[16px]" x-text="skillTestTimelineLaneIcon(item.event.lane_id)"></span>
-                                  <span class="min-w-0 flex-1">
-                                    <span class="block font-mono text-[10px] leading-4" x-text="formatSkillTestTimelineMs(item.event.at_ms)"></span>
-                                    <span class="block truncate text-xs font-semibold" x-text="skillTestTimelineEventLabel(item.event)"></span>
-                                  </span>
-                                </button>
-                              </template>
-                              <template x-if="isSkillTestTimelineEventExpanded(item.event)">
-                                <article class="space-y-2 rounded-md border p-2 shadow-xl shadow-black/50" :class="skillTestTimelineExpandedEventTone(skillTestTimelineEditorEvent(item.event))">
-                                  <div class="flex items-center justify-between gap-2">
-                                    <div class="flex min-w-0 items-center gap-2">
-                                      <span class="material-symbols-outlined shrink-0 text-[16px]" x-text="skillTestTimelineLaneIcon(skillTestTimelineEditorEvent(item.event).lane_id)"></span>
-                                      <span class="truncate text-xs font-semibold" x-text="skillTestTimelineLaneLabel(lane)"></span>
-                                    </div>
-                                    <span class="font-mono text-[10px]" x-text="formatSkillTestTimelineMs(skillTestTimelineEditorEvent(item.event).at_ms)"></span>
-                                  </div>
-                                  <div class="grid grid-cols-[4.75rem_minmax(0,1fr)] gap-2">
-                                    <label class="field-block">
-                                      <span class="field-label">时间 s</span>
-                                      <input type="number" min="0" step="1" class="number-no-spinner input-field h-9 px-3 py-0 text-xs leading-normal" :value="skillTestTimelineEventSeconds(skillTestTimelineEditorEvent(item.event))" @input="updateSkillTestTimelineEventDraft('at_ms', Math.max(0, Math.round(Number($event.target.value || 0))) * 1000)" />
-                                    </label>
-                                    <label class="field-block">
-                                      <span class="field-label">信道</span>
-                                      <input class="input-field h-9 cursor-not-allowed px-3 py-0 text-xs leading-normal text-slate-400" :value="skillTestTimelineLaneLabel({ id: skillTestTimelineEditorEvent(item.event).lane_id })" disabled />
-                                    </label>
-                                  </div>
-                                  <template x-if="skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event))">
-                                    <label class="field-block">
-                                      <span class="field-label">上传文件</span>
-                                      <span class="flex h-8 cursor-pointer items-center overflow-hidden rounded-md border border-slate-700 bg-slate-950 px-2 text-xs text-slate-100 transition hover:border-orange-500/40 hover:bg-slate-900">
-                                        <span class="shrink-0 rounded border border-slate-700 px-1.5 py-0.5 text-[11px] font-semibold text-slate-300">选择文件</span>
-                                        <span class="ml-2 min-w-0 truncate" :class="skillTestTimelineEditorEvent(item.event).asset_id ? 'text-slate-100' : 'text-slate-500'" x-text="skillTestTimelineEventAssetLabel(skillTestTimelineEditorEvent(item.event))"></span>
-                                      </span>
-                                      <input type="file" class="sr-only" :accept="skillTestTimelineAcceptForLane(skillTestTimelineEditorEvent(item.event).lane_id)" :disabled="busy.skillTestData" @change="handleSkillTestTimelineEventFile($event)" />
-                                    </label>
-                                  </template>
-                                  <template x-if="skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event)) && skillTestTimelineAssetPreviewUrl(skillTestTimelineEditorEvent(item.event))">
-                                    <div class="space-y-2" data-skill-test-asset-preview>
-                                      <div class="flex items-center justify-between gap-2">
-                                        <p class="field-label">内容预览</p>
-                                        <span class="mono-field min-w-0 truncate text-right" x-text="skillTestTimelineAssetPreviewMeta(skillTestTimelineEditorEvent(item.event))"></span>
-                                      </div>
-                                      <template x-if="skillTestTimelineAssetPreviewKind(skillTestTimelineEditorEvent(item.event)) === 'image'">
-                                        <img class="max-h-44 w-full border border-slate-800 bg-slate-950 object-contain" :src="skillTestTimelineAssetPreviewUrl(skillTestTimelineEditorEvent(item.event))" :alt="skillTestTimelineEventAssetLabel(skillTestTimelineEditorEvent(item.event))" />
-                                      </template>
-                                      <template x-if="skillTestTimelineAssetPreviewKind(skillTestTimelineEditorEvent(item.event)) === 'audio'">
-                                        <audio class="w-full" controls preload="metadata" :src="skillTestTimelineAssetPreviewUrl(skillTestTimelineEditorEvent(item.event))"></audio>
-                                      </template>
-                                      <template x-if="skillTestTimelineAssetPreviewKind(skillTestTimelineEditorEvent(item.event)) === 'video'">
-                                        <video class="max-h-44 w-full border border-slate-800 bg-black object-contain" controls preload="metadata" :src="skillTestTimelineAssetPreviewUrl(skillTestTimelineEditorEvent(item.event))"></video>
-                                      </template>
-                                    </div>
-                                  </template>
-                                  <template x-if="isSkillTestSensorLane(skillTestTimelineEditorEvent(item.event).lane_id)">
-                                    <div class="grid grid-cols-2 gap-2" data-skill-test-sensor-fields>
-                                      <template x-for="field in skillTestSensorFields(skillTestTimelineEditorEvent(item.event).lane_id)" :key="field.key">
-                                        <label class="field-block">
-                                          <span class="field-label" x-text="field.required ? `${field.label} *` : field.label"></span>
-                                          <input class="input-field h-9 px-3 py-0 text-xs leading-normal" :type="field.type" :step="field.type === 'number' ? 'any' : undefined" :value="skillTestSensorFieldValue(skillTestTimelineEditorEvent(item.event), field.key)" @input="updateSkillTestTimelineSensorField(field.key, $event.target.value)" />
-                                        </label>
-                                      </template>
-                                    </div>
-                                  </template>
-                                  <template x-if="!isSkillTestSensorLane(skillTestTimelineEditorEvent(item.event).lane_id)">
-                                    <label class="field-block">
-                                      <span class="field-label" x-text="isSkillTestTimelineExpectationEvent(skillTestTimelineEditorEvent(item.event)) ? '阶段期望' : skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event)) ? '说明' : '输入内容'"></span>
-                                      <textarea class="input-field h-16 resize-none text-xs" :value="skillTestTimelineEventTextValue(skillTestTimelineEditorEvent(item.event))" :placeholder="skillTestTimelineEventUsesAsset(skillTestTimelineEditorEvent(item.event)) ? '可选：描述该文件输入的上下文' : ''" @input="updateSkillTestTimelineEventDraft(isSkillTestTimelineExpectationEvent(skillTestTimelineEditorEvent(item.event)) ? 'expectation' : 'payload_inline', $event.target.value)"></textarea>
-                                    </label>
-                                  </template>
-                                  <div class="flex items-center justify-end gap-2">
-                                    <button type="button" class="button-danger h-8 px-3 text-xs" @click.stop="removeSkillTestTimelineEvent(item.index)">
-                                      <span class="material-symbols-outlined text-[16px]">delete</span>
-                                    </button>
-                                    <button type="button" class="button-primary h-8 px-3 text-xs" @click.stop="saveSkillTestTimelineEventEditor()">
-                                      <span class="material-symbols-outlined text-[16px]">check</span>
-                                      <span>保存</span>
-                                    </button>
-                                  </div>
-                                </article>
-                              </template>
-                            </div>
-                          </template>
-                        </div>
-                      </div>
-                      </template>
-                    </div>
-
-                    <div class="grid min-h-14 shrink-0 grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] items-center border-t border-slate-800 bg-slate-950/35 pt-2">
-                      <div class="flex items-center justify-center border-r border-slate-800/60">
-                        <span class="whitespace-nowrap text-sm font-semibold text-slate-300">时间</span>
-                      </div>
-                      <div class="border-r border-slate-800/60">
-                        <div class="flex h-8 w-full overflow-hidden rounded-md border border-slate-700 bg-slate-950">
-                          <input type="number" :min="skillTestTimelineDurationMin()" :step="skillTestTimelineDurationStep()" class="number-no-spinner min-w-0 flex-1 bg-transparent px-2 font-mono text-sm text-slate-100 outline-none" :value="skillTestTimelineDurationValue()" @change="updateSkillTestTimelineDurationValue($event.target.value)" />
-                          <span class="flex w-8 shrink-0 items-center justify-center border-l border-slate-700 bg-slate-900 text-xs font-semibold text-slate-300">分</span>
-                        </div>
-                      </div>
-                      <div class="relative h-12 px-3">
-                        <template x-for="tick in skillTestTimelineTicks()" :key="tick.ms">
-                          <div class="absolute top-0 h-full border-l border-slate-800/80" :style="`left: calc(${tick.percent}% + ${tick.percent === 0 ? '0.75rem' : tick.percent === 100 ? '-0.75rem' : '0rem'})`">
-                            <span class="absolute top-0 whitespace-nowrap font-mono text-[10px] text-slate-500" :style="tick.percent === 100 ? 'right: 0.25rem' : 'left: 0.25rem'" x-text="formatSkillTestTimelineMs(tick.ms)"></span>
-                          </div>
-                        </template>
-                        <input type="range" min="0" :max="skillTestTimelineDurationMs()" class="absolute inset-x-3 bottom-1 accent-orange-500" :value="skillTestTimelineSelectedAtMs()" :disabled="!skillTestTimelineSelectedEvent()" @input="updateSkillTestTimelineSelectedAtMs($event.target.value)" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <aside class="flex min-h-0 flex-col overflow-hidden bg-slate-950/20">
-                <div class="min-h-0 flex-1 overflow-auto divide-y divide-slate-800">
-                  <section class="space-y-3 p-3">
-                    <p class="text-sm font-semibold text-slate-100">基础信息</p>
-                    <label class="field-block">
-                      <span class="field-label">场景名称</span>
-                      <input x-model="skillTestCaseForm.name" class="input-field" placeholder="例如：多模态证据确认流程" />
-                    </label>
-                    <label class="field-block">
-                      <span class="field-label">描述</span>
-                      <textarea x-model="skillTestCaseForm.description" class="input-field h-24 resize-none" placeholder="描述这个黑盒时序场景覆盖的输入条件与预期输出"></textarea>
-                    </label>
-                  </section>
-
-                  <details class="p-3">
-                    <summary class="cursor-pointer text-sm font-semibold text-slate-100">高级 JSON</summary>
-                    <div class="mt-3 space-y-3">
-                      <label class="field-block">
-                        <span class="field-label">时间轴 JSON</span>
-                        <textarea x-model="skillTestCaseForm.timeline_json" class="input-field h-60 resize-none font-mono text-xs leading-5"></textarea>
-                      </label>
-                      <label class="field-block">
-                        <span class="field-label">Judge 策略 JSON</span>
-                        <textarea x-model="skillTestCaseForm.judge_policy_json" class="input-field h-28 resize-none font-mono text-xs leading-5"></textarea>
-                      </label>
-                    </div>
-                  </details>
-                </div>
-
-                <div class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-slate-800 bg-slate-950/35 px-3 py-3">
-                  <button type="button" class="button-secondary" :disabled="busy.skillTestSave" @click="resetSkillTestCaseForm()">
-                    <span class="material-symbols-outlined text-[18px]">restart_alt</span>
-                    <span>重置</span>
-                  </button>
-                  <button type="submit" class="button-primary" :disabled="busy.skillTestSave">
-                    <span class="material-symbols-outlined text-[18px]">save</span>
-                    <span x-text="busy.skillTestSave ? '创建中...' : '创建场景'"></span>
-                  </button>
-                </div>
-              </aside>
-            </form>
-          </div>
-        </section>
-
-        <section x-show="route.name !== 'skill-test-scenario-new'" class="flex h-full min-h-0 flex-col overflow-hidden">
+        <section class="flex h-full min-h-0 flex-col overflow-hidden">
           <div class="shrink-0 border-b border-slate-800 bg-slate-950/45">
             <div class="flex items-center gap-2 overflow-x-auto whitespace-nowrap px-3 py-3">
               <label class="relative min-w-56 flex-1">
@@ -1603,11 +1299,18 @@
               </div>
               <div class="divide-y divide-slate-800">
                 <template x-for="testCase in filteredSkillTestCases()" :key="testCase.id">
-                  <article class="grid min-w-[64rem] grid-cols-[minmax(16rem,1.4fr)_8rem_minmax(16rem,1fr)_14rem_12rem] items-center gap-4 px-3 py-3 transition hover:bg-slate-900/60">
-                    <button type="button" class="min-w-0 text-left" @click="navigate(`/admin/skills/${currentSkill.id}/tests/${testCase.id}`)">
+                  <article
+                    class="grid min-w-[64rem] cursor-pointer grid-cols-[minmax(16rem,1.4fr)_8rem_minmax(16rem,1fr)_14rem_12rem] items-center gap-4 px-3 py-3 transition hover:bg-slate-900/60"
+                    role="button"
+                    tabindex="0"
+                    @click="navigate(`/admin/skills/${currentSkill.id}/tests/${testCase.id}`)"
+                    @keydown.enter.prevent="navigate(`/admin/skills/${currentSkill.id}/tests/${testCase.id}`)"
+                    @keydown.space.prevent="navigate(`/admin/skills/${currentSkill.id}/tests/${testCase.id}`)"
+                  >
+                    <div class="min-w-0 text-left">
                       <p class="truncate font-semibold text-slate-100" x-text="testCase.name"></p>
                       <p class="mt-1 truncate text-xs text-slate-500" x-text="testCase.description || skillTestInitialEventPreview(testCase)"></p>
-                    </button>
+                    </div>
                     <span class="status-badge" :class="statusBadgeTone(testCase.latest_run?.status || testCase.status)" x-text="formatStatus(testCase.latest_run?.status || testCase.status)"></span>
                     <span class="mono-field truncate" x-text="testCase.latest_run?.run_id || '尚未运行'"></span>
                     <span class="mono-field" x-text="formatAssertionSummary(testCase.latest_run?.result_summary)"></span>
@@ -1622,3 +1325,4 @@
     </template>
   </section>
 </div>
+</template>

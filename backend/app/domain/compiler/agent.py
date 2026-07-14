@@ -28,6 +28,7 @@ class CompileAgentCandidate:
     context_diagnostics: list[FormalDiagnostic]
     compiler_metadata: dict[str, Any]
     raw_content: str
+    usage: dict[str, Any]
 
 
 class SkillCompileAgent:
@@ -53,6 +54,7 @@ class SkillCompileAgent:
         skill_version: SkillVersion,
         document: SkillDocument,
         source: SkillSourceBundle,
+        reference_assets: list[dict[str, Any]] | None = None,
         repair_diagnostics: list[FormalDiagnostic] | None = None,
         session: Session | None = None,
     ) -> CompileAgentCandidate:
@@ -71,6 +73,7 @@ class SkillCompileAgent:
                 skill_version=skill_version,
                 document=document,
                 source=source,
+                reference_assets=reference_assets or [],
                 prompt_pack=prompt_pack,
                 domain_pack=domain_resolution.pack,
                 compiler_metadata=compiler_metadata,
@@ -81,6 +84,7 @@ class SkillCompileAgent:
         candidate = self._parse_candidate(completion.content)
         candidate.context_diagnostics = context_diagnostics
         candidate.compiler_metadata = compiler_metadata
+        candidate.usage = dict(completion.usage or {})
         return candidate
 
     @staticmethod
@@ -102,6 +106,7 @@ class SkillCompileAgent:
                 context_diagnostics=[],
                 compiler_metadata={},
                 raw_content=content,
+                usage={},
             )
 
         if not isinstance(artifact, dict):
@@ -118,6 +123,7 @@ class SkillCompileAgent:
                 context_diagnostics=[],
                 compiler_metadata={},
                 raw_content=content,
+                usage={},
             )
         return CompileAgentCandidate(
             artifact=artifact,
@@ -125,6 +131,7 @@ class SkillCompileAgent:
             context_diagnostics=[],
             compiler_metadata={},
             raw_content=content,
+            usage={},
         )
 
     @staticmethod
@@ -134,6 +141,7 @@ class SkillCompileAgent:
         skill_version: SkillVersion,
         document: SkillDocument,
         source: SkillSourceBundle,
+        reference_assets: list[dict[str, Any]],
         prompt_pack: AgentPromptPack,
         domain_pack: DomainPack,
         compiler_metadata: dict[str, Any],
@@ -154,6 +162,7 @@ class SkillCompileAgent:
             "source": {
                 "README.md": source.readme_content,
                 "SKILL.md": source.skill_md_content,
+                "reference_assets": reference_assets,
             },
             "agent_prompt": prompt_pack.metadata(),
             "domain_pack": {
@@ -186,9 +195,18 @@ class SkillCompileAgent:
                     "recovery_paths",
                 ],
                 "workflow_step_required_fields": ["id", "title", "goal", "source_evidence"],
+                "workflow_step_reference_images_rule": (
+                    "如果 source.reference_assets 中的图片能帮助用户理解某个 workflow step，"
+                    "必须把它映射到该 step 的 reference_images；"
+                    "每项只能引用 source.reference_assets 提供的 artifact_object_id，"
+                    "不得编造新的附件或运行时对象。"
+                ),
                 "business_node_rule": (
                     "每个 workflow step 必须编译为 instruct_<step_id> 和 evaluate_<step_id> 两个节点。"
-                    "instruct 节点必须输出到终端并进入 wait checkpoint；evaluate 节点必须消费 terminal evidence 并输出 JSON decision。"
+                    "首个 instruct 的 interaction.runner_turn_kind 必须是 first_step_instruction，"
+                    "其余 instruct 必须是 step_instruction。instruct 节点必须输出到终端并进入 wait checkpoint；"
+                    "evaluate 节点必须标记 evidence_evaluation，消费 terminal evidence 并输出 JSON decision；"
+                    "final_verify 必须标记 final_verification。"
                 ),
                 "node_sequence_rule": (
                     "start -> instruct_<first_step> -> wait -> evaluate_<first_step> -> "
@@ -196,7 +214,14 @@ class SkillCompileAgent:
                 ),
                 "llm_projection_rule": (
                     "指令型 llm 节点输出 terminal_message；评估型 llm 节点必须只输出 JSON object，"
-                    "包含 decision/proceed|retry|need_more_evidence|abort|complete、reason、next_phase、terminal_message。"
+                    "包含 decision/proceed|retry|need_more_evidence|abort|complete、reason、terminal_message；"
+                    "next_phase 只是兼容可选字段，可留空。"
+                ),
+                "runtime_language_rule": (
+                    "所有 Runtime LLM 节点的用户可见自然语言必须使用简体中文。"
+                    "instruct 节点的终端输出必须是简体中文。"
+                    "evaluate/final_verify 节点输出 JSON 时，字段名与 decision 枚举保持英文协议值，"
+                    "但 reason、terminal_message 等自然语言字段值必须是简体中文。"
                 ),
                 "policy_budget_rule": (
                     "不要生成固定模板值 max_llm_calls=8。LLM 调用预算必须按 workflow_steps 动态推导："
@@ -204,8 +229,8 @@ class SkillCompileAgent:
                     "如必须设置也不得低于 happy path 调用数并需为 retry/need_more_evidence 留出弹性。"
                 ),
                 "view_graph_rule": (
-                    "dependency_graph_for_view 只表达 guard/merge/next_phase 真实可达的展示边；"
-                    "不得添加 artifact 中没有明确 phase 写入路径的 speculative recovery edge。"
+                    "dependency_graph_for_view 只表达 guard/merge/interaction.transitions 真实可达的展示边；"
+                    "不得添加 artifact 中没有明确 transition 支撑的 speculative recovery edge。"
                 ),
                 "domain_pack_rule": (
                     "domain_pack 只用于理解行业术语、常见步骤和质量标准；"

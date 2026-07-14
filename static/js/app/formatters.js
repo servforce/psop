@@ -86,6 +86,45 @@
         return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
       },
 
+      formatDuration(value) {
+        if (value === null || value === undefined || value === "") {
+          return "N/A";
+        }
+        const milliseconds = Number(value);
+        if (!Number.isFinite(milliseconds) || milliseconds < 0) {
+          return "N/A";
+        }
+        if (milliseconds < 1000) {
+          return `${Math.round(milliseconds)} ms`;
+        }
+        const totalSeconds = Math.round(milliseconds / 1000);
+        if (totalSeconds < 60) {
+          return `${totalSeconds} s`;
+        }
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        if (minutes < 60) {
+          return seconds ? `${minutes} m ${seconds} s` : `${minutes} m`;
+        }
+        const hours = Math.floor(minutes / 60);
+        const remainingMinutes = minutes % 60;
+        return remainingMinutes ? `${hours} h ${remainingMinutes} m` : `${hours} h`;
+      },
+
+      formatTokenUsage(value) {
+        if (!value || typeof value !== "object") {
+          return "N/A";
+        }
+        if (value.total_tokens === null || value.total_tokens === undefined || value.total_tokens === "") {
+          return "N/A";
+        }
+        const total = Number(value.total_tokens);
+        if (!Number.isFinite(total)) {
+          return "N/A";
+        }
+        return new Intl.NumberFormat("zh-CN").format(total);
+      },
+
 
       formatStatus(value) {
         const statusMap = {
@@ -94,8 +133,10 @@
           ready: "已就绪",
           draft: "草稿",
           published: "已发布",
+          unpublished: "未发布",
           requested: "已请求",
           compiling: "编译中",
+          processing: "处理中",
           pending: "待处理",
           running: "运行中",
           waiting_input: "等待输入",
@@ -112,7 +153,11 @@
           succeeded: "成功",
           passed: "通过",
           failed: "失败",
+          retryable_failed: "等待重试",
+          deadletter: "死信",
+          dead_letter: "死信",
           rejected: "已拒绝",
+          aborted: "已中止",
           cancelled: "已取消",
           canceled: "已取消",
           timeout: "已超时",
@@ -134,10 +179,10 @@
         if (["compiling", "running", "waiting_input", "waiting_checkpoint", "waiting_runtime", "in_progress", "processing", "matched", "triggered", "output"].includes(normalized)) {
           return "border-sky-500/25 bg-sky-500/10 text-sky-200";
         }
-        if (["requested", "pending", "queued", "draft", "retrying", "sent", "inconclusive"].includes(normalized)) {
+        if (["requested", "pending", "queued", "draft", "unpublished", "retrying", "retryable_failed", "sent", "inconclusive"].includes(normalized)) {
           return "border-amber-500/25 bg-amber-500/10 text-amber-200";
         }
-        if (["failed", "error", "rejected", "cancelled", "canceled", "timeout", "timed_out"].includes(normalized)) {
+        if (["failed", "error", "rejected", "aborted", "cancelled", "canceled", "timeout", "timed_out", "deadletter", "dead_letter"].includes(normalized)) {
           return "border-rose-500/30 bg-rose-500/10 text-rose-200";
         }
         if (["not_occurred"].includes(normalized)) {

@@ -2,7 +2,6 @@
   const {
     normalizePath,
     resolveAdminRoute,
-    buildSkillDetailPath,
     buildRunLivePath,
     buildSkillRunLivePath,
     buildSkillDebugRunLivePath,
@@ -12,6 +11,7 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
+    buildSkillCompilerArtifactPath,
     generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
@@ -548,23 +548,13 @@
       },
 
 
-      isSkillCompilerArtifactWorkspace() {
-        return (
-          Boolean(this.currentSkill) &&
-          this.activeDetailTab === "compiler" &&
-          this.compilerArtifactWorkspaceOpen
-        );
-      },
-
-
       compilerArtifactCanvasId() {
-        return this.isSkillCompilerArtifactWorkspace() ? "skill-eg-bpmn-canvas" : "eg-bpmn-canvas";
+        return "eg-bpmn-canvas";
       },
 
 
       async renderCompilerArtifactGraph() {
-        const canRender =
-          this.route.name === "compiler-artifact" || this.isSkillCompilerArtifactWorkspace();
+        const canRender = ["compiler-artifact", "skill-compiler-artifact"].includes(this.route.name);
         if (!canRender || this.compilerArtifactView !== "graph" || !this.compilerArtifact) {
           return;
         }
@@ -647,9 +637,8 @@
       },
 
 
-      closeCompilerArtifactWorkspace() {
+      resetCompilerArtifactState() {
         this.destroyCompilerArtifactViewer();
-        this.compilerArtifactWorkspaceOpen = false;
         this.compilerArtifact = null;
         this.compilerArtifactGraphModel = null;
         this.compilerArtifactGraphError = "";
@@ -665,12 +654,7 @@
           return;
         }
         if (this.currentSkill && this.activeDetailTab === "compiler") {
-          if (this.route.name !== "skill-detail") {
-            window.history.pushState({}, "", buildSkillDetailPath(this.currentSkill.id));
-            this.syncRoute();
-          }
-          this.compilerArtifactWorkspaceOpen = true;
-          await this.loadCompilerArtifact(artifactId);
+          await this.navigate(buildSkillCompilerArtifactPath(this.currentSkill.id, artifactId));
           return;
         }
         await this.navigate(buildCompilerArtifactPath(artifactId));

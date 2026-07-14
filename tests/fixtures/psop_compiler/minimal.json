@@ -1,0 +1,75 @@
+{
+  "agent_key": "psop.compiler",
+  "input": {
+    "text": "将冻结的 PSOP Skill source 编译为 formal-v5 PSOP-EG candidate，并写入 sandbox outputs。"
+  },
+  "context": {
+    "compile_request": {
+      "id": "compile-request-1",
+      "trigger_type": "publish",
+      "source_commit_sha": "commit-scripted-compiler"
+    },
+    "skill": {
+      "id": "skill-1",
+      "key": "scripted-compiler-skill",
+      "name": "Scripted Compiler Skill",
+      "description": "用于测试 psop.compiler 的最小 Skill。",
+      "version_id": "skill-version-1",
+      "version_no": 1
+    },
+    "source": {
+      "source_commit_sha": "commit-scripted-compiler",
+      "files": {
+        "README.md": "# Scripted Compiler Skill\n\n用于测试 compiler agent 将 Skill source 编译为 formal-v5 Execution Graph。\n",
+        "SKILL.md": "# Scripted Compiler Skill\n\n## 目标\n帮助用户在现实任务中收集上下文、等待证据并完成最终验证。\n\n## Workflow\n### collect_context\n收集用户任务、约束和期望输出，等待文本、图片或文件证据。\n\n## Expected Evidence\n- 文本说明\n- 图片证据\n- 文件证据\n\n## Safety Constraints\n如果证据显示存在安全风险，应中止或要求人工介入。\n\n## Completion Criteria\n所有必须的现实步骤已经由证据验证完成。\n\n## Recovery Paths\n证据不足时请求更多证据。\n"
+      }
+    },
+    "manifest_snapshot": {
+      "identity": {
+        "key": "scripted-compiler-skill",
+        "name": "Scripted Compiler Skill"
+      },
+      "compile_config": {
+        "formal_revision": "psop-eg-formal/v5",
+        "domain_pack": "generic"
+      },
+      "capability_summary": {
+        "runtime": "mvp"
+      }
+    },
+    "runtime_policy_snapshot": {
+      "terminal_required": true
+    },
+    "allowed_runtime": {
+      "formal_revision": "psop-eg-formal/v5",
+      "artifact_version": "psop-eg-formal-v5/llm-compiler-mvp-v1",
+      "node_kinds": ["start", "input", "llm", "tool", "terminal"],
+      "actors": ["runtime.start", "runtime.input", "agent.llm", "capability.demo_tool", "runtime.terminal"],
+      "tools": ["psop.demo.inspect_input"],
+      "guard_ops": ["always", "phase_is", "field_exists", "field_equals", "all", "any", "not"],
+      "merge_ops": ["set"],
+      "token_fields": ["phase", "input_envelope", "observations", "budgets", "outputs", "control", "metadata", "facts", "registers", "memory", "trace", "status"],
+      "policy_limits": {
+        "selection": "priority_then_order"
+      },
+      "unsupported_features": ["approval", "timer", "skill"]
+    },
+    "domain_pack": {
+      "domain_pack_ref": "generic/v1",
+      "metadata": {
+        "domain_pack_id": "generic",
+        "domain_pack_key": "generic/v1",
+        "version": "v1",
+        "title": "Generic"
+      },
+      "guidance_summary": "使用通用 PSOP 编译规则。",
+      "guidance": "将现实任务建模为状态推进、证据等待、安全停止和最终验证。"
+    },
+    "repair_diagnostics": [],
+    "output_contract": {
+      "formal_revision": "psop-eg-formal/v5",
+      "candidate_artifact_ref": "sandbox://outputs/compiler-result.json",
+      "eg_artifact_ref": "sandbox://outputs/eg.compile.artifact.json"
+    }
+  }
+}

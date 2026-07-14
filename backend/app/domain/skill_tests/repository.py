@@ -40,6 +40,17 @@ class SkillTestRepository:
             .order_by(EgCompileArtifact.created_at.desc())
         )
 
+    def get_latest_ready_artifact_for_skill(self, session: Session, skill_id: str) -> EgCompileArtifact | None:
+        return session.scalar(
+            select(EgCompileArtifact)
+            .join(SkillVersion, SkillVersion.id == EgCompileArtifact.skill_version_id)
+            .where(
+                SkillVersion.skill_definition_id == skill_id,
+                EgCompileArtifact.status == "ready",
+            )
+            .order_by(EgCompileArtifact.created_at.desc())
+        )
+
     def get_run(self, session: Session, run_id: str | None) -> Run | None:
         if not run_id:
             return None
@@ -105,6 +116,13 @@ class SkillTestRepository:
 
     def get_scenario_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRun | None:
         return session.get(SkillTestScenarioRun, scenario_run_id)
+
+    def get_scenario_run_for_update(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRun | None:
+        return session.scalar(
+            select(SkillTestScenarioRun)
+            .where(SkillTestScenarioRun.id == scenario_run_id)
+            .with_for_update()
+        )
 
     def list_expectation_evaluations(
         self,

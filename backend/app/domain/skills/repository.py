@@ -7,6 +7,8 @@ from app.domain.skills.models import (
     SkillDefinition,
     SkillPublishRecord,
     SkillRawMaterial,
+    SkillRawMaterialAnalysis,
+    SkillRawMaterialDerivedAsset,
     SkillRawMaterialGeneration,
     SkillVersion,
 )
@@ -21,6 +23,7 @@ class SkillsRepository:
         *,
         search: str | None = None,
         status: str | None = None,
+        is_published: bool | None = None,
     ) -> list[SkillDefinition]:
         query = select(SkillDefinition).order_by(SkillDefinition.updated_at.desc())
 
@@ -28,6 +31,10 @@ class SkillsRepository:
             query = query.where(SkillDefinition.status == status)
         else:
             query = query.where(SkillDefinition.status != "archived")
+        if is_published is True:
+            query = query.where(SkillDefinition.latest_published_version_id.is_not(None))
+        elif is_published is False:
+            query = query.where(SkillDefinition.latest_published_version_id.is_(None))
         if search:
             pattern = f"%{search.strip()}%"
             query = query.where(
@@ -93,6 +100,13 @@ class SkillsRepository:
     def get_raw_material(self, session: Session, material_id: str) -> SkillRawMaterial | None:
         return session.get(SkillRawMaterial, material_id)
 
+    def get_raw_material_for_update(self, session: Session, material_id: str) -> SkillRawMaterial | None:
+        return session.scalar(
+            select(SkillRawMaterial)
+            .where(SkillRawMaterial.id == material_id)
+            .with_for_update()
+        )
+
     def list_raw_materials_by_ids(
         self,
         session: Session,
@@ -117,3 +131,60 @@ class SkillsRepository:
         session.add(generation)
         session.flush()
         return generation
+
+    def get_raw_material_generation(self, session: Session, generation_id: str) -> SkillRawMaterialGeneration | None:
+        return session.get(SkillRawMaterialGeneration, generation_id)
+
+    def get_raw_material_generation_for_update(
+        self,
+        session: Session,
+        generation_id: str,
+    ) -> SkillRawMaterialGeneration | None:
+        return session.scalar(
+            select(SkillRawMaterialGeneration)
+            .where(SkillRawMaterialGeneration.id == generation_id)
+            .with_for_update()
+        )
+
+    def get_latest_raw_material_analysis(
+        self,
+        session: Session,
+        raw_material_id: str,
+    ) -> SkillRawMaterialAnalysis | None:
+        query = (
+            select(SkillRawMaterialAnalysis)
+            .where(SkillRawMaterialAnalysis.raw_material_id == raw_material_id)
+            .order_by(SkillRawMaterialAnalysis.created_at.desc())
+            .limit(1)
+        )
+        return session.scalar(query)
+
+    def get_raw_material_analysis(self, session: Session, analysis_id: str) -> SkillRawMaterialAnalysis | None:
+        return session.get(SkillRawMaterialAnalysis, analysis_id)
+
+    def get_raw_material_analysis_for_update(
+        self,
+        session: Session,
+        analysis_id: str,
+    ) -> SkillRawMaterialAnalysis | None:
+        return session.scalar(
+            select(SkillRawMaterialAnalysis)
+            .where(SkillRawMaterialAnalysis.id == analysis_id)
+            .with_for_update()
+        )
+
+    def get_derived_asset(self, session: Session, asset_id: str) -> SkillRawMaterialDerivedAsset | None:
+        return session.get(SkillRawMaterialDerivedAsset, asset_id)
+
+    def list_derived_assets(
+        self,
+        session: Session,
+        *,
+        raw_material_id: str,
+        analysis_id: str | None = None,
+    ) -> list[SkillRawMaterialDerivedAsset]:
+        query = select(SkillRawMaterialDerivedAsset).where(SkillRawMaterialDerivedAsset.raw_material_id == raw_material_id)
+        if analysis_id:
+            query = query.where(SkillRawMaterialDerivedAsset.analysis_id == analysis_id)
+        query = query.order_by(SkillRawMaterialDerivedAsset.timestamp_ms.asc(), SkillRawMaterialDerivedAsset.created_at.asc())
+        return list(session.scalars(query).all())

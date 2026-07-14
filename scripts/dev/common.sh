@@ -23,7 +23,7 @@ load_psop_env() {
 
 derive_local_integration_defaults() {
   export PSOP_SERVER_HOST="${PSOP_SERVER_HOST:-0.0.0.0}"
-  export PSOP_SERVER_PORT="${PSOP_SERVER_PORT:-8001}"
+  export PSOP_SERVER_PORT="${PSOP_SERVER_PORT:-8011}"
   export PSOP_WEB_HOST="${PSOP_WEB_HOST:-0.0.0.0}"
   export PSOP_WEB_PORT="${PSOP_WEB_PORT:-4173}"
   export PSOP_WEB_API_BASE_URL="${PSOP_WEB_API_BASE_URL:-http://${PSOP_SERVER_HOST}:${PSOP_SERVER_PORT}/api/v1}"

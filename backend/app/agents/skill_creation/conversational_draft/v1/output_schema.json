@@ -5,7 +5,8 @@
     "files",
     "review_notes",
     "generation_reason",
-    "material_usage"
+    "material_usage",
+    "selected_reference_assets"
   ],
   "properties": {
     "directory_tree": {
@@ -25,6 +26,7 @@
     },
     "material_usage": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
         "required": [
@@ -36,6 +38,7 @@
             "type": "string"
           },
           "usage": {
+            "minLength": 1,
             "type": "string"
           },
           "key_points": {
@@ -45,6 +48,31 @@
             }
           },
           "inference_notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "selected_reference_assets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "asset_id",
+          "reference_path",
+          "reason"
+        ],
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "reference_path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
             "type": "string"
           }
         }

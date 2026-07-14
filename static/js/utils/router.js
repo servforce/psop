@@ -16,6 +16,10 @@ export function resolveAdminRoute(pathname) {
     return { name: "skills-list", params: {} };
   }
 
+  if (normalized === "/admin/tasks") {
+    return { name: "tasks-list", params: {} };
+  }
+
   const detailMatch = normalized.match(/^\/admin\/skills\/([^/]+)$/);
   if (detailMatch) {
     return {
@@ -32,6 +36,14 @@ export function resolveAdminRoute(pathname) {
     };
   }
 
+  const skillRunReplayMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/runs\/([^/]+)\/live\/replay$/);
+  if (skillRunReplayMatch) {
+    return {
+      name: "skill-run-live",
+      params: { skillId: skillRunReplayMatch[1], runId: skillRunReplayMatch[2], view: "replay" }
+    };
+  }
+
   const skillDebugRunLiveMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/debug\/runs\/([^/]+)\/live$/);
   if (skillDebugRunLiveMatch) {
     return {
@@ -43,8 +55,8 @@ export function resolveAdminRoute(pathname) {
   const skillReplayRunMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/runs\/([^/]+)\/replay$/);
   if (skillReplayRunMatch) {
     return {
-      name: "skill-replay-detail",
-      params: { skillId: skillReplayRunMatch[1], runId: skillReplayRunMatch[2] }
+      name: "skill-run-live",
+      params: { skillId: skillReplayRunMatch[1], runId: skillReplayRunMatch[2], view: "replay" }
     };
   }
 
@@ -72,6 +84,14 @@ export function resolveAdminRoute(pathname) {
     };
   }
 
+  const skillCompilerArtifactMatch = normalized.match(/^\/admin\/skills\/([^/]+)\/compiler\/artifacts\/([^/]+)$/);
+  if (skillCompilerArtifactMatch) {
+    return {
+      name: "skill-compiler-artifact",
+      params: { skillId: skillCompilerArtifactMatch[1], artifactId: skillCompilerArtifactMatch[2] }
+    };
+  }
+
   if (normalized === "/admin/compiler") {
     return { name: "compiler-list", params: {} };
   }
@@ -93,13 +113,18 @@ export function resolveAdminRoute(pathname) {
     return { name: "run-live", params: { runId: runLiveMatch[1] } };
   }
 
+  const runReplayMatch = normalized.match(/^\/admin\/runs\/([^/]+)\/live\/replay$/);
+  if (runReplayMatch) {
+    return { name: "run-live", params: { runId: runReplayMatch[1], view: "replay" } };
+  }
+
   if (normalized === "/admin/replay") {
     return { name: "replay-list", params: {} };
   }
 
   const replayRunMatch = normalized.match(/^\/admin\/replay\/runs\/([^/]+)$/);
   if (replayRunMatch) {
-    return { name: "replay-detail", params: { runId: replayRunMatch[1] } };
+    return { name: "run-live", params: { runId: replayRunMatch[1], view: "replay" } };
   }
 
   return { name: "skills-list", params: {} };
@@ -107,6 +132,10 @@ export function resolveAdminRoute(pathname) {
 
 export function buildSkillDetailPath(skillId) {
   return `/admin/skills/${skillId}`;
+}
+
+export function buildTasksPath() {
+  return "/admin/tasks";
 }
 
 export function buildRunLivePath(runId) {
@@ -122,11 +151,11 @@ export function buildSkillDebugRunLivePath(skillId, runId) {
 }
 
 export function buildReplayPath(runId) {
-  return `/admin/replay/runs/${runId}`;
+  return `/admin/runs/${runId}/live/replay`;
 }
 
 export function buildSkillReplayPath(skillId, runId) {
-  return `/admin/skills/${skillId}/runs/${runId}/replay`;
+  return `/admin/skills/${skillId}/runs/${runId}/live/replay`;
 }
 
 export function buildSkillTestScenarioPath(skillId, scenarioId) {
@@ -143,4 +172,8 @@ export function buildSkillTestScenarioRunReviewPath(skillId, scenarioId, scenari
 
 export function buildCompilerArtifactPath(artifactId) {
   return `/admin/compiler/artifacts/${artifactId}`;
+}
+
+export function buildSkillCompilerArtifactPath(skillId, artifactId) {
+  return `/admin/skills/${skillId}/compiler/artifacts/${artifactId}`;
 }

@@ -11,4 +11,9 @@ derive_local_integration_defaults
 PYTHON_BIN="$(require_backend_python "${REPO_ROOT}")"
 
 cd "${REPO_ROOT}"
-"${PYTHON_BIN}" -m uvicorn app.main:app --host "${PSOP_SERVER_HOST}" --port "${PSOP_SERVER_PORT}" --app-dir "${REPO_ROOT}/backend" --reload
+"${PYTHON_BIN}" -m uvicorn app.main:app \
+  --host "${PSOP_SERVER_HOST}" \
+  --port "${PSOP_SERVER_PORT}" \
+  --app-dir "${REPO_ROOT}/backend" \
+  --reload \
+  --reload-dir "${REPO_ROOT}/backend"

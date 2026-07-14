@@ -1,20 +1,53 @@
 from __future__ import annotations
 
+import asyncio
 import copy
+import inspect
+import io
 import json
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import pytest
+from fastapi import Request, UploadFile
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 
+from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
+from app.agent_harness.models.scripted_compiler_chat_model import ScriptedCompilerChatModel
+from app.agent_harness.models.scripted_runner_chat_model import ScriptedRunnerChatModel
+from app.agent_harness.service import AgentHarnessService
+from app.api.routes.runtime import (
+    _stream_terminal_content_response,
+    get_terminal_event_content,
+    get_terminal_event_part_content,
+)
 from app.app import create_app
 from app.core.config import Settings
+from app.domain.jobs.models import RuntimeJob
+from app.domain.runtime.ingest import TerminalEventIngestService, run_object_store_io
+from app.domain.runtime.schemas import AppendTerminalEventRequest
+from app.domain.runtime.service import RuntimeService
+from app.domain.runtime.media import TerminalContentDescriptor
 from app.domain.skills import raw_materials
+from app.domain.skills import video_analysis
+from app.domain.skills import service as skills_service_module
+from app.domain.skills.models import SkillDefinition, SkillRawMaterial, SkillRawMaterialAnalysis, SkillRawMaterialGeneration
+from app.domain.skill_tests.models import SkillTestExpectationEvaluation
 from app.domain.skill_tests.service import SkillTestService
-from app.domain.skills.exceptions import SkillsGatewayError
+from app.domain.skills.exceptions import (
+    PayloadTooLargeError,
+    SkillsGatewayError,
+    SkillsGatewayTimeoutError,
+    SkillValidationError,
+)
+from app.gateway.asr import AsrTranscription
 from app.gateway.inference import LlmAttachment, LlmCompletion
-from app.infra.object_store import StoredObject
+from app.infra.object_store import ObjectDownload, ObjectStat, StoredObject
 from app.gateway.gitlab import GitLabProjectInfo, RepositoryFile, RepositoryTreeEntry, SkillSourceBundle
+from app.infra.database import DatabaseManager
 
 
 @dataclass
@@ -28,7 +61,7 @@ class _FakeProject:
     readme_content: str
     skill_md_content: str
     skill_yaml_content: str
-    files: dict[str, str] = field(default_factory=dict)
+    files: dict[str, str | bytes] = field(default_factory=dict)
     archived: bool = False
 
 
@@ -153,14 +186,28 @@ class FakeGitLabGateway:
 
     def get_repository_file(self, project_id: str, ref: str, file_path: str) -> RepositoryFile:
         project = self.projects[project_id]
-        assert ref == project.default_branch
+        assert ref in {project.default_branch, project.head_commit_sha}
+        raw_content = project.files[file_path]
+        if isinstance(raw_content, bytes):
+            content_bytes = raw_content
+            content = raw_content.decode("utf-8", errors="replace")
+        else:
+            content = raw_content
+            content_bytes = raw_content.encode("utf-8")
         return RepositoryFile(
             file_path=file_path,
             file_name=file_path.rsplit("/", 1)[-1],
-            content=project.files[file_path],
+            content=content,
             ref=project.default_branch,
             head_commit_sha=project.head_commit_sha,
+            content_bytes=content_bytes,
         )
+
+    def get_repository_file_bytes(self, project_id: str, ref: str, file_path: str) -> bytes:
+        project = self.projects[project_id]
+        assert ref in {project.default_branch, project.head_commit_sha}
+        content = project.files[file_path]
+        return content if isinstance(content, bytes) else content.encode("utf-8")
 
     def commit_repository_file(
         self,
@@ -189,6 +236,7 @@ class FakeGitLabGateway:
         project_id: str,
         branch: str,
         files: dict[str, str],
+        binary_files: dict[str, bytes] | None = None,
         commit_message: str,
     ) -> str:
         project = self.projects[project_id]
@@ -202,6 +250,8 @@ class FakeGitLabGateway:
                 project.skill_md_content = content
             if file_path == "skill.yaml":
                 project.skill_yaml_content = content
+        for file_path, content in (binary_files or {}).items():
+            project.files[file_path] = content
         project.head_commit_sha = self._next_commit_sha()
         return project.head_commit_sha
 
@@ -216,7 +266,35 @@ class FakeInferenceGateway:
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
 
-    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "default") -> LlmCompletion:
+    @staticmethod
+    def _request_snapshot(
+        *,
+        route_key: str,
+        system_prompt: str,
+        user_prompt: str,
+        content_parts: list[dict[str, object]] | None = None,
+        attachments: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        return {
+            "redaction": {"mode": "redacted"},
+            "provider": "fake-openai-compatible",
+            "method": "POST",
+            "url": "https://fake-llm.test/v1/chat/completions",
+            "endpoint": "/chat/completions",
+            "route_key": route_key,
+            "headers": {"Authorization": "Bearer [redacted]", "Content-Type": "application/json"},
+            "body": {
+                "model": "fake-model",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content_parts if content_parts is not None else user_prompt},
+                ],
+                "temperature": 0.2,
+            },
+            "attachments": attachments or [],
+        }
+
+    def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "text") -> LlmCompletion:
         self.calls.append(
             {
                 "system_prompt": system_prompt,
@@ -228,9 +306,31 @@ class FakeInferenceGateway:
             content = json.dumps(build_test_formal_v5_artifact(), ensure_ascii=False)
         elif "generate_psop_skill_source_from_raw_materials" in user_prompt:
             try:
-                material_id = str(json.loads(user_prompt)["raw_materials"][0]["id"])
+                parsed_prompt = json.loads(user_prompt)
+                material_id = str(parsed_prompt["material_analysis_results"][0]["source"]["material_id"])
+                candidate_assets = [
+                    item
+                    for item in parsed_prompt.get("candidate_reference_assets", [])
+                    if isinstance(item, dict) and item.get("id") and item.get("reference_path")
+                ]
+                selected_reference_assets = [
+                    {
+                        "asset_id": str(item["id"]),
+                        "reference_path": str(item["reference_path"]),
+                        "reason": "测试选择前两个候选帧作为运行时参考。",
+                    }
+                    for item in candidate_assets[:2]
+                ]
+                keyframe_paths = [
+                    str(item["reference_path"])
+                    for item in selected_reference_assets
+                    if item.get("reference_path")
+                ]
             except (KeyError, IndexError, TypeError, json.JSONDecodeError):
                 material_id = "material-1"
+                keyframe_paths = []
+                selected_reference_assets = []
+            reference_lines = "\n".join(f"![关键帧]({path})" for path in keyframe_paths) or "- 原始素材摘要已用于生成。"
             content = json.dumps(
                 {
                     "directory_tree": (
@@ -244,9 +344,9 @@ class FakeInferenceGateway:
                     ),
                     "files": {
                         "README.md": "# Generated Skill\n\n基于原始素材生成的 Skill 草稿。\n",
-                        "SKILL.md": "# Generated Skill\n\n请根据素材帮助用户完成任务。\n",
+                        "SKILL.md": "# Generated Skill\n\n请根据素材帮助用户完成任务，并参考视频关键帧。\n",
                         "prompts/system.md": "你是一个基于素材工作的 PSOP Skill 智能体。\n",
-                        "references/README.md": "# References\n\n- 原始素材摘要已用于生成。\n",
+                        "references/README.md": f"# References\n\n{reference_lines}\n",
                         "examples/input.md": "# Input\n\n用户给出现场问题。\n",
                         "examples/expected-output.md": "# Expected Output\n\n给出结构化行动建议。\n",
                         "tests/checklist.md": "# Checklist\n\n- [ ] README 已说明用途\n- [ ] SKILL 已包含执行步骤\n",
@@ -255,10 +355,11 @@ class FakeInferenceGateway:
                     "review_notes": ["需要人工复核边界条件。"],
                     "generation_reason": "素材包含创建 Skill 所需的任务说明与示例。",
                     "material_usage": [{"material_id": material_id, "usage": "提炼流程与示例"}],
+                    "selected_reference_assets": selected_reference_assets,
                 },
                 ensure_ascii=False,
             )
-        elif route_key == "skill-test-judge":
+        elif "黑盒时序测试 Judge" in system_prompt:
             content = json.dumps(
                 {
                     "status": "passed",
@@ -302,6 +403,11 @@ class FakeInferenceGateway:
                 "total_tokens": 15,
                 "raw": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
             },
+            request=self._request_snapshot(
+                route_key=route_key,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            ),
         )
 
     def complete_multimodal(
@@ -310,7 +416,7 @@ class FakeInferenceGateway:
         system_prompt: str,
         user_prompt: str,
         attachments: list[LlmAttachment],
-        route_key: str = "default",
+        route_key: str = "multimodal",
     ) -> LlmCompletion:
         self.calls.append(
             {
@@ -320,19 +426,112 @@ class FakeInferenceGateway:
                 "attachments": ",".join(attachment.filename for attachment in attachments),
             }
         )
-        return LlmCompletion(
-            content=json.dumps(
+        if "final_verify" in system_prompt or "final_verify" in user_prompt:
+            content = json.dumps(
+                {
+                    "decision": "complete",
+                    "reason": "最终完成标准已验证。",
+                    "next_phase": "terminal",
+                    "terminal_message": "测试任务已完成，现场步骤已验证。",
+                },
+                ensure_ascii=False,
+            )
+        elif "只输出 JSON decision" in system_prompt or "JSON decision" in user_prompt:
+            content = json.dumps(
+                {
+                    "decision": "proceed",
+                    "reason": "多模态现场证据满足当前步骤完成标准。",
+                    "next_phase": "final_verify",
+                    "terminal_message": "已确认多模态证据，继续最终核验。",
+                },
+                ensure_ascii=False,
+            )
+        else:
+            content = json.dumps(
                 {
                     "summary": "视觉或音视频素材已由 LLM Gateway 解析。",
-                    "extracted_text": "素材包含可用于创建 Skill 的多模态线索。",
+                    "content": {"text": "素材包含可用于创建 Skill 的多模态线索。", "language": ""},
+                    "evidence_items": [
+                        {
+                            "kind": "visual_observation",
+                            "content": "素材包含可用于创建 Skill 的多模态线索。",
+                            "observations": ["fake multimodal signal"],
+                        }
+                    ],
                     "signals": [{"kind": "multimodal", "confidence": 0.9}],
                 },
                 ensure_ascii=False,
-            ),
+            )
+        content_parts: list[dict[str, object]] = [{"type": "text", "text": user_prompt}]
+        for attachment in attachments:
+            if attachment.media_type.startswith("image/"):
+                content_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{attachment.media_type};base64,[redacted]",
+                        },
+                    }
+                )
+            else:
+                content_parts.append(
+                    {
+                        "type": "input_attachment",
+                        "filename": attachment.filename,
+                        "media_type": attachment.media_type,
+                        "content_base64_chars": len(attachment.content_base64),
+                    }
+                )
+        attachments_metadata = [
+            {
+                "filename": attachment.filename,
+                "media_type": attachment.media_type,
+                "content_base64_chars": len(attachment.content_base64),
+            }
+            for attachment in attachments
+        ]
+        return LlmCompletion(
+            content=content,
             provider="fake-openai-compatible",
             model="fake-model",
             raw_response={"id": "fake-multimodal-response"},
             usage={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
+            request=self._request_snapshot(
+                route_key=route_key,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                content_parts=content_parts,
+                attachments=attachments_metadata,
+            ),
+        )
+
+
+class FakeAsrGateway:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def transcribe(
+        self,
+        *,
+        filename: str,
+        content: bytes,
+        media_type: str = "audio/wav",
+        language: str | None = None,
+        prompt: str | None = None,
+    ) -> AsrTranscription:
+        self.calls.append(
+            {
+                "filename": filename,
+                "content": content,
+                "media_type": media_type,
+                "language": language,
+                "prompt": prompt,
+            }
+        )
+        return AsrTranscription(
+            text="第一步关闭电源。第二步拆下面板。第三步清洁滤网并复位。",
+            language="Chinese",
+            raw_response={"text": "第一步关闭电源。第二步拆下面板。第三步清洁滤网并复位。"},
         )
 
 
@@ -340,6 +539,8 @@ class FakeObjectStore:
     def __init__(self) -> None:
         self.uploads: list[dict[str, object]] = []
         self.objects: dict[tuple[str, str], bytes] = {}
+        self.opens: list[dict[str, object]] = []
+        self.downloads: list[ObjectDownload] = []
 
     def upload_bytes(
         self,
@@ -367,13 +568,595 @@ class FakeObjectStore:
             metadata=metadata or {},
         )
 
+    def upload_stream(
+        self,
+        *,
+        object_key: str,
+        stream,
+        media_type: str,
+        size_bytes: int | None = None,
+        checksum: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> StoredObject:
+        stream.seek(0)
+        content = stream.read()
+        return self.upload_bytes(
+            object_key=object_key,
+            content=content,
+            media_type=media_type,
+            metadata=metadata,
+        )
+
     def download_bytes(self, *, bucket: str, object_key: str) -> bytes:
         return self.objects[(bucket, object_key)]
+
+    def stat_object(self, *, bucket: str, object_key: str) -> ObjectStat:
+        content = self.objects[(bucket, object_key)]
+        return ObjectStat(
+            bucket=bucket,
+            object_key=object_key,
+            media_type="application/octet-stream",
+            size_bytes=len(content),
+            etag=f"etag-{len(content)}",
+        )
+
+    def open_download(
+        self,
+        *,
+        bucket: str,
+        object_key: str,
+        byte_range: tuple[int, int] | None = None,
+    ) -> ObjectDownload:
+        self.opens.append(
+            {
+                "bucket": bucket,
+                "object_key": object_key,
+                "byte_range": byte_range,
+            }
+        )
+        content = self.objects[(bucket, object_key)]
+        if byte_range is not None:
+            total_size = len(content)
+            content = content[byte_range[0] : byte_range[1] + 1]
+            content_range = f"bytes {byte_range[0]}-{byte_range[1]}/{total_size}"
+        else:
+            content_range = ""
+        download = ObjectDownload(
+            body=io.BytesIO(content),
+            size_bytes=len(content),
+            media_type="application/octet-stream",
+            etag=f"etag-{len(content)}",
+            content_range=content_range,
+        )
+        self.downloads.append(download)
+        return download
+
+    def delete_object(self, *, bucket: str, object_key: str) -> None:
+        self.objects.pop((bucket, object_key), None)
 
 
 class FailingObjectStore(FakeObjectStore):
     def upload_bytes(self, **_) -> StoredObject:
         raise RuntimeError("object store offline")
+
+    def upload_stream(self, **_) -> StoredObject:
+        raise RuntimeError("object store offline")
+
+
+def _content_request(**headers: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/content",
+            "headers": [(key.replace("_", "-").encode(), value.encode()) for key, value in headers.items()],
+        }
+    )
+
+
+async def _streaming_response_content(response) -> bytes:
+    return b"".join([chunk async for chunk in response.body_iterator])
+
+
+def test_terminal_content_stream_uses_s3_range_and_closes_reader() -> None:
+    object_store = FakeObjectStore()
+    object_store.objects[("test-bucket", "terminal/photo.png")] = b"0123456789"
+    descriptor = TerminalContentDescriptor(
+        artifact_object_id="artifact-1",
+        bucket="test-bucket",
+        object_key="terminal/photo.png",
+        mime_type="image/png",
+        filename="photo.png",
+        size_bytes=10,
+        checksum="sha256-10",
+    )
+
+    response = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(range="bytes=2-5"),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+    content = asyncio.run(_streaming_response_content(response))
+
+    assert response.status_code == 206
+    assert response.headers["content-range"] == "bytes 2-5/10"
+    assert response.headers["content-length"] == "4"
+    assert response.headers["etag"] == '"sha256-10"'
+    assert response.headers["cache-control"] == "private, max-age=86400, immutable"
+    assert object_store.opens == [
+        {"bucket": "test-bucket", "object_key": "terminal/photo.png", "byte_range": (2, 5)}
+    ]
+    assert content == b"2345"
+    assert object_store.downloads[0].body.closed
+
+
+def test_terminal_content_endpoints_are_async_and_do_not_hold_anyio_workers_for_s3() -> None:
+    assert inspect.iscoroutinefunction(get_terminal_event_content)
+    assert inspect.iscoroutinefunction(get_terminal_event_part_content)
+
+
+def test_terminal_content_cache_and_invalid_range_do_not_open_object() -> None:
+    object_store = FakeObjectStore()
+    object_store.objects[("test-bucket", "terminal/photo.png")] = b"0123456789"
+    descriptor = TerminalContentDescriptor(
+        artifact_object_id="artifact-1",
+        bucket="test-bucket",
+        object_key="terminal/photo.png",
+        mime_type="image/png",
+        filename="photo.png",
+        size_bytes=10,
+        checksum="sha256-10",
+    )
+
+    cached = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(if_none_match='"sha256-10"'),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+    malformed = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(range="bytes=0-1,4-5"),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+    unsatisfied = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(range="bytes=100-200"),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+
+    assert cached.status_code == 304
+    assert malformed.status_code == 416
+    assert unsatisfied.status_code == 416
+    assert malformed.headers["content-range"] == "bytes */10"
+    assert object_store.opens == []
+
+
+@pytest.mark.parametrize(
+    ("range_header", "expected_range", "expected_content"),
+    [
+        ("bytes=3-", (3, 9), b"3456789"),
+        ("bytes=-3", (7, 9), b"789"),
+    ],
+)
+def test_terminal_content_supports_open_ended_and_suffix_ranges(
+    range_header: str,
+    expected_range: tuple[int, int],
+    expected_content: bytes,
+) -> None:
+    object_store = FakeObjectStore()
+    object_store.objects[("test-bucket", "terminal/photo.png")] = b"0123456789"
+    descriptor = TerminalContentDescriptor(
+        artifact_object_id="artifact-1",
+        bucket="test-bucket",
+        object_key="terminal/photo.png",
+        mime_type="image/png",
+        filename="photo.png",
+        size_bytes=10,
+        checksum="sha256-10",
+    )
+
+    response = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(range=range_header),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+
+    assert response.status_code == 206
+    assert object_store.opens[0]["byte_range"] == expected_range
+    assert asyncio.run(_streaming_response_content(response)) == expected_content
+
+
+def test_terminal_content_if_range_mismatch_falls_back_to_full_response() -> None:
+    object_store = FakeObjectStore()
+    object_store.objects[("test-bucket", "terminal/photo.png")] = b"0123456789"
+    descriptor = TerminalContentDescriptor(
+        artifact_object_id="artifact-1",
+        bucket="test-bucket",
+        object_key="terminal/photo.png",
+        mime_type="image/png",
+        filename="photo.png",
+        size_bytes=10,
+        checksum="sha256-10",
+    )
+
+    response = asyncio.run(
+        _stream_terminal_content_response(
+            request=_content_request(range="bytes=0-2", if_range='"different"'),
+            descriptor=descriptor,
+            object_store=object_store,
+            error_details={"run_id": "run-1"},
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-length"] == "10"
+    assert object_store.opens[0]["byte_range"] is None
+    assert asyncio.run(_streaming_response_content(response)) == b"0123456789"
+
+
+def test_terminal_content_rejects_object_store_that_ignores_range() -> None:
+    class IgnoredRangeObjectStore(FakeObjectStore):
+        def open_download(self, *, bucket: str, object_key: str, byte_range=None) -> ObjectDownload:
+            content = self.objects[(bucket, object_key)]
+            download = ObjectDownload(
+                body=io.BytesIO(content),
+                size_bytes=len(content),
+                media_type="application/octet-stream",
+                etag="etag-full",
+                content_range="",
+            )
+            self.downloads.append(download)
+            return download
+
+    object_store = IgnoredRangeObjectStore()
+    object_store.objects[("test-bucket", "terminal/photo.png")] = b"0123456789"
+    descriptor = TerminalContentDescriptor(
+        artifact_object_id="artifact-1",
+        bucket="test-bucket",
+        object_key="terminal/photo.png",
+        mime_type="image/png",
+        filename="photo.png",
+        size_bytes=10,
+        checksum="sha256-10",
+    )
+
+    with pytest.raises(SkillsGatewayError):
+        asyncio.run(
+            _stream_terminal_content_response(
+                request=_content_request(range="bytes=2-5"),
+                descriptor=descriptor,
+                object_store=object_store,
+                error_details={"run_id": "run-1"},
+            )
+        )
+
+    assert object_store.downloads[0].body.closed
+
+
+def test_terminal_content_reader_closes_on_read_error_and_consumer_cancel() -> None:
+    class RaisingBody(io.BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            raise OSError("stream failed")
+
+    class ReaderObjectStore(FakeObjectStore):
+        def __init__(self, body) -> None:
+            super().__init__()
+            self.body = body
+
+        def open_download(self, *, bucket: str, object_key: str, byte_range=None) -> ObjectDownload:
+            download = ObjectDownload(
+                body=self.body,
+                size_bytes=len(self.body.getvalue()),
+                media_type="application/octet-stream",
+                etag="etag-reader",
+            )
+            self.downloads.append(download)
+            return download
+
+    async def response_for(store: ReaderObjectStore, size: int):
+        return await _stream_terminal_content_response(
+            request=_content_request(),
+            descriptor=TerminalContentDescriptor(
+                artifact_object_id="artifact-reader",
+                bucket="test-bucket",
+                object_key="terminal/reader.bin",
+                mime_type="application/octet-stream",
+                filename="reader.bin",
+                size_bytes=size,
+                checksum="sha256-reader",
+            ),
+            object_store=store,
+            error_details={"run_id": "run-1"},
+        )
+
+    failing_store = ReaderObjectStore(RaisingBody(b"failure"))
+    failing_response = asyncio.run(response_for(failing_store, 7))
+    with pytest.raises(OSError, match="stream failed"):
+        asyncio.run(_streaming_response_content(failing_response))
+    assert failing_store.body.closed
+
+    async def cancel_consumer() -> ReaderObjectStore:
+        store = ReaderObjectStore(io.BytesIO(b"x" * (300 * 1024)))
+        response = await response_for(store, 300 * 1024)
+        iterator = response.body_iterator
+        assert len(await anext(iterator)) == 256 * 1024
+        await iterator.aclose()
+        return store
+
+    cancelled_store = asyncio.run(cancel_consumer())
+    assert cancelled_store.body.closed
+
+
+def test_terminal_multipart_rejects_request_body_over_limit_before_db_access() -> None:
+    client, _, _ = create_test_client()
+    client.app.state.settings.terminal_event_max_request_bytes = 128
+
+    with client:
+        response = client.post(
+            "/api/v1/terminal/sessions/missing-run/events",
+            data={"event": json.dumps({"text": "x" * 256})},
+            files=[("files", ("photo.png", b"image", "image/png"))],
+        )
+
+    assert response.status_code == 413
+    assert response.json()["code"] == "payload_too_large"
+    assert client.app.state.object_store.uploads == []
+
+
+@pytest.mark.parametrize("multipart", [False, True])
+def test_terminal_event_manual_model_validation_returns_skill_422(multipart: bool) -> None:
+    client, _, _ = create_test_client()
+    event = {"direction": "x" * 33, "text": "现场证据"}
+
+    with client:
+        if multipart:
+            response = client.post(
+                "/api/v1/terminal/sessions/missing-run/events",
+                data={"event": json.dumps(event, ensure_ascii=False)},
+                files=[("files", ("photo.png", b"image", "image/png"))],
+            )
+        else:
+            response = client.post(
+                "/api/v1/terminal/sessions/missing-run/events",
+                json=event,
+            )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "skill_validation_error"
+    assert response.json()["details"]["errors"][0]["type"] == "string_too_long"
+
+
+def test_terminal_multipart_rejects_more_than_four_files_before_upload() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        response = client.post(
+            "/api/v1/terminal/sessions/missing-run/events",
+            data={"event": json.dumps({"text": "现场证据"}, ensure_ascii=False)},
+            files=[
+                ("files", (f"photo-{index}.png", b"image", "image/png"))
+                for index in range(5)
+            ],
+        )
+
+    assert response.status_code == 413
+    assert response.json()["code"] == "payload_too_large"
+    assert response.json()["details"] == {"max_files": 4, "file_count": 5}
+    assert client.app.state.object_store.uploads == []
+
+
+class _NoDbTerminalEventIngestService(TerminalEventIngestService):
+    def _preflight(self, run_id: str, external_event_id: str | None):
+        return None
+
+
+class _SecondUploadFailsObjectStore(FakeObjectStore):
+    def upload_stream(self, **kwargs) -> StoredObject:
+        if len(self.uploads) == 1:
+            raise RuntimeError("second upload failed")
+        return super().upload_stream(**kwargs)
+
+
+class _TimeoutUploadObjectStore(FakeObjectStore):
+    def upload_stream(self, **_) -> StoredObject:
+        raise TimeoutError("object store timed out")
+
+
+class _CancelledUploadObjectStore(FakeObjectStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.read_after_release = False
+
+    def upload_stream(self, **kwargs) -> StoredObject:
+        self.started.set()
+        assert self.release.wait(timeout=2)
+        self.read_after_release = True
+        return super().upload_stream(**kwargs)
+
+
+def _upload_file(filename: str, content: bytes, mime_type: str = "image/png") -> UploadFile:
+    return UploadFile(
+        file=io.BytesIO(content),
+        filename=filename,
+        headers=Headers({"content-type": mime_type}),
+    )
+
+
+def _no_db_ingest(object_store: FakeObjectStore) -> _NoDbTerminalEventIngestService:
+    return _NoDbTerminalEventIngestService(
+        settings=create_test_settings(),
+        database_manager=None,  # type: ignore[arg-type]
+        object_store=object_store,  # type: ignore[arg-type]
+        runtime_service=None,  # type: ignore[arg-type]
+    )
+
+
+def test_terminal_upload_cleans_previous_objects_when_later_upload_fails() -> None:
+    object_store = _SecondUploadFailsObjectStore()
+    ingest = _no_db_ingest(object_store)
+    uploads = [
+        ("files", _upload_file("first.png", b"first-image")),
+        ("files", _upload_file("second.png", b"second-image")),
+    ]
+
+    with pytest.raises(SkillsGatewayError):
+        asyncio.run(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=uploads,
+                idempotency_key=None,
+            )
+        )
+
+    assert len(object_store.uploads) == 1
+    assert object_store.objects == {}
+
+
+def test_terminal_upload_maps_explicit_timeout_to_504_error() -> None:
+    ingest = _no_db_ingest(_TimeoutUploadObjectStore())
+
+    with pytest.raises(SkillsGatewayTimeoutError):
+        asyncio.run(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=[("files", _upload_file("photo.png", b"image"))],
+                idempotency_key=None,
+            )
+        )
+
+
+def test_terminal_upload_cancellation_waits_for_transfer_and_removes_uuid_object() -> None:
+    object_store = _CancelledUploadObjectStore()
+    ingest = _no_db_ingest(object_store)
+    upload = _upload_file("photo.png", b"image")
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=[("files", upload)],
+                idempotency_key=None,
+            )
+        )
+        await asyncio.to_thread(object_store.started.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        object_store.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await upload.close()
+
+    asyncio.run(scenario())
+
+    assert object_store.read_after_release
+    assert object_store.objects == {}
+
+
+def test_terminal_upload_enforces_per_file_limit_while_hashing_stream() -> None:
+    object_store = FakeObjectStore()
+    ingest = _no_db_ingest(object_store)
+    ingest.settings.terminal_event_max_file_bytes = 4
+
+    with pytest.raises(PayloadTooLargeError):
+        asyncio.run(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=[("files", _upload_file("photo.png", b"12345"))],
+                idempotency_key=None,
+            )
+        )
+
+    assert object_store.uploads == []
+
+
+def test_terminal_upload_enforces_total_limit_before_s3_upload() -> None:
+    object_store = FakeObjectStore()
+    ingest = _no_db_ingest(object_store)
+    ingest.settings.terminal_event_max_file_bytes = 4
+    ingest.settings.terminal_event_max_total_file_bytes = 6
+
+    with pytest.raises(PayloadTooLargeError):
+        asyncio.run(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=[
+                    ("files", _upload_file("first.png", b"1234")),
+                    ("files", _upload_file("second.png", b"567")),
+                ],
+                idempotency_key=None,
+            )
+        )
+
+    assert object_store.uploads == []
+
+
+@pytest.mark.parametrize(
+    "upload",
+    [
+        pytest.param(_upload_file("empty.png", b""), id="empty"),
+        pytest.param(_upload_file("document.pdf", b"pdf", "application/pdf"), id="unsupported-mime"),
+    ],
+)
+def test_terminal_upload_rejects_empty_and_unsupported_media(upload: UploadFile) -> None:
+    object_store = FakeObjectStore()
+    ingest = _no_db_ingest(object_store)
+
+    with pytest.raises(SkillValidationError):
+        asyncio.run(
+            ingest.append(
+                run_id="run-1",
+                payload=AppendTerminalEventRequest(direction="input"),
+                uploads=[("files", upload)],
+                idempotency_key=None,
+            )
+        )
+
+    assert object_store.uploads == []
+
+
+def test_terminal_object_store_io_does_not_block_event_loop() -> None:
+    async def scenario() -> float:
+        gaps: list[float] = []
+        finished = False
+
+        async def ticker() -> None:
+            previous = asyncio.get_running_loop().time()
+            while not finished:
+                await asyncio.sleep(0.005)
+                current = asyncio.get_running_loop().time()
+                gaps.append(current - previous)
+                previous = current
+
+        ticker_task = asyncio.create_task(ticker())
+        await run_object_store_io(FakeObjectStore(), time.sleep, 0.3)
+        finished = True
+        await ticker_task
+        return max(gaps)
+
+    assert asyncio.run(scenario()) < 0.1
 
 
 def build_test_formal_v5_artifact() -> dict:
@@ -418,6 +1201,7 @@ def build_test_formal_v5_artifact() -> dict:
                 "guard": {"phase_is": "instruct_collect_context"},
                 "actor": {"name": "agent.llm"},
                 "interaction": {
+                    "runner_turn_kind": "first_step_instruction",
                     "output_to_terminal": True,
                     "wait_after_output": True,
                     "checkpoint_id": "collect_context_evidence",
@@ -448,7 +1232,7 @@ def build_test_formal_v5_artifact() -> dict:
                 "kind": "llm",
                 "guard": {"phase_is": "evaluate_collect_context"},
                 "actor": {"name": "agent.llm"},
-                "interaction": {"evaluation": True},
+                "interaction": {"runner_turn_kind": "evidence_evaluation", "evaluation": True},
                 "projection": {
                     "system_template": "只输出 JSON decision。evaluate_collect_context",
                     "user_template": (
@@ -467,7 +1251,7 @@ def build_test_formal_v5_artifact() -> dict:
                 "kind": "llm",
                 "guard": {"phase_is": "final_verify"},
                 "actor": {"name": "agent.llm"},
-                "interaction": {"evaluation": True},
+                "interaction": {"runner_turn_kind": "final_verification", "evaluation": True},
                 "projection": {
                     "system_template": "只输出 JSON decision。final_verify",
                     "user_template": "根据 completion_criteria 与当前 Token 做最终验证。当前 Token：{{token}}",
@@ -502,7 +1286,7 @@ def build_test_formal_v5_artifact() -> dict:
             {"from": "final_verify", "to": "terminal"},
         ],
         "runtime_contract": {
-            "llm_route_key": "default",
+            "llm_route_key": "text",
             "skill_instruction": "遵循 SKILL.md 完成任务。",
             "execution_goal": "帮助用户在现实世界完成当前 Skill 目标。",
             "applicability": {
@@ -550,22 +1334,147 @@ def create_test_settings() -> Settings:
         database_auto_create_schema=True,
         gitlab_skills_group_path="skills",
         runtime_worker_enabled=False,
+        standard_lightrag_base_url="",
+        standard_lightrag_api_key="",
     )
 
 
 def create_test_client() -> tuple[TestClient, FakeGitLabGateway, FakeInferenceGateway]:
     fake_gateway = FakeGitLabGateway()
     fake_inference = FakeInferenceGateway()
+    fake_asr = FakeAsrGateway()
     fake_object_store = FakeObjectStore()
+    settings = create_test_settings()
     client = TestClient(
         create_app(
-            create_test_settings(),
+            settings,
             gitlab_gateway=fake_gateway,
             inference_gateway=fake_inference,
+            asr_gateway=fake_asr,
             object_store=fake_object_store,
+            agent_harness_service=AgentHarnessService(
+                settings=settings,
+                chat_model_factory=lambda definition: (
+                    ScriptedCompilerChatModel()
+                    if definition.agent_key == "psop.compiler"
+                    else ScriptedRunnerChatModel()
+                    if definition.agent_key == "psop.runner"
+                    else ScriptedBuilderChatModel()
+                ),
+            ),
         )
     )
     return client, fake_gateway, fake_inference
+
+
+def process_runtime_run_for_test(client: TestClient, run_id: str) -> None:
+    service = RuntimeService(
+        settings=client.app.state.settings,
+        inference_gateway=client.app.state.inference_gateway,
+        object_store=client.app.state.object_store,
+        agent_harness_service=client.app.state.agent_harness_service,
+        runtime_event_sink=client.app.state.runtime_event_sink,
+    )
+    with client.app.state.db_manager.session() as session:
+        service.process_run(session, run_id)
+
+
+def test_process_skill_raw_material_generation_job_rolls_back_before_marking_failed(monkeypatch) -> None:
+    settings = create_test_settings()
+    manager = DatabaseManager(settings.sqlalchemy_database_url)
+    manager.create_schema()
+    service = skills_service_module.SkillsService(
+        settings=settings,
+        gitlab_gateway=FakeGitLabGateway(),
+        inference_gateway=FakeInferenceGateway(),
+        asr_gateway=FakeAsrGateway(),
+        object_store=FakeObjectStore(),
+    )
+
+    with manager.session() as session:
+        definition = SkillDefinition(
+            key="rollback-builder",
+            name="Rollback Builder",
+            gitlab_project_id="rollback-project",
+            repository_url="https://gitlab.example.local/skills/rollback-builder",
+        )
+        session.add(definition)
+        session.flush()
+        generation = SkillRawMaterialGeneration(
+            skill_definition_id=definition.id,
+            material_ids=[],
+            user_description="触发失败。",
+            status="pending",
+            raw_response={"request": {}},
+        )
+        session.add(generation)
+        session.flush()
+        job = RuntimeJob(
+            job_type=skills_service_module.SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE,
+            status="pending",
+            payload=service._skill_generation_job_payload(
+                skill_definition_id=definition.id,
+                generation_id=generation.id,
+                material_ids=[],
+                base_commit_sha=None,
+                current_stage="queued",
+            ),
+            dedupe_key=f"skill-raw-material-generation:{generation.id}",
+        )
+        session.add(job)
+        session.commit()
+
+        def broken_run(active_session, **_kwargs):
+            active_session.add(
+                RuntimeJob(
+                    id=job.id,
+                    job_type="duplicate",
+                    status="pending",
+                    payload={},
+                    dedupe_key="duplicate-runtime-job",
+                )
+            )
+            active_session.flush()
+
+        monkeypatch.setattr(service, "_run_skill_raw_material_generation", broken_run)
+
+        result = service.process_skill_raw_material_generation_job(session, job.id)
+
+        stored_job = session.get(RuntimeJob, job.id)
+        assert result.status == "failed"
+        assert result.error_message
+        assert stored_job.status == "failed"
+        assert stored_job.last_error
+        assert (stored_job.payload or {})["current_stage"] == "failed"
+
+
+def test_parse_generated_skill_draft_handles_outer_fence_and_inner_markdown_fences() -> None:
+    content = json.dumps(
+        {
+            "directory_tree": "README.md\nSKILL.md",
+            "files": {
+                "README.md": "# README\n",
+                "SKILL.md": "# Skill\n",
+                "prompts/system.md": "system",
+                "references/README.md": "reference",
+                "examples/input.md": "```text\n用户输入\n```",
+                "examples/expected-output.md": "```text\n助手输出\n```",
+                "tests/checklist.md": "- [ ] ok",
+            },
+            "review_notes": [],
+            "generation_reason": "ok",
+            "material_usage": [],
+            "selected_reference_assets": ["references/video-keyframes/material/000000000.jpg"],
+        },
+        ensure_ascii=False,
+    )
+
+    parsed = raw_materials.parse_generated_skill_draft(f"```json\n{content}\n```")
+
+    assert parsed.files["examples/input.md"].startswith("```text")
+    assert parsed.selected_reference_assets == [
+        {"reference_path": "references/video-keyframes/material/000000000.jpg", "reason": ""}
+    ]
 
 
 def test_create_skill_initializes_gitlab_and_persists_metadata() -> None:
@@ -585,9 +1494,57 @@ def test_create_skill_initializes_gitlab_and_persists_metadata() -> None:
     payload = response.json()
     assert payload["key"] == "equipment-diagnosis"
     assert payload["gitlab_group_path"] == "skills"
+    assert payload["is_published"] is False
     assert payload["current_draft_version"]["status"] == "draft"
     assert payload["current_draft_version"]["source_commit_sha"].startswith("commit-")
     assert len(fake_gateway.projects) == 1
+
+
+def test_list_skills_filters_by_published_state() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        draft_skill = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "draft-only",
+                "name": "Draft Only",
+                "description": "Keep this skill unpublished.",
+            },
+        ).json()
+        published_skill = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "published-skill",
+                "name": "Published Skill",
+                "description": "Publish this skill.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{published_skill['id']}/publish",
+            json={"publish_reason": "Initial publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+
+        all_response = client.get("/api/v1/skills")
+        published_response = client.get("/api/v1/skills?is_published=true")
+        unpublished_response = client.get("/api/v1/skills?is_published=false")
+
+    assert all_response.status_code == 200
+    all_skills = {skill["id"]: skill for skill in all_response.json()}
+    assert all_skills[draft_skill["id"]]["is_published"] is False
+    assert all_skills[published_skill["id"]]["is_published"] is True
+
+    assert published_response.status_code == 200
+    published_ids = {skill["id"] for skill in published_response.json()}
+    assert published_skill["id"] in published_ids
+    assert draft_skill["id"] not in published_ids
+
+    assert unpublished_response.status_code == 200
+    unpublished_ids = {skill["id"] for skill in unpublished_response.json()}
+    assert draft_skill["id"] in unpublished_ids
+    assert published_skill["id"] not in unpublished_ids
 
 
 def test_get_and_save_skill_source() -> None:
@@ -632,6 +1589,7 @@ def test_get_and_save_skill_source() -> None:
     assert after_snapshot["prompt_material"]["skill_md"] != before_skill_md
     assert after_snapshot["prompt_material"]["skill_md"] == saved_payload["skill_md_content"]
     assert after_snapshot["prompt_material"]["readme"] == saved_payload["readme_content"]
+    assert after_detail["updated_at"] != before_detail["updated_at"]
 
 
 def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
@@ -663,10 +1621,15 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
             data={"name": "设备照片", "material_kind": "image"},
             files={"file": ("panel.png", b"not-really-a-png", "image/png")},
         )
+        jobs_response = client.get("/api/v1/runtime/jobs", params={"job_type": "raw_material_analysis"})
         list_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
         material_id = upload_response.json()["id"]
         detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
         content_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/content")
+        range_response = client.get(
+            f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/content",
+            headers={"Range": "bytes=0-6"},
+        )
         delete_response = client.delete(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
         after_delete_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
         deleted_detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
@@ -676,20 +1639,28 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
     assert upload_payload["status"] == "ready"
     assert upload_payload["filename"] == "guide.md"
     assert upload_payload["source_note"] == "operator upload"
-    assert "Guide" in upload_payload["extracted_text"]
+    assert "Guide" in upload_payload["analysis_result"]["content"]["text"]
 
     assert image_response.status_code == 201
     assert image_response.json()["status"] == "ready"
-    assert image_response.json()["processing_metadata"]["processor"] == "llm_multimodal"
-    assert any(call.get("attachments") == "panel.png" for call in fake_inference.calls)
+    assert image_response.json()["analysis_result"]["debug"]["processor"] == "llm_multimodal"
+    assert any(
+        call.get("attachments") == "panel.png" and call.get("route_key") == "multimodal"
+        for call in fake_inference.calls
+    )
+    assert any(job["token_usage"] and job["token_usage"]["total_tokens"] == 30 for job in jobs_response.json())
 
     assert list_response.status_code == 200
     assert {item["id"] for item in list_response.json()} == {material_id, image_response.json()["id"]}
 
     assert detail_response.status_code == 200
-    assert "lockout" in detail_response.json()["extracted_text"]
+    assert "lockout" in detail_response.json()["analysis_result"]["content"]["text"]
     assert content_response.status_code == 200
     assert content_response.content == b"# Guide\n\nUse lockout before repair.\n"
+    assert content_response.headers["accept-ranges"] == "bytes"
+    assert range_response.status_code == 206
+    assert range_response.headers["content-range"] == "bytes 0-6/36"
+    assert range_response.content == b"# Guide"
 
     assert delete_response.status_code == 200
     assert delete_response.json() == {"deleted": True, "material_id": material_id}
@@ -697,38 +1668,16 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
     assert deleted_detail_response.status_code == 404
 
 
-def test_skill_raw_material_url_upload_fetches_reference(monkeypatch) -> None:
-    class FakeHttpResponse:
-        content = b"<html><body><h1>Reference</h1><p>Calibrate sensor before use.</p></body></html>"
-        headers = {"content-type": "text/html; charset=utf-8"}
-
-        def raise_for_status(self) -> None:
-            return None
-
-    class FakeHttpClient:
-        def __init__(self, *_, **__) -> None:
-            pass
-
-        def __enter__(self) -> "FakeHttpClient":
-            return self
-
-        def __exit__(self, *_: object) -> None:
-            return None
-
-        def get(self, url: str) -> FakeHttpResponse:
-            assert url == "https://example.test/reference"
-            return FakeHttpResponse()
-
-    monkeypatch.setattr(raw_materials.httpx, "Client", FakeHttpClient)
+def test_skill_raw_material_upload_rejects_url_only_payload() -> None:
     client, _, _ = create_test_client()
 
     with client:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "url-material-skill",
-                "name": "URL Material Skill",
-                "description": "Create skills from reference URLs.",
+                "key": "url-only-material-skill",
+                "name": "URL Only Material Skill",
+                "description": "Reject URL raw materials.",
             },
         ).json()
         response = client.post(
@@ -736,21 +1685,68 @@ def test_skill_raw_material_url_upload_fetches_reference(monkeypatch) -> None:
             data={
                 "source_url": "https://example.test/reference",
                 "name": "参考页面",
-                "description": "在线参考资料",
             },
         )
 
-    assert response.status_code == 201
-    payload = response.json()
-    assert payload["material_kind"] == "url"
-    assert payload["source_note"] == "https://example.test/reference"
-    assert "Reference" in payload["extracted_text"]
-    assert "Calibrate sensor" in payload["extracted_text"]
+    assert response.status_code == 422
+    assert response.json()["message"] == "请上传素材文件。"
+
+
+def test_skill_raw_material_video_uses_dedicated_upload_limit() -> None:
+    settings = create_test_settings()
+    settings.raw_material_max_upload_bytes = 8
+    settings.raw_material_video_max_upload_bytes = 32
+    processor = raw_materials.RawMaterialProcessor(
+        settings=settings,
+        inference_gateway=FakeInferenceGateway(),
+        object_store=FakeObjectStore(),
+    )
+
+    processor._validate_upload(filename="guide.mp4", content=b"x" * 16, mime_type="video/mp4")
+
+    with pytest.raises(SkillValidationError) as exc_info:
+        processor._validate_upload(filename="guide.txt", content=b"x" * 16, mime_type="text/plain")
+
+    assert exc_info.value.message == "上传素材超过大小限制。"
+    assert exc_info.value.details["max_bytes"] == 8
+
+
+def _fake_video_analysis_result() -> video_analysis.VideoAnalysisResult:
+    keyframes = [
+        video_analysis.VideoKeyframeAnalysis(
+            timestamp_ms=0,
+            filename="000000000.jpg",
+            content=b"fake-keyframe-0",
+            caption="关闭设备电源并确认安全。",
+            observations=[{"kind": "safety"}],
+            frame_source="timeline_sample",
+            metadata={"frame_source": "timeline_sample", "operation_relevance": "high"},
+        ),
+        video_analysis.VideoKeyframeAnalysis(
+            timestamp_ms=30000,
+            filename="000030000.jpg",
+            content=b"fake-keyframe-1",
+            caption="拆下面板并清洁滤网。",
+            observations=[{"kind": "operation"}],
+            frame_source="scene_change",
+            metadata={"frame_source": "scene_change", "operation_relevance": "high"},
+        ),
+    ]
+    asr = AsrTranscription(text="先关闭电源，然后拆下面板并清洁滤网。", language="Chinese")
+    return video_analysis.VideoAnalysisResult(
+        asr=asr,
+        keyframes=keyframes,
+        duration_ms=60_000,
+    )
 
 
 def test_skill_raw_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
     monkeypatch.setattr(raw_materials, "_extract_pdf_text", lambda content: "PDF extracted procedure text.")
-    monkeypatch.setattr(raw_materials, "_extract_video_frame", lambda content, filename: b"fake-jpeg-frame")
+    monkeypatch.setattr(
+        skills_service_module,
+        "analyze_video_material",
+        lambda **_: _fake_video_analysis_result(),
+    )
     client, _, fake_inference = create_test_client()
 
     with client:
@@ -778,25 +1774,137 @@ def test_skill_raw_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
             data={"name": "Video Walkthrough", "material_kind": "video"},
             files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
         )
+        video_analysis_response = client.get(
+            f"/api/v1/skills/{skill_id}/raw-materials/{video_response.json()['id']}/analysis"
+        )
         list_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials")
 
     assert pdf_response.status_code == 201
     assert pdf_response.json()["status"] == "ready"
-    assert "PDF extracted procedure text" in pdf_response.json()["extracted_text"]
+    assert "PDF extracted procedure text" in pdf_response.json()["analysis_result"]["content"]["text"]
 
     assert audio_response.status_code == 201
     assert audio_response.json()["status"] == "ready"
-    assert audio_response.json()["processing_metadata"]["processor"] == "llm_multimodal"
+    assert audio_response.json()["analysis_result"]["debug"]["processor"] == "llm_multimodal"
 
     assert video_response.status_code == 201
     assert video_response.json()["status"] == "ready"
-    assert video_response.json()["processing_metadata"]["processor"] == "llm_multimodal"
+    assert video_response.json()["analysis_status"] == "ready"
+    assert video_response.json()["derived_asset_count"] == 2
+    assert video_response.json()["analysis_result"]["debug"]["processor"] == "video_analysis"
+    assert video_analysis_response.status_code == 200
+    assert video_analysis_response.json()["analysis_result"]["content"]["text"].startswith("先关闭电源")
+    assert len(video_analysis_response.json()["derived_assets"]) == 2
     assert len(list_response.json()) == 3
-    assert any(call.get("attachments") == "notes.wav" for call in fake_inference.calls)
-    assert any(call.get("attachments") == "walkthrough-frame.jpg" for call in fake_inference.calls)
+    assert any(
+        call.get("attachments") == "notes.wav" and call.get("route_key") == "multimodal"
+        for call in fake_inference.calls
+    )
 
 
-def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_publish_or_compile() -> None:
+def test_failed_video_raw_material_can_be_reanalyzed(monkeypatch) -> None:
+    attempts = {"count": 0}
+
+    def fake_analyze_video_material(**_: object) -> video_analysis.VideoAnalysisResult:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise SkillsGatewayError(
+                "ASR Gateway 返回错误响应。",
+                details={"status_code": 413, "body": "audio too large"},
+            )
+        return _fake_video_analysis_result()
+
+    monkeypatch.setattr(skills_service_module, "analyze_video_material", fake_analyze_video_material)
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "retry-material-analysis-skill",
+                "name": "Retry Video Analysis Skill",
+                "description": "Retry failed video parsing.",
+            },
+        ).json()
+        skill_id = created["id"]
+        upload_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "视频教程", "material_kind": "video"},
+            files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
+        )
+        material_id = upload_response.json()["id"]
+        failed_analysis_response = client.get(
+            f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/analysis"
+        )
+        retry_response = client.post(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/analyze")
+        detail_response = client.get(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}")
+
+    assert upload_response.status_code == 201
+    assert upload_response.json()["status"] == "failed"
+    assert failed_analysis_response.status_code == 200
+    assert failed_analysis_response.json()["status"] == "failed"
+    assert failed_analysis_response.json()["error_details"]["status_code"] == 413
+    assert failed_analysis_response.json()["error_details"]["body"] == "audio too large"
+    assert retry_response.status_code == 200
+    assert retry_response.json()["status"] == "ready"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["status"] == "ready"
+    assert detail_response.json()["analysis_status"] == "ready"
+    assert attempts["count"] == 2
+
+
+def test_processing_video_raw_material_cannot_be_reanalyzed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        skills_service_module,
+        "analyze_video_material",
+        lambda **_: _fake_video_analysis_result(),
+    )
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "processing-material-analysis-skill",
+                "name": "Processing Video Analysis Skill",
+                "description": "Reject duplicate processing video parsing.",
+            },
+        ).json()
+        skill_id = created["id"]
+        upload_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "视频教程", "material_kind": "video"},
+            files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
+        )
+        material_id = upload_response.json()["id"]
+        with client.app.state.db_manager.session() as session:
+            material = session.get(SkillRawMaterial, material_id)
+            analysis = (
+                session.query(SkillRawMaterialAnalysis)
+                .filter(SkillRawMaterialAnalysis.raw_material_id == material_id)
+                .one()
+            )
+            material.status = "processing"
+            analysis.status = "running"
+            session.commit()
+        retry_response = client.post(f"/api/v1/skills/{skill_id}/raw-materials/{material_id}/analyze")
+
+    assert upload_response.status_code == 201
+    assert retry_response.status_code == 422
+    assert retry_response.json()["message"] == "素材正在分析中，不能重复解析。"
+    assert retry_response.json()["details"] == {
+        "material_id": material_id,
+        "material_status": "processing",
+        "analysis_status": "running",
+    }
+
+
+def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_publish_or_compile(monkeypatch) -> None:
+    monkeypatch.setattr(
+        skills_service_module,
+        "analyze_video_material",
+        lambda **_: _fake_video_analysis_result(),
+    )
     client, fake_gateway, fake_inference = create_test_client()
 
     with client:
@@ -815,11 +1923,16 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
             files={"file": ("workflow.md", b"# Workflow\n\nAsk, inspect, then advise.\n", "text/markdown")},
         )
         material_id = material_response.json()["id"]
+        video_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials",
+            data={"name": "视频教程", "material_kind": "video"},
+            files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
+        )
+        video_material_id = video_response.json()["id"]
 
         generate_response = client.post(
             f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
             json={
-                "material_ids": [material_id],
                 "user_description": "请基于素材生成一个现场支持 Skill。",
                 "base_commit_sha": created["latest_draft_head_sha"],
             },
@@ -831,8 +1944,22 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert generate_response.status_code == 200
     payload = generate_response.json()
     assert payload["status"] == "succeeded"
-    assert payload["material_ids"] == [material_id]
+    assert payload["material_ids"] == [video_material_id, material_id]
     assert payload["committed_commit_sha"].startswith("commit-")
+    assert payload["prompt_metadata"]["agent_key"] == "psop.builder"
+    assert payload["prompt_metadata"]["agent_run_id"] == payload["id"]
+    assert payload["job_id"] == payload["prompt_metadata"]["job_id"]
+    assert payload["prompt_metadata"]["builder_artifact_path"] == "sandbox://outputs/builder-result.json"
+    assert payload["prompt_metadata"]["builder_files_path"] == "sandbox://outputs/skill-draft"
+    assert payload["prompt_metadata"]["events_path"].endswith("/events.jsonl")
+    assert payload["prompt_metadata"]["standard_search_summary"]["called"] is True
+    assert payload["prompt_metadata"]["reference_files"] == [
+        f"references/video-keyframes/{video_material_id}/000000000.jpg",
+    ]
+    assert payload["prompt_metadata"]["materialized_reference_image_count"] == 1
+    assert [item["reference_path"] for item in payload["prompt_metadata"]["selected_reference_assets"]] == [
+        f"references/video-keyframes/{video_material_id}/000000000.jpg",
+    ]
     assert set(payload["generated_files"]) >= {
         "README.md",
         "SKILL.md",
@@ -843,19 +1970,41 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
         "tests/checklist.md",
     }
     assert "skill.yaml" not in payload["generated_files"]
-    assert payload["material_usage"][0]["material_id"] == material_id
-    assert fake_gateway.projects[created["gitlab_project_id"]].files["README.md"].startswith("# Generated Skill")
+    assert payload["material_usage"][0]["material_id"] == video_material_id
+    assert fake_gateway.projects[created["gitlab_project_id"]].files["README.md"].startswith("# 泵房进入前安全检查")
+    assert fake_gateway.projects[created["gitlab_project_id"]].files[
+        f"references/video-keyframes/{video_material_id}/000000000.jpg"
+    ] == b"fake-keyframe-0"
+    skill_md = fake_gateway.projects[created["gitlab_project_id"]].files["SKILL.md"]
+    references_md = fake_gateway.projects[created["gitlab_project_id"]].files["references/README.md"]
+    reference_path = f"references/video-keyframes/{video_material_id}/000000000.jpg"
+    assert "data:image/" not in skill_md
+    assert "data:image/" not in references_md
+    assert reference_path in skill_md
+    assert reference_path in references_md
+    assert f"]({reference_path})" in skill_md
+    assert "## 嵌入参考图片" not in skill_md
+    assert "## 嵌入参考图片" not in references_md
+    assert skill_md.index("### 阶段 1：PPE 与进入条件确认") < skill_md.index(f"]({reference_path})") < skill_md.index("### 阶段 2：阀门与压力表确认")
     assert "should-be-ignored" not in fake_gateway.projects[created["gitlab_project_id"]].files["skill.yaml"]
     assert detail_response.json()["latest_draft_head_sha"] == payload["committed_commit_sha"]
+    assert detail_response.json()["updated_at"] != created["updated_at"]
     prompt_material = detail_response.json()["current_draft_version"]["manifest_snapshot"]["prompt_material"]
-    assert prompt_material["readme"].startswith("# Generated Skill")
-    assert prompt_material["skill_md"].startswith("# Generated Skill")
+    assert prompt_material["readme"].startswith("# 泵房进入前安全检查")
+    assert prompt_material["skill_md"].startswith("# 泵房进入前安全检查")
+    assert "data:image/" not in prompt_material["skill_md"]
+    assert reference_path in prompt_material["skill_md"]
     assert source_response.json()["head_commit_sha"] == payload["committed_commit_sha"]
     assert publishes_response.json() == []
-    assert any("generate_psop_skill_source_from_raw_materials" in call["user_prompt"] for call in fake_inference.calls)
+    assert not any("generate_psop_skill_source_from_raw_materials" in call["user_prompt"] for call in fake_inference.calls)
 
 
-def test_generate_skill_draft_from_raw_materials_rejects_stale_head() -> None:
+def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch) -> None:
+    monkeypatch.setattr(
+        skills_service_module,
+        "analyze_video_material",
+        lambda **_: _fake_video_analysis_result(),
+    )
     client, fake_gateway, _ = create_test_client()
 
     with client:
@@ -869,10 +2018,10 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head() -> None:
         ).json()
         skill_id = created["id"]
         source_payload = client.get(f"/api/v1/skills/{skill_id}/source").json()
-        material_response = client.post(
+        video_response = client.post(
             f"/api/v1/skills/{skill_id}/raw-materials",
             data={"name": "素材"},
-            files={"file": ("notes.txt", b"Build a safe checklist.\n", "text/plain")},
+            files={"file": ("walkthrough.mp4", b"fake mp4", "video/mp4")},
         )
         fake_gateway.commit_skill_source(
             project_id=created["gitlab_project_id"],
@@ -885,7 +2034,6 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head() -> None:
         response = client.post(
             f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
             json={
-                "material_ids": [material_response.json()["id"]],
                 "user_description": "生成草稿。",
                 "base_commit_sha": source_payload["head_commit_sha"],
             },
@@ -893,6 +2041,51 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head() -> None:
 
     assert response.status_code == 409
     assert response.json()["code"] == "skill_source_conflict"
+
+
+def test_generate_skill_draft_from_raw_materials_rejects_material_subset_field() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        response = client.post(
+            "/api/v1/skills/skill-id/raw-materials/generate-skill-draft",
+            json={
+                "material_ids": ["material-id"],
+                "user_description": "生成草稿。",
+            },
+        )
+
+    assert response.status_code == 422
+    assert any(error["loc"][-1] == "material_ids" for error in response.json()["detail"])
+
+
+def test_generate_skill_draft_from_raw_materials_requires_ready_video() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "video-required",
+                "name": "Video Required",
+                "description": "Reject generation without analyzed video.",
+            },
+        ).json()
+        text_response = client.post(
+            f"/api/v1/skills/{created['id']}/raw-materials",
+            data={"name": "文本素材"},
+            files={"file": ("notes.txt", b"Build a safe checklist.\n", "text/plain")},
+        )
+        response = client.post(
+            f"/api/v1/skills/{created['id']}/raw-materials/generate-skill-draft",
+            json={
+                "user_description": "生成草稿。",
+                "base_commit_sha": created["latest_draft_head_sha"],
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["message"] == "生成 Skill 至少需要选择一个已分析完成的视频素材。"
 
 
 def test_repository_tree_file_and_folder_operations() -> None:
@@ -1114,6 +2307,81 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
     assert detail_response.json()["latest_published_version"] is None
 
 
+def test_skill_test_scenario_run_can_use_unpublished_ready_artifact() -> None:
+    client, _, _ = create_test_client()
+
+    timeline = {
+        "schema_version": "psop-skill-test-timeline/v1",
+        "duration_ms": 1000,
+        "events": [
+            {
+                "id": "draft_input",
+                "lane_id": "input.text",
+                "at_ms": 0,
+                "payload_inline": "请按 draft 编译产物运行测试。",
+            },
+            {
+                "id": "expect_draft",
+                "lane_id": "expected.semantic",
+                "at_ms": 1000,
+                "expectation": "测试运行应使用未发布 draft 的 ready 编译产物。",
+            },
+        ],
+    }
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "skill-test-unpublished-draft",
+                "name": "Skill Test Unpublished Draft",
+                "description": "Validate tests can target unpublished ready artifacts.",
+            },
+        ).json()
+        skill_id = created["id"]
+
+        compile_response = client.post(f"/api/v1/compiler/skills/{skill_id}/compile")
+        compile_request_id = compile_response.json()["id"]
+        retry_response = client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        artifact_id = retry_response.json()["artifact_id"]
+
+        direct_invocation_response = client.post(
+            "/api/v1/gateway/invocations",
+            json={
+                "skill_key": created["key"],
+                "input_envelope": {"user_input": "真实运行仍需发布版本。"},
+                "gateway_type": "web",
+            },
+        )
+        detail_response = client.get(f"/api/v1/skills/{skill_id}")
+        scenario_response = client.post(
+            f"/api/v1/skills/{skill_id}/test-scenarios",
+            json={
+                "name": "未发布 draft 测试场景",
+                "duration_ms": 1000,
+                "timeline": timeline,
+            },
+        )
+        scenario = scenario_response.json()
+        start_response = client.post(f"/api/v1/skills/{skill_id}/test-scenarios/{scenario['id']}/runs", json={})
+        scenario_run = start_response.json()
+        runtime_run_response = client.get(f"/api/v1/runs/{scenario_run['run_id']}")
+
+    assert compile_response.status_code == 202
+    assert retry_response.status_code == 200
+    assert artifact_id
+    assert detail_response.json()["latest_published_version"] is None
+
+    assert direct_invocation_response.status_code == 422
+    assert direct_invocation_response.json()["message"] == "当前 Skill 尚无已发布版本，无法发起运行。"
+
+    assert scenario_response.status_code == 201
+    assert scenario["target_compile_artifact_id"] is None
+    assert start_response.status_code == 202
+    assert runtime_run_response.json()["compile_artifact_id"] == artifact_id
+    assert scenario_run["run_id"]
+
+
 def test_publish_skill_records_failed_startup_when_gitlab_fails() -> None:
     client, fake_gateway, _ = create_test_client()
 
@@ -1193,6 +2461,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         run_id = invocation_payload["run_id"]
 
         initial_run_response = client.get(f"/api/v1/runs/{run_id}")
+        initial_task_status_response = client.get(f"/api/v1/runs/{run_id}/task-status")
         binding_requirements_response = client.get(f"/api/v1/runs/{run_id}/binding-requirements")
         bindings_response = client.get(f"/api/v1/runs/{run_id}/bindings")
         terminal_session_response = client.get(f"/api/v1/terminal/sessions/{run_id}")
@@ -1207,11 +2476,16 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
                 "external_event_id": "issue-one-demo-extra-input",
             },
         )
+        run_after_append_response = client.get(f"/api/v1/runs/{run_id}")
+        jobs_after_append_response = client.get("/api/v1/runtime/jobs")
+        process_runtime_run_for_test(client, run_id)
         run_response = client.get(f"/api/v1/runs/{run_id}")
+        task_status_response = client.get(f"/api/v1/runs/{run_id}/task-status")
         trace_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
         terminal_events_after_append_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
         jobs_response = client.get("/api/v1/runtime/jobs")
+        job_stats_response = client.get("/api/v1/runtime/jobs/stats")
 
     assert publish_response.status_code == 202
     assert publish_payload["compile_request"]["status"] == "pending"
@@ -1243,26 +2517,55 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert invocation_payload["gateway_type"] == "terminal"
     assert invocation_payload["terminal_session_id"]
     initial_run_payload = initial_run_response.json()
-    assert initial_run_payload["status"] == "waiting_input"
-    assert initial_run_payload["current_step"] == "collect_context"
-    assert initial_run_payload["checkpoint_id"] == "collect_context_evidence"
+    assert initial_run_payload["status"] == "waiting_runtime"
+    assert initial_run_payload["runtime_phase"] == "start"
+    assert initial_run_payload["latest_terminal_seq"] == 0
+    assert initial_run_payload["current_step"] == ""
+    assert initial_run_payload["checkpoint_id"] == ""
+    assert initial_task_status_response.status_code == 200
+    initial_task_status = initial_task_status_response.json()
+    assert initial_task_status["task"] == {
+        "skill_key": "issue-one-demo",
+        "skill_name": "Issue One Demo",
+        "version_no": 1,
+        "execution_goal": "帮助用户在现实世界完成当前 Skill 目标。",
+    }
+    assert initial_task_status["activity_status"] == "initializing"
+    assert initial_task_status["progress"] == {"completed": 0, "total": 1, "percent": 0}
+    assert initial_task_status["stages"][0]["title"] == "人工修订上下文收集"
+    assert initial_task_status["stages"][0]["status"] == "pending"
+    assert terminal_events_response.status_code == 200
+    assert terminal_events_response.json() == []
+    assert terminal_append_response.status_code == 202
+    assert terminal_append_response.json()["seq_no"] == 1
+    assert run_after_append_response.json()["status"] == "waiting_runtime"
+    assert run_after_append_response.json()["latest_terminal_seq"] == 1
+    runtime_job_after_append = next(job for job in jobs_after_append_response.json() if job["job_type"] == "runtime")
+    assert runtime_job_after_append["status"] == "pending"
     run_payload = run_response.json()
     assert run_payload["status"] == "succeeded"
     assert run_payload["terminal_session_id"] == invocation_payload["terminal_session_id"]
-    assert run_payload["latest_terminal_seq"] == 6
+    assert run_payload["latest_terminal_seq"] == 3
     assert run_payload["latest_trace_seq"] == 7
     assert len(run_payload["binding_summary"]) == 2
     assert "测试任务已完成" in run_payload["final_output"]
-    assert "final_verify" in fake_inference.calls[-1]["system_prompt"]
+    task_status = task_status_response.json()
+    assert task_status["run_status"] == "succeeded"
+    assert task_status["activity_status"] == "succeeded"
+    assert task_status["progress"] == {"completed": 1, "total": 1, "percent": 100}
+    assert task_status["current_stage_id"] == ""
+    assert task_status["stages"][0]["status"] == "completed"
+    assert task_status["current_checkpoint"] is None
+    assert fake_inference.calls == []
 
     event_types = [event["event_type"] for event in trace_response.json()]
     assert event_types == [
         "binding.resolved",
         "runtime.start.completed",
         "runtime.wait_checkpoint.entered",
-        "gateway.inference.completed",
-        "gateway.inference.completed",
-        "gateway.inference.completed",
+        "runtime.agent.completed",
+        "runtime.agent.completed",
+        "runtime.agent.completed",
         "runtime.final.completed",
     ]
 
@@ -1275,28 +2578,46 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert {item["target_kind"] for item in bindings_response.json()} == {"web_terminal"}
     assert terminal_session_response.status_code == 200
     assert terminal_session_response.json()["terminal_session"]["id"] == invocation_payload["terminal_session_id"]
-    assert terminal_events_response.status_code == 200
-    assert [item["direction"] for item in terminal_events_response.json()] == ["input", "output"]
-    assert terminal_append_response.status_code == 202
-    assert terminal_append_response.json()["seq_no"] == 3
-    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3, 4, 5, 6]
+    assert [item["seq_no"] for item in terminal_events_after_append_response.json()] == [1, 2, 3]
+    assert [item["direction"] for item in terminal_events_after_append_response.json()] == [
+        "input",
+        "output",
+        "output",
+    ]
+    assert terminal_events_after_append_response.json()[-1]["source_ref"]["node_id"] == "terminal"
+    assert "final_verify" not in [
+        item["source_ref"].get("node_id")
+        for item in terminal_events_after_append_response.json()
+        if item["direction"] == "output"
+    ]
 
     replay_payload = replay_response.json()
-    assert [item["title"] for item in replay_payload["timeline"]][:6] == [
-        "终端输入",
-        "绑定解析",
-        "runtime.start.completed",
-        "终端输出",
-        "等待现场证据",
-        "LLM 输出",
-    ]
-    assert len(replay_payload["terminal_events"]) == 6
+    replay_event_types = [item["event_type"] for item in replay_payload["timeline"]]
+    assert "terminal.event.appended" in replay_event_types
+    assert "binding.resolved" in replay_event_types
+    assert "runtime.start.completed" in replay_event_types
+    assert "runtime.wait_checkpoint.entered" in replay_event_types
+    assert "runtime.agent.completed" in replay_event_types
+    assert len(replay_payload["terminal_events"]) == 3
     assert len(replay_payload["bindings"]) == 2
     assert replay_payload["run"]["final_output"] == run_payload["final_output"]
 
     jobs = jobs_response.json()
     assert {job["job_type"] for job in jobs} >= {"compile", "runtime"}
     assert all(job["status"] == "succeeded" for job in jobs)
+    compile_job = next(job for job in jobs if job["job_type"] == "compile")
+    runtime_job = next(job for job in jobs if job["job_type"] == "runtime")
+    assert compile_job["started_at"]
+    assert compile_job["finished_at"]
+    assert compile_job["duration_ms"] is not None
+    assert compile_job["token_usage"]["total_tokens"] >= 15
+    assert runtime_job["started_at"]
+    assert runtime_job["finished_at"]
+    assert runtime_job["progress"]["percent"] == 100
+    assert runtime_job["token_usage"]["total_tokens"] >= 45
+    job_stats = job_stats_response.json()
+    assert job_stats["succeeded"] >= 2
+    assert job_stats["token_usage"]["total_tokens"] >= 60
 
 
 def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
@@ -1340,10 +2661,49 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         persisted_invocation_response = client.get(f"/api/v1/gateway/invocations/{invocation['id']}")
         initial_run_response = client.get(f"/api/v1/runs/{run_id}")
         upload_response = client.post(
-            f"/api/v1/terminal/sessions/{run_id}/files",
-            data={"caption": "现场证据已确认"},
-            files={"file": ("debug-photo.png", b"debug-image", "image/png")},
+            f"/api/v1/terminal/sessions/{run_id}/events",
+            data={
+                "event": json.dumps(
+                    {
+                        "direction": "input",
+                        "text": "现场证据已确认",
+                        "external_event_id": "terminal-debug-upload-000001",
+                    },
+                    ensure_ascii=False,
+                )
+            },
+            files=[("files", ("debug-photo.png", b"debug-image", "image/png"))],
         )
+        upload_count_after_first_append = len(client.app.state.object_store.uploads)
+        duplicate_upload_response = client.post(
+            f"/api/v1/terminal/sessions/{run_id}/events",
+            data={
+                "event": json.dumps(
+                    {
+                        "direction": "input",
+                        "text": "幂等重试不应重复上传",
+                        "external_event_id": "terminal-debug-upload-000001",
+                    },
+                    ensure_ascii=False,
+                )
+            },
+            files=[("files", ("retry-photo.png", b"different-image", "image/png"))],
+        )
+        uploaded_event = upload_response.json()["event"]
+        uploaded_image_part = next(part for part in uploaded_event["parts"] if part["kind"] == "image")
+        uploaded_content_response = client.get(
+            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content"
+        )
+        uploaded_content_range_response = client.get(
+            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content",
+            headers={"Range": "bytes=0-4"},
+        )
+        uploaded_content_cached_response = client.get(
+            f"/api/v1/terminal/sessions/{run_id}/events/{uploaded_event['id']}/parts/{uploaded_image_part['part_id']}/content",
+            headers={"If-None-Match": uploaded_content_response.headers["etag"]},
+        )
+        run_after_upload_response = client.get(f"/api/v1/runs/{run_id}")
+        process_runtime_run_for_test(client, run_id)
         final_run_response = client.get(f"/api/v1/runs/{run_id}")
         terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
         replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
@@ -1360,15 +2720,30 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     persisted_context = persisted_invocation_response.json()["terminal_context"]
     assert persisted_context["operator_mode"] == "debug"
     assert persisted_context["debug_context"]["kind"] == "skill_debug"
-    assert initial_run_response.json()["status"] == "waiting_input"
+    assert initial_run_response.json()["status"] == "waiting_runtime"
     assert upload_response.status_code == 202
-    assert upload_response.json()["event"]["event_kind"] == "terminal.image.input.v1"
-    assert upload_response.json()["event"]["mime_type"] == "image/png"
-    assert len(upload_response.json()["event"]["artifact_object_id"]) == 36
-    assert upload_response.json()["event"]["payload_inline"]["object_key"].startswith(f"terminal-uploads/{run_id}/")
-    assert upload_response.json()["event"]["payload_inline"]["caption"] == "现场证据已确认"
+    assert duplicate_upload_response.status_code == 202
+    assert duplicate_upload_response.json()["event_id"] == upload_response.json()["event_id"]
+    assert len(client.app.state.object_store.uploads) == upload_count_after_first_append
+    assert uploaded_event["event_kind"] == "terminal.multimodal.input.v1"
+    assert uploaded_event["mime_type"] == "multipart/mixed"
+    assert [part["kind"] for part in uploaded_event["parts"]] == ["text", "image"]
+    assert uploaded_event["parts"][0]["text"] == "现场证据已确认"
+    assert uploaded_image_part["metadata"]["filename"] == "debug-photo.png"
+    assert "object_key" not in uploaded_image_part["metadata"]
+    assert uploaded_content_response.status_code == 200
+    assert uploaded_content_response.headers["content-type"] == "image/png"
+    assert uploaded_content_response.headers["cache-control"] == "private, max-age=86400, immutable"
+    assert uploaded_content_response.headers["etag"]
+    assert uploaded_content_response.content == b"debug-image"
+    assert uploaded_content_range_response.status_code == 206
+    assert uploaded_content_range_response.headers["content-range"] == "bytes 0-4/11"
+    assert uploaded_content_range_response.content == b"debug"
+    assert uploaded_content_cached_response.status_code == 304
+    assert uploaded_content_cached_response.content == b""
+    assert run_after_upload_response.json()["status"] == "waiting_runtime"
     assert final_run_response.json()["status"] == "succeeded"
-    assert any(event["event_kind"] == "terminal.image.input.v1" for event in terminal_events_response.json())
+    assert any(event["event_kind"] == "terminal.multimodal.input.v1" for event in terminal_events_response.json())
     assert replay_response.status_code == 200
     assert replay_response.json()["run"]["id"] == run_id
     assert len(replay_response.json()["terminal_events"]) >= 3
@@ -1377,15 +2752,117 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
     assert test_jobs_response.json() == []
 
 
+def test_terminal_events_accept_multipart_multimodal_parts_and_feed_runner() -> None:
+    client, _, fake_inference = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "terminal-multipart-event",
+                "name": "Terminal Multipart Event",
+                "description": "Validate one terminal event can carry ordered multimodal parts.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Multipart terminal publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        invocation_response = client.post(
+            "/api/v1/gateway/invocations",
+            json={
+                "skill_key": "terminal-multipart-event",
+                "gateway_type": "terminal",
+                "terminal_context": {"terminal_kind": "web", "operator_mode": "debug"},
+                "input_envelope": {"user_input": "启动多模态验证"},
+            },
+        )
+        run_id = invocation_response.json()["run_id"]
+        event_payload = {
+            "direction": "input",
+            "text": "请结合现场图像、视频和音频判断故障。",
+        }
+        append_response = client.post(
+            f"/api/v1/terminal/sessions/{run_id}/events",
+            data={"event": json.dumps(event_payload, ensure_ascii=False)},
+            files=[
+                ("files", ("fault.png", b"image-bytes", "image/png")),
+                ("files", ("clip.mp4", b"video-bytes", "video/mp4")),
+                ("files", ("note.wav", b"audio-bytes", "audio/wav")),
+            ],
+        )
+        appended_event = append_response.json()["event"]
+        image_part = next(part for part in appended_event["parts"] if part["kind"] == "image")
+        image_part_content_response = client.get(
+            f"/api/v1/terminal/sessions/{run_id}/events/{appended_event['id']}/parts/{image_part['part_id']}/content"
+        )
+        run_after_append_response = client.get(f"/api/v1/runs/{run_id}")
+        process_runtime_run_for_test(client, run_id)
+        final_run_response = client.get(f"/api/v1/runs/{run_id}")
+        snapshots_response = client.get(f"/api/v1/runs/{run_id}/snapshots")
+        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+        replay_response = client.get(f"/api/v1/replay/runs/{run_id}")
+
+    assert append_response.status_code == 202
+    assert appended_event["event_kind"] == "terminal.multimodal.input.v1"
+    assert appended_event["mime_type"] == "multipart/mixed"
+    assert [part["part_id"] for part in appended_event["parts"]] == ["text_1", "image_1", "video_1", "audio_1"]
+    assert [part["order_index"] for part in appended_event["parts"]] == [1, 2, 3, 4]
+    assert appended_event["parts"][0]["text"] == "请结合现场图像、视频和音频判断故障。"
+    assert all(not part.get("caption") for part in appended_event["parts"])
+    media_parts = [part for part in appended_event["parts"] if part["kind"] != "text"]
+    assert [part["kind"] for part in media_parts] == ["image", "video", "audio"]
+    assert all(part["artifact_object_id"] for part in media_parts)
+    assert all("object_key" not in part["metadata"] for part in media_parts)
+
+    assert image_part_content_response.status_code == 200
+    assert image_part_content_response.headers["content-type"] == "image/png"
+    assert image_part_content_response.content == b"image-bytes"
+    assert run_after_append_response.json()["status"] == "waiting_runtime"
+    assert final_run_response.json()["status"] == "succeeded"
+
+    final_token = snapshots_response.json()[-1]["token_payload"]
+    latest_evidence = final_token["control"]["latest_evidence"]
+    assert latest_evidence["id"] == appended_event["id"]
+    assert [part["part_id"] for part in latest_evidence["parts"]] == ["text_1", "image_1", "video_1", "audio_1"]
+    assert "请结合现场图像" in latest_evidence["input_bundle"]["text"]
+    assert "fault.png" in latest_evidence["input_bundle"]["text"]
+    assert "object_key" not in latest_evidence["input_bundle"]["text"]
+    assert "terminal-event-parts" not in latest_evidence["input_bundle"]["text"]
+    assert "请结合现场图像" in final_token["input_envelope"]["user_input"]
+
+    assert not any(call.get("attachments") for call in fake_inference.calls)
+    assert any(item["event_type"] == "runtime.agent.completed" for item in replay_response.json()["timeline"])
+
+    terminal_events = terminal_events_response.json()
+    persisted_event = next(event for event in terminal_events if event["id"] == appended_event["id"])
+    assert [part["kind"] for part in persisted_event["parts"]] == ["text", "image", "video", "audio"]
+    replay_event = next(event for event in replay_response.json()["terminal_events"] if event["id"] == appended_event["id"])
+    assert [part["part_id"] for part in replay_event["parts"]] == ["text_1", "image_1", "video_1", "audio_1"]
+
+
 def test_terminal_file_upload_returns_json_error_when_object_store_unavailable() -> None:
     fake_gateway = FakeGitLabGateway()
     fake_inference = FakeInferenceGateway()
+    settings = create_test_settings()
     client = TestClient(
         create_app(
-            create_test_settings(),
+            settings,
             gitlab_gateway=fake_gateway,
             inference_gateway=fake_inference,
             object_store=FailingObjectStore(),
+            agent_harness_service=AgentHarnessService(
+                settings=settings,
+                chat_model_factory=lambda definition: (
+                    ScriptedCompilerChatModel()
+                    if definition.agent_key == "psop.compiler"
+                    else ScriptedRunnerChatModel()
+                    if definition.agent_key == "psop.runner"
+                    else ScriptedBuilderChatModel()
+                ),
+            ),
         )
     )
 
@@ -1415,9 +2892,9 @@ def test_terminal_file_upload_returns_json_error_when_object_store_unavailable()
         )
         run_id = invocation_response.json()["run_id"]
         upload_response = client.post(
-            f"/api/v1/terminal/sessions/{run_id}/files",
-            data={"caption": "图片证据"},
-            files={"file": ("fault.jpg", b"image-bytes", "image/jpeg")},
+            f"/api/v1/terminal/sessions/{run_id}/events",
+            data={"event": json.dumps({"direction": "input", "text": "图片证据"}, ensure_ascii=False)},
+            files=[("files", ("fault.jpg", b"image-bytes", "image/jpeg"))],
         )
 
     assert upload_response.status_code == 502
@@ -1468,14 +2945,60 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
                     "external_event_id": "ws-terminal-demo-input",
                 },
             )
-            message = websocket.receive_json()
+            initial_trace_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
+            terminal_events_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+            appended_events = [
+                event
+                for event in terminal_events_response.json()
+                if event["seq_no"] >= append_response.json()["seq_no"]
+            ]
+            messages = [websocket.receive_json() for _ in appended_events]
+            initial_trace_seq = max((event["seq_no"] for event in initial_trace_response.json()), default=0)
+            process_runtime_run_for_test(client, run_id)
+            terminal_events_after_process_response = client.get(f"/api/v1/terminal/sessions/{run_id}/events")
+            trace_after_process_response = client.get(f"/api/v1/runs/{run_id}/trace-events")
+            output_events = [
+                event
+                for event in terminal_events_after_process_response.json()
+                if event["seq_no"] > append_response.json()["seq_no"]
+            ]
+            new_trace_events = [
+                event for event in trace_after_process_response.json() if event["seq_no"] > initial_trace_seq
+            ]
+            process_messages = []
+            for _ in range(32):
+                message = websocket.receive_json()
+                process_messages.append(message)
+                if (
+                    message["event_type"] == "run.task_status.updated"
+                    and message["payload"]["run_status"] == "succeeded"
+                ):
+                    break
 
     assert invocation_response.status_code == 201
     assert connected["event_type"] == "ws.connected"
     assert append_response.status_code == 202
-    assert message["event_type"] == "terminal.event.appended"
-    assert message["payload"]["payload_inline"] == "WS 输入"
-    assert message["seq_no"] == append_response.json()["seq_no"]
+    assert terminal_events_response.status_code == 200
+    assert [message["event_type"] for message in messages] == ["terminal.event.appended"] * len(appended_events)
+    assert [message["seq_no"] for message in messages] == [event["seq_no"] for event in appended_events]
+    assert messages[0]["payload"]["payload_inline"] == "WS 输入"
+    assert messages[0]["seq_no"] == append_response.json()["seq_no"]
+    assert [message["payload"]["direction"] for message in messages] == ["input"]
+    assert [message["event_type"] for message in process_messages].count("terminal.event.appended") == len(output_events)
+    assert [message["event_type"] for message in process_messages].count("trace.event.appended") == len(new_trace_events)
+    task_status_messages = [
+        message for message in process_messages if message["event_type"] == "run.task_status.updated"
+    ]
+    assert task_status_messages
+    assert task_status_messages[-1]["payload"]["run_status"] == "succeeded"
+    assert task_status_messages[-1]["payload"]["progress"]["percent"] == 100
+    output_messages = [message for message in process_messages if message["event_type"] == "terminal.event.appended"]
+    assert [message["payload"]["direction"] for message in output_messages] == ["output"] * len(output_events)
+    assert any("测试任务已完成" in str(message["payload"]["payload_inline"]) for message in output_messages)
+    assert any(
+        any(part["kind"] == "text" and "测试任务已完成" in part["text"] for part in message["payload"]["parts"])
+        for message in output_messages
+    )
 
 
 def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
@@ -1530,7 +3053,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
                 "description": "时间轴驱动输入，时间点以前判断输出。",
                 "duration_ms": 5000,
                 "timeline": timeline,
-                "judge_policy": {"route_key": "skill-test-judge", "confidence_threshold": 0.7},
+                "judge_policy": {"route_key": "text", "confidence_threshold": 0.7},
             },
         )
         scenario = scenario_response.json()
@@ -1623,10 +3146,16 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     )
     assert image_inputs[0]["payload_inline"]["asset_id"] == upload_response.json()["id"]
     assert image_inputs[0]["payload_inline"]["name"] == "伞骨图片"
-    assert image_inputs[0]["payload_inline"]["caption"] == "伞骨近照"
+    assert image_inputs[0]["payload_inline"]["description"] == "伞骨近照"
     assert any(event["direction"] == "output" and "测试任务已完成" in str(event["payload_inline"]) for event in terminal_events)
     assert any(job["job_type"] == "skill_test_timeline_driver" and job["status"] == "succeeded" for job in jobs_response.json())
-    assert any(call["route_key"] == "skill-test-judge" for call in fake_inference.calls)
+    assert any(
+        job["job_type"] == "skill_test_timeline_driver"
+        and job["token_usage"]
+        and job["token_usage"]["total_tokens"] >= 15
+        for job in jobs_response.json()
+    )
+    assert any(call["route_key"] == "text" and "黑盒时序测试 Judge" in call["system_prompt"] for call in fake_inference.calls)
 
     assert evaluate_response.status_code == 200
     assert evaluate_response.json()["status"] == "passed"
@@ -1636,7 +3165,7 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert review["expectation_evaluations"][0]["expectation_id"] == "expect_completion"
     assert review["expectation_evaluations"][0]["status"] == "passed"
     judge_raw_response = review["expectation_evaluations"][0]["raw_response"]
-    assert judge_raw_response["request"]["route_key"] == "skill-test-judge"
+    assert judge_raw_response["request"]["route_key"] == "text"
     assert judge_raw_response["request"]["prompt_payload"]["expectation"] == "系统应确认现场步骤已完成。"
     assert judge_raw_response["request"]["prompt_payload"]["run_status"] == "succeeded"
     assert judge_raw_response["request"]["user_prompt"] == json.dumps(
@@ -1666,6 +3195,125 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert fork_debug_response.status_code == 201
     assert fork_debug_response.json()["terminal_context"]["operator_mode"] == "debug"
     assert fork_debug_response.json()["terminal_context"]["debug_context"]["kind"] == "skill_debug"
+
+
+def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> None:
+    client, _, fake_inference = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "skill-test-multimodal-parts",
+                "name": "Skill Test Multimodal Parts",
+                "description": "Validate timeline parts are sent as one terminal event.",
+            },
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Scenario multimodal publish"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+        scenario_response = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios",
+            json={"name": "多模态现场包", "duration_ms": 5000, "timeline": {"events": []}},
+        )
+        scenario = scenario_response.json()
+        image_upload = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets",
+            data={"name": "现场照片", "description": "电控柜照片", "lane_id": "input.image"},
+            files={"file": ("panel.png", b"panel-image", "image/png")},
+        ).json()
+        video_upload = client.post(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/assets",
+            data={"name": "启动视频", "description": "设备启动过程", "lane_id": "input.video"},
+            files={"file": ("startup.mp4", b"startup-video", "video/mp4")},
+        ).json()
+        patched_timeline = copy.deepcopy(scenario["timeline"])
+        patched_timeline["events"] = [
+            {
+                "id": "site_bundle",
+                "lane_id": "input.text",
+                "at_ms": 0,
+                "parts": [
+                    {
+                        "part_id": "text_1",
+                        "kind": "text",
+                        "mime_type": "text/plain",
+                        "text": "现场电控柜启动后抖动，请结合素材判断。",
+                    },
+                    {
+                        "part_id": "image_1",
+                        "kind": "image",
+                        "asset_id": image_upload["id"],
+                    },
+                    {
+                        "part_id": "video_1",
+                        "kind": "video",
+                        "asset_id": video_upload["id"],
+                    },
+                ],
+            },
+            {
+                "id": "expect_completion",
+                "lane_id": "expected.semantic",
+                "at_ms": 5000,
+                "expectation": "系统应完成多模态现场包评估。",
+            },
+        ]
+        patch_response = client.patch(
+            f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}",
+            json={"timeline": patched_timeline},
+        )
+        scenario = patch_response.json()
+        start_response = client.post(f"/api/v1/skills/{created['id']}/test-scenarios/{scenario['id']}/runs", json={})
+        scenario_run = start_response.json()
+        terminal_events_response = client.get(f"/api/v1/terminal/sessions/{scenario_run['run_id']}/events")
+        review_response = client.get(f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/review")
+        cursor = review_response.json()["cursor_anchors"][-1]
+        fork_response = client.post(
+            f"/api/v1/skill-test-scenario-runs/{scenario_run['id']}/fork-scenario",
+            json={"cursor": cursor, "name": "从多模态包继续"},
+        )
+
+    assert patch_response.status_code == 200
+    patched_event = next(event for event in scenario["timeline"]["events"] if event["id"] == "site_bundle")
+    assert patched_event["event_kind"] == "terminal.multimodal.input.v1"
+    assert patched_event["mime_type"] == "multipart/mixed"
+    assert [part["part_id"] for part in patched_event["parts"]] == ["text_1", "image_1", "video_1"]
+
+    assert start_response.status_code == 202
+    assert scenario_run["driver_status"] == "completed"
+    assert scenario_run["driver_events"] == [
+        {
+            **scenario_run["driver_events"][0],
+            "event_id": "site_bundle",
+            "lane_id": "input.text",
+            "at_ms": 0,
+        }
+    ]
+    terminal_inputs = [event for event in terminal_events_response.json() if event["direction"] == "input"]
+    bundled_inputs = [event for event in terminal_inputs if event["external_event_id"].endswith(":site_bundle")]
+    assert len(bundled_inputs) == 1
+    bundled_event = bundled_inputs[0]
+    assert bundled_event["event_kind"] == "terminal.multimodal.input.v1"
+    assert bundled_event["mime_type"] == "multipart/mixed"
+    assert [part["kind"] for part in bundled_event["parts"]] == ["text", "image", "video"]
+    assert [part["metadata"].get("filename") for part in bundled_event["parts"][1:]] == ["panel.png", "startup.mp4"]
+    assert not any(call.get("attachments") for call in fake_inference.calls)
+    assert any(item["event_type"] == "runtime.agent.completed" for item in review_response.json()["replay"]["timeline"])
+
+    assert review_response.status_code == 200
+    review_terminal_event = next(
+        event for event in review_response.json()["replay"]["terminal_events"] if event["id"] == bundled_event["id"]
+    )
+    assert [part["part_id"] for part in review_terminal_event["parts"]] == ["text_1", "image_1", "video_1"]
+
+    assert fork_response.status_code == 201
+    forked_parts = next(event for event in fork_response.json()["timeline"]["events"] if event["id"] == "fork_site_bundle")["parts"]
+    assert forked_parts[1]["asset_id"] != image_upload["id"]
+    assert forked_parts[2]["asset_id"] != video_upload["id"]
 
 
 def test_skill_test_scenario_fork_uses_selected_timeline_time() -> None:
@@ -1985,6 +3633,38 @@ def test_skill_test_judge_prompt_compacts_large_outputs() -> None:
     assert len(prompt_json) < 10000
     assert old_payload not in prompt_json
     assert recent_payload not in prompt_json
+
+
+def test_skill_test_evidence_refs_are_normalized_for_review_responses() -> None:
+    assert SkillTestService._normalize_evidence_refs(
+        [
+            {"kind": "terminal_event", "seq_no": 4},
+            "seq_no: 1",
+            "",
+            None,
+        ]
+    ) == [
+        {"kind": "terminal_event", "seq_no": 4},
+        {"kind": "raw", "ref": "seq_no: 1"},
+    ]
+    evaluation = SkillTestExpectationEvaluation(
+        id="evaluation-1",
+        scenario_run_id="scenario-run-1",
+        expectation_id="expectation-1",
+        status="failed",
+        confidence=0.5,
+        reason="缺少预期输出。",
+        evidence_refs=["seq_no: 1"],
+        judge_provider="fake",
+        judge_model="fake-model",
+        prompt_hash="hash",
+        raw_response={},
+        created_at=datetime(2026, 5, 13, tzinfo=timezone.utc),
+    )
+
+    response = SkillTestService._build_evaluation_response(evaluation)
+
+    assert response.evidence_refs == [{"kind": "raw", "ref": "seq_no: 1"}]
 
 
 def test_skill_test_scenario_rejects_duplicate_open_run() -> None:

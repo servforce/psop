@@ -25,15 +25,16 @@
 
   window.PSOPConsoleSkillDetailMethods = {
 
-      async loadSkills() {
+      async loadSkills(options = {}) {
         this.busy.list = true;
         try {
           const params = new URLSearchParams();
-          if (this.filters.search.trim()) {
+          const useFilters = options.useFilters !== false;
+          if (useFilters && this.filters.search.trim()) {
             params.set("search", this.filters.search.trim());
           }
-          if (this.filters.status) {
-            params.set("status", this.filters.status);
+          if (useFilters && this.filters.published_state) {
+            params.set("is_published", String(this.filters.published_state === "published"));
           }
           const suffix = params.toString() ? `?${params}` : "";
           this.skills = await this.apiRequest(`/skills${suffix}`);
@@ -46,6 +47,7 @@
       async createSkill() {
         this.busy.create = true;
         this.clearNotice();
+        this.createFormError = "";
 
         try {
           const payload = {
@@ -61,7 +63,7 @@
           await this.navigate(buildSkillDetailPath(created.id));
           this.showNotice("success", "Skill 已创建，并已在 GitLab 中初始化。");
         } catch (error) {
-          this.showNotice("error", error.message || "创建 Skill 失败。");
+          this.createFormError = error.message || "创建 Skill 失败。";
         } finally {
           this.busy.create = false;
         }
@@ -112,7 +114,7 @@
             description: detail.description
           };
           this.resetLazyDetailState(skillId);
-          if (!["overview", "source", "materials", "publish", "compiler", "debug", "runtime", "test"].includes(this.activeDetailTab)) {
+          if (!["overview", "source", "materials", "publish", "compiler", "runtime", "test"].includes(this.activeDetailTab)) {
             this.activeDetailTab = "overview";
           }
           if (this.activeDetailTab === "materials") {
@@ -123,10 +125,7 @@
           }
           if (this.activeDetailTab === "runtime") {
             this.invocationForm.skill_key = detail.key;
-            await this.loadInvocations(detail.key);
-          }
-          if (this.activeDetailTab === "debug") {
-            await this.loadInvocations(detail.key);
+            await this.loadSkillRuns(detail.id);
           }
           if (this.activeDetailTab === "test" && options.loadTestCases !== false) {
             await this.loadSkillTestCases(detail.id);
@@ -147,15 +146,18 @@
         this.rawMaterialsLoadedSkillId = null;
         this.rawMaterials = [];
         this.rawMaterialDetail = null;
-        this.selectedRawMaterialIds = [];
-        this.rawMaterialUploadMode = "file";
-        this.rawMaterialUploadFile = null;
+        this.rawMaterialAnalysis = null;
+        this.rawMaterialDetailTab = "analysis";
+        this.rawMaterialUploadFiles = [];
+        this.rawMaterialUploadItems = [];
+        this.rawMaterialUploadSelectedIndex = 0;
+        this.rawMaterialUploadNameAutoFilled = false;
+        this.rawMaterialUploadProgress = null;
+        this.rawMaterialUploadError = "";
         this.rawMaterialUploadForm = {
           name: "",
           description: "",
-          material_kind: "",
-          source_note: "",
-          source_url: ""
+          source_note: ""
         };
         this.rawMaterialUploadModalOpen = false;
         this.rawMaterialGenerateModalOpen = false;
@@ -163,6 +165,8 @@
           user_description: ""
         };
         this.rawMaterialGenerationResult = null;
+        this.resetBuilderAgentPanel();
+        this.closeRawMaterialImagePreview();
         this.publishRecordsLoadedSkillId = null;
         this.publishRecords = [];
         this.sourceForm = {
@@ -193,7 +197,7 @@
         this.skillTestReviewAutoFollow = true;
         this.skillTestCaseSearch = "";
         this.resetSkillTestCaseForm();
-        this.closeCompilerArtifactWorkspace();
+        this.resetCompilerArtifactState();
         if (skillId) {
           this.activeSourceTab = "skill.yaml";
         }
@@ -245,11 +249,9 @@
         try {
           this.rawMaterials = await this.apiRequest(`/skills/${skillId}/raw-materials`);
           this.rawMaterialsLoadedSkillId = skillId;
-          this.selectedRawMaterialIds = this.selectedRawMaterialIds.filter((materialId) =>
-            this.rawMaterials.some((material) => material.id === materialId)
-          );
           if (this.rawMaterialDetail && !this.rawMaterials.some((material) => material.id === this.rawMaterialDetail.id)) {
             this.rawMaterialDetail = null;
+            this.rawMaterialAnalysis = null;
           }
           if (!this.rawMaterialDetail && this.rawMaterials.length > 0) {
             await this.openRawMaterialDetail(this.rawMaterials[0]);
@@ -267,31 +269,93 @@
 
         this.busy.rawMaterialDetail = true;
         try {
+          this.rawMaterialDetailTab = "analysis";
           this.rawMaterialDetail = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`);
+          await this.loadRawMaterialAnalysis(this.rawMaterialDetail.id);
         } finally {
           this.busy.rawMaterialDetail = false;
         }
       },
 
 
-      handleRawMaterialFileChange(event) {
-        const file = event?.target?.files?.[0] || null;
-        this.rawMaterialUploadFile = file;
-        if (file && !this.rawMaterialUploadForm.name) {
-          this.rawMaterialUploadForm.name = file.name;
+      async loadRawMaterialAnalysis(materialId) {
+        if (!this.currentSkill || !materialId) {
+          return;
+        }
+        try {
+          this.rawMaterialAnalysis = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${materialId}/analysis`);
+        } catch (error) {
+          this.rawMaterialAnalysis = null;
         }
       },
 
 
-      openRawMaterialUploadModal(mode = "file") {
-        this.rawMaterialUploadMode = mode;
-        this.rawMaterialUploadFile = null;
+      async analyzeRawMaterial(material = this.rawMaterialDetail) {
+        if (!this.currentSkill || !material) {
+          return;
+        }
+        const analysisStatus = material.analysis_status || material.status;
+        if (material.status === "processing" || ["pending", "running"].includes(analysisStatus)) {
+          this.showNotice("error", "素材正在分析中，不能重复解析。");
+          return;
+        }
+        const materialId = material.id;
+        this.busy.rawMaterialAnalyze = true;
+        this.clearNotice();
+        try {
+          const analysis = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${materialId}/analyze`, {
+            method: "POST"
+          });
+          await this.loadRawMaterials(this.currentSkill.id, true);
+          if (this.rawMaterialDetail?.id === materialId) {
+            this.rawMaterialAnalysis = analysis;
+            this.rawMaterialDetail = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${materialId}`);
+          }
+          this.showNotice("success", "素材分析任务已提交。");
+        } catch (error) {
+          this.showNotice("error", error.message || "提交素材分析失败。");
+        } finally {
+          this.busy.rawMaterialAnalyze = false;
+        }
+      },
+
+
+      handleRawMaterialFileChange(event) {
+        const files = Array.from(event?.target?.files || []);
+        if (files.length === 0) {
+          return;
+        }
+        this.syncRawMaterialUploadSelectedItem();
+        const nextItems = files.map((file) => ({
+          file,
+          name: file.name,
+          description: "",
+          source_note: ""
+        }));
+        const startIndex = this.rawMaterialUploadItems.length;
+        this.rawMaterialUploadItems = [...this.rawMaterialUploadItems, ...nextItems];
+        this.rawMaterialUploadFiles = this.rawMaterialUploadItems.map((item) => item.file);
+        this.rawMaterialUploadSelectedIndex = startIndex;
+        this.rawMaterialUploadForm = this.rawMaterialUploadItemForm(this.rawMaterialUploadSelectedItem());
+        this.rawMaterialUploadError = "";
+        this.rawMaterialUploadNameAutoFilled = nextItems.length === 1;
+        if (this.$refs.rawMaterialFileInput) {
+          this.$refs.rawMaterialFileInput.value = "";
+        }
+      },
+
+
+      openRawMaterialUploadModal() {
+        this.rawMaterialUploadFiles = [];
+        this.rawMaterialUploadItems = [];
+        this.rawMaterialUploadSelectedIndex = 0;
+        this.rawMaterialUploadNameAutoFilled = false;
+        this.rawMaterialUploadProgress = null;
+        this.rawMaterialUploadError = "";
         this.rawMaterialUploadForm = {
           name: "",
           description: "",
-          material_kind: "",
-          source_note: "",
-          source_url: ""
+          source_note: ""
         };
         this.rawMaterialUploadModalOpen = true;
       },
@@ -305,59 +369,198 @@
       },
 
 
+      rawMaterialUploadSelectedItem() {
+        return this.rawMaterialUploadItems[this.rawMaterialUploadSelectedIndex] || null;
+      },
+
+
+      rawMaterialUploadItemForm(item) {
+        return {
+          name: item?.name || "",
+          description: item?.description || "",
+          source_note: item?.source_note || ""
+        };
+      },
+
+
+      selectRawMaterialUploadItem(index) {
+        if (this.busy.rawMaterialUpload || index < 0 || index >= this.rawMaterialUploadItems.length) {
+          return;
+        }
+        this.syncRawMaterialUploadSelectedItem();
+        this.rawMaterialUploadSelectedIndex = index;
+        this.rawMaterialUploadForm = this.rawMaterialUploadItemForm(this.rawMaterialUploadSelectedItem());
+        this.rawMaterialUploadNameAutoFilled = false;
+      },
+
+
+      syncRawMaterialUploadSelectedItem() {
+        const item = this.rawMaterialUploadSelectedItem();
+        if (!item) {
+          return;
+        }
+        ["name", "description", "source_note"].forEach((key) => {
+          item[key] = this.rawMaterialUploadForm[key] || "";
+        });
+      },
+
+
+      removeRawMaterialUploadItem(index) {
+        if (this.busy.rawMaterialUpload || index < 0 || index >= this.rawMaterialUploadItems.length) {
+          return;
+        }
+        this.syncRawMaterialUploadSelectedItem();
+        this.rawMaterialUploadItems.splice(index, 1);
+        this.rawMaterialUploadFiles = this.rawMaterialUploadItems.map((item) => item.file);
+        if (this.rawMaterialUploadSelectedIndex >= this.rawMaterialUploadItems.length) {
+          this.rawMaterialUploadSelectedIndex = Math.max(0, this.rawMaterialUploadItems.length - 1);
+        } else if (index < this.rawMaterialUploadSelectedIndex) {
+          this.rawMaterialUploadSelectedIndex -= 1;
+        }
+        this.rawMaterialUploadForm = this.rawMaterialUploadItemForm(this.rawMaterialUploadSelectedItem());
+        if (this.rawMaterialUploadItems.length === 0 && this.$refs.rawMaterialFileInput) {
+          this.$refs.rawMaterialFileInput.value = "";
+        }
+      },
+
+
       async submitRawMaterial() {
         if (!this.currentSkill) {
           return;
         }
-        if (this.rawMaterialUploadMode === "file" && !this.rawMaterialUploadFile) {
-          this.showCenterToast("error", "请选择要上传的素材文件。");
+        this.rawMaterialUploadError = "";
+        this.syncRawMaterialUploadSelectedItem();
+        const selectedItems = this.rawMaterialUploadItems.length > 0
+          ? this.rawMaterialUploadItems
+          : Array.from(this.$refs.rawMaterialFileInput?.files || []).map((file) => ({
+            file,
+            name: file.name,
+            description: "",
+            source_note: ""
+          }));
+        if (selectedItems.length === 0) {
+          this.rawMaterialUploadError = "请选择要上传的素材文件。";
           return;
         }
-        if (this.rawMaterialUploadMode === "url" && !this.rawMaterialUploadForm.source_url.trim()) {
-          this.showCenterToast("error", "请输入参考 URL。");
-          return;
-        }
-
-        const formData = new FormData();
-        if (this.rawMaterialUploadMode === "file") {
-          formData.append("file", this.rawMaterialUploadFile);
-        } else {
-          formData.append("source_url", this.rawMaterialUploadForm.source_url.trim());
-        }
-        ["name", "description", "material_kind", "source_note"].forEach((key) => {
-          const value = this.rawMaterialUploadForm[key];
-          if (value) {
-            formData.append(key, value);
-          }
-        });
 
         this.busy.rawMaterialUpload = true;
         this.clearNotice();
+        const createdMaterials = [];
+        const failedUploads = [];
         try {
-          const created = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials`, {
-            method: "POST",
-            body: formData
-          });
-          this.rawMaterialUploadFile = null;
+          for (const [index, item] of selectedItems.entries()) {
+            const selectedFile = item.file;
+            this.rawMaterialUploadProgress = {
+              current: index + 1,
+              total: selectedItems.length,
+              filename: selectedFile.name
+            };
+            const formData = new FormData();
+            formData.append("file", selectedFile);
+            ["name", "description", "source_note"].forEach((key) => {
+              const value = item[key];
+              if (value) {
+                formData.append(key, value);
+              }
+            });
+            try {
+              const created = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials`, {
+                method: "POST",
+                body: formData
+              });
+              createdMaterials.push(created);
+            } catch (error) {
+              failedUploads.push({
+                ...item,
+                message: error.message || "保存素材失败。"
+              });
+            }
+          }
+
+          if (createdMaterials.length > 0) {
+            await this.loadRawMaterials(this.currentSkill.id, true);
+          }
+          if (failedUploads.length > 0) {
+            this.rawMaterialUploadItems = failedUploads.map(({ message, ...item }) => item);
+            this.rawMaterialUploadFiles = this.rawMaterialUploadItems.map((item) => item.file);
+            this.rawMaterialUploadSelectedIndex = 0;
+            this.rawMaterialUploadForm = this.rawMaterialUploadItemForm(this.rawMaterialUploadSelectedItem());
+            this.rawMaterialUploadNameAutoFilled = false;
+            if (this.$refs.rawMaterialFileInput) {
+              this.$refs.rawMaterialFileInput.value = "";
+            }
+            const prefix = createdMaterials.length > 0 ? `已上传 ${createdMaterials.length} 个素材，` : "";
+            const firstFailure = failedUploads[0];
+            const suffix = failedUploads.length === 1
+              ? `${firstFailure.file.name} 上传失败：${firstFailure.message}`
+              : `${failedUploads.length} 个文件上传失败，首个失败：${firstFailure.file.name}：${firstFailure.message}`;
+            const message = `${prefix}${suffix}`;
+            this.rawMaterialUploadError = message;
+            this.showNotice("error", message);
+            return;
+          }
+
+          this.rawMaterialUploadFiles = [];
+          this.rawMaterialUploadItems = [];
+          this.rawMaterialUploadSelectedIndex = 0;
+          this.rawMaterialUploadNameAutoFilled = false;
+          this.rawMaterialUploadProgress = null;
           this.rawMaterialUploadForm = {
             name: "",
             description: "",
-            material_kind: "",
-            source_note: "",
-            source_url: ""
+            source_note: ""
           };
           if (this.$refs.rawMaterialFileInput) {
             this.$refs.rawMaterialFileInput.value = "";
           }
           this.rawMaterialUploadModalOpen = false;
-          await this.loadRawMaterials(this.currentSkill.id, true);
-          await this.openRawMaterialDetail(created);
-          this.showNotice(created.status === "ready" ? "success" : "error", created.status === "ready" ? "素材已保存并解析完成。" : "素材已保存，但解析失败。");
+          if (createdMaterials.length > 0) {
+            await this.loadRawMaterials(this.currentSkill.id, true);
+          }
+          const lastCreated = createdMaterials[createdMaterials.length - 1];
+          if (lastCreated) {
+            await this.openRawMaterialDetail(lastCreated);
+          }
+          const noticeType = createdMaterials.some((material) => material.status === "failed") ? "error" : "success";
+          this.showNotice(noticeType, this.rawMaterialUploadSuccessMessage(createdMaterials));
         } catch (error) {
-          this.showNotice("error", error.message || "保存素材失败。");
+          const message = error.message || "保存素材失败。";
+          this.rawMaterialUploadError = message;
+          this.showNotice("error", message);
         } finally {
+          this.rawMaterialUploadProgress = null;
           this.busy.rawMaterialUpload = false;
         }
+      },
+
+
+      rawMaterialUploadSuccessMessage(createdMaterials) {
+        if (!Array.isArray(createdMaterials) || createdMaterials.length === 0) {
+          return "素材已保存。";
+        }
+        if (createdMaterials.length === 1) {
+          const created = createdMaterials[0];
+          const statusMessages = {
+            ready: "素材已保存并解析完成。",
+            processing: "素材已保存，视频分析已开始。",
+            failed: created.error_message || "素材已保存，但解析失败。"
+          };
+          return statusMessages[created.status] || "素材已保存。";
+        }
+        const processingCount = createdMaterials.filter((material) => material.status === "processing").length;
+        const failedCount = createdMaterials.filter((material) => material.status === "failed").length;
+        const readyCount = createdMaterials.filter((material) => material.status === "ready").length;
+        const parts = [`已上传 ${createdMaterials.length} 个素材`];
+        if (readyCount) {
+          parts.push(`${readyCount} 个已解析`);
+        }
+        if (processingCount) {
+          parts.push(`${processingCount} 个视频已开始分析`);
+        }
+        if (failedCount) {
+          parts.push(`${failedCount} 个解析失败`);
+        }
+        return `${parts.join("，")}。`;
       },
 
 
@@ -372,7 +575,6 @@
           await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`, {
             method: "DELETE"
           });
-          this.selectedRawMaterialIds = this.selectedRawMaterialIds.filter((materialId) => materialId !== material.id);
           if (this.rawMaterialDetail?.id === material.id) {
             this.rawMaterialDetail = null;
           }
@@ -386,81 +588,532 @@
       },
 
 
-      toggleRawMaterialSelection(material) {
-        if (!material || material.status !== "ready") {
-          return;
-        }
-        if (this.selectedRawMaterialIds.includes(material.id)) {
-          this.selectedRawMaterialIds = this.selectedRawMaterialIds.filter((materialId) => materialId !== material.id);
-          return;
-        }
-        this.selectedRawMaterialIds = [...this.selectedRawMaterialIds, material.id];
+      allRawMaterialsReady() {
+        return this.rawMaterials.length > 0 && this.rawMaterials.every((material) => material.status === "ready");
       },
 
 
-      isRawMaterialSelected(material) {
-        return Boolean(material?.id && this.selectedRawMaterialIds.includes(material.id));
+      readyVideoRawMaterials() {
+        return this.rawMaterials.filter((material) => this.isVideoRawMaterial(material) && material.status === "ready");
       },
 
 
-      selectedRawMaterials() {
-        return this.rawMaterials.filter((material) => this.selectedRawMaterialIds.includes(material.id));
+      hasReadyVideoRawMaterial() {
+        return this.readyVideoRawMaterials().length > 0;
+      },
+
+
+      canGenerateSkillDraftFromRawMaterials() {
+        return this.allRawMaterialsReady() && this.hasReadyVideoRawMaterial();
       },
 
 
       openRawMaterialGenerateModal() {
-        if (this.selectedRawMaterialIds.length === 0) {
-          this.showCenterToast("error", "请选择至少一个已解析素材。");
+        if (this.rawMaterials.length === 0) {
+          this.showCenterToast("error", "请先上传素材。");
           return;
         }
+        if (!this.allRawMaterialsReady()) {
+          this.showCenterToast("error", "请等待全部素材分析完成后再生成。");
+          return;
+        }
+        if (!this.hasReadyVideoRawMaterial()) {
+          this.showCenterToast("error", "请至少上传一个已分析完成的视频素材。");
+          return;
+        }
+        this.rawMaterialGenerateModalOpen = false;
+        this.builderAgentPanel.open = true;
+        this.builderAgentPanel.status = "loading_latest";
+        this.builderAgentPanel.errorMessage = "";
+        this.builderAgentPanel.userInput = "";
         this.rawMaterialGenerateForm = {
-          user_description: ""
+          user_description: this.builderAgentPanel.userInput
         };
-        this.rawMaterialGenerationResult = null;
-        this.rawMaterialGenerateModalOpen = true;
+        this.loadLatestBuilderAgentRun();
       },
 
 
       closeRawMaterialGenerateModal() {
-        if (this.busy.rawMaterialGenerate) {
-          return;
-        }
+        this.stopBuilderAgentStreaming();
+        this.stopBuilderAgentElapsedTimer();
+        this.builderAgentPanel.open = false;
         this.rawMaterialGenerateModalOpen = false;
       },
 
 
       async generateSkillDraftFromRawMaterials() {
-        if (!this.currentSkill || this.selectedRawMaterialIds.length === 0) {
+        if (!this.currentSkill || !this.canGenerateSkillDraftFromRawMaterials()) {
           return;
         }
-        if (!this.rawMaterialGenerateForm.user_description.trim()) {
+        const userDescription = (
+          this.builderAgentPanel.userInput ||
+          this.rawMaterialGenerateForm.user_description ||
+          ""
+        ).trim();
+        if (!userDescription) {
           this.showCenterToast("error", "请输入生成描述。");
           return;
         }
 
         this.busy.rawMaterialGenerate = true;
+        let keepRunning = false;
         this.clearNotice();
         try {
           const skillId = this.currentSkill.id;
+          this.stopBuilderAgentStreaming();
+          this.builderAgentPanel = {
+            ...this.builderAgentPanel,
+            open: true,
+            status: "submitting",
+            userInput: "",
+            submittedInput: userDescription,
+            generationId: "",
+            jobId: "",
+            agentRunId: "",
+            startedAt: new Date().toISOString(),
+            elapsedMs: 0,
+            processExpanded: true,
+            timeline: null,
+            steps: [],
+            result: null,
+            errorMessage: "",
+            sseConnected: false,
+            usingPolling: false,
+            lastEventAt: "",
+            resultRefreshed: false
+          };
+          this.rawMaterialGenerateForm = { user_description: "" };
+          this.startBuilderAgentElapsedTimer();
           const result = await this.apiRequest(`/skills/${skillId}/raw-materials/generate-skill-draft`, {
             method: "POST",
             body: JSON.stringify({
-              material_ids: this.selectedRawMaterialIds,
-              user_description: this.rawMaterialGenerateForm.user_description.trim(),
+              user_description: userDescription,
               base_commit_sha: this.currentSkill.latest_draft_head_sha
             })
           });
           this.rawMaterialGenerationResult = result;
-          this.sourceLoadedSkillId = null;
-          this.repositoryLoadedSkillId = null;
-          this.currentSkill = await this.apiRequest(`/skills/${skillId}`);
-          await this.loadRawMaterials(skillId, true);
-          this.showNotice("success", "Skill 草稿已生成并提交到 GitLab draft。");
+          const agentRunId = result.prompt_metadata?.agent_run_id || result.id || "";
+          this.builderAgentPanel.generationId = result.id || "";
+          this.builderAgentPanel.jobId = result.job_id || result.prompt_metadata?.job_id || "";
+          this.builderAgentPanel.agentRunId = agentRunId;
+          this.builderAgentPanel.status = result.status || "pending";
+          if (agentRunId) {
+            await this.loadBuilderAgentTimeline(agentRunId);
+            if (!this.isBuilderAgentTerminalStatus(this.builderAgentPanel.status)) {
+              keepRunning = true;
+              this.subscribeBuilderAgentEvents(agentRunId);
+            }
+          } else if (result.status === "succeeded" || result.status === "failed") {
+            this.applyRawMaterialGenerationAsBuilderResult(result);
+          } else {
+            keepRunning = true;
+            this.startBuilderAgentPolling(agentRunId);
+          }
         } catch (error) {
-          this.showNotice("error", error.message || "生成 Skill 草稿失败。");
+          this.builderAgentPanel.status = "failed";
+          this.builderAgentPanel.errorMessage = error.message || "生成 Skill 草稿失败。";
+          this.builderAgentPanel.processExpanded = true;
+          this.showCenterToast("error", error.message || "生成 Skill 草稿失败。");
         } finally {
-          this.busy.rawMaterialGenerate = false;
+          if (!keepRunning && !this.isBuilderAgentRunning()) {
+            this.busy.rawMaterialGenerate = false;
+            this.stopBuilderAgentElapsedTimer();
+          }
         }
+      },
+
+
+      defaultBuilderAgentUserInput() {
+        return "";
+      },
+
+
+      resetBuilderAgentPanel(options = {}) {
+        this.stopBuilderAgentStreaming();
+        this.stopBuilderAgentElapsedTimer();
+        const userInput = options.userInput || (options.keepInput ? this.builderAgentPanel?.userInput : "") || this.defaultBuilderAgentUserInput();
+        this.rawMaterialGenerateModalOpen = false;
+        this.rawMaterialGenerateForm = { user_description: userInput };
+        this.rawMaterialGenerationResult = null;
+        this.builderAgentPanel = {
+          open: Boolean(options.open),
+          status: "idle",
+          userInput,
+          submittedInput: "",
+          generationId: "",
+          jobId: "",
+          agentRunId: "",
+          startedAt: "",
+          elapsedMs: 0,
+          processExpanded: true,
+          timeline: null,
+          steps: [],
+          result: null,
+          errorMessage: "",
+          sseConnected: false,
+          usingPolling: false,
+          lastEventAt: "",
+          resultRefreshed: false
+        };
+      },
+
+
+      async loadLatestBuilderAgentRun() {
+        if (!this.currentSkill?.id) {
+          this.resetBuilderAgentPanel({ open: true });
+          return;
+        }
+        try {
+          const params = new URLSearchParams({
+            agent_key: "psop.builder",
+            related_skill_definition_id: this.currentSkill.id
+          });
+          const timeline = await this.apiRequest(`/agents/runs/latest?${params}`);
+          this.applyBuilderAgentTimeline(timeline, { fromLatest: true });
+          if (this.isBuilderAgentTerminalStatus(timeline.status)) {
+            this.stopBuilderAgentStreaming();
+            this.stopBuilderAgentElapsedTimer();
+            return;
+          }
+          this.busy.rawMaterialGenerate = true;
+          this.startBuilderAgentElapsedTimer();
+          this.subscribeBuilderAgentEvents(timeline.agent_run_id);
+        } catch (error) {
+          if (error.payload?.code === "skill_not_found") {
+            this.resetBuilderAgentPanel({ open: true });
+            return;
+          }
+          this.builderAgentPanel.status = "idle";
+          this.builderAgentPanel.errorMessage = error.message || "读取 Builder Agent 运行记录失败。";
+          this.showCenterToast("error", this.builderAgentPanel.errorMessage);
+        }
+      },
+
+
+      async loadBuilderAgentTimeline(agentRunId) {
+        if (!agentRunId) {
+          return;
+        }
+        const timeline = await this.apiRequest(`/agents/runs/${encodeURIComponent(agentRunId)}/timeline`);
+        this.applyBuilderAgentTimeline(timeline);
+      },
+
+
+      subscribeBuilderAgentEvents(agentRunId) {
+        if (!agentRunId) {
+          return;
+        }
+        this.stopBuilderAgentStreaming();
+        if (typeof EventSource === "undefined") {
+          this.startBuilderAgentPolling(agentRunId);
+          return;
+        }
+        const source = new EventSource(`${this.apiBaseUrl}/agents/runs/${encodeURIComponent(agentRunId)}/events`);
+        this.builderAgentEventSource = source;
+        this.builderAgentPanel.sseConnected = true;
+        this.builderAgentPanel.usingPolling = false;
+        const applyTimelineEvent = (event) => {
+          const payload = this.parseBuilderAgentEventPayload(event);
+          if (!payload) {
+            return;
+          }
+          this.builderAgentPanel.lastEventAt = new Date().toISOString();
+          this.applyBuilderAgentTimeline(payload);
+        };
+        source.addEventListener("snapshot", applyTimelineEvent);
+        source.addEventListener("progress", applyTimelineEvent);
+        source.addEventListener("final", applyTimelineEvent);
+        source.addEventListener("error", (event) => {
+          const payload = this.parseBuilderAgentEventPayload(event);
+          if (payload?.agent_run_id) {
+            applyTimelineEvent(event);
+            return;
+          }
+          this.builderAgentPanel.sseConnected = false;
+          if (!this.isBuilderAgentTerminalStatus(this.builderAgentPanel.status)) {
+            this.startBuilderAgentPolling(agentRunId);
+          }
+        });
+      },
+
+
+      parseBuilderAgentEventPayload(event) {
+        const data = event?.data || "";
+        if (!data) {
+          return null;
+        }
+        try {
+          return JSON.parse(data);
+        } catch {
+          return null;
+        }
+      },
+
+
+      startBuilderAgentPolling(agentRunId = this.builderAgentPanel.agentRunId) {
+        if (!agentRunId) {
+          return;
+        }
+        if (this.builderAgentEventSource) {
+          this.builderAgentEventSource.close();
+          this.builderAgentEventSource = null;
+        }
+        if (this.builderAgentPollTimer && typeof window !== "undefined") {
+          window.clearInterval(this.builderAgentPollTimer);
+        }
+        this.builderAgentPanel.sseConnected = false;
+        this.builderAgentPanel.usingPolling = true;
+        this.pollBuilderAgentTimeline(agentRunId);
+        if (typeof window === "undefined") {
+          return;
+        }
+        this.builderAgentPollTimer = window.setInterval(() => {
+          this.pollBuilderAgentTimeline(agentRunId);
+        }, 2000);
+      },
+
+
+      async pollBuilderAgentTimeline(agentRunId = this.builderAgentPanel.agentRunId) {
+        if (!agentRunId) {
+          return;
+        }
+        try {
+          await this.loadBuilderAgentTimeline(agentRunId);
+          if (this.isBuilderAgentTerminalStatus(this.builderAgentPanel.status)) {
+            this.stopBuilderAgentStreaming();
+          }
+        } catch (error) {
+          this.builderAgentPanel.errorMessage = error.message || "读取 Builder Agent 运行状态失败。";
+        }
+      },
+
+
+      stopBuilderAgentStreaming() {
+        if (this.builderAgentEventSource) {
+          this.builderAgentEventSource.close();
+        }
+        this.builderAgentEventSource = null;
+        if (this.builderAgentPollTimer && typeof window !== "undefined") {
+          window.clearInterval(this.builderAgentPollTimer);
+        }
+        this.builderAgentPollTimer = null;
+        if (this.builderAgentPanel) {
+          this.builderAgentPanel.sseConnected = false;
+          this.builderAgentPanel.usingPolling = false;
+        }
+      },
+
+
+      startBuilderAgentElapsedTimer() {
+        if (!this.builderAgentPanel.startedAt) {
+          this.builderAgentPanel.startedAt = new Date().toISOString();
+        }
+        if (typeof window === "undefined") {
+          return;
+        }
+        if (this.builderAgentElapsedTimer && typeof window !== "undefined") {
+          window.clearInterval(this.builderAgentElapsedTimer);
+        }
+        this.builderAgentElapsedTimer = window.setInterval(() => {
+          if (this.builderAgentPanel.timeline?.elapsed_ms !== null && this.builderAgentPanel.timeline?.elapsed_ms !== undefined) {
+            this.builderAgentPanel.elapsedMs = this.builderAgentPanel.timeline.elapsed_ms;
+            return;
+          }
+          this.builderAgentPanel.elapsedMs = Math.max(
+            0,
+            Date.now() - new Date(this.builderAgentPanel.startedAt).getTime()
+          );
+        }, 1000);
+      },
+
+
+      stopBuilderAgentElapsedTimer() {
+        if (this.builderAgentElapsedTimer && typeof window !== "undefined") {
+          window.clearInterval(this.builderAgentElapsedTimer);
+        }
+        this.builderAgentElapsedTimer = null;
+      },
+
+
+      applyBuilderAgentTimeline(timeline, options = {}) {
+        if (!timeline?.agent_run_id) {
+          return;
+        }
+        const status = timeline.status || "pending";
+        const submittedInput = timeline.user_description || this.builderAgentPanel.submittedInput || this.builderAgentPanel.userInput;
+        const userInput = this.builderAgentPanel.userInput || "";
+        const terminal = this.isBuilderAgentTerminalStatus(status);
+        this.builderAgentPanel = {
+          ...this.builderAgentPanel,
+          open: true,
+          status,
+          submittedInput,
+          userInput,
+          generationId: timeline.related_generation_id || this.builderAgentPanel.generationId,
+          jobId: timeline.related_job_id || this.builderAgentPanel.jobId,
+          agentRunId: timeline.agent_run_id,
+          timeline,
+          steps: Array.isArray(timeline.steps) ? timeline.steps : [],
+          result: terminal ? timeline.final : this.builderAgentPanel.result,
+          errorMessage: timeline.error_message || this.builderAgentPanel.errorMessage,
+          elapsedMs: timeline.elapsed_ms ?? this.builderAgentPanel.elapsedMs,
+          processExpanded: terminal && status === "succeeded" ? false : this.builderAgentPanel.processExpanded,
+          lastEventAt: new Date().toISOString()
+        };
+        this.rawMaterialGenerateForm = { user_description: this.builderAgentPanel.userInput || "" };
+        if (timeline.created_at && !this.builderAgentPanel.startedAt) {
+          this.builderAgentPanel.startedAt = timeline.created_at;
+        }
+        if (terminal) {
+          this.busy.rawMaterialGenerate = false;
+          this.stopBuilderAgentStreaming();
+          this.stopBuilderAgentElapsedTimer();
+          if (status === "succeeded") {
+            this.refreshAfterBuilderAgentSuccess().catch((error) => {
+              this.showNotice("error", error.message || "刷新 Skill 失败。");
+            });
+          }
+        } else if (options.fromLatest || status === "pending" || status === "running") {
+          this.busy.rawMaterialGenerate = true;
+        }
+      },
+
+
+      applyRawMaterialGenerationAsBuilderResult(result) {
+        const status = result.status || "pending";
+        this.builderAgentPanel.status = status;
+        this.builderAgentPanel.result = {
+          generation_reason: result.generation_reason || "",
+          review_notes: result.review_notes || [],
+          generated_file_paths: Object.keys(result.generated_files || {}).sort(),
+          reference_files: result.prompt_metadata?.reference_files || [],
+          committed_commit_sha: result.committed_commit_sha || "",
+          standard_search_summary: result.prompt_metadata?.standard_search_summary || {}
+        };
+        this.builderAgentPanel.errorMessage = result.error_message || "";
+        this.builderAgentPanel.processExpanded = status !== "succeeded";
+        if (status === "succeeded") {
+          this.refreshAfterBuilderAgentSuccess().catch((error) => {
+            this.showNotice("error", error.message || "刷新 Skill 失败。");
+          });
+        }
+      },
+
+
+      async refreshAfterBuilderAgentSuccess() {
+        if (!this.currentSkill?.id || this.builderAgentPanel.resultRefreshed) {
+          return;
+        }
+        this.builderAgentPanel.resultRefreshed = true;
+        const skillId = this.currentSkill.id;
+        this.sourceLoadedSkillId = null;
+        this.repositoryLoadedSkillId = null;
+        this.currentSkill = await this.apiRequest(`/skills/${skillId}`);
+        await this.loadRawMaterials(skillId, true);
+        this.showCenterToast("success", "Skill 草稿已生成。");
+        this.showNotice("success", "Skill 草稿已生成并提交到 GitLab draft。");
+      },
+
+
+      restartBuilderAgentPanel() {
+        this.resetBuilderAgentPanel({ open: true, userInput: "" });
+      },
+
+
+      isBuilderAgentTerminalStatus(status) {
+        return ["succeeded", "failed", "cancelled", "canceled", "deadletter", "dead_letter"].includes(status || "");
+      },
+
+
+      isBuilderAgentRunning() {
+        return ["loading_latest", "submitting", "pending", "running"].includes(this.builderAgentPanel.status || "");
+      },
+
+
+      builderAgentWorkLabel() {
+        const prefix = this.isBuilderAgentTerminalStatus(this.builderAgentPanel.status) ? "Worked for" : "Working for";
+        const duration = this.formatDuration(this.builderAgentPanel.elapsedMs || 0);
+        return `${prefix} ${duration === "N/A" ? "0 s" : duration}`;
+      },
+
+
+      builderAgentCurrentStageLabel() {
+        if (this.builderAgentPanel.status === "loading_latest") {
+          return "读取最近运行记录";
+        }
+        if (this.builderAgentPanel.status === "submitting") {
+          return "提交 Builder Agent 请求";
+        }
+        return this.builderAgentPanel.timeline?.progress?.label || this.formatStatus(this.builderAgentPanel.status);
+      },
+
+
+      builderAgentProgressPercent() {
+        const percent = Number(this.builderAgentPanel.timeline?.progress?.percent);
+        if (Number.isFinite(percent)) {
+          return Math.min(100, Math.max(0, percent));
+        }
+        if (this.builderAgentPanel.status === "succeeded" || this.builderAgentPanel.status === "failed") {
+          return 100;
+        }
+        if (this.isBuilderAgentRunning()) {
+          return 35;
+        }
+        return 0;
+      },
+
+
+      builderAgentStepIcon(step) {
+        if (step?.status === "failed") {
+          return "error";
+        }
+        if (step?.status === "running") {
+          return "progress_activity";
+        }
+        if (step?.status === "succeeded") {
+          return "check_circle";
+        }
+        return "radio_button_unchecked";
+      },
+
+
+      builderAgentStepTone(step) {
+        if (step?.status === "failed") {
+          return "border-rose-500/30 bg-rose-500/10 text-rose-100";
+        }
+        if (step?.status === "running") {
+          return "border-orange-500/30 bg-orange-500/10 text-orange-100";
+        }
+        if (step?.status === "succeeded") {
+          return "border-emerald-500/25 bg-emerald-500/10 text-emerald-100";
+        }
+        return "border-slate-800 bg-slate-900/40 text-slate-300";
+      },
+
+
+      builderAgentFinalGeneratedFiles() {
+        return this.builderAgentPanel.result?.generated_file_paths || [];
+      },
+
+
+      builderAgentFinalReferenceFiles() {
+        return this.builderAgentPanel.result?.reference_files || [];
+      },
+
+
+      builderAgentReviewNotes() {
+        return this.builderAgentPanel.result?.review_notes || [];
+      },
+
+
+      builderAgentStandardSearchSummaryText() {
+        const summary = this.builderAgentPanel.result?.standard_search_summary;
+        if (!summary || typeof summary !== "object" || Object.keys(summary).length === 0) {
+          return "无标准检索摘要";
+        }
+        const count = summary.result_count ?? summary.count ?? "";
+        const status = summary.status || "";
+        return [status, count !== "" ? `${count} 条结果` : ""].filter(Boolean).join("，") || "已记录标准检索摘要";
       },
 
 
@@ -472,7 +1125,6 @@
           image: "图片",
           audio: "音频",
           video: "视频",
-          url: "URL",
           file: "文件"
         };
         return labels[value] || value || "素材";
@@ -487,7 +1139,6 @@
           image: "image",
           audio: "graphic_eq",
           video: "movie",
-          url: "link",
           file: "attach_file"
         };
         return icons[value] || "draft";
@@ -499,6 +1150,89 @@
           return "";
         }
         return `${this.apiBaseUrl}/skills/${encodeURIComponent(this.currentSkill.id)}/raw-materials/${encodeURIComponent(material.id)}/content`;
+      },
+
+
+      rawMaterialDerivedAssetContentUrl(asset) {
+        if (!this.currentSkill || !this.rawMaterialDetail?.id || !asset?.id) {
+          return "";
+        }
+        return `${this.apiBaseUrl}/skills/${encodeURIComponent(this.currentSkill.id)}/raw-materials/${encodeURIComponent(this.rawMaterialDetail.id)}/derived-assets/${encodeURIComponent(asset.id)}/content`;
+      },
+
+
+      rawMaterialVisibleEvidenceItems() {
+        const result = this.rawMaterialDetail?.analysis_result || {};
+        const items = Array.isArray(result.evidence_items) ? result.evidence_items : [];
+        const hasTextContent = Boolean(String(result.content?.text || "").trim());
+        const derivedAssets = Array.isArray(this.rawMaterialDetail?.derived_assets)
+          ? this.rawMaterialDetail.derived_assets
+          : [];
+        const derivedAssetIds = new Set(derivedAssets.map((asset) => asset.id).filter(Boolean));
+
+        return items.filter((item) => {
+          if (hasTextContent && item?.kind === "audio_transcript") {
+            return false;
+          }
+          if (derivedAssetIds.has(item?.asset_id)) {
+            return false;
+          }
+          if (derivedAssets.length > 0 && item?.kind === "video_keyframe") {
+            return false;
+          }
+          return true;
+        });
+      },
+
+
+      openRawMaterialImagePreview(asset) {
+        const src = this.rawMaterialDerivedAssetContentUrl(asset);
+        if (!src) {
+          return;
+        }
+        this.rawMaterialImagePreview = {
+          open: true,
+          src,
+          title: asset.label || asset.filename || "派生资产",
+          description: asset.label || "",
+          timestamp_ms: asset.timestamp_ms ?? null,
+          frame_source: asset.asset_metadata?.frame_source || ""
+        };
+      },
+
+
+      closeRawMaterialImagePreview() {
+        this.rawMaterialImagePreview = {
+          open: false,
+          src: "",
+          title: "",
+          description: "",
+          timestamp_ms: null,
+          frame_source: ""
+        };
+      },
+
+
+      rawMaterialFrameSourceLabel(value) {
+        if (value === "scene_change") {
+          return "场景变化";
+        }
+        if (value === "timeline_sample") {
+          return "时间采样";
+        }
+        return value ? "候选帧" : "";
+      },
+
+
+      selectRawMaterialDetailTab(tabName) {
+        if (["analysis", "preview"].includes(tabName)) {
+          this.rawMaterialDetailTab = tabName;
+        }
+      },
+
+
+      isVideoRawMaterial(material) {
+        return material?.material_kind === "video" || String(material?.mime_type || "").startsWith("video/");
       },
 
 
@@ -1023,7 +1757,17 @@
           return;
         }
 
-        this.activeDetailTab = "debug";
+        this.activeDetailTab = "runtime";
+        await this.navigate(buildSkillDetailPath(this.currentSkill.id));
+      },
+
+
+      async openCurrentSkillCompiler() {
+        if (!this.currentSkill?.id) {
+          return;
+        }
+
+        this.activeDetailTab = "compiler";
         await this.navigate(buildSkillDetailPath(this.currentSkill.id));
       },
 
@@ -1040,6 +1784,10 @@
 
       async selectDetailTab(tabName) {
         this.activeDetailTab = tabName;
+        if (tabName !== "materials") {
+          this.stopBuilderAgentStreaming();
+          this.stopBuilderAgentElapsedTimer();
+        }
         if (!this.currentSkill) {
           return;
         }
@@ -1061,12 +1809,9 @@
           if (tabName === "compiler") {
             await this.loadCompilerRequests(this.currentSkill.id);
           }
-          if (tabName === "debug") {
-            await this.loadInvocations(this.currentSkill.key);
-          }
           if (tabName === "runtime") {
             this.invocationForm.skill_key = this.currentSkill.key;
-            await this.loadInvocations(this.currentSkill.key);
+            await this.loadSkillRuns(this.currentSkill.id);
           }
           if (tabName === "test") {
             await this.loadSkillTestCases(this.currentSkill.id);
@@ -1091,24 +1836,41 @@
           const nameMatched =
             !nameQuery ||
             skill.name.toLowerCase().includes(nameQuery);
+          const publishedState = this.filters.published_state;
+          const publishedMatched =
+            !publishedState ||
+            (publishedState === "published" && this.isSkillPublished(skill)) ||
+            (publishedState === "unpublished" && !this.isSkillPublished(skill));
 
           return (
             nameMatched &&
-            this.inDateRange(skill.created_at, this.filters.created_from, this.filters.created_to) &&
-            this.inDateRange(skill.latest_published_at, this.filters.published_from, this.filters.published_to)
+            publishedMatched &&
+            this.inDateRange(skill.created_at, this.filters.created_from, this.filters.created_to)
           );
         });
+      },
+
+
+      isSkillPublished(skill) {
+        if (typeof skill?.is_published === "boolean") {
+          return skill.is_published;
+        }
+
+        return Boolean(skill?.latest_published_commit_sha || skill?.latest_published_at);
+      },
+
+
+      skillPublishStatus(skill) {
+        return this.isSkillPublished(skill) ? "published" : "unpublished";
       },
 
 
       clearFilters() {
         this.filters = {
           search: "",
-          status: "",
+          published_state: "",
           created_from: "",
-          created_to: "",
-          published_from: "",
-          published_to: ""
+          created_to: ""
         };
         this.loadSkills();
       },

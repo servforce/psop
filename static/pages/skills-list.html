@@ -8,44 +8,29 @@
       </nav>
     </div>
 
-    <div class="shrink-0 border-b border-slate-200 bg-slate-50/80 px-4 py-3">
-      <div class="flex items-end gap-2 overflow-x-auto whitespace-nowrap">
-        <label class="field-block min-w-56 flex-1">
-          <span class="field-label">名称</span>
+    <div class="shrink-0 border-b border-slate-200 bg-slate-50/80 px-4 py-2">
+      <div class="flex items-center gap-3 overflow-x-auto whitespace-nowrap">
+        <label class="min-w-64 flex-1">
           <input
             x-model="filters.search"
-            class="input-field h-11"
+            class="input-field h-10 py-0"
             placeholder="按名称模糊搜索"
+            aria-label="按名称模糊搜索"
             @input.debounce.300ms="loadSkills()"
           />
         </label>
-        <label class="field-block w-36 shrink-0">
-          <span class="field-label">状态</span>
-          <select x-model="filters.status" class="input-field h-11" @change="loadSkills()">
-            <option value="">全部</option>
-            <option value="active">启用</option>
-            <option value="archived">已归档</option>
-          </select>
-        </label>
-        <label class="field-block shrink-0">
-          <span class="field-label">创建时间</span>
-          <span class="flex items-center gap-2">
-            <input x-model="filters.created_from" type="date" class="input-field h-11 w-40" @change="loadSkills()" />
-            <span class="text-xs text-slate-400">至</span>
-            <input x-model="filters.created_to" type="date" class="input-field h-11 w-40" @change="loadSkills()" />
-          </span>
-        </label>
-        <label class="field-block shrink-0">
-          <span class="field-label">发布时间</span>
-          <span class="flex items-center gap-2">
-            <input x-model="filters.published_from" type="date" class="input-field h-11 w-40" @change="loadSkills()" />
-            <span class="text-xs text-slate-400">至</span>
-            <input x-model="filters.published_to" type="date" class="input-field h-11 w-40" @change="loadSkills()" />
-          </span>
-        </label>
-        <button type="button" class="button-primary mb-0.5 shrink-0" title="新建 Skill" aria-label="新建 Skill" @click="openCreateModal()">
+        <select x-model="filters.published_state" class="select-field h-10 w-36 shrink-0 py-0" aria-label="是否已发布筛选" @change="loadSkills()">
+          <option value="">全部发布状态</option>
+          <option value="published">已发布</option>
+          <option value="unpublished">未发布</option>
+        </select>
+        <div class="flex shrink-0 items-center gap-2">
+          <input x-model="filters.created_from" type="date" class="input-field h-10 w-40 py-0" aria-label="创建开始时间" @change="loadSkills()" />
+          <span class="text-xs text-slate-400">至</span>
+          <input x-model="filters.created_to" type="date" class="input-field h-10 w-40 py-0" aria-label="创建结束时间" @change="loadSkills()" />
+        </div>
+        <button type="button" class="button-primary h-10 w-10 shrink-0 px-0" title="新建 Skill" aria-label="新建 Skill" data-tooltip="新建 Skill" @click="openCreateModal()">
           <span class="material-symbols-outlined text-[18px]">add</span>
-          <span>新建 Skill</span>
         </button>
       </div>
     </div>
@@ -53,6 +38,7 @@
     <div class="skill-table-header shrink-0">
       <span>名称</span>
       <span>状态</span>
+      <span>是否已发布</span>
       <span>创建时间</span>
       <span>发布时间</span>
       <span class="text-right">操作</span>
@@ -79,9 +65,10 @@
               @keydown.space.prevent="openSkill(skill.id)"
             >
               <div class="min-w-0">
-                <span class="block truncate text-left text-base font-semibold text-slate-100" x-text="skill.name"></span>
+                <span class="block truncate text-left text-sm font-semibold leading-5 text-slate-100" x-text="skill.name"></span>
               </div>
               <div><span class="status-badge" :class="statusBadgeTone(skill.status)" x-text="formatStatus(skill.status)"></span></div>
+              <div><span class="status-badge" :class="statusBadgeTone(skillPublishStatus(skill))" x-text="formatStatus(skillPublishStatus(skill))"></span></div>
               <div class="mono-field whitespace-nowrap" x-text="formatDateTime(skill.created_at)"></div>
               <div class="mono-field whitespace-nowrap" x-text="formatDateTime(skill.latest_published_at)"></div>
               <div class="flex justify-end gap-2">

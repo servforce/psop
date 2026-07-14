@@ -24,6 +24,14 @@
             <textarea x-model="createForm.description" class="textarea-field h-36" placeholder="描述这个 Skill 要完成的事情。"></textarea>
           </label>
         </div>
+        <template x-if="createFormError">
+          <div class="shrink-0 border-t border-rose-200 bg-rose-50 px-6 py-3 text-sm leading-6 text-rose-800">
+            <div class="flex items-start gap-2">
+              <span class="material-symbols-outlined mt-0.5 text-[18px]">error</span>
+              <p class="min-w-0 flex-1" x-text="createFormError"></p>
+            </div>
+          </div>
+        </template>
         <div class="flex justify-end gap-3 border-t border-slate-200 bg-white px-6 py-4">
           <button type="button" class="button-secondary" title="取消" aria-label="取消" @click="closeCreateModal()">
             <span class="material-symbols-outlined text-[18px]">close</span>

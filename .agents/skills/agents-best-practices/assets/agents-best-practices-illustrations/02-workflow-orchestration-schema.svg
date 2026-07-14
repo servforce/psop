@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920" role="img" aria-labelledby="title desc">
+  <title id="title">Workflow orchestration schema</title>
+  <desc id="desc">A 9 by 16 diagram showing how a workflow orchestration runtime turns an objective into a generated workflow program, validates it, runs worker and verifier contexts, integrates results, and stores audit state.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f7f4ec; }
+      .panel { fill: #fffdf7; stroke: #24211d; stroke-width: 2.5; }
+      .soft { fill: #f1eadc; stroke: #24211d; stroke-width: 2; }
+      .accent { fill: #d8f0ec; stroke: #24211d; stroke-width: 2.5; }
+      .warn { fill: #ffe8b8; stroke: #24211d; stroke-width: 2.5; }
+      .final { fill: #dbe9ff; stroke: #24211d; stroke-width: 2.5; }
+      .state { fill: #eadff7; stroke: #24211d; stroke-width: 2.5; }
+      .ink { fill: #24211d; }
+      .muted { fill: #625d55; }
+      .label { font-family: Arial, Helvetica, sans-serif; font-size: 32px; font-weight: 700; fill: #24211d; }
+      .small { font-family: Arial, Helvetica, sans-serif; font-size: 22px; font-weight: 500; fill: #24211d; }
+      .tiny { font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: 500; fill: #625d55; }
+      .code { font-family: Menlo, Consolas, monospace; font-size: 20px; font-weight: 600; fill: #24211d; }
+      .arrow { stroke: #24211d; stroke-width: 4; fill: none; marker-end: url(#arrowhead); }
+      .thin { stroke: #625d55; stroke-width: 2.5; fill: none; marker-end: url(#smallarrow); }
+      .dash { stroke: #625d55; stroke-width: 2.5; stroke-dasharray: 9 9; fill: none; }
+    </style>
+    <marker id="arrowhead" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#24211d"/>
+    </marker>
+    <marker id="smallarrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#625d55"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="5" stdDeviation="0" flood-color="#24211d" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1080" height="1920"/>
+  <rect x="42" y="42" width="996" height="1836" rx="26" fill="none" stroke="#24211d" stroke-width="3"/>
+
+  <text x="90" y="112" class="tiny">AGENT HARNESS PATTERN</text>
+  <text x="90" y="160" class="label">Workflow Orchestration</text>
+  <text x="90" y="196" class="small">Generated execution program, bounded workers, verifier gates, and auditable state.</text>
+
+  <rect class="panel" filter="url(#shadow)" x="90" y="240" width="900" height="116" rx="18"/>
+  <text x="126" y="286" class="label">1. Objective</text>
+  <text x="126" y="325" class="small">Large, decomposable task: report, audit, migration, research, review.</text>
+
+  <path class="arrow" d="M540 356 V420"/>
+
+  <rect class="accent" filter="url(#shadow)" x="90" y="420" width="900" height="300" rx="18"/>
+  <text x="126" y="468" class="label">2. Generated Workflow Program</text>
+  <text x="126" y="506" class="small">The model designs structure. The runtime owns execution.</text>
+
+  <rect class="soft" x="126" y="540" width="828" height="142" rx="14"/>
+  <text x="158" y="578" class="code">meta: name, phases</text>
+  <text x="158" y="612" class="code">args: files, records, sources, scope</text>
+  <text x="158" y="646" class="code">schemas: worker, verifier, final result</text>
+
+  <rect class="soft" x="126" y="704" width="828" height="0" rx="0"/>
+  <text x="126" y="706" class="tiny">prompt builders + scheduler + assertions are explicit, inspectable program logic</text>
+
+  <path class="arrow" d="M540 720 V784"/>
+
+  <rect class="warn" filter="url(#shadow)" x="90" y="784" width="900" height="134" rx="18"/>
+  <text x="126" y="832" class="label">3. Harness Gate</text>
+  <text x="126" y="870" class="small">Validate version, budget, permissions, schemas, edit scope, and approvals.</text>
+
+  <path class="arrow" d="M540 918 V982"/>
+
+  <rect class="panel" filter="url(#shadow)" x="90" y="982" width="900" height="330" rx="18"/>
+  <text x="126" y="1030" class="label">4. Worker Fan-Out</text>
+  <text x="126" y="1068" class="small">Each packet gets narrow context, tools, schema, timeout, and evidence rules.</text>
+
+  <rect class="accent" x="126" y="1110" width="244" height="126" rx="14"/>
+  <text x="154" y="1152" class="small">Worker A</text>
+  <text x="154" y="1184" class="tiny">source cluster</text>
+  <text x="154" y="1212" class="tiny">returns claims</text>
+
+  <rect class="accent" x="418" y="1110" width="244" height="126" rx="14"/>
+  <text x="446" y="1152" class="small">Worker B</text>
+  <text x="446" y="1184" class="tiny">report section</text>
+  <text x="446" y="1212" class="tiny">returns draft</text>
+
+  <rect class="accent" x="710" y="1110" width="244" height="126" rx="14"/>
+  <text x="738" y="1152" class="small">Worker C</text>
+  <text x="738" y="1184" class="tiny">competitor</text>
+  <text x="738" y="1212" class="tiny">returns evidence</text>
+
+  <path class="thin" d="M248 1236 C248 1270, 432 1270, 540 1288"/>
+  <path class="thin" d="M540 1236 V1288"/>
+  <path class="thin" d="M832 1236 C832 1270, 648 1270, 540 1288"/>
+
+  <path class="arrow" d="M540 1312 V1376"/>
+
+  <rect class="warn" filter="url(#shadow)" x="90" y="1376" width="900" height="178" rx="18"/>
+  <text x="126" y="1424" class="label">5. Verification Gates</text>
+  <text x="126" y="1462" class="small">Independent reviewers challenge claims, compare evidence, vote, and tiebreak.</text>
+  <text x="126" y="1502" class="code">assert: no null result, quorum reached, no blocker, budget remains</text>
+
+  <path class="arrow" d="M540 1554 V1618"/>
+
+  <rect class="final" filter="url(#shadow)" x="90" y="1618" width="900" height="132" rx="18"/>
+  <text x="126" y="1666" class="label">6. Integration</text>
+  <text x="126" y="1704" class="small">Deduplicate, rank, preserve uncertainty, summarize failures, produce final artifact.</text>
+
+  <path class="arrow" d="M540 1750 V1814"/>
+
+  <rect class="state" filter="url(#shadow)" x="90" y="1814" width="900" height="76" rx="18"/>
+  <text x="126" y="1858" class="small">State store: workflow version, prompts, tool refs, approvals, coverage, budget, results.</text>
+
+  <path class="dash" d="M1004 420 C1030 690, 1030 1160, 1004 1814"/>
+  <text x="756" y="760" class="tiny">runtime policy wraps every phase</text>
+</svg>

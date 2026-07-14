@@ -183,3 +183,29 @@ def test_create_app_request_spans_share_one_trace(monkeypatch) -> None:
     assert by_message["child 1"]["trace_id"] == request_trace_id
     assert by_message["child 2"]["trace_id"] == request_trace_id
     assert by_message["child 1"]["span_id"] != by_message["child 2"]["span_id"]
+
+
+def test_cors_preflight_succeeds_with_observability_enabled() -> None:
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        database_check_on_startup=False,
+        database_auto_create_schema=False,
+        runtime_worker_enabled=False,
+        otel_enabled=True,
+        otel_traces_enabled=False,
+        otel_logs_enabled=False,
+    )
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        response = client.options(
+            "/api/v1/skills",
+            headers={
+                "Origin": "http://10.0.0.20:4173",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
