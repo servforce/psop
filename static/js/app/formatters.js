@@ -157,6 +157,7 @@
           deadletter: "死信",
           dead_letter: "死信",
           rejected: "已拒绝",
+          aborted: "已中止",
           cancelled: "已取消",
           canceled: "已取消",
           timeout: "已超时",
@@ -181,7 +182,7 @@
         if (["requested", "pending", "queued", "draft", "unpublished", "retrying", "retryable_failed", "sent", "inconclusive"].includes(normalized)) {
           return "border-amber-500/25 bg-amber-500/10 text-amber-200";
         }
-        if (["failed", "error", "rejected", "cancelled", "canceled", "timeout", "timed_out", "deadletter", "dead_letter"].includes(normalized)) {
+        if (["failed", "error", "rejected", "aborted", "cancelled", "canceled", "timeout", "timed_out", "deadletter", "dead_letter"].includes(normalized)) {
           return "border-rose-500/30 bg-rose-500/10 text-rose-200";
         }
         if (["not_occurred"].includes(normalized)) {

@@ -876,11 +876,11 @@
   .grid-cols-\[minmax\(16rem\,1\.4fr\)_8rem_9rem_9rem_minmax\(18rem\,1fr\)\] {
     grid-template-columns: minmax(16rem,1.4fr) 8rem 9rem 9rem minmax(18rem,1fr);
   }
-  .grid-cols-\[minmax\(16rem\,1\.4fr\)_8rem_minmax\(14rem\,1fr\)_10rem_minmax\(14rem\,1fr\)\] {
-    grid-template-columns: minmax(16rem,1.4fr) 8rem minmax(14rem,1fr) 10rem minmax(14rem,1fr);
-  }
   .grid-cols-\[minmax\(16rem\,1\.4fr\)_8rem_minmax\(16rem\,1fr\)_14rem_12rem\] {
     grid-template-columns: minmax(16rem,1.4fr) 8rem minmax(16rem,1fr) 14rem 12rem;
+  }
+  .grid-cols-\[minmax\(18rem\,1\.4fr\)_8rem_10rem_minmax\(14rem\,1fr\)\] {
+    grid-template-columns: minmax(18rem,1.4fr) 8rem 10rem minmax(14rem,1fr);
   }
   .grid-rows-\[auto_minmax\(0\,1fr\)\] {
     grid-template-rows: auto minmax(0,1fr);

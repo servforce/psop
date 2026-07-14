@@ -125,7 +125,7 @@
           }
           if (this.activeDetailTab === "runtime") {
             this.invocationForm.skill_key = detail.key;
-            await this.loadInvocations(detail.key);
+            await this.loadSkillRuns(detail.id);
           }
           if (this.activeDetailTab === "test" && options.loadTestCases !== false) {
             await this.loadSkillTestCases(detail.id);
@@ -1811,7 +1811,7 @@
           }
           if (tabName === "runtime") {
             this.invocationForm.skill_key = this.currentSkill.key;
-            await this.loadInvocations(this.currentSkill.key);
+            await this.loadSkillRuns(this.currentSkill.id);
           }
           if (tabName === "test") {
             await this.loadSkillTestCases(this.currentSkill.id);

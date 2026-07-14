@@ -36,6 +36,20 @@
       },
 
 
+      async loadSkillRuns(skillId, status = this.runtimeFilters.status) {
+        this.busy.skillRuns = true;
+        try {
+          const params = new URLSearchParams({ skill_id: skillId });
+          if (status) {
+            params.set("status", status);
+          }
+          this.skillRuns = await this.apiRequest(`/runs?${params.toString()}`);
+        } finally {
+          this.busy.skillRuns = false;
+        }
+      },
+
+
       async createInvocation() {
         if (!this.invocationForm.skill_key) {
           this.showNotice("error", "请选择 Skill。");
@@ -58,7 +72,11 @@
             })
           });
           this.invocationForm.user_input = "";
-          await this.loadInvocations(this.route.name === "skill-detail" ? this.currentSkill?.key : null);
+          if (this.route.name === "skill-detail" && this.currentSkill?.id) {
+            await this.loadSkillRuns(this.currentSkill.id);
+          } else {
+            await this.loadInvocations();
+          }
           if (invocation.run_id) {
             const livePath = this.currentSkill?.id
               ? buildSkillRunLivePath(this.currentSkill.id, invocation.run_id)
@@ -2309,10 +2327,9 @@
       },
 
 
-      currentSkillFilteredInvocations() {
-        return this.currentSkillInvocations().filter((invocation) =>
-          (!this.runtimeFilters.status || invocation.status === this.runtimeFilters.status) &&
-          this.inDateRange(invocation.created_at, this.runtimeFilters.created_from, this.runtimeFilters.created_to)
+      currentSkillFilteredRuns() {
+        return this.skillRuns.filter((run) =>
+          this.inDateRange(run.created_at, this.runtimeFilters.created_from, this.runtimeFilters.created_to)
         );
       },
 

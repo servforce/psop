@@ -615,6 +615,7 @@
         selected_data_object_ids: []
       },
       invocations: [],
+      skillRuns: [],
       replayRuns: [],
       liveRun: null,
       liveRunTaskStatus: null,
@@ -736,6 +737,7 @@
         agentPromptAction: false,
         manualCompile: false,
         invocations: false,
+        skillRuns: false,
         createInvocation: false,
         liveRun: false,
         terminalInput: false,
