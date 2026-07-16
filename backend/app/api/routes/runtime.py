@@ -134,7 +134,7 @@ def get_invocation(
 
 @runs_router.get("", response_model=list[RunResponse])
 def list_runs(
-    status: RunStatus | None = Query(default=None),
+    status: list[RunStatus] | None = Query(default=None),
     skill_id: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
@@ -751,7 +751,7 @@ def list_replay_runs(
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
 ) -> list[RunResponse]:
-    return service.list_runs(session, skill_id=skill_id, status=status)
+    return service.list_runs(session, skill_id=skill_id, status=[status] if status else None)
 
 
 @replay_router.get("/runs/{run_id}", response_model=ReplayDetailResponse)

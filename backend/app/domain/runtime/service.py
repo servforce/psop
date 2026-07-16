@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import time
+from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -771,7 +772,13 @@ class RuntimeService:
             raise SkillNotFoundError("未找到 Invocation。", details={"invocation_id": invocation_id})
         return self._build_invocation_response(session, invocation)
 
-    def list_runs(self, session: Session, *, status: str | None = None, skill_id: str | None = None) -> list[RunResponse]:
+    def list_runs(
+        self,
+        session: Session,
+        *,
+        status: Sequence[str] | None = None,
+        skill_id: str | None = None,
+    ) -> list[RunResponse]:
         return [
             self._build_run_response(session, item)
             for item in self.repository.list_runs(session, status=status, skill_id=skill_id)

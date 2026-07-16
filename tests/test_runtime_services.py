@@ -1198,6 +1198,47 @@ def process_publish_job(session, compiler_service: CompilerService, compile_requ
     return compiler_service.get_compile_request(session, compile_request_id)
 
 
+def test_runtime_list_runs_filters_multiple_statuses(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                key="list-runs-statuses",
+                name="List Runs Statuses",
+                description="Validate filtering runs by multiple statuses.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="List runs status filter test"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+
+        waiting_invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(skill_key=skill.key),
+        )
+        failed_invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(skill_key=skill.key),
+        )
+        excluded_invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(skill_key=skill.key),
+        )
+        session.get(Run, waiting_invocation.run_id).status = "waiting_input"
+        session.get(Run, failed_invocation.run_id).status = "failed"
+        session.get(Run, excluded_invocation.run_id).status = "succeeded"
+        session.flush()
+
+        runs = runtime_service.list_runs(session, status=["waiting_input", "failed"])
+
+    assert {run.id for run in runs} == {waiting_invocation.run_id, failed_invocation.run_id}
+
+
 def build_test_abort_formal_v5_artifact() -> dict:
     artifact = build_test_formal_v5_artifact()
     artifact["nodes"].append(
