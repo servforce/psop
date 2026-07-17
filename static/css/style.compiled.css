@@ -563,14 +563,14 @@
   .max-h-44 {
     max-height: calc(var(--spacing) * 44);
   }
-  .max-h-48 {
-    max-height: calc(var(--spacing) * 48);
-  }
   .max-h-52 {
     max-height: calc(var(--spacing) * 52);
   }
   .max-h-56 {
     max-height: calc(var(--spacing) * 56);
+  }
+  .max-h-64 {
+    max-height: calc(var(--spacing) * 64);
   }
   .max-h-72 {
     max-height: calc(var(--spacing) * 72);
@@ -1877,9 +1877,6 @@
   .pr-1 {
     padding-right: calc(var(--spacing) * 1);
   }
-  .pr-2 {
-    padding-right: calc(var(--spacing) * 2);
-  }
   .pr-3 {
     padding-right: calc(var(--spacing) * 3);
   }
@@ -2724,13 +2721,6 @@
     &:hover {
       @media (hover: hover) {
         color: var(--color-orange-100);
-      }
-    }
-  }
-  .hover\:text-orange-200 {
-    &:hover {
-      @media (hover: hover) {
-        color: var(--color-orange-200);
       }
     }
   }
