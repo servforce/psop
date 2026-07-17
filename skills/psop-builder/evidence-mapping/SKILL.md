@@ -11,6 +11,7 @@
 - `current_source_fact`：当前 README/SKILL 已有内容。
 - `builder_inference`：基于上下文的必要推断，只能低置信写入。
 - `human_confirmation_required`：现有证据不足，必须进入 `missing_questions` 或 `review_notes`。
+- `confirmed_instruction`：已确认的用户修订指令；可明确覆盖待修订 draft 的既有内容，但不能伪造素材事实。
 
 ## 证据治理要求
 
@@ -44,3 +45,25 @@
 - `/mnt/psop/workspace/standard-usage-draft.md`
 
 这些中间产物只用于审阅和调试，最终仍以 `psop.builder.submit_candidate` 输入为准。
+# 证据治理补充
+
+`source_refs` 是对象数组，禁止把 `psop.standard.search`、`timeout`、任意文件路径或自由文本当作 `source_type`。
+
+- `user_description`、`current_source`、`builder_inference`、`human_confirmation_required` 必须提供 `ref`。
+- `material_analysis` 必须提供 `material_id` 或 `ref`；`reference_asset` 必须提供 `asset_id` 或 `ref`；`industry_standard` 必须提供 `standard_ref` 或 `ref`。
+- 可无歧义识别的旧值 `current_source/SKILL.md` 可改写为 `{"source_type":"current_source","ref":"SKILL.md"}`；其他不明旧字符串必须修正，不能猜测。
+- 强制 workflow、安全约束和完成标准只可由 `user_description`、`material_analysis`、`reference_asset`、`industry_standard` 支撑。`current_source` 仅定位待修订内容。
+- 标准检索超时/不可用时，不得生成 `industry_standard` 引用，且 `review_notes` 必须写入：`标准检索不可用，未引用行业标准。`
+
+## Candidate metadata 提交清单
+
+提交前逐项核对，而不是只检查 Markdown：
+
+- `material_usage`：每项必须有 `material_id` 和 `usage`。
+- `evidence_map`：每项必须有 `claim`、`support_level`、`source_refs`、`used_in`；`support_level` 只能是 `observed_fact`、`standard_reference`、`current_source_fact`、`builder_inference`、`human_confirmation_required` 或 `confirmed_instruction`。
+- `missing_questions`：每项必须有 `question`、`reason`、`blocking_level`；无问题时使用空数组。
+- `safety_constraints`：每项必须有 `constraint`、`applies_to`、`risk_type`、`required_action`。
+- `workflow_step_candidates` 必须有阶段编号或标题；`expected_evidence_requirements` 必须有阶段关联、`evidence_type`、`completion_criteria`。
+- 若标准检索不可用：`industry_standard_usage=[]`，并在 `review_notes` 原样写入 `标准检索不可用，未引用行业标准。`
+
+收到工具的 `repair_checklist` 时，必须修复其中全部项后再提交完整 candidate。

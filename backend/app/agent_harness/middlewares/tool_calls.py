@@ -30,6 +30,7 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
         self.max_error_counts = max_error_counts or {}
         self.deadline_monotonic = deadline_monotonic
         self._error_counts: dict[str, int] = {}
+        self._validation_signatures: dict[str, tuple[str, int]] = {}
 
     @override
     def wrap_tool_call(
@@ -112,6 +113,7 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
 
     def _check_error_budget(self, payload: dict[str, Any]) -> None:
         tool_name = str(payload.get("tool_name") or "")
+        self._check_repeated_builder_validation(payload, tool_name)
         limit = self.max_error_counts.get(tool_name)
         if not limit or payload.get("result_status") != "error":
             if tool_name:
@@ -134,6 +136,30 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
             },
         )
         raise AgentBudgetExceededError(f"{tool_name} 连续返回错误次数达到限制：{limit}。")
+
+    def _check_repeated_builder_validation(self, payload: dict[str, Any], tool_name: str) -> None:
+        if tool_name != "psop.builder.submit_candidate" or payload.get("result_status") != "error":
+            return
+        diagnostics = payload.get("validation_diagnostics")
+        if not isinstance(diagnostics, list) or not diagnostics:
+            return
+        signature = json.dumps(diagnostics, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        previous, count = self._validation_signatures.get(tool_name, ("", 0))
+        count = count + 1 if signature == previous else 1
+        self._validation_signatures[tool_name] = (signature, count)
+        if count < 2:
+            return
+        self.event_writer.record(
+            "agent.validation.terminal",
+            {
+                "tool_name": tool_name,
+                "failure_kind": "validation_failed",
+                "repeated_diagnostic_count": count,
+                "diagnostics": diagnostics[:8],
+                "message": "同一候选校验诊断重复出现，停止内部纠错。",
+            },
+        )
+        raise AgentBudgetExceededError("psop.builder.submit_candidate 重复出现同一候选校验错误，停止内部纠错。")
 
 
 def _tool_payload(request: ToolCallRequest) -> dict[str, Any]:
@@ -181,6 +207,9 @@ def _tool_result_payload(result: ToolMessage | Command) -> dict[str, Any]:
             for key, value in validation_summary.items()
             if isinstance(value, (str, int, float, bool)) or value is None
         }
+    diagnostics = payload.get("diagnostics")
+    if isinstance(diagnostics, list):
+        summary["validation_diagnostics"] = [item for item in diagnostics if isinstance(item, dict)][:8]
     return summary
 
 

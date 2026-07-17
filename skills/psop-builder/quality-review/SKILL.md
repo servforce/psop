@@ -55,3 +55,15 @@
 - 如果 LightRAG 检索失败，不要伪造行业标准；在 `review_notes` 中说明失败状态，并保持 `industry_standard_usage` 为空数组或只写可追溯的 `reference_only` 项。
 
 不得把 workspace 中的 `submit-params.json`、证据映射草稿或参考资产选择草稿当作最终候选产物。
+
+## Metadata 完整性门禁
+
+提交前必须逐项确认：
+
+- 每个 `material_usage` 含 `material_id`、`usage`。
+- 每个 `evidence_map` 含 `claim`、`support_level`、`source_refs`、`used_in`；`support_level` 必须使用平台枚举值。
+- 每个 `missing_questions` 含 `question`、`reason`、`blocking_level`。
+- 每个安全约束、workflow、expected evidence、参考资产和标准使用项都满足工具 schema 的必填字段。
+- 标准检索不可用是正常降级：不写标准引用，且 `review_notes` 必须含 `标准检索不可用，未引用行业标准。`
+
+若工具返回 `repair_checklist`，视为整份 candidate 的重新审查任务；必须修复清单中的全部字段，不得只修复第一项后重新提交。

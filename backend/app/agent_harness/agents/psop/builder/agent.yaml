@@ -23,10 +23,10 @@ middleware:
   - name: dangling_tool_call
   - name: model_events
     config:
-      max_model_calls: 12
+      max_model_calls: 13
   - name: token_usage
   - name: tool_calls
     config:
       max_error_counts:
-        psop.builder.submit_candidate: 3
+        psop.builder.submit_candidate: 4
 memory_scope: psop.builder

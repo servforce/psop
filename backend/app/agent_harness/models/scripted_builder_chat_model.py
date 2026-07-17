@@ -124,7 +124,7 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
             "tests/checklist.md": "# 测试清单\n\n- happy path：阶段 1 和阶段 2 均有证据。\n- 缺失证据：缺少 PPE 时等待。\n- 风险停止：压力读数异常时停止。\n- 人工确认：阀门状态不清时请求复核。\n",
         },
         "generation_reason": "根据用户目标、素材分析和候选参考资产构建了泵房进入前检查 Skill draft。",
-        "review_notes": ["行业标准检索结果仅作为参考，发布前需要人工确认适用标准条款。"],
+        "review_notes": ["标准检索不可用，未引用行业标准。", "发布前需要人工确认适用标准条款。"],
         "material_usage": [{"material_id": material_id, "usage": "用于识别 PPE、阀门关闭和压力表读数三个关键检查点。"}],
         "industry_standard_usage": [],
         "selected_reference_assets": [

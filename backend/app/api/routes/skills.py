@@ -14,6 +14,8 @@ from app.domain.skills.schemas import (
     DeleteSkillRequest,
     DeleteSkillRawMaterialResponse,
     GenerateSkillDraftRequest,
+    GenerationIntentPreviewRequest,
+    GenerationIntentPreviewResponse,
     PublishSkillRequest,
     PublishSkillResponse,
     SaveSkillRepositoryFileRequest,
@@ -208,6 +210,19 @@ def list_raw_materials(
     service: SkillsService = Depends(get_skills_service),
 ) -> list[SkillRawMaterialResponse]:
     return service.list_raw_materials(session, skill_id=skill_id)
+
+
+@router.post(
+    "/{skill_id}/raw-materials/generation-intent-preview",
+    response_model=GenerationIntentPreviewResponse,
+)
+def preview_skill_generation_intent(
+    skill_id: str,
+    payload: GenerationIntentPreviewRequest,
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> GenerationIntentPreviewResponse:
+    return service.preview_skill_generation_intent(session, skill_id=skill_id, payload=payload)
 
 
 @router.post(

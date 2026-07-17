@@ -92,6 +92,17 @@ class AgentRunQueryService:
         )
         if job_response and terminal and job_response.duration_ms is not None:
             elapsed_ms = job_response.duration_ms
+        validation_diagnostics = self._validation_diagnostics(events)
+        candidate_submission_attempts = sum(
+            1
+            for event in events
+            if event.event_type == "agent.tool.started" and (event.payload or {}).get("tool_name") == "psop.builder.submit_candidate"
+        )
+        candidate_correction_attempts = max(0, candidate_submission_attempts - 1)
+        model_call_count = sum(1 for event in events if event.event_type == "agent.model.started")
+        if not model_call_count:
+            # 兼容早期仅记录 token usage 的历史 Agent Run。
+            model_call_count = sum(1 for event in events if event.event_type == "agent.token.usage")
         return AgentRunTimelineResponse(
             agent_run_id=agent_run_id,
             agent_key=record.agent_key if record else str((generation.prompt_metadata or {}).get("agent_key") or ""),
@@ -106,6 +117,13 @@ class AgentRunQueryService:
             progress=job_response.progress if job_response else self._generation_progress(generation),
             elapsed_ms=elapsed_ms,
             token_usage=job_response.token_usage if job_response else self._token_usage_from_events(events),
+            model_call_count=model_call_count,
+            candidate_submission_attempts=candidate_submission_attempts,
+            candidate_correction_attempts=candidate_correction_attempts,
+            job_attempt_no=job.attempt_no if job else 0,
+            job_max_attempts=job.max_attempts if job else 0,
+            failure_kind="validation_failed" if validation_diagnostics else "",
+            validation_diagnostics=validation_diagnostics,
             steps=[*self._job_steps(job), *self._event_steps(events)],
             final=self._final_for_generation(generation),
             error_message=(
@@ -269,6 +287,8 @@ class AgentRunQueryService:
 
     @staticmethod
     def _event_title(event_type: str, payload: dict[str, Any]) -> str:
+        if event_type == "agent.validation.failed":
+            return "候选产物校验失败"
         if event_type == "agent.memory.read":
             return "读取 memory"
         if event_type == "agent.skill.loaded":
@@ -310,6 +330,8 @@ class AgentRunQueryService:
             if payload.get("error"):
                 return str(payload.get("error"))
             return tool_name
+        if event_type == "agent.validation.failed":
+            return str(payload.get("error") or "请按诊断修复 candidate 后重试。")
         if event_type == "agent.memory.read":
             scope = str(payload.get("scope") or "")
             keys = payload.get("keys") if isinstance(payload.get("keys"), list) else []
@@ -338,6 +360,12 @@ class AgentRunQueryService:
                 "result_status": str(payload.get("result_status") or ""),
                 "result_type": str(payload.get("result_type") or ""),
             }
+        if event_type == "agent.validation.failed":
+            return {
+                "attempt": payload.get("attempt") or 0,
+                "validation_stage": str(payload.get("validation_stage") or ""),
+                "diagnostics": payload.get("diagnostics") if isinstance(payload.get("diagnostics"), list) else [],
+            }
         if event_type == "agent.tool.standard_search":
             return {
                 "result_count": payload.get("result_count") or 0,
@@ -353,6 +381,17 @@ class AgentRunQueryService:
             total = payload.get("total") if isinstance(payload.get("total"), dict) else {}
             return {key: total.get(key) for key in ("input_tokens", "output_tokens", "total_tokens")}
         return {}
+
+    @staticmethod
+    def _validation_diagnostics(events: list[AgentEventRecord]) -> list[dict[str, Any]]:
+        for event in reversed(events):
+            if event.event_type != "agent.validation.failed":
+                continue
+            raw = (event.payload or {}).get("diagnostics")
+            if not isinstance(raw, list):
+                continue
+            return [item for item in raw if isinstance(item, dict)][:8]
+        return []
 
     @staticmethod
     def _normalize_step_status(value: str) -> str:

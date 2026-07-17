@@ -146,6 +146,22 @@ class SkillsRepository:
             .with_for_update()
         )
 
+    def get_latest_failed_raw_material_generation(
+        self,
+        session: Session,
+        *,
+        skill_definition_id: str,
+    ) -> SkillRawMaterialGeneration | None:
+        return session.scalar(
+            select(SkillRawMaterialGeneration)
+            .where(
+                SkillRawMaterialGeneration.skill_definition_id == skill_definition_id,
+                SkillRawMaterialGeneration.status == "failed",
+            )
+            .order_by(SkillRawMaterialGeneration.created_at.desc())
+            .limit(1)
+        )
+
     def get_latest_raw_material_analysis(
         self,
         session: Session,

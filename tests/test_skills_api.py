@@ -2043,6 +2043,35 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch)
     assert response.json()["code"] == "skill_source_conflict"
 
 
+def test_generation_intent_preview_requires_confirmation_only_for_ambiguous_question() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={"key": "intent-preview", "name": "Intent Preview", "description": "Preview generation intent."},
+        ).json()
+        ambiguous = client.post(
+            f"/api/v1/skills/{created['id']}/raw-materials/generation-intent-preview",
+            json={"user_description": "电源供应器安装步骤是否应该保留？"},
+        )
+        direct = client.post(
+            f"/api/v1/skills/{created['id']}/raw-materials/generation-intent-preview",
+            json={"user_description": "删除电源供应器安装步骤，仅保留素材可证实内容。"},
+        )
+
+    assert ambiguous.status_code == 200
+    assert ambiguous.json()["status"] == "confirmation_required"
+    assert [item["id"] for item in ambiguous.json()["options"]] == [
+        "remove_unsupported",
+        "optional_confirmation",
+        "keep_current",
+    ]
+    assert direct.status_code == 200
+    assert direct.json()["status"] == "ready"
+    assert direct.json()["revision_mode"] == "direct_revision"
+
+
 def test_generate_skill_draft_from_raw_materials_rejects_material_subset_field() -> None:
     client, _, _ = create_test_client()
 

@@ -4,9 +4,12 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 from app.agent_harness.events import AgentEventWriter
-from app.agent_harness.agents.psop.builder.schemas import validate_builder_candidate
+from app.agent_harness.errors import AgentBudgetExceededError
+from app.agent_harness.middlewares.tool_calls import ToolCallMiddleware
+from app.agent_harness.agents.psop.builder.schemas import BuilderCandidateValidationError, validate_builder_candidate
 from app.agent_harness.agents.registry import default_agent_registry
 from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
 from app.agent_harness.schemas import AgentInvocation
@@ -30,6 +33,9 @@ def test_psop_builder_definition_and_skills_load() -> None:
 
     assert package.definition.description.startswith("根据用户目标")
     assert package.definition.memory_scope == "psop.builder"
+    middleware = {item.name: item.config for item in package.definition.middleware if not isinstance(item, str)}
+    assert middleware["model_events"]["max_model_calls"] == 13
+    assert middleware["tool_calls"]["max_error_counts"]["psop.builder.submit_candidate"] == 4
     for skill_name in package.definition.skills:
         skill = loader.load_metadata(skill_name)
         assert skill.description
@@ -207,6 +213,8 @@ def test_submit_candidate_invalid_payload_returns_auditable_repair_hint(tmp_path
     assert result["type"] == "invalid_arguments"
     assert result["retry_requires_argument_correction"] is True
     assert "files 对象必须包含所有必需 Markdown 文件" in result["correction_hint"]
+    assert result["repair_checklist"]
+    assert result["repair_checklist"][0]["field"] == "directory_tree"
     assert "README.md" in result["required_files"]
     assert writer.events[-1].event_type == "agent.validation.failed"
     assert not (sandbox.outputs_path / "builder-result.json").exists()
@@ -373,6 +381,14 @@ def test_builder_candidate_matches_workflow_step_with_normalized_spacing() -> No
     payload = _builder_candidate_payload(reference_path)
     payload["files"]["SKILL.md"] += "\n### 首次点亮与 BIOS 配置\n确认 BIOS 设置。\n"
     payload["workflow_step_candidates"].append({"title": "首次点亮与BIOS配置"})
+    payload["evidence_map"].append(
+        {
+            "claim": "首次点亮与 BIOS 配置需要人工确认。",
+            "support_level": "observed_fact",
+            "source_refs": [{"source_type": "material_analysis", "material_id": "material-1"}],
+            "used_in": ["首次点亮与BIOS配置"],
+        }
+    )
 
     validate_builder_candidate(
         payload,
@@ -386,6 +402,127 @@ def test_builder_candidate_matches_workflow_step_with_normalized_spacing() -> No
         ],
         standard_search_results=[],
     )
+
+
+def test_builder_candidate_normalizes_only_unambiguous_current_source_path() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["evidence_map"].append(
+        {
+            "claim": "当前 draft 需要修订。",
+            "support_level": "current_source_fact",
+            "source_refs": [{"source_type": "current_source/SKILL.md"}],
+            "used_in": ["review_notes"],
+        }
+    )
+
+    candidate = validate_builder_candidate(
+        payload,
+        candidate_reference_assets=[{"id": "asset-1", "reference_path": "references/video-keyframes/material-1/000001.jpg"}],
+    )
+
+    assert candidate.evidence_map[-1].source_refs[0].source_type == "current_source"
+    assert candidate.evidence_map[-1].source_refs[0].ref == "SKILL.md"
+
+
+def test_builder_candidate_rejects_tool_timeout_as_evidence_source() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["evidence_map"][0]["source_refs"] = [{"source_type": "psop.standard.search/timeout"}]
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(payload)
+
+    diagnostics = exc_info.value.diagnostics
+    assert diagnostics[0]["path"].endswith("source_type")
+    assert "industry_standard" in diagnostics[0]["allowed_values"]
+
+
+def test_builder_candidate_rejects_unknown_support_level_with_repair_example() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["evidence_map"][0]["support_level"] = "unverified"
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(payload)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic["path"] == "evidence_map.0.support_level"
+    assert "observed_fact" in diagnostic["allowed_values"]
+    assert diagnostic["example"] == "observed_fact"
+
+
+def test_submit_candidate_returns_grouped_repair_checklist_for_all_metadata_errors(tmp_path) -> None:
+    settings = Settings(database_url="sqlite+pysqlite:///:memory:", agent_harness_sandbox_root=str(tmp_path / "agent-runs"))
+    sandbox = LocalAgentSandboxProvider(settings).acquire(input_payload={})
+    registry = ToolRegistry()
+    register_builder_tools(registry)
+    context = ToolExecutionContext(
+        sandbox=sandbox,
+        memory_store=FileMemoryStore(sandbox.memory_path),
+        memory_scope="psop.builder",
+        event_writer=AgentEventWriter(sandbox.events_path),
+        invocation_context={"candidate_reference_assets": []},
+    )
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["evidence_map"][0].pop("support_level")
+    payload["missing_questions"][0].pop("reason")
+
+    result = registry.execute("psop.builder.submit_candidate", payload, context)
+
+    fields = {item["field"] for item in result["repair_checklist"]}
+    assert {"evidence_map", "missing_questions"}.issubset(fields)
+
+
+def test_repeated_builder_validation_stops_before_fourth_submission(tmp_path) -> None:
+    writer = AgentEventWriter(tmp_path / "events.jsonl")
+    middleware = ToolCallMiddleware(writer, max_error_counts={"psop.builder.submit_candidate": 4})
+    payload = {
+        "tool_name": "psop.builder.submit_candidate",
+        "result_status": "error",
+        "validation_diagnostics": [{"path": "evidence_map.0.support_level", "code": "missing"}],
+    }
+
+    middleware._check_error_budget(payload)
+    with pytest.raises(AgentBudgetExceededError, match="重复出现同一候选校验错误"):
+        middleware._check_error_budget(payload)
+
+
+def test_builder_candidate_rejects_current_source_section_path_as_legacy_alias() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["evidence_map"].append(
+        {
+            "claim": "伪造路径。",
+            "support_level": "current_source_fact",
+            "source_refs": [{"source_type": "current_source/SKILL.md/安全约束"}],
+            "used_in": ["review_notes"],
+        }
+    )
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(payload)
+
+    assert "current_source.ref" in exc_info.value.diagnostics[0]["message"]
+
+
+def test_builder_candidate_allows_checklist_assertion_but_rejects_real_todo() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["files"]["tests/checklist.md"] = "# 检查\n\n- 断言：不得有未完成 TODO 项。\n"
+    validate_builder_candidate(payload)
+
+    payload["files"]["tests/checklist.md"] = "# 检查\n\n- TODO：补充场景。\n"
+    with pytest.raises(BuilderCandidateValidationError):
+        validate_builder_candidate(payload)
+
+
+def test_builder_candidate_rejects_standard_reference_when_search_timed_out() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["industry_standard_usage"] = [{"standard_ref": "GB 1", "clause_ref": "1.1", "usage": "mandatory", "used_in": ["阶段 1"]}]
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(payload, standard_search_status="timeout")
+
+    assert {item["code"] for item in exc_info.value.diagnostics} == {
+        "standard_search_unavailable",
+        "missing_standard_unavailable_note",
+    }
 
 
 def test_standard_search_uses_lightrag_query_endpoint_and_api_key(monkeypatch, tmp_path) -> None:
@@ -475,7 +612,13 @@ def _builder_candidate_payload(reference_path: str) -> dict:
                 "support_level": "observed_fact",
                 "source_refs": [{"source_type": "reference_asset", "asset_id": "asset-1"}],
                 "used_in": ["阶段 1"],
-            }
+            },
+            {
+                "claim": "阶段 2 需要记录压力表读数。",
+                "support_level": "observed_fact",
+                "source_refs": [{"source_type": "material_analysis", "material_id": "material-1"}],
+                "used_in": ["阶段 2"],
+            },
         ],
         "missing_questions": [
             {

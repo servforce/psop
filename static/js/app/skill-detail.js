@@ -641,7 +641,7 @@
       },
 
 
-      async generateSkillDraftFromRawMaterials() {
+      async generateSkillDraftFromRawMaterials(confirmedIntent = null) {
         if (!this.currentSkill || !this.canGenerateSkillDraftFromRawMaterials()) {
           return;
         }
@@ -653,6 +653,24 @@
         if (!userDescription) {
           this.showCenterToast("error", "请输入生成描述。");
           return;
+        }
+
+        if (!confirmedIntent) {
+          try {
+            const preview = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/generation-intent-preview`, {
+              method: "POST",
+              body: JSON.stringify({ user_description: userDescription })
+            });
+            if (preview.status === "confirmation_required") {
+              this.builderAgentPanel.intentPreview = preview;
+              this.builderAgentPanel.selectedIntentOption = preview.options?.[0]?.id || "";
+              this.builderAgentPanel.status = "idle";
+              return;
+            }
+          } catch (error) {
+            this.showCenterToast("error", error.message || "生成意图预览失败。");
+            return;
+          }
         }
 
         this.busy.rawMaterialGenerate = true;
@@ -688,7 +706,8 @@
             method: "POST",
             body: JSON.stringify({
               user_description: userDescription,
-              base_commit_sha: this.currentSkill.latest_draft_head_sha
+              base_commit_sha: this.currentSkill.latest_draft_head_sha,
+              generation_intent: confirmedIntent
             })
           });
           this.rawMaterialGenerationResult = result;
@@ -723,6 +742,19 @@
       },
 
 
+      async confirmBuilderGenerationIntent() {
+        const preview = this.builderAgentPanel.intentPreview;
+        const optionId = this.builderAgentPanel.selectedIntentOption;
+        if (!preview?.preview_hash || !optionId) {
+          return;
+        }
+        await this.generateSkillDraftFromRawMaterials({
+          preview_hash: preview.preview_hash,
+          confirmed_option_id: optionId
+        });
+      },
+
+
       defaultBuilderAgentUserInput() {
         return "";
       },
@@ -753,7 +785,9 @@
           sseConnected: false,
           usingPolling: false,
           lastEventAt: "",
-          resultRefreshed: false
+          resultRefreshed: false,
+          intentPreview: null,
+          selectedIntentOption: ""
         };
       },
 
@@ -956,6 +990,7 @@
           steps: Array.isArray(timeline.steps) ? timeline.steps : [],
           result: terminal ? timeline.final : this.builderAgentPanel.result,
           errorMessage: timeline.error_message || this.builderAgentPanel.errorMessage,
+          intentPreview: null,
           elapsedMs: timeline.elapsed_ms ?? this.builderAgentPanel.elapsedMs,
           processExpanded: terminal && status === "succeeded" ? false : this.builderAgentPanel.processExpanded,
           lastEventAt: new Date().toISOString()

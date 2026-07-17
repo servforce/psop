@@ -62,6 +62,10 @@ from app.domain.skills.schemas import (
     CreateSkillRequest,
     DeleteSkillRequest,
     DeleteSkillRawMaterialResponse,
+    GenerationIntentConfirmation,
+    GenerationIntentOption,
+    GenerationIntentPreviewRequest,
+    GenerationIntentPreviewResponse,
     GenerateSkillDraftRequest,
     PublishSkillRequest,
     PublishSkillResponse,
@@ -974,6 +978,22 @@ class SkillsService:
                 material.error_message = reason
         return True
 
+    def preview_skill_generation_intent(
+        self,
+        session: Session,
+        *,
+        skill_id: str,
+        payload: GenerationIntentPreviewRequest,
+    ) -> GenerationIntentPreviewResponse:
+        definition = self._require_definition(session, skill_id)
+        draft_version = self._require_draft_version(session, definition)
+        head_sha = self.gitlab_gateway.get_branch_head(definition.gitlab_project_id, draft_version.source_ref)
+        return self._generation_intent_preview(
+            skill_id=definition.id,
+            source_commit_sha=head_sha,
+            user_description=payload.user_description,
+        )
+
     def generate_skill_draft_from_raw_materials(
         self,
         session: Session,
@@ -1000,6 +1020,15 @@ class SkillsService:
                     details={"expected": payload.base_commit_sha, "actual": current_head},
                 )
 
+        draft_version = self._require_draft_version(session, definition)
+        current_head = self.gitlab_gateway.get_branch_head(definition.gitlab_project_id, draft_version.source_ref)
+        intent = self._resolve_generation_intent(
+            skill_id=definition.id,
+            source_commit_sha=current_head,
+            user_description=payload.user_description,
+            confirmation=payload.generation_intent,
+        )
+
         generation = SkillRawMaterialGeneration(
             skill_definition_id=definition.id,
             material_ids=material_ids,
@@ -1009,12 +1038,14 @@ class SkillsService:
                 "agent_key": "psop.builder",
                 "agent_run_id": "",
                 "reference_files": [],
+                "generation_intent": intent,
             },
             raw_response={
                 "request": {
                     "material_ids": material_ids,
                     "user_description": payload.user_description,
                     "base_commit_sha": payload.base_commit_sha,
+                    "generation_intent": intent,
                 }
             },
         )
@@ -1053,6 +1084,93 @@ class SkillsService:
             return self._build_raw_material_generation_response(refreshed or generation)
 
         return self._build_raw_material_generation_response(generation)
+
+    @staticmethod
+    def _generation_intent_preview(
+        *,
+        skill_id: str,
+        source_commit_sha: str,
+        user_description: str,
+    ) -> GenerationIntentPreviewResponse:
+        text = user_description.strip()
+        action_words = ("删除", "移除", "仅保留", "保留素材", "替换", "修改", "不要", "去掉")
+        question_words = ("？", "?", "是否", "能否", "会不会", "为什么", "怎么")
+        is_direct = any(word in text for word in action_words)
+        needs_confirmation = not is_direct and any(word in text for word in question_words)
+        revision_mode = "direct_revision" if is_direct else ("confirmation_required" if needs_confirmation else "generation")
+        preview_hash = hashlib.sha256(
+            json.dumps(
+                {"skill_id": skill_id, "source_commit_sha": source_commit_sha, "user_description": text, "revision_mode": revision_mode},
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        if not needs_confirmation:
+            return GenerationIntentPreviewResponse(
+                status="ready",
+                revision_mode=revision_mode,
+                summary="已识别为明确生成/修订指令，将按严格证据优先规则执行。",
+                preview_hash=preview_hash,
+            )
+        return GenerationIntentPreviewResponse(
+            status="confirmation_required",
+            revision_mode=revision_mode,
+            summary="该描述是疑问式或修订范围不明确；请先选择如何处理未被素材直接支持的现有内容。",
+            preview_hash=preview_hash,
+            options=[
+                GenerationIntentOption(
+                    id="remove_unsupported",
+                    label="移除未被素材支持的内容",
+                    revision_instruction="移除或降级所有未被素材直接支持的事实性、强制性流程。",
+                ),
+                GenerationIntentOption(
+                    id="optional_confirmation",
+                    label="保留为可选并要求确认",
+                    revision_instruction="仅将未被素材支持的内容保留为可选建议或待人工确认项，不得作为强制流程或验收要求。",
+                ),
+                GenerationIntentOption(
+                    id="keep_current",
+                    label="保留当前内容",
+                    revision_instruction="保留当前内容，但未被素材支持的事实性或强制性内容必须明确标记为待人工确认。",
+                ),
+            ],
+        )
+
+    def _resolve_generation_intent(
+        self,
+        *,
+        skill_id: str,
+        source_commit_sha: str,
+        user_description: str,
+        confirmation: GenerationIntentConfirmation | None,
+    ) -> dict:
+        preview = self._generation_intent_preview(
+            skill_id=skill_id,
+            source_commit_sha=source_commit_sha,
+            user_description=user_description,
+        )
+        if preview.status == "ready":
+            return {
+                "mode": preview.revision_mode,
+                "revision_instructions": [user_description.strip()],
+                "preview_hash": preview.preview_hash,
+                "confirmed": True,
+            }
+        if confirmation is None or confirmation.preview_hash != preview.preview_hash:
+            raise SkillValidationError(
+                "生成意图不明确，请先确认修订动作。",
+                details={"intent_preview": preview.model_dump(mode="json")},
+            )
+        selected = next((item for item in preview.options if item.id == confirmation.confirmed_option_id), None)
+        if selected is None:
+            raise SkillValidationError("无效的生成意图确认选项。")
+        return {
+            "mode": "confirmed_revision",
+            "revision_instructions": [selected.revision_instruction, user_description.strip()],
+            "preview_hash": preview.preview_hash,
+            "confirmed_option_id": selected.id,
+            "confirmed": True,
+        }
 
     def process_skill_raw_material_generation_job(
         self,
@@ -1189,6 +1307,8 @@ class SkillsService:
             raise SkillValidationError("存在未就绪素材，不能用于生成 Skill。", details={"material_ids": failed_materials})
 
         material_generation_context = self._collect_generation_material_context(session, materials)
+        generation_intent = dict((generation.prompt_metadata or {}).get("generation_intent") or {})
+        previous_validation_summary = self._latest_builder_validation_summary(session, definition.id)
         source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, draft_version.source_ref)
         if base_commit_sha and source_bundle.head_commit_sha != base_commit_sha:
             raise SkillSourceConflictError(
@@ -1203,6 +1323,8 @@ class SkillsService:
             materials=materials,
             user_description=generation.user_description,
             material_generation_context=material_generation_context,
+            generation_intent=generation_intent,
+            previous_validation_summary=previous_validation_summary,
         )
         builder_reference_asset_files = self._build_builder_reference_asset_file_payloads(
             session,
@@ -1227,6 +1349,8 @@ class SkillsService:
             "candidate_reference_asset_count": len(material_generation_context["candidate_reference_assets"]),
             "reference_asset_file_count": len(builder_reference_asset_files),
             "reference_files": [],
+            "generation_intent": generation_intent,
+            "previous_validation_summary": previous_validation_summary,
         }
         generation.prompt_hash = prompt_hash
         generation.prompt_metadata = prompt_metadata
@@ -1263,9 +1387,16 @@ class SkillsService:
         }
         session.commit()
         if agent_result.status != "succeeded":
+            validation_message = self._agent_validation_failure_message(agent_result)
+            validation_diagnostics = self._agent_validation_diagnostics(agent_result)
             raise SkillsGatewayError(
-                "PSOP builder 智能体运行失败。",
-                details={"agent_run_id": agent_result.agent_run_id, "error": agent_result.error_message},
+                validation_message or "PSOP builder 智能体运行失败。",
+                details={
+                    "agent_run_id": agent_result.agent_run_id,
+                    "error": agent_result.error_message,
+                    "failure_kind": "validation_failed" if validation_message else "agent_execution_failed",
+                    "validation_diagnostics": validation_diagnostics,
+                },
             )
         candidate_content, builder_artifact_path = self._read_builder_candidate_artifact(agent_result)
         prompt_metadata = {
@@ -1477,6 +1608,49 @@ class SkillsService:
         }
 
     @staticmethod
+    def _agent_validation_failure_message(agent_result: AgentResult) -> str:
+        for event in reversed(agent_result.events):
+            if event.event_type != "agent.validation.failed":
+                continue
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), list) else []
+            if diagnostics and isinstance(diagnostics[0], dict):
+                first = diagnostics[0]
+                return f"PSOP builder 候选校验失败：{first.get('path') or 'candidate'}：{first.get('message') or payload.get('error') or ''}"
+            return f"PSOP builder 候选校验失败：{payload.get('error') or ''}".rstrip("：")
+        return ""
+
+    @staticmethod
+    def _agent_validation_diagnostics(agent_result: AgentResult) -> list[dict]:
+        for event in reversed(agent_result.events):
+            if event.event_type != "agent.validation.failed":
+                continue
+            diagnostics = event.payload.get("diagnostics") if isinstance(event.payload, dict) else None
+            if isinstance(diagnostics, list):
+                return [item for item in diagnostics if isinstance(item, dict)][:8]
+        return []
+
+    def _latest_builder_validation_summary(self, session: Session, skill_definition_id: str) -> list[dict]:
+        failed = self.repository.get_latest_failed_raw_material_generation(
+            session,
+            skill_definition_id=skill_definition_id,
+        )
+        error_details = ((failed.raw_response or {}).get("error_details") or {}) if failed else {}
+        diagnostics = error_details.get("validation_diagnostics") if isinstance(error_details, dict) else None
+        if not isinstance(diagnostics, list):
+            return []
+        return [
+            {
+                "path": str(item.get("path") or "candidate"),
+                "code": str(item.get("code") or "invalid_candidate"),
+                "message": str(item.get("message") or "候选字段无效。"),
+                "example": item.get("example"),
+            }
+            for item in diagnostics
+            if isinstance(item, dict)
+        ][:8]
+
+    @staticmethod
     def _agent_artifact_path(agent_result: AgentResult, artifact_type: str) -> str:
         for artifact in agent_result.artifacts:
             if artifact.artifact_type == artifact_type:
@@ -1497,6 +1671,8 @@ class SkillsService:
         materials: list[SkillRawMaterial],
         user_description: str,
         material_generation_context: dict,
+        generation_intent: dict,
+        previous_validation_summary: list[dict],
     ) -> dict:
         return {
             "task": "generate_psop_skill_source_from_raw_materials",
@@ -1514,6 +1690,25 @@ class SkillsService:
                 "SKILL.md": source_bundle.skill_md_content,
             },
             "user_description": user_description,
+            "generation_intent": generation_intent,
+            "previous_validation_summary": previous_validation_summary,
+            "evidence_policy": {
+                "mode": "strict_evidence_first",
+                "priority": [
+                    "confirmed_revision_instruction",
+                    "direct_material_evidence",
+                    "traceable_industry_standard",
+                    "current_source_as_revision_target",
+                    "builder_inference",
+                ],
+                "rules": [
+                    "当前 draft 仅是待修订内容，不能单独支撑新的事实性或强制性流程。",
+                    "每个强制工作流、安全约束和完成标准必须由 evidence_map.used_in 关联到素材、用户确认或可追溯标准。",
+                    "builder_inference 与 human_confirmation_required 只能用于可选建议、审阅风险或待确认项。",
+                    "标准检索不可用时不得引用 industry_standard，必须在 review_notes 写入“标准检索不可用，未引用行业标准”。",
+                    "previous_validation_summary 不为空时，必须在首次提交前逐项避免其中列出的字段错误。",
+                ],
+            },
             "material_analysis_results": material_generation_context["material_analysis_results"],
             "candidate_reference_assets": material_generation_context["candidate_reference_assets"],
             "output_contract": {
@@ -1545,8 +1740,8 @@ class SkillsService:
                     "不要使用 base64 data URI，也不要要求用户打开外部图片链接。"
                 ),
                 "material_analysis_policy": (
-                    "material_analysis_results 是素材证据包，不是任务拆解；"
-                    "必须由 Skill 构建智能体综合判断任务目标、步骤、安全风险和完成标准。"
+                    "material_analysis_results 是素材直接证据包；未被其直接支持的内容不得写为事实性、强制性流程或验收要求，"
+                    "除非 generation_intent 中有已确认的明确修订指令。"
                 ),
                 "reference_selection_policy": (
                     "优先选择能支撑关键步骤、状态变化、工具/对象识别、安全风险和完成标准的画面；"

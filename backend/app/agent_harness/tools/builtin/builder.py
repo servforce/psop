@@ -7,7 +7,12 @@ import json
 import re
 from typing import Any
 
-from app.agent_harness.agents.psop.builder.schemas import REQUIRED_BUILDER_FILES, validate_builder_candidate
+from app.agent_harness.agents.psop.builder.schemas import (
+    REQUIRED_BUILDER_FILES,
+    builder_candidate_input_schema,
+    validate_builder_candidate,
+    validation_diagnostics,
+)
 from app.agent_harness.sandbox.base import PSOP_OUTPUTS_VIRTUAL_ROOT
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
 from app.agent_harness.tools.spec import ToolSpec
@@ -18,6 +23,7 @@ BUILDER_DRAFT_FILES_VIRTUAL_ROOT = f"{PSOP_OUTPUTS_VIRTUAL_ROOT}/skill-draft"
 BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY = "_psop_builder_reference_asset_files"
 _REFERENCE_ASSETS_CONTEXT_KEY = "_psop_builder_reference_assets"
 _STANDARD_RESULTS_CONTEXT_KEY = "_psop_builder_standard_results"
+_STANDARD_SEARCH_STATUS_CONTEXT_KEY = "_psop_builder_standard_search_status"
 _SUBMIT_CANDIDATE_ERROR_COUNT_CONTEXT_KEY = "_psop_builder_submit_candidate_error_count"
 _SUBMIT_CANDIDATE_REQUIRED_FIELDS = [
     "directory_tree",
@@ -130,29 +136,7 @@ def register_builder_tools(registry: ToolRegistry) -> None:
             name="psop.builder.submit_candidate",
             description="提交并校验 PSOP Skill draft candidate。",
             purpose="用于 psop.builder 写入正式候选产物 builder-result.json，并将 PSOP Skill files 物化到 sandbox outputs/skill-draft。参数必须直接包含完整 candidate，不接受 workspace 文件路径或只包含 evidence_map 的部分参数。",
-            input_schema={
-                "type": "object",
-                "required": _SUBMIT_CANDIDATE_REQUIRED_FIELDS,
-                "properties": {
-                    "directory_tree": {"type": "string", "minLength": 1, "description": "生成文件树，必须列出所有必需 Markdown 文件。"},
-                    "files": {
-                        "type": "object",
-                        "description": "完整 PSOP Skill 文件内容对象。键必须至少包含 README.md、SKILL.md、prompts/system.md、references/README.md、examples/input.md、examples/expected-output.md、tests/checklist.md；值必须是完整 Markdown 文本。",
-                        "additionalProperties": {"type": "string", "minLength": 1},
-                    },
-                    "generation_reason": {"type": "string", "minLength": 1, "description": "说明本次生成依据和主要取舍。"},
-                    "review_notes": {"type": "array", "items": {"type": "string"}, "description": "审阅注意事项和不可阻塞风险。"},
-                    "material_usage": {"type": "array", "items": {"type": "object"}, "description": "素材使用说明，每项必须包含 material_id 和 usage。"},
-                    "industry_standard_usage": {"type": "array", "items": {"type": "object"}, "description": "行业标准使用说明；无可追溯结果时传空数组并在 review_notes 说明。"},
-                    "selected_reference_assets": {"type": "array", "items": {"type": "object"}, "description": "选中的参考资产，最多 12 项，每项包含 asset_id、material_id、reference_path、reason。"},
-                    "evidence_map": {"type": "array", "items": {"type": "object"}, "description": "关键结论证据映射，每项包含 claim、support_level、source_refs、used_in。"},
-                    "missing_questions": {"type": "array", "items": {"type": "object"}, "description": "需要人工确认的问题，每项包含 question、reason、blocking_level。"},
-                    "safety_constraints": {"type": "array", "items": {"type": "object"}, "description": "安全约束，每项包含 constraint、applies_to、risk_type、required_action。"},
-                    "workflow_step_candidates": {"type": "array", "items": {"type": "object"}, "description": "工作流阶段候选，阶段编号或标题必须能在 SKILL.md 中找到。"},
-                    "expected_evidence_requirements": {"type": "array", "items": {"type": "object"}, "description": "预期证据要求，每项包含 evidence_type 和 completion_criteria。"},
-                },
-                "additionalProperties": False,
-            },
+            input_schema=builder_candidate_input_schema(),
             risk_class="write_local",
             side_effect_class="write_sandbox_file",
             resource_scope="sandbox_outputs",
@@ -360,23 +344,35 @@ def _submit_candidate(arguments: dict[str, Any], context: ToolExecutionContext) 
             arguments,
             candidate_reference_assets=reference_assets,
             standard_search_results=standard_results,
+            standard_search_status=str(context.invocation_context.get(_STANDARD_SEARCH_STATUS_CONTEXT_KEY) or "") or None,
         )
     except ValueError as exc:
-        return _submit_candidate_error_result(context, str(exc), "schema_validation")
+        return _submit_candidate_error_result(
+            context,
+            str(exc),
+            "schema_validation",
+            diagnostics=validation_diagnostics(exc),
+        )
     payload = candidate.model_dump(mode="json")
+    selected_reference_assets = [item.model_dump(mode="json") for item in candidate.selected_reference_assets]
     try:
         linked_files, linked_images = _link_reference_images_in_files(
             files=candidate.files,
-            selected_reference_assets=candidate.selected_reference_assets,
+            selected_reference_assets=selected_reference_assets,
         )
         materialized_reference_images = _write_reference_asset_files(
-            selected_reference_assets=candidate.selected_reference_assets,
+            selected_reference_assets=selected_reference_assets,
             reference_asset_files=_reference_asset_files(context),
             context=context,
             require_available=BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY in context.invocation_context,
         )
     except ValueError as exc:
-        return _submit_candidate_error_result(context, str(exc), "reference_image_materialization")
+        return _submit_candidate_error_result(
+            context,
+            str(exc),
+            "reference_image_materialization",
+            diagnostics=validation_diagnostics(exc),
+        )
     payload["materialized_reference_image_count"] = len(materialized_reference_images)
     payload["materialized_reference_images"] = materialized_reference_images
     payload["linked_reference_images"] = linked_images
@@ -705,7 +701,13 @@ def _error_result(error_type: str, message: str, next_valid_actions: list[str]) 
     }
 
 
-def _submit_candidate_error_result(context: ToolExecutionContext, message: str, validation_stage: str) -> dict[str, Any]:
+def _submit_candidate_error_result(
+    context: ToolExecutionContext,
+    message: str,
+    validation_stage: str,
+    *,
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any]:
     attempt = int(context.invocation_context.get(_SUBMIT_CANDIDATE_ERROR_COUNT_CONTEXT_KEY) or 0) + 1
     context.invocation_context[_SUBMIT_CANDIDATE_ERROR_COUNT_CONTEXT_KEY] = attempt
     context.event_writer.record(
@@ -716,6 +718,8 @@ def _submit_candidate_error_result(context: ToolExecutionContext, message: str, 
             "attempt": attempt,
             "error_type": "invalid_arguments",
             "error": _truncate(message, 1000),
+            "diagnostics": diagnostics,
+            "repair_checklist": _repair_checklist(diagnostics),
         },
     )
     result = _error_result("invalid_arguments", message, ["psop.builder.submit_candidate", "workspace.write_text"])
@@ -725,12 +729,37 @@ def _submit_candidate_error_result(context: ToolExecutionContext, message: str, 
             "retry_requires_argument_correction": True,
             "attempt": attempt,
             "validation_stage": validation_stage,
+            "diagnostics": diagnostics,
+            "repair_checklist": _repair_checklist(diagnostics),
             "required_top_level_fields": _SUBMIT_CANDIDATE_REQUIRED_FIELDS,
             "required_files": REQUIRED_BUILDER_FILES,
-            "correction_hint": (
-                "请重新调用 psop.builder.submit_candidate，并在本次 tool 参数中直接提供完整 candidate。"
-                "不要只提交 evidence_map、workflow_step_candidates 或 workspace 文件路径；files 对象必须包含所有必需 Markdown 文件的完整内容。"
-            ),
+            "correction_hint": _correction_hint(diagnostics),
         }
     )
     return result
+
+
+def _correction_hint(diagnostics: list[dict[str, Any]]) -> str:
+    return (
+        "请依据 repair_checklist 一次性修复所有列出的字段后，重新调用 psop.builder.submit_candidate 并提交完整 candidate；"
+        "不要只修复第一项，也不要只提交部分 metadata、workspace 文件路径或缺少完整内容的 files；"
+        "files 对象必须包含所有必需 Markdown 文件。"
+    )
+
+
+def _repair_checklist(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for diagnostic in diagnostics[:8]:
+        path = str(diagnostic.get("path") or "candidate")
+        root = path.split(".", 1)[0]
+        group = grouped.setdefault(root, {"field": root, "items": []})
+        group["items"].append(
+            {
+                "path": path,
+                "code": str(diagnostic.get("code") or "invalid_candidate"),
+                "reason": str(diagnostic.get("message") or "候选字段无效。"),
+                "allowed_values": diagnostic.get("allowed_values") if isinstance(diagnostic.get("allowed_values"), list) else [],
+                "minimal_example": diagnostic.get("example"),
+            }
+        )
+    return list(grouped.values())
