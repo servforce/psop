@@ -297,7 +297,7 @@ def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
         database_manager.dispose()
 
 
-def test_compiler_reference_images_flow_to_runner_multimodal_output(tmp_path) -> None:
+def test_compiler_reference_images_are_preserved_but_runner_outputs_text_only(tmp_path) -> None:
     settings = create_test_settings().model_copy(
         update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
     )
@@ -394,13 +394,11 @@ def test_compiler_reference_images_flow_to_runner_multimodal_output(tmp_path) ->
             runtime_service.process_run(session, invocation.run_id or "")
             terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
 
-        multimodal_events = [
-            event for event in terminal_events if event.event_kind == "terminal.multimodal.output.v1"
-        ]
-        assert multimodal_events
-        image_parts = [part for part in multimodal_events[0].parts if part.kind == "image"]
-        assert len(image_parts) == 1
-        assert image_parts[0].artifact_object_id == reference_image["artifact_object_id"]
+        multimodal_events = [event for event in terminal_events if event.event_kind == "terminal.multimodal.output.v1"]
+        text_outputs = [event for event in terminal_events if event.event_kind == "terminal.text.output.v1"]
+        assert not multimodal_events
+        assert text_outputs
+        assert all(part.kind == "text" for event in text_outputs for part in event.parts)
     finally:
         database_manager.dispose()
 
@@ -758,196 +756,6 @@ def test_runtime_runner_attachment_warning_when_object_store_unavailable(tmp_pat
     assert warning_events
     assert warning_events[0].payload["source_ref"] == "terminal_event:1:image_1"
     assert warning_events[0].payload["reason"] == "object_store_unavailable"
-
-
-def test_runtime_runner_outputs_reference_image_when_artifact_resolves(tmp_path) -> None:
-    result = _run_runner_reference_image_case(
-        tmp_path,
-        skill_key="runtime-runner-reference-image",
-        reference_image_artifact_object_id="__valid__",
-    )
-
-    multimodal_events = [
-        event for event in result["terminal_events"] if event.event_kind == "terminal.multimodal.output.v1"
-    ]
-    warning_events = [
-        event for event in result["trace_events"] if event.event_type == "runtime.runner.reference_image.warning"
-    ]
-
-    assert multimodal_events
-    image_parts = [part for part in multimodal_events[0].parts if part.kind == "image"]
-    assert image_parts
-    assert image_parts[0].artifact_object_id == result["reference_artifact_object_id"]
-    assert not warning_events
-
-
-def test_runtime_ignores_runner_supplied_reference_image_artifact_object_id(tmp_path) -> None:
-    result = _run_runner_reference_image_case(
-        tmp_path,
-        skill_key="runtime-runner-reference-image-spoof",
-        reference_image_artifact_object_id="__valid__",
-        runner_reference_image_artifact_object_id="spoofed-artifact-object",
-    )
-
-    multimodal_events = [
-        event for event in result["terminal_events"] if event.event_kind == "terminal.multimodal.output.v1"
-    ]
-    image_parts = [part for part in multimodal_events[0].parts if part.kind == "image"]
-
-    assert image_parts[0].artifact_object_id == result["reference_artifact_object_id"]
-
-
-def test_runtime_runner_reference_image_warning_falls_back_to_text(tmp_path) -> None:
-    result = _run_runner_reference_image_case(
-        tmp_path,
-        skill_key="runtime-runner-reference-image-warning",
-        reference_image_artifact_object_id="missing-artifact-object",
-    )
-
-    multimodal_events = [
-        event for event in result["terminal_events"] if event.event_kind == "terminal.multimodal.output.v1"
-    ]
-    text_outputs = [
-        event for event in result["terminal_events"] if event.event_kind == "terminal.text.output.v1"
-    ]
-    warning_events = [
-        event for event in result["trace_events"] if event.event_type == "runtime.runner.reference_image.warning"
-    ]
-
-    assert not multimodal_events
-    assert text_outputs
-    assert warning_events
-    assert warning_events[0].payload["reference_image_ref"] == "skill-reference://steps/collect-context/site-overview"
-    assert warning_events[0].payload["artifact_object_id"] == "missing-artifact-object"
-    assert warning_events[0].payload["reason"] == "artifact_object_not_found"
-
-
-def _run_runner_reference_image_case(
-    tmp_path,
-    *,
-    skill_key: str,
-    reference_image_artifact_object_id: str,
-    runner_reference_image_artifact_object_id: str | None = None,
-) -> dict:
-    settings = create_test_settings().model_copy(
-        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
-    )
-    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
-    database_manager.create_schema()
-    gitlab_gateway = FakeGitLabGateway()
-    compile_gateway = FakeInferenceGateway()
-    compiler_service = CompilerService(
-        settings=settings,
-        gitlab_gateway=gitlab_gateway,
-        inference_gateway=compile_gateway,
-    )
-    skills_service = SkillsService(
-        settings=settings,
-        gitlab_gateway=gitlab_gateway,
-        compiler_service=compiler_service,
-    )
-    reference_image_ref = "skill-reference://steps/collect-context/site-overview"
-
-    def _runner_model(_definition):
-        if runner_reference_image_artifact_object_id:
-            return ScriptedRunnerChatModel(
-                observation_overrides_by_node={
-                    "instruct_collect_context": {
-                        "reference_images": [
-                            {
-                                "reference_image_ref": reference_image_ref,
-                                "artifact_object_id": runner_reference_image_artifact_object_id,
-                                "mime_type": "image/jpeg",
-                            }
-                        ]
-                    }
-                }
-            )
-        return ScriptedRunnerChatModel()
-
-    agent_harness_service = AgentHarnessService(
-        settings=settings,
-        chat_model_factory=_runner_model,
-    )
-    runtime_service = RuntimeService(
-        settings=settings,
-        inference_gateway=FailingInferenceGateway(),
-        agent_harness_service=agent_harness_service,
-    )
-    try:
-        with database_manager.session() as session:
-            skill = skills_service.create_skill(
-                session,
-                CreateSkillRequest(
-                    name=skill_key,
-                    description="Validate psop.runner reference image handling.",
-                ),
-            )
-            published = skills_service.publish_skill(
-                session,
-                skill_id=skill.id,
-                payload=PublishSkillRequest(publish_reason="Runtime runner reference image"),
-            )
-            compiled = process_publish_job(session, compiler_service, published.compile_request.id)
-            artifact = compiler_service.get_artifact(session, compiled.artifact_id or "")
-            artifact_object = session.get(ArtifactObject, artifact.artifact_object_id)
-            assert artifact_object is not None
-            reference_artifact_object_id = reference_image_artifact_object_id
-            if reference_image_artifact_object_id == "__valid__":
-                reference_object = ArtifactObject(
-                    bucket="psop-test",
-                    object_key=f"reference/{skill_key}.jpg",
-                    media_type="image/jpeg",
-                    size_bytes=10,
-                    checksum="reference-image-checksum",
-                )
-                session.add(reference_object)
-                session.flush()
-                reference_artifact_object_id = reference_object.id
-            artifact_payload = json.loads(json.dumps(artifact_object.content_json, ensure_ascii=False))
-            artifact_payload["runtime_contract"]["workflow_steps"][0]["reference_images"] = [
-                {
-                    "reference_image_ref": reference_image_ref,
-                    "title": "现场概览参考图",
-                    "caption": "请按参考图角度拍摄现场整体状态。",
-                    "artifact_object_id": reference_artifact_object_id,
-                    "mime_type": "image/jpeg",
-                    "source_ref": "runtime_contract.workflow_steps.collect_context.reference_images.site-overview",
-                }
-            ]
-            artifact_object.content_json = artifact_payload
-            session.flush()
-
-            invocation = runtime_service.create_invocation(
-                session,
-                CreateInvocationRequest(
-                    skill_key=skill.key,
-                    terminal_context={"terminal_kind": "web"},
-                ),
-            )
-            runtime_service.append_terminal_event(
-                session,
-                invocation.run_id or "",
-                AppendTerminalEventRequest(
-                    direction="input",
-                    event_kind="terminal.text.input.v1",
-                    mime_type="text/plain",
-                    payload_inline="现场说明已提交。",
-                    external_event_id=f"{skill_key}-evidence-001",
-                ),
-            )
-            runtime_service.process_run(session, invocation.run_id or "")
-            run = runtime_service.get_run(session, invocation.run_id or "")
-            trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
-            terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
-            return {
-                "run": run,
-                "trace_events": trace_events,
-                "terminal_events": terminal_events,
-                "reference_artifact_object_id": reference_artifact_object_id,
-            }
-    finally:
-        database_manager.dispose()
 
 
 def test_compiler_candidate_diagnostics_filters_standard_search_availability_notes() -> None:

@@ -21,7 +21,6 @@
 - 证据进度 `evidence_progress`：当前等待点每个证据项的验收状态；`accepted` 表示运行时已经记录为通过，不要要求用户重新提交。
 - 节点要求和证据要求：判断当前节点能否通过的标准。
 - 输出要求：允许使用哪些判断结果、最终写入哪个 schema、终端提示用什么语言。
-- 参考图片索引：当前节点可展示给用户的参考图片；只有匹配当前节点时才使用。
 - 信任标签和 source refs：告诉你哪些内容可信、哪些只是用户输入，以及提交结果时应引用哪些可验证来源。
 
 输入示例：
@@ -76,7 +75,7 @@ allowed_decisions: ["continue", "need_more_evidence", "retry", "abort", "complet
 
 如果当前节点上下文已经足够，直接调用 `psop.runner.submit_observation` 提交结构化判断结果。
 
-只有在缺少必要事实时才使用按需工具：`psop.runner.read_prompt_view`、`psop.runner.read_runtime_contract`、`psop.runner.read_current_checkpoint`、`psop.runner.list_terminal_events`、`psop.runner.read_latest_evidence`、`psop.runner.read_terminal_event_part`、`psop.runner.list_step_reference_images`。
+只有在缺少必要事实时才使用按需工具：`psop.runner.read_prompt_view`、`psop.runner.read_runtime_contract`、`psop.runner.read_current_checkpoint`、`psop.runner.list_terminal_events`、`psop.runner.read_latest_evidence`、`psop.runner.read_terminal_event_part`。
 
 不要为了形式完整而固定调用 `load_skill`、`load_skill_resource` 或 read tools。不要在 runtime contract 和当前节点范围外发明步骤、工具、设备操作或安全判断。
 
@@ -93,7 +92,6 @@ allowed_decisions: ["continue", "need_more_evidence", "retry", "abort", "complet
 - `wait_reason`：当需要继续等待用户输入时，说明等待原因；不等待时用空字符串。
 - `expected_inputs`：告诉终端接下来应提交什么类型的输入，例如 `text`、`image`。
 - `evidence_assessment`：把证据分成已接受、已拒绝、缺失和不安全/不明确四类；如果上下文提供证据进度，还要在 `requirement_results` 中按证据项提交结构化判断。
-- `reference_images`：需要给用户展示参考图时填写；没有合适图片就保持空数组。
 - `safety_flags`：记录安全提醒或风险；没有风险就保持空数组。
 - `final_response`：只在 `complete` 或 `abort` 时填写终局说明；其他判断保持空字符串。
 - `source_refs`：引用本次判断依据，便于运行时校验和回放。
@@ -103,7 +101,7 @@ allowed_decisions: ["continue", "need_more_evidence", "retry", "abort", "complet
 
 - 工具入参字段名是 `schema`，不要使用 `kind` 字段；`schema` 的值必须是 `psop.runner.observation.v1`。
 - 字符串字段 `terminal_message`、`reason`、`next_phase`、`wait_reason`、`final_response` 不能传 `null`；没有内容时传空字符串 `""`。
-- 数组字段 `expected_inputs`、`reference_images`、`safety_flags`、`source_refs` 不能传 `null`；没有内容时传空数组 `[]`。
+- 数组字段 `expected_inputs`、`safety_flags`、`source_refs` 不能传 `null`；没有内容时传空数组 `[]`。
 - `evidence_assessment` 必须是对象；其中 `accepted_event_refs`、`rejected_event_refs`、`missing_evidence`、`unsafe_or_ambiguous_facts` 都使用数组。
 - 如果上下文提供 `evidence_progress.requirements`，`evidence_assessment.requirement_results` 必须使用其中真实存在的 `requirement_key`；`status` 只能是 `accepted`、`rejected`、`missing` 或 `ambiguous`，`event_refs` 只能引用当前可见的 `terminal_event`。
 - `source_refs` 只能引用当前调用可见的来源，允许前缀包括：`terminal_event:N`、`terminal_event:N:part_id`、`task_identity.*`、`runtime_contract.execution_goal`、`runtime_contract.applicability`、`runtime_contract.safety_constraints`、`runtime_contract.completion_criteria`、`runtime_contract.workflow_steps.<id>`、`runtime_contract.expected_evidence.<id>`、`runtime_contract.wait_checkpoints.<id>`、`prompt_view.*`、`current_checkpoint.*`、`trace_summary:N`。
@@ -142,7 +140,6 @@ allowed_decisions: ["continue", "need_more_evidence", "retry", "abort", "complet
       }
     ]
   },
-  "reference_images": [],
   "safety_flags": [],
   "final_response": "",
   "source_refs": ["terminal_event:30", "runtime_contract.workflow_steps.precheck_compatibility"],
@@ -176,7 +173,6 @@ allowed_decisions: ["continue", "need_more_evidence", "retry", "abort", "complet
       }
     ]
   },
-  "reference_images": [],
   "safety_flags": [],
   "final_response": "",
   "source_refs": ["terminal_event:34", "runtime_contract.wait_checkpoints.motherboard_preinstall_evidence"],

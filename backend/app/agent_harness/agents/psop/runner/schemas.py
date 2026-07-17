@@ -36,18 +36,6 @@ class RunnerEvidenceAssessment(BaseModel):
     requirement_results: list[RunnerRequirementResult] = Field(default_factory=list)
 
 
-class RunnerReferenceImage(BaseModel):
-    reference_image_ref: str
-    title: str = ""
-    caption: str = ""
-    artifact_ref: str = ""
-    artifact_object_id: str = ""
-    mime_type: str = ""
-    workflow_step_id: str = ""
-    source_ref: str = ""
-    display_order: int = 0
-
-
 class RunnerSafetyFlag(BaseModel):
     level: str = ""
     code: str = ""
@@ -64,7 +52,6 @@ class RunnerObservation(BaseModel):
     wait_reason: str = ""
     expected_inputs: list[str] = Field(default_factory=list)
     evidence_assessment: RunnerEvidenceAssessment = Field(default_factory=RunnerEvidenceAssessment)
-    reference_images: list[RunnerReferenceImage] = Field(default_factory=list)
     safety_flags: list[RunnerSafetyFlag] = Field(default_factory=list)
     final_response: str = ""
     source_refs: list[str] = Field(default_factory=list)
@@ -88,6 +75,8 @@ def validate_runner_observation(
 ) -> dict[str, Any]:
     if not isinstance(candidate, dict):
         raise ValueError("Runner observation 必须是 JSON object。")
+    if "reference_images" in candidate:
+        raise ValueError("Runner observation 不再支持 reference_images。")
     observation = RunnerObservation.model_validate(candidate).model_dump(mode="json", by_alias=True)
     invocation_input = invocation_input or {}
     invocation_context = invocation_context or {}
@@ -107,7 +96,6 @@ def validate_runner_observation(
     if observation["final_response"] and observation["decision"] not in {"complete", "abort"}:
         raise ValueError("final_response 只允许在 decision=complete 或 decision=abort 时非空。")
 
-    _validate_reference_images(observation.get("reference_images") or [], invocation_context)
     _validate_source_refs(observation.get("source_refs") or [], invocation_context)
     evidence_assessment = observation.get("evidence_assessment") or {}
     _validate_evidence_event_refs(_evidence_event_refs(evidence_assessment), invocation_context)
@@ -144,22 +132,6 @@ def _max_terminal_message_chars(invocation_context: dict[str, Any]) -> int:
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
     return 2000
-
-
-def _validate_reference_images(items: list[dict[str, Any]], invocation_context: dict[str, Any]) -> None:
-    allowed_refs = {
-        str(item.get("reference_image_ref") or "")
-        for item in _list_value(invocation_context, "step_reference_images")
-        if isinstance(item, dict)
-    }
-    if items and not allowed_refs:
-        raise ValueError("当前步骤没有允许的 reference_images，Runner 不能提交参考图片引用。")
-    for item in items:
-        ref = str(item.get("reference_image_ref") or "")
-        if not ref:
-            raise ValueError("reference_images 每项必须包含 reference_image_ref。")
-        if ref not in allowed_refs:
-            raise ValueError(f"reference_image_ref 不属于当前步骤允许集合：{ref}")
 
 
 def _validate_source_refs(source_refs: list[str], invocation_context: dict[str, Any]) -> None:

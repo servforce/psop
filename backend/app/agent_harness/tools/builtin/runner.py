@@ -53,20 +53,6 @@ def register_runner_tools(registry: ToolRegistry) -> None:
     )
     registry.register(
         ToolSpec(
-            name="psop.runner.list_step_reference_images",
-            description="列出当前步骤允许返回给终端的参考图片。",
-            purpose="用于 psop.runner 选择当前步骤内最相关的参考图片，不得跨步骤引用。",
-            input_schema={
-                "type": "object",
-                "properties": {"workflow_step_id": {"type": "string"}},
-                "additionalProperties": False,
-            },
-            max_result_chars=20000,
-        ),
-        _list_step_reference_images,
-    )
-    registry.register(
-        ToolSpec(
             name="psop.runner.list_terminal_events",
             description="按 seq 范围列出当前 Run 的终端事件摘要。",
             purpose="用于 psop.runner 查看用户提交的现场事实摘要；终端事实均为 untrusted_runtime_input。",
@@ -170,7 +156,6 @@ def register_runner_tools(registry: ToolRegistry) -> None:
                         },
                         "additionalProperties": False,
                     },
-                    "reference_images": {"type": "array", "items": {"type": "object"}},
                     "safety_flags": {"type": "array", "items": {"type": "object"}},
                     "final_response": {"type": "string"},
                     "source_refs": {"type": "array", "items": {"type": "string"}},
@@ -208,7 +193,7 @@ def _read_runtime_contract(_: dict[str, Any], context: ToolExecutionContext) -> 
         "已读取 runtime contract。",
         runtime_contract=runtime_contract,
         trust_label=_trust_label(context, "runtime_contract"),
-        next_valid_actions=["psop.runner.read_current_checkpoint", "psop.runner.list_step_reference_images"],
+        next_valid_actions=["psop.runner.read_current_checkpoint"],
     )
 
 
@@ -222,24 +207,6 @@ def _read_current_checkpoint(_: dict[str, Any], context: ToolExecutionContext) -
         evidence_progress=_dict_value(context.invocation_context, "evidence_progress"),
         next_valid_actions=["psop.runner.list_terminal_events", "psop.runner.read_latest_evidence"],
     )
-
-
-def _list_step_reference_images(arguments: dict[str, Any], context: ToolExecutionContext) -> dict[str, Any]:
-    images = _list_value(context.invocation_context, "step_reference_images")
-    workflow_step_id = str(arguments.get("workflow_step_id") or "").strip()
-    if workflow_step_id:
-        images = [
-            item
-            for item in images
-            if isinstance(item, dict) and str(item.get("workflow_step_id") or "") == workflow_step_id
-        ]
-    return {
-        "status": "success",
-        "summary": f"列出 {len(images)} 张当前步骤参考图片。",
-        "items": [_safe_reference_image(item) for item in images if isinstance(item, dict)],
-        "truncated": False,
-        "next_valid_actions": ["psop.runner.submit_observation"],
-    }
 
 
 def _list_terminal_events(arguments: dict[str, Any], context: ToolExecutionContext) -> dict[str, Any]:
@@ -336,7 +303,6 @@ def _submit_observation(arguments: dict[str, Any], context: ToolExecutionContext
             "content_hash": content_hash,
             "validation_summary": {
                 "status": "passed",
-                "reference_image_count": len(observation.get("reference_images") or []),
                 "source_ref_count": len(observation.get("source_refs") or []),
             },
             "next_valid_actions": [],
@@ -351,21 +317,6 @@ def _submit_observation(arguments: dict[str, Any], context: ToolExecutionContext
             },
         )
         return _error_result("invalid_arguments", str(exc), ["psop.runner.submit_observation"])
-
-
-def _safe_reference_image(item: dict[str, Any]) -> dict[str, Any]:
-    allowed_keys = {
-        "reference_image_ref",
-        "title",
-        "caption",
-        "workflow_step_id",
-        "artifact_ref",
-        "artifact_object_id",
-        "mime_type",
-        "source_ref",
-        "display_order",
-    }
-    return {key: item.get(key) for key in allowed_keys if key in item}
 
 
 def _safe_terminal_event(event: dict[str, Any], context: ToolExecutionContext | None = None) -> dict[str, Any]:

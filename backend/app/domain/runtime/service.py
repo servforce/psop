@@ -1328,35 +1328,17 @@ class RuntimeService:
         if should_output and not suppress_terminal_output and terminal_message:
             terminal_session = self.repository.get_terminal_session_for_run(session, run.id)
             if terminal_session and terminal_session.status == "open":
-                reference_images = self._resolve_runner_reference_images_for_output(
-                    session=session,
-                    run=run,
-                    node=node,
-                    token=next_token,
-                    artifact_payload=artifact_payload,
-                    observation_reference_images=(
-                        observation.get("reference_images") if isinstance(observation.get("reference_images"), list) else []
-                    ),
-                )
-                if not self._append_runner_terminal_output(
+                self._append_terminal_event(
                     session,
                     run=run,
                     terminal_session=terminal_session,
-                    node=node,
-                    terminal_message=terminal_message,
-                    reference_images=reference_images,
-                ):
-                    self._append_terminal_event(
-                        session,
-                        run=run,
-                        terminal_session=terminal_session,
-                        direction="output",
-                        event_kind=str(interaction.get("output_event_kind") or "terminal.text.output.v1"),
-                        mime_type=str(interaction.get("output_mime_type") or "text/markdown"),
-                        payload_inline=terminal_message,
-                        binding_id=None,
-                        source_ref={"kind": "runtime", "node_id": str(node.get("id")), "agent_key": "psop.runner"},
-                    )
+                    direction="output",
+                    event_kind="terminal.text.output.v1",
+                    mime_type=str(interaction.get("output_mime_type") or "text/markdown"),
+                    payload_inline=terminal_message,
+                    binding_id=None,
+                    source_ref={"kind": "runtime", "node_id": str(node.get("id")), "agent_key": "psop.runner"},
+                )
 
         if self._node_is_evaluation(node):
             latest_evaluation = self._evaluation_summary(node, observation)
@@ -1559,173 +1541,6 @@ class RuntimeService:
                 continue
             seqs.append(seq)
         return max(seqs) if seqs else 0
-
-    def _append_runner_terminal_output(
-        self,
-        session: Session,
-        *,
-        run: Run,
-        terminal_session: TerminalSession,
-        node: dict[str, Any],
-        terminal_message: str,
-        reference_images: list[Any],
-    ) -> bool:
-        if not reference_images:
-            return False
-        parts = [
-            TerminalEventPartInput(
-                part_id="text_1",
-                kind="text",
-                mime_type="text/markdown",
-                text=terminal_message,
-            )
-        ]
-        image_index = 0
-        for item in reference_images:
-            if not isinstance(item, dict):
-                self._append_runner_reference_image_warning(
-                    session,
-                    run=run,
-                    node=node,
-                    reference_image_ref="",
-                    artifact_object_id="",
-                    reason="invalid_reference_image",
-                )
-                continue
-            artifact_object_id = str(item.get("artifact_object_id") or "")
-            if not artifact_object_id:
-                self._append_runner_reference_image_warning(
-                    session,
-                    run=run,
-                    node=node,
-                    reference_image_ref=str(item.get("reference_image_ref") or ""),
-                    artifact_object_id="",
-                    reason="missing_artifact_object_id",
-                )
-                continue
-            artifact_object = self.repository.get_artifact_object(session, artifact_object_id)
-            if not artifact_object:
-                self._append_runner_reference_image_warning(
-                    session,
-                    run=run,
-                    node=node,
-                    reference_image_ref=str(item.get("reference_image_ref") or ""),
-                    artifact_object_id=artifact_object_id,
-                    reason="artifact_object_not_found",
-                )
-                continue
-            image_index += 1
-            parts.append(
-                TerminalEventPartInput(
-                    part_id=f"image_{image_index}",
-                    kind="image",
-                    mime_type=str(item.get("mime_type") or artifact_object.media_type or "image/jpeg"),
-                    artifact_object_id=artifact_object_id,
-                    metadata={
-                        "title": str(item.get("title") or ""),
-                        "caption": str(item.get("caption") or ""),
-                        "source_ref": str(item.get("source_ref") or ""),
-                        "reference_image_ref": str(item.get("reference_image_ref") or ""),
-                    },
-                )
-            )
-        if len(parts) <= 1:
-            return False
-        self._append_terminal_event(
-            session,
-            run=run,
-            terminal_session=terminal_session,
-            direction="output",
-            event_kind="terminal.multimodal.output.v1",
-            mime_type="multipart/mixed",
-            payload_inline={"summary": terminal_message, "reference_image_count": len(parts) - 1},
-            binding_id=None,
-            parts=parts,
-            source_ref={"kind": "runtime", "node_id": str(node.get("id")), "agent_key": "psop.runner"},
-        )
-        return True
-
-    def _resolve_runner_reference_images_for_output(
-        self,
-        *,
-        session: Session,
-        run: Run,
-        node: dict[str, Any],
-        token: dict[str, Any],
-        artifact_payload: dict[str, Any],
-        observation_reference_images: list[Any],
-    ) -> list[dict[str, Any]]:
-        if not observation_reference_images:
-            return []
-        runtime_contract = artifact_payload.get("runtime_contract") if isinstance(artifact_payload.get("runtime_contract"), dict) else {}
-        allowed_images = self._runner_step_reference_images(node=node, token=token, runtime_contract=runtime_contract)
-        allowed_by_ref = {
-            str(item.get("reference_image_ref") or ""): dict(item)
-            for item in allowed_images
-            if isinstance(item, dict) and str(item.get("reference_image_ref") or "")
-        }
-        if not allowed_by_ref:
-            for item in observation_reference_images:
-                reference_image_ref = str(item.get("reference_image_ref") or "") if isinstance(item, dict) else ""
-                self._append_runner_reference_image_warning(
-                    session,
-                    run=run,
-                    node=node,
-                    reference_image_ref=reference_image_ref,
-                    artifact_object_id="",
-                    reason="reference_image_not_allowed",
-                )
-            return []
-
-        resolved: list[dict[str, Any]] = []
-        for item in observation_reference_images:
-            if not isinstance(item, dict):
-                self._append_runner_reference_image_warning(
-                    session,
-                    run=run,
-                    node=node,
-                    reference_image_ref="",
-                    artifact_object_id="",
-                    reason="invalid_reference_image",
-                )
-                continue
-            reference_image_ref = str(item.get("reference_image_ref") or "")
-            allowed_item = allowed_by_ref.get(reference_image_ref)
-            if not allowed_item:
-                self._append_runner_reference_image_warning(
-                    session,
-                    run=run,
-                    node=node,
-                    reference_image_ref=reference_image_ref,
-                    artifact_object_id="",
-                    reason="reference_image_not_allowed",
-                )
-                continue
-            resolved.append(allowed_item)
-        return resolved
-
-    def _append_runner_reference_image_warning(
-        self,
-        session: Session,
-        *,
-        run: Run,
-        node: dict[str, Any],
-        reference_image_ref: str,
-        artifact_object_id: str,
-        reason: str,
-    ) -> None:
-        self._append_trace_event(
-            session,
-            run=run,
-            phase=str(node.get("id") or ""),
-            event_type="runtime.runner.reference_image.warning",
-            payload={
-                "node_id": str(node.get("id") or ""),
-                "reference_image_ref": reference_image_ref,
-                "artifact_object_id": artifact_object_id,
-                "reason": reason,
-            },
-        )
 
     def _append_runner_attachment_warning(
         self,
@@ -3434,7 +3249,6 @@ class RuntimeService:
                     "runtime_controls_transition": True,
                     "transition_summary": context.get("transition_contract", {}),
                     "language": "zh-CN",
-                    "allow_reference_images": True,
                 },
                 "text": text,
             },
@@ -3467,7 +3281,6 @@ class RuntimeService:
             "prompt_view": self._runner_prompt_view(run=run, node=node, token=token),
             "task_identity": self._runner_task_identity(artifact_payload),
             "runtime_contract": runtime_contract,
-            "step_reference_images": self._runner_step_reference_images(node=node, token=token, runtime_contract=runtime_contract),
             "current_checkpoint": self._runner_current_checkpoint(run=run, node=node, token=token),
             "evidence_progress": self._runner_evidence_progress(node=node, token=token, artifact_payload=artifact_payload),
             "transition_contract": self._runner_transition_contract(artifact_payload=artifact_payload, node=node),
@@ -3475,9 +3288,9 @@ class RuntimeService:
             "latest_evidence": control.get("latest_evidence") if isinstance(control.get("latest_evidence"), dict) else {},
             "trace_summary": token.get("trace") if isinstance(token.get("trace"), list) else [],
             "allowed_runtime": {
-                "terminal_event_kinds": ["terminal.text.output.v1", "terminal.multimodal.output.v1"],
+                "terminal_event_kinds": ["terminal.text.output.v1"],
                 "input_part_kinds": ["text", "image", "audio", "video"],
-                "output_part_kinds": ["text", "image"],
+                "output_part_kinds": ["text"],
                 "max_terminal_message_chars": 2000,
             },
             "terminal_cursor": _get_path(token, "metadata.terminal_cursor") or 0,
@@ -3537,7 +3350,6 @@ class RuntimeService:
                 if isinstance(item, dict)
             ],
             "runtime_contract_slice": self._runner_runtime_contract_slice(runtime_contract),
-            "reference_image_index": context.get("step_reference_images") if isinstance(context.get("step_reference_images"), list) else [],
             "transition_contract": context.get("transition_contract") if isinstance(context.get("transition_contract"), dict) else {},
             "trust_labels": context.get("trust_labels") if isinstance(context.get("trust_labels"), dict) else {},
             "output_contract": {
@@ -3547,7 +3359,6 @@ class RuntimeService:
                 "runtime_controls_transition": True,
                 "transition_summary": context.get("transition_contract") if isinstance(context.get("transition_contract"), dict) else {},
                 "language": "zh-CN",
-                "allow_reference_images": True,
             },
             "terminal_cursor": int(context.get("terminal_cursor") or 0),
         }
@@ -3867,40 +3678,6 @@ class RuntimeService:
             "evidence": [],
         }
 
-    def _runner_step_reference_images(
-        self,
-        *,
-        node: dict[str, Any],
-        token: dict[str, Any],
-        runtime_contract: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        workflow_step_id = str(
-            _get_path(token, "control.wait.workflow_step_id")
-            or (node.get("interaction") or {}).get("workflow_step_id")
-            or node.get("id")
-            or ""
-        )
-        images: list[dict[str, Any]] = []
-        for item in runtime_contract.get("step_reference_images") or []:
-            if isinstance(item, dict):
-                images.append(dict(item))
-        workflow_steps = runtime_contract.get("workflow_steps")
-        if isinstance(workflow_steps, list):
-            for step in workflow_steps:
-                if not isinstance(step, dict) or str(step.get("id") or "") != workflow_step_id:
-                    continue
-                reference_images = step.get("reference_images")
-                if isinstance(reference_images, dict):
-                    iterable = reference_images.items()
-                    for key, value in iterable:
-                        if isinstance(value, dict):
-                            images.append({**value, "reference_image_ref": value.get("reference_image_ref") or str(key), "workflow_step_id": workflow_step_id})
-                elif isinstance(reference_images, list):
-                    for value in reference_images:
-                        if isinstance(value, dict):
-                            images.append({**value, "workflow_step_id": workflow_step_id})
-        return [item for item in images if str(item.get("reference_image_ref") or "")]
-
     @staticmethod
     def _read_runner_observation_artifact(result: AgentResult) -> dict[str, Any]:
         if not result.sandbox_path:
@@ -3931,7 +3708,6 @@ class RuntimeService:
             "wait_reason": str(observation.get("wait_reason") or ""),
             "expected_inputs": observation.get("expected_inputs") if isinstance(observation.get("expected_inputs"), list) else [],
             "evidence_assessment": observation.get("evidence_assessment") if isinstance(observation.get("evidence_assessment"), dict) else {},
-            "reference_images": observation.get("reference_images") if isinstance(observation.get("reference_images"), list) else [],
             "safety_flags": observation.get("safety_flags") if isinstance(observation.get("safety_flags"), list) else [],
             "final_response": str(observation.get("final_response") or ""),
             "runner": {
@@ -3939,7 +3715,6 @@ class RuntimeService:
                 "agent_run_id": agent_result.agent_run_id,
                 "artifact_ref": RUNNER_OBSERVATION_ARTIFACT_REF,
                 "source_refs": observation.get("source_refs") if isinstance(observation.get("source_refs"), list) else [],
-                "reference_images": observation.get("reference_images") if isinstance(observation.get("reference_images"), list) else [],
                 "safety_flags": observation.get("safety_flags") if isinstance(observation.get("safety_flags"), list) else [],
                 "original_decision": str(observation.get("decision") or ""),
                 "suggested_next_phase": str(observation.get("next_phase") or ""),
@@ -4619,7 +4394,6 @@ class RuntimeService:
             "gateway.tool.completed": "工具调用",
             "runtime.final.completed": "最终结果",
             "runtime.aborted": "已中止",
-            "runtime.runner.reference_image.warning": "参考图片告警",
             "runtime.runner.attachment.warning": "Runner 附件告警",
             "runtime.message_processing.failed": "消息处理失败",
             "runtime.failed": "运行失败",

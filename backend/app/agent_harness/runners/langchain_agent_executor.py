@@ -419,9 +419,6 @@ def _runner_observation_provenance(path) -> dict[str, Any]:
         source_refs = payload.get("source_refs")
         if isinstance(source_refs, list):
             provenance["source_ref_count"] = len(source_refs)
-        reference_images = payload.get("reference_images")
-        if isinstance(reference_images, list):
-            provenance["reference_image_count"] = len(reference_images)
     return provenance
 
 

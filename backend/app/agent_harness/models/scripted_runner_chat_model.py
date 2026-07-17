@@ -58,7 +58,6 @@ def _next_runner_message(
             ("psop.runner.read_current_checkpoint", "call_read_checkpoint", {}),
             ("psop.runner.list_terminal_events", "call_list_terminal_events", {"limit": 20}),
             ("psop.runner.read_latest_evidence", "call_read_latest_evidence", {}),
-            ("psop.runner.list_step_reference_images", "call_list_reference_images", {}),
         ):
             if tool_name in tool_names and not _has_tool_result(messages, tool_name):
                 missing_read_calls.append({"id": call_id, "name": tool_name, "args": args})
@@ -107,7 +106,6 @@ def _observation(
     event_ref = _latest_terminal_event_ref(messages)
     if event_ref:
         source_refs.append(event_ref)
-    reference_images = _reference_images(messages)
     requirement_results = _requirement_results(
         context=context,
         decision=decision,
@@ -131,7 +129,6 @@ def _observation(
             "unsafe_or_ambiguous_facts": [],
             "requirement_results": requirement_results,
         },
-        "reference_images": reference_images,
         "safety_flags": [],
         "final_response": terminal_message if decision == "complete" else "",
         "source_refs": source_refs,
@@ -226,43 +223,6 @@ def _latest_terminal_event_ref(messages: list[BaseMessage]) -> str:
     if isinstance(latest, dict) and isinstance(latest.get("seq_no"), int):
         return f"terminal_event:{latest['seq_no']}"
     return ""
-
-
-def _reference_images(messages: list[BaseMessage]) -> list[dict[str, Any]]:
-    context = _runner_turn_context_from_messages(messages)
-    context_items = context.get("reference_image_index")
-    if isinstance(context_items, list):
-        images = [_safe_reference_image(item, index) for index, item in enumerate(context_items, start=1)]
-        if images:
-            return images[:1]
-    payload = _latest_tool_payload(messages, "psop.runner.list_step_reference_images")
-    items = payload.get("items")
-    if not isinstance(items, list):
-        return []
-    results = []
-    for index, item in enumerate(items, start=1):
-        if not isinstance(item, dict) or not item.get("reference_image_ref"):
-            continue
-        image = _safe_reference_image(item, index)
-        if image:
-            results.append(image)
-    return results[:1]
-
-
-def _safe_reference_image(item: Any, index: int) -> dict[str, Any]:
-    if not isinstance(item, dict) or not item.get("reference_image_ref"):
-        return {}
-    image = {
-        "reference_image_ref": str(item.get("reference_image_ref") or ""),
-        "title": str(item.get("title") or ""),
-        "caption": str(item.get("caption") or ""),
-        "source_ref": str(item.get("source_ref") or ""),
-        "display_order": index,
-    }
-    for key in ("artifact_object_id", "artifact_ref", "mime_type", "workflow_step_id"):
-        if item.get(key):
-            image[key] = item.get(key)
-    return image
 
 
 def _tool_call(call_id: str, name: str, args: dict[str, Any]) -> AIMessage:

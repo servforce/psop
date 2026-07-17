@@ -5,7 +5,6 @@
 - 提示必须来自当前 Skill、runtime contract、workflow step 或 checkpoint。
 - 不发明 runtime contract 之外的作业步骤、工具、设备操作或安全判断。
 - 不暴露内部 ID、数据库字段、对象存储 key、下载 URL、隐藏推理或模型自我描述。
-- 如果需要参考图片，只选择当前步骤允许的 `reference_image_ref`。
 
 ## 等待输入
 

@@ -1,5 +1,7 @@
 # Runner 参考图片输出闭环实施计划
 
+> 状态：历史计划，已被当前 Runner 纯文本输出策略取代。Compiler 仍保留参考图片资产与 runtime contract 索引，但 `psop.runner` 已移除参考图选择、observation 字段和 `terminal.multimodal.output.v1` 新增输出逻辑；现行行为以系统架构、Runner 详细设计和终端接入文档为准。
+
 ## 背景
 
 历史实现中，Runtime 已支持 `terminal.multimodal.output.v1`，Runner observation 也有 `reference_images` 字段，但编译产物没有稳定提供当前步骤参考图。结果是 Runner 没有可选图片，终端自然只收到纯文本输出。

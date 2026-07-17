@@ -41,11 +41,13 @@ def test_psop_runner_definition_and_skills_load() -> None:
     assert package.definition.factory == "make_runner_agent"
     assert package.definition.skills == ["psop-runner"]
     assert "psop.runner.submit_observation" in package.definition.tools
+    assert "psop.runner.list_step_reference_images" not in package.definition.tools
     for skill_name in package.definition.skills:
         skill = loader.load_metadata(skill_name)
         assert skill.description
         assert skill.name == "psop-runner"
         assert "psop.runner.submit_observation" in skill.allowed_tools
+        assert "psop.runner.list_step_reference_images" not in skill.allowed_tools
     resource = loader.load_resource("psop-runner", "core/SKILL.md")
     assert "PSOP Runner Core" in resource["content"]
 
@@ -88,6 +90,7 @@ def test_psop_runner_config_and_prompt_guard_observation_format() -> None:
     assert '`decision: "complete"`' in prompt
     assert "流程推进由运行时根据执行图完成" in prompt
     assert "`next_phase`：兼容字段，固定传空字符串" in prompt
+    assert "reference_images" not in prompt
     assert prompt.count("next_phase") <= 4
     assert '"next_phase": "motherboard_preinstall"' not in prompt
 
@@ -218,7 +221,6 @@ def test_psop_runner_optional_read_tools_still_work(tmp_path) -> None:
         "psop.runner.read_current_checkpoint",
         "psop.runner.list_terminal_events",
         "psop.runner.read_latest_evidence",
-        "psop.runner.list_step_reference_images",
         "psop.runner.submit_observation",
     }.issubset(completed_tools)
 
@@ -315,7 +317,6 @@ def test_runner_submit_observation_validates_and_writes_outputs(tmp_path) -> Non
             "missing_evidence": [],
             "unsafe_or_ambiguous_facts": [],
         },
-        "reference_images": [],
         "safety_flags": [],
         "final_response": "",
         "source_refs": ["runtime_contract.workflow_steps.collect_context", "terminal_event:1"],
@@ -468,36 +469,12 @@ def test_runner_observation_rejects_unknown_requirement_key() -> None:
         )
 
 
-def test_runner_observation_accepts_allowed_reference_image_ref() -> None:
-    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
-    allowed_ref = payload["context"]["step_reference_images"][0]["reference_image_ref"]
-    observation = _valid_runner_observation()
-    observation["reference_images"] = [{"reference_image_ref": allowed_ref}]
-
-    validated = validate_runner_observation(
-        observation,
-        invocation_input=payload["input"],
-        invocation_context=payload["context"],
-    )
-
-    assert validated["reference_images"][0]["reference_image_ref"] == allowed_ref
-
-
-def test_runner_observation_rejects_unlisted_reference_image_ref() -> None:
+def test_runner_observation_rejects_removed_reference_images_field() -> None:
     payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     observation = _valid_runner_observation()
-    observation["reference_images"] = [{"reference_image_ref": "skill-reference://steps/collect-context/missing"}]
+    observation["reference_images"] = []
 
-    with pytest.raises(ValueError, match="reference_image_ref"):
-        validate_runner_observation(
-            observation,
-            invocation_input=payload["input"],
-            invocation_context=payload["context"],
-        )
-
-    payload["context"]["step_reference_images"] = []
-    observation["reference_images"] = [{"reference_image_ref": "skill-reference://steps/collect-context/site-overview"}]
-    with pytest.raises(ValueError, match="没有允许"):
+    with pytest.raises(ValueError, match="不再支持 reference_images"):
         validate_runner_observation(
             observation,
             invocation_input=payload["input"],
@@ -633,7 +610,6 @@ def _valid_runner_observation() -> dict:
             "missing_evidence": [],
             "unsafe_or_ambiguous_facts": [],
         },
-        "reference_images": [],
         "safety_flags": [],
         "final_response": "",
         "source_refs": ["runtime_contract.workflow_steps.collect_context", "terminal_event:1"],
