@@ -70,6 +70,7 @@ class FakeGitLabGateway:
         self.projects: dict[str, _FakeProject] = {}
         self.project_counter = 0
         self.commit_counter = 0
+        self.commit_repository_files_calls: list[dict] = []
         self.fail_get_skill_source = False
 
     def _next_project_id(self) -> str:
@@ -242,6 +243,15 @@ class FakeGitLabGateway:
         project = self.projects[project_id]
         assert branch == project.default_branch
         assert commit_message
+        self.commit_repository_files_calls.append(
+            {
+                "project_id": project_id,
+                "branch": branch,
+                "files": dict(files),
+                "binary_files": dict(binary_files or {}),
+                "commit_message": commit_message,
+            }
+        )
         for file_path, content in files.items():
             project.files[file_path] = content
             if file_path == "README.md":
@@ -1975,6 +1985,12 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert fake_gateway.projects[created["gitlab_project_id"]].files[
         f"references/video-keyframes/{video_material_id}/000000000.jpg"
     ] == b"fake-keyframe-0"
+    assert len(fake_gateway.commit_repository_files_calls) == 1
+    commit_call = fake_gateway.commit_repository_files_calls[0]
+    assert set(commit_call["files"]) >= {"README.md", "SKILL.md", "skill.yaml"}
+    assert commit_call["binary_files"] == {
+        f"references/video-keyframes/{video_material_id}/000000000.jpg": b"fake-keyframe-0"
+    }
     skill_md = fake_gateway.projects[created["gitlab_project_id"]].files["SKILL.md"]
     references_md = fake_gateway.projects[created["gitlab_project_id"]].files["references/README.md"]
     reference_path = f"references/video-keyframes/{video_material_id}/000000000.jpg"

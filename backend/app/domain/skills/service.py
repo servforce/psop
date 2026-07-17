@@ -1480,18 +1480,9 @@ class SkillsService:
             project_id=definition.gitlab_project_id,
             branch=draft_version.source_ref,
             files=files_to_commit,
-            binary_files={},
+            binary_files=reference_binary_files or {},
             commit_message="Generate skill draft from raw materials via PSOP WEB IDE",
         )
-        reference_files = reference_binary_files or {}
-        for index, (file_path, content) in enumerate(sorted(reference_files.items()), start=1):
-            new_commit_sha = self.gitlab_gateway.commit_repository_files(
-                project_id=definition.gitlab_project_id,
-                branch=draft_version.source_ref,
-                files={},
-                binary_files={file_path: content},
-                commit_message=f"Add skill reference image {index}/{len(reference_files)} via PSOP WEB IDE",
-            )
         draft_version.source_commit_sha = new_commit_sha
         draft_version.manifest_snapshot = manifest_snapshot(document)
         draft_version.runtime_policy_snapshot = runtime_policy_snapshot(document)

@@ -974,7 +974,7 @@ builder Skill 包必须满足以下治理要求：
 3. SkillsService 读取并校验 artifact，同时读取 sandbox 中已物化的 Markdown。
 4. SkillsService 再次检查 GitLab branch head。
 5. SkillsService 复用 _resolve_selected_reference_assets 解析参考资产，用于审计 metadata 和仓库二进制资产提交，不再改写 Markdown 图片位置。
-6. SkillsService 复用 _commit_generated_skill_files 提交已物化 Markdown、参考资产文件和由平台渲染的 skill.yaml。
+6. SkillsService 复用 _commit_generated_skill_files，将已物化 Markdown、全部参考资产文件和由平台渲染的 skill.yaml 作为同一个 GitLab commit 原子提交；
 7. draft_version.source_commit_sha、manifest_snapshot、runtime_policy_snapshot 由应用层更新。
 ```
 
