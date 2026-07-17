@@ -5,6 +5,7 @@ import copy
 import inspect
 import io
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -1494,7 +1495,6 @@ def test_create_skill_initializes_gitlab_and_persists_metadata() -> None:
         response = client.post(
             "/api/v1/skills",
             json={
-                "key": "equipment-diagnosis",
                 "name": "Equipment Diagnosis",
                 "description": "Diagnose equipment issues from operator input.",
             },
@@ -1502,12 +1502,51 @@ def test_create_skill_initializes_gitlab_and_persists_metadata() -> None:
 
     assert response.status_code == 201
     payload = response.json()
-    assert payload["key"] == "equipment-diagnosis"
+    assert re.fullmatch(r"equipment-diagnosis-[0-9a-f]{12}", payload["key"])
     assert payload["gitlab_group_path"] == "skills"
     assert payload["is_published"] is False
     assert payload["current_draft_version"]["status"] == "draft"
     assert payload["current_draft_version"]["source_commit_sha"].startswith("commit-")
     assert len(fake_gateway.projects) == 1
+    assert fake_gateway.projects[payload["gitlab_project_id"]].path == payload["key"]
+    assert f"key: {payload['key']}" in fake_gateway.projects[payload["gitlab_project_id"]].skill_yaml_content
+
+
+def test_create_skill_ignores_client_provided_key() -> None:
+    client, fake_gateway, _ = create_test_client()
+
+    with client:
+        response = client.post(
+            "/api/v1/skills",
+            json={
+                "key": "client-defined-key",
+                "name": "Client Key Ignored",
+                "description": "The server owns Skill keys.",
+            },
+        )
+        list_response = client.get("/api/v1/skills")
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert re.fullmatch(r"client-key-ignored-[0-9a-f]{12}", payload["key"])
+    assert payload["key"] != "client-defined-key"
+    assert [skill["id"] for skill in list_response.json()] == [payload["id"]]
+    assert fake_gateway.projects[payload["gitlab_project_id"]].path == payload["key"]
+
+
+def test_server_generated_skill_key_respects_length_limit() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        response = client.post(
+            "/api/v1/skills",
+            json={"name": "A" * 255, "description": "Validate generated key length."},
+        )
+
+    assert response.status_code == 201
+    generated_key = response.json()["key"]
+    assert len(generated_key) == 120
+    assert re.fullmatch(r"a{107}-[0-9a-f]{12}", generated_key)
 
 
 def test_list_skills_filters_by_published_state() -> None:
@@ -1517,7 +1556,6 @@ def test_list_skills_filters_by_published_state() -> None:
         draft_skill = client.post(
             "/api/v1/skills",
             json={
-                "key": "draft-only",
                 "name": "Draft Only",
                 "description": "Keep this skill unpublished.",
             },
@@ -1525,7 +1563,6 @@ def test_list_skills_filters_by_published_state() -> None:
         published_skill = client.post(
             "/api/v1/skills",
             json={
-                "key": "published-skill",
                 "name": "Published Skill",
                 "description": "Publish this skill.",
             },
@@ -1564,7 +1601,6 @@ def test_get_and_save_skill_source() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "diagnosis-assistant",
                 "name": "Diagnosis Assistant",
                 "description": "Assist engineers with diagnostics.",
             },
@@ -1609,7 +1645,6 @@ def test_skill_raw_material_upload_list_detail_content_and_delete() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "raw-material-skill",
                 "name": "Raw Material Skill",
                 "description": "Create skills from source materials.",
             },
@@ -1685,7 +1720,6 @@ def test_skill_raw_material_upload_rejects_url_only_payload() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "url-only-material-skill",
                 "name": "URL Only Material Skill",
                 "description": "Reject URL raw materials.",
             },
@@ -1763,7 +1797,6 @@ def test_skill_raw_material_pdf_audio_and_video_extraction(monkeypatch) -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "multimodal-material-skill",
                 "name": "Multimodal Material Skill",
                 "description": "Create skills from PDFs and media.",
             },
@@ -1831,7 +1864,6 @@ def test_failed_video_raw_material_can_be_reanalyzed(monkeypatch) -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "retry-material-analysis-skill",
                 "name": "Retry Video Analysis Skill",
                 "description": "Retry failed video parsing.",
             },
@@ -1875,7 +1907,6 @@ def test_processing_video_raw_material_cannot_be_reanalyzed(monkeypatch) -> None
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "processing-material-analysis-skill",
                 "name": "Processing Video Analysis Skill",
                 "description": "Reject duplicate processing video parsing.",
             },
@@ -1921,7 +1952,6 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "generated-skill",
                 "name": "Generated Skill",
                 "description": "Generate source from materials.",
             },
@@ -2027,7 +2057,6 @@ def test_generate_skill_draft_from_raw_materials_rejects_stale_head(monkeypatch)
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "stale-generation",
                 "name": "Stale Generation",
                 "description": "Reject stale source generation.",
             },
@@ -2065,7 +2094,7 @@ def test_generation_intent_preview_requires_confirmation_only_for_ambiguous_ques
     with client:
         created = client.post(
             "/api/v1/skills",
-            json={"key": "intent-preview", "name": "Intent Preview", "description": "Preview generation intent."},
+            json={"name": "Intent Preview", "description": "Preview generation intent."},
         ).json()
         ambiguous = client.post(
             f"/api/v1/skills/{created['id']}/raw-materials/generation-intent-preview",
@@ -2111,7 +2140,6 @@ def test_generate_skill_draft_from_raw_materials_requires_ready_video() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "video-required",
                 "name": "Video Required",
                 "description": "Reject generation without analyzed video.",
             },
@@ -2140,7 +2168,6 @@ def test_repository_tree_file_and_folder_operations() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "repo-browser",
                 "name": "Repo Browser",
                 "description": "Browse skill source files.",
             },
@@ -2239,7 +2266,6 @@ def test_save_skill_source_rejects_stale_commit_sha() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "repair-planner",
                 "name": "Repair Planner",
                 "description": "Plan repair actions.",
             },
@@ -2277,7 +2303,6 @@ def test_publish_skill_creates_published_version_and_record() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "field-support",
                 "name": "Field Support",
                 "description": "Support field operators.",
             },
@@ -2327,7 +2352,6 @@ def test_manual_compile_request_does_not_publish_draft() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "manual-compile",
                 "name": "Manual Compile",
                 "description": "Compile without publishing.",
             },
@@ -2378,7 +2402,6 @@ def test_skill_test_scenario_run_can_use_unpublished_ready_artifact() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "skill-test-unpublished-draft",
                 "name": "Skill Test Unpublished Draft",
                 "description": "Validate tests can target unpublished ready artifacts.",
             },
@@ -2434,7 +2457,6 @@ def test_publish_skill_records_failed_startup_when_gitlab_fails() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "gitlab-freeze-failure",
                 "name": "GitLab Freeze Failure",
                 "description": "Validate publish startup failure record.",
             },
@@ -2465,7 +2487,6 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "issue-one-demo",
                 "name": "Issue One Demo",
                 "description": "Validate issue #1 vertical slice.",
             },
@@ -2497,7 +2518,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
         invocation_response = client.post(
             "/api/v1/gateway/invocations",
             json={
-                "skill_key": "issue-one-demo",
+                "skill_key": created["key"],
                 "input_envelope": {"user_input": "请检查泵站压力异常？"},
                 "gateway_type": "web",
             },
@@ -2570,7 +2591,7 @@ def test_issue_1_publish_compile_run_and_replay_vertical_slice() -> None:
     assert initial_task_status_response.status_code == 200
     initial_task_status = initial_task_status_response.json()
     assert initial_task_status["task"] == {
-        "skill_key": "issue-one-demo",
+        "skill_key": created["key"],
         "skill_name": "Issue One Demo",
         "version_no": 1,
         "execution_goal": "帮助用户在现实世界完成当前 Skill 目标。",
@@ -2672,7 +2693,6 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "skill-debug-terminal",
                 "name": "Skill Debug Terminal",
                 "description": "Validate direct skill debug terminal flow.",
             },
@@ -2687,7 +2707,7 @@ def test_skill_debug_invocation_uses_runtime_without_skill_test_case() -> None:
         invocation_response = client.post(
             "/api/v1/gateway/invocations",
             json={
-                "skill_key": "skill-debug-terminal",
+                "skill_key": created["key"],
                 "version_selector": "latest",
                 "gateway_type": "terminal",
                 "terminal_context": {
@@ -2804,7 +2824,6 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_runner() -> 
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "terminal-multipart-event",
                 "name": "Terminal Multipart Event",
                 "description": "Validate one terminal event can carry ordered multimodal parts.",
             },
@@ -2818,7 +2837,7 @@ def test_terminal_events_accept_multipart_multimodal_parts_and_feed_runner() -> 
         invocation_response = client.post(
             "/api/v1/gateway/invocations",
             json={
-                "skill_key": "terminal-multipart-event",
+                "skill_key": created["key"],
                 "gateway_type": "terminal",
                 "terminal_context": {"terminal_kind": "web", "operator_mode": "debug"},
                 "input_envelope": {"user_input": "启动多模态验证"},
@@ -2915,7 +2934,6 @@ def test_terminal_file_upload_returns_json_error_when_object_store_unavailable()
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "terminal-upload-object-store-failure",
                 "name": "Terminal Upload Object Store Failure",
                 "description": "Validate upload failure is surfaced as JSON.",
             },
@@ -2929,7 +2947,7 @@ def test_terminal_file_upload_returns_json_error_when_object_store_unavailable()
         invocation_response = client.post(
             "/api/v1/gateway/invocations",
             json={
-                "skill_key": "terminal-upload-object-store-failure",
+                "skill_key": created["key"],
                 "gateway_type": "terminal",
                 "terminal_context": {"terminal_kind": "web", "operator_mode": "debug"},
                 "input_envelope": {},
@@ -2956,7 +2974,6 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "ws-terminal-demo",
                 "name": "WS Terminal Demo",
                 "description": "Validate terminal websocket broadcast.",
             },
@@ -2970,7 +2987,7 @@ def test_run_websocket_broadcasts_terminal_event_append() -> None:
         invocation_response = client.post(
             "/api/v1/gateway/invocations",
             json={
-                "skill_key": "ws-terminal-demo",
+                "skill_key": created["key"],
                 "input_envelope": {"user_input": "启动 WS 验证"},
                 "gateway_type": "terminal",
                 "terminal_context": {"terminal_kind": "web"},
@@ -3079,7 +3096,6 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "skill-test-scenario",
                 "name": "Skill Test Scenario",
                 "description": "Validate black-box timeline scenario flow.",
             },
@@ -3249,7 +3265,6 @@ def test_skill_test_scenario_timeline_parts_append_single_terminal_event() -> No
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "skill-test-multimodal-parts",
                 "name": "Skill Test Multimodal Parts",
                 "description": "Validate timeline parts are sent as one terminal event.",
             },
@@ -3403,7 +3418,6 @@ def test_skill_test_scenario_fork_uses_selected_timeline_time() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "skill-test-scenario-fork-selected-time",
                 "name": "Skill Test Scenario Fork Selected Time",
                 "description": "Validate forked timeline respects the selected review playhead.",
             },
@@ -3479,7 +3493,6 @@ def test_skill_test_scenario_run_can_be_cancelled() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "skill-test-scenario-cancel",
                 "name": "Skill Test Scenario Cancel",
                 "description": "Validate cancelling a running skill test scenario.",
             },
@@ -3565,7 +3578,6 @@ def test_skill_test_scenario_sensor_timeline_review_stage_outputs_and_fork() -> 
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "skill-test-sensors",
                 "name": "Skill Test Sensors",
                 "description": "Validate sensor lanes in skill test timelines.",
             },
@@ -3719,7 +3731,6 @@ def test_skill_test_scenario_rejects_duplicate_open_run() -> None:
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "skill-test-scenario-duplicate",
                 "name": "Skill Test Scenario Duplicate",
                 "description": "Validate active scenario run conflict.",
             },
@@ -3769,7 +3780,6 @@ def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -
         created = client.post(
             "/api/v1/skills",
             json={
-                "key": "delete-me",
                 "name": "Delete Me",
                 "description": "Archive this project.",
             },
@@ -3799,3 +3809,49 @@ def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -
 
     assert all(skill["id"] != skill_id for skill in list_response.json())
     assert any(skill["id"] == skill_id for skill in archived_response.json())
+
+
+def test_archived_skill_name_can_be_recreated_with_a_new_server_key(monkeypatch) -> None:
+    class FakeUuid:
+        def __init__(self, value: str) -> None:
+            self.hex = value
+
+    generated_uuids = iter(
+        [
+            FakeUuid("a" * 32),
+            FakeUuid("a" * 32),
+            FakeUuid("b" * 32),
+        ]
+    )
+    monkeypatch.setattr(skills_service_module, "uuid4", lambda: next(generated_uuids))
+    client, fake_gateway, _ = create_test_client()
+
+    with client:
+        first_response = client.post(
+            "/api/v1/skills",
+            json={"name": "设备诊断助手", "description": "First Skill."},
+        )
+        first = first_response.json()
+        delete_response = client.request(
+            "DELETE",
+            f"/api/v1/skills/{first['id']}",
+            json={"confirmation_name": "设备诊断助手"},
+        )
+        second_response = client.post(
+            "/api/v1/skills",
+            json={"name": "设备诊断助手", "description": "Second Skill."},
+        )
+        archived_response = client.get("/api/v1/skills?status=archived")
+        active_response = client.get("/api/v1/skills")
+
+    second = second_response.json()
+    assert first_response.status_code == 201
+    assert delete_response.status_code == 200
+    assert second_response.status_code == 201
+    assert first["key"] == "skill-aaaaaaaaaaaa"
+    assert second["key"] == "skill-bbbbbbbbbbbb"
+    assert first["id"] != second["id"]
+    assert first["gitlab_project_id"] != second["gitlab_project_id"]
+    assert fake_gateway.projects[first["gitlab_project_id"]].archived is True
+    assert any(skill["id"] == first["id"] for skill in archived_response.json())
+    assert [skill["id"] for skill in active_response.json()] == [second["id"]]

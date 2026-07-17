@@ -18,7 +18,6 @@ function loadCoreMethods() {
     "buildSkillTestScenarioNewPath",
     "buildSkillTestScenarioRunReviewPath",
     "buildCompilerArtifactPath",
-    "generateSkillKey",
     "resolveApiBaseUrl",
     "resolveWsUrl",
     "escapeHtml",

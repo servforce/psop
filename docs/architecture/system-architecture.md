@@ -760,6 +760,12 @@ Agent Skill 与 PSOP Skill 是不同对象。
 | Inference | `/api/v1/gateway/inference/models` | 模型能力 |
 | Jobs | `/api/v1/runtime/jobs` | runtime_job read model |
 
+Skill 创建与归档遵循以下契约：
+
+- `POST /api/v1/skills` 以 `name` 与 `description` 作为创建输入；`key` 由服务端根据名称和随机后缀生成，请求中携带的同名字段会被忽略。
+- `key` 是全局唯一且稳定的运行时标识，Skill 名称允许重复；服务端生成 key 时会同时避让 active 与 archived 记录。
+- 删除 Skill 的正式语义是归档：数据库历史和 GitLab 项目保留。归档后可使用相同名称创建具有新 ID、key 和 GitLab 项目的独立 Skill。
+
 ### 10.2 新增 Agent API
 
 首版：

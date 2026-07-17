@@ -137,7 +137,6 @@ def test_compiler_emits_mvp_formal_v5_artifact(runtime_stack) -> None:
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="compiler-unit",
                 name="Compiler Unit",
                 description="Validate compiler output.",
             ),
@@ -276,7 +275,6 @@ def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="compiler-harness",
                     name="Compiler Harness",
                     description="Validate psop.compiler harness integration.",
                 ),
@@ -339,7 +337,6 @@ def test_compiler_reference_images_flow_to_runner_multimodal_output(tmp_path) ->
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="compiler-reference-images",
                     name="Compiler Reference Images",
                     description="Validate Skill reference image output flow.",
                 ),
@@ -467,7 +464,6 @@ def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-runner-harness",
                     name="Runtime Runner Harness",
                     description="Validate psop.runner harness integration.",
                 ),
@@ -482,7 +478,7 @@ def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-runner-harness",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -576,7 +572,6 @@ def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> N
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-runner-image-attachment",
                     name="Runtime Runner Image Attachment",
                     description="Validate uploaded images are passed to psop.runner.",
                 ),
@@ -590,7 +585,7 @@ def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> N
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-runner-image-attachment",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -698,7 +693,6 @@ def test_runtime_runner_attachment_warning_when_object_store_unavailable(tmp_pat
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-runner-image-attachment-warning",
                     name="Runtime Runner Image Attachment Warning",
                     description="Validate unavailable attachments warn without failing Runtime.",
                 ),
@@ -712,7 +706,7 @@ def test_runtime_runner_attachment_warning_when_object_store_unavailable(tmp_pat
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-runner-image-attachment-warning",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -885,7 +879,6 @@ def _run_runner_reference_image_case(
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key=skill_key,
                     name=skill_key,
                     description="Validate psop.runner reference image handling.",
                 ),
@@ -928,7 +921,7 @@ def _run_runner_reference_image_case(
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key=skill_key,
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -994,7 +987,6 @@ def test_compiler_records_diagnostics_for_unsupported_formal_revision(runtime_st
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="bad-formal",
                 name="Bad Formal",
                 description="Validate compiler diagnostics.",
             ),
@@ -1054,7 +1046,6 @@ def test_compiler_repairs_invalid_agent_json_once() -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="agent-repair",
                     name="Agent Repair",
                     description="Validate compiler repair.",
                 ),
@@ -1098,7 +1089,6 @@ def test_compiler_injects_selected_domain_pack() -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="maintenance-pack",
                     name="Maintenance Pack",
                     description="Validate equipment maintenance domain pack.",
                 ),
@@ -1153,7 +1143,6 @@ def test_compiler_falls_back_for_unknown_domain_pack() -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="fallback-pack",
                     name="Fallback Pack",
                     description="Validate domain pack fallback.",
                 ),
@@ -1205,7 +1194,6 @@ def test_runtime_list_runs_filters_multiple_statuses(runtime_stack) -> None:
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="list-runs-statuses",
                 name="List Runs Statuses",
                 description="Validate filtering runs by multiple statuses.",
             ),
@@ -1285,7 +1273,6 @@ def test_compiler_fails_when_agent_repair_still_invalid() -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="agent-failure",
                     name="Agent Failure",
                     description="Validate compiler failure.",
                 ),
@@ -1367,7 +1354,6 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-unit",
                 name="Runtime Unit",
                 description="Validate runtime loop.",
             ),
@@ -1382,7 +1368,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-unit",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -1488,7 +1474,6 @@ def test_runtime_task_status_projects_waiting_stage_and_current_evidence(runtime
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-task-status",
                 name="Runtime Task Status",
                 description="Validate the terminal task status projection.",
             ),
@@ -1502,7 +1487,7 @@ def test_runtime_task_status_projects_waiting_stage_and_current_evidence(runtime
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-task-status",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -1567,7 +1552,6 @@ def test_runtime_task_status_projects_multistage_finalizing_terminal_and_legacy_
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-task-status-states",
                 name="Runtime Task Status States",
                 description="Validate multistage and compatibility task status projection.",
             ),
@@ -1581,7 +1565,7 @@ def test_runtime_task_status_projects_multistage_finalizing_terminal_and_legacy_
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-task-status-states",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -1663,7 +1647,6 @@ def test_runtime_service_batches_inputs_that_arrive_before_first_checkpoint(runt
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-early-input-batch",
                 name="Runtime Early Input Batch",
                 description="Validate early terminal inputs are delivered once the first checkpoint exists.",
             ),
@@ -1678,7 +1661,7 @@ def test_runtime_service_batches_inputs_that_arrive_before_first_checkpoint(runt
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-early-input-batch",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -1772,7 +1755,6 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> No
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-abort",
                     name="Runtime Abort",
                     description="Validate semantic abort path.",
                 ),
@@ -1787,7 +1769,7 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> No
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-abort",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -1852,7 +1834,6 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="terminal-event-unit",
                 name="Terminal Event Unit",
                 description="Validate terminal transcript append.",
             ),
@@ -1866,7 +1847,7 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="terminal-event-unit",
+                skill_key=skill.key,
                 input_envelope={"user_input": "初始输入"},
             ),
         )
@@ -1930,7 +1911,6 @@ def test_terminal_event_append_refreshes_stale_run_before_assigning_seq(runtime_
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="terminal-event-stale-run",
                 name="Terminal Event Stale Run",
                 description="Validate stale Run seq refresh.",
             ),
@@ -1943,7 +1923,7 @@ def test_terminal_event_append_refreshes_stale_run_before_assigning_seq(runtime_
         process_publish_job(session, compiler_service, published.compile_request.id)
         invocation = runtime_service.create_invocation(
             session,
-            CreateInvocationRequest(skill_key="terminal-event-stale-run"),
+            CreateInvocationRequest(skill_key=skill.key),
         )
         run_id = invocation.run_id or ""
 
@@ -2003,7 +1983,6 @@ def test_runtime_service_publishes_terminal_trace_and_task_status_events_after_c
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-event-sink",
                 name="Runtime Event Sink",
                 description="Validate runtime event sink publishing.",
             ),
@@ -2017,7 +1996,7 @@ def test_runtime_service_publishes_terminal_trace_and_task_status_events_after_c
         invocation = service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-event-sink",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -2082,7 +2061,6 @@ def test_runtime_service_publish_uses_precommit_upper_bounds(runtime_stack) -> N
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-event-upper-bound",
                 name="Runtime Event Upper Bound",
                 description="Validate runtime event publish upper bounds.",
             ),
@@ -2095,7 +2073,7 @@ def test_runtime_service_publish_uses_precommit_upper_bounds(runtime_stack) -> N
         process_publish_job(session, compiler_service, published.compile_request.id)
         invocation = service.create_invocation(
             session,
-            CreateInvocationRequest(skill_key="runtime-event-upper-bound"),
+            CreateInvocationRequest(skill_key=skill.key),
         )
         run_id = invocation.run_id or ""
         service.append_terminal_event(
@@ -2221,7 +2199,6 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-checkpoint-consumption",
                     name="Runtime Checkpoint Consumption",
                     description="Validate checkpoint-scoped terminal input consumption.",
                 ),
@@ -2243,7 +2220,7 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-checkpoint-consumption",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -2384,7 +2361,6 @@ def test_runtime_new_checkpoint_does_not_consume_same_turn_trigger_input(tmp_pat
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-same-turn-trigger",
                     name="Runtime Same Turn Trigger",
                     description="Validate new checkpoints ignore the input that triggered the instruct node.",
                 ),
@@ -2406,7 +2382,7 @@ def test_runtime_new_checkpoint_does_not_consume_same_turn_trigger_input(tmp_pat
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-same-turn-trigger",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -2669,7 +2645,6 @@ def test_runtime_missing_evaluation_transition_fails_before_success_output(runti
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-missing-transition",
                 name="Runtime Missing Transition",
                 description="Validate missing evaluation transition recovery.",
             ),
@@ -2695,7 +2670,7 @@ def test_runtime_missing_evaluation_transition_fails_before_success_output(runti
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-missing-transition",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -2828,7 +2803,6 @@ def test_runtime_job_running_append_marks_rerun_and_finish_requeues_unsynced_inp
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-job-rerun",
                 name="Runtime Job Rerun",
                 description="Validate runtime job rerun marker.",
             ),
@@ -2842,7 +2816,7 @@ def test_runtime_job_running_append_marks_rerun_and_finish_requeues_unsynced_inp
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-job-rerun",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -2906,7 +2880,6 @@ def test_runtime_service_records_failed_run_when_runner_fails(runtime_stack) -> 
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-failure",
                 name="Runtime Failure",
                 description="Validate runtime failure trace.",
             ),
@@ -2921,7 +2894,7 @@ def test_runtime_service_records_failed_run_when_runner_fails(runtime_stack) -> 
         invocation = failing_runtime.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-failure",
+                skill_key=skill.key,
                 input_envelope={"user_input": "触发失败"},
             ),
         )
@@ -2972,7 +2945,6 @@ def test_runtime_service_records_runner_gateway_error_details_in_failed_trace_pa
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-gateway-failure",
                 name="Runtime Gateway Failure",
                 description="Validate gateway failure trace details.",
             ),
@@ -2987,7 +2959,7 @@ def test_runtime_service_records_runner_gateway_error_details_in_failed_trace_pa
         invocation = failing_runtime.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-gateway-failure",
+                skill_key=skill.key,
                 input_envelope={"user_input": "触发 gateway 失败"},
             ),
         )
@@ -3038,7 +3010,6 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-message-recover",
                 name="Runtime Message Recover",
                 description="Validate recoverable terminal message failures.",
             ),
@@ -3053,7 +3024,7 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-message-recover",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )

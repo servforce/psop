@@ -20,7 +20,6 @@ function loadFormatMethods() {
         buildSkillTestScenarioRunReviewPath: () => "",
         buildCompilerArtifactPath: () => "",
         buildAgentPromptPath: () => "",
-        generateSkillKey: () => "",
         resolveApiBaseUrl: () => "",
         resolveWsUrl: () => "",
         escapeHtml: (value) => String(value || ""),

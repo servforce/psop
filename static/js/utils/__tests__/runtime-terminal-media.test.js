@@ -21,7 +21,6 @@ function loadRuntimeMethods({ urlApi, documentApi } = {}) {
     "buildSkillTestScenarioNewPath",
     "buildSkillTestScenarioRunReviewPath",
     "buildCompilerArtifactPath",
-    "generateSkillKey",
     "resolveApiBaseUrl",
     "resolveWsUrl",
     "escapeHtml",

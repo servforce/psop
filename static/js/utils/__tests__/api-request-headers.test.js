@@ -19,7 +19,6 @@ function loadCoreMethods(fetchMock) {
     "buildSkillTestScenarioRunReviewPath",
     "buildCompilerArtifactPath",
     "buildAgentPromptPath",
-    "generateSkillKey",
     "resolveApiBaseUrl",
     "resolveWsUrl",
     "escapeHtml",

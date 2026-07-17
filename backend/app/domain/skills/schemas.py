@@ -88,7 +88,6 @@ class SkillRepositoryFileResponse(BaseModel):
 
 
 class CreateSkillRequest(BaseModel):
-    key: str = Field(min_length=2, max_length=120, pattern=r"^[a-z0-9][a-z0-9-]*$")
     name: str = Field(min_length=2, max_length=255)
     description: str = Field(default="", max_length=5000)
 

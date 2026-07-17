@@ -4,8 +4,11 @@ import base64
 import hashlib
 import json
 import logging
+import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
@@ -17,7 +20,6 @@ from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
 from app.domain.skills.exceptions import (
     SkillsError,
-    SkillConflictError,
     SkillsGatewayError,
     SkillNotFoundError,
     SkillSourceConflictError,
@@ -95,6 +97,8 @@ from app.infra.object_store import ObjectStoreService
 
 LOGGER = logging.getLogger(__name__)
 SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE = "skill_raw_material_generation"
+SKILL_KEY_MAX_LENGTH = 120
+SKILL_KEY_SUFFIX_LENGTH = 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,11 +153,9 @@ class SkillsService:
         return [self._build_skill_summary(session, definition) for definition in definitions]
 
     def create_skill(self, session: Session, payload: CreateSkillRequest) -> SkillDetailResponse:
-        existing = self.repository.get_skill_definition_by_key(session, payload.key)
-        if existing:
-            raise SkillConflictError("Skill key 已存在。", details={"key": payload.key})
+        skill_key = self._generate_unique_skill_key(session, payload.name)
 
-        default_document = build_default_skill_document(payload.key, payload.name, payload.description)
+        default_document = build_default_skill_document(skill_key, payload.name, payload.description)
         default_readme = build_default_readme(payload.name, payload.description)
         default_skill_md = build_default_skill_markdown(payload.name, payload.description)
         default_document = document_with_prompt_material(
@@ -166,7 +168,7 @@ class SkillsService:
         project_info = self.gitlab_gateway.create_skill_project(
             group_path=self.settings.gitlab_skills_group_path,
             project_name=payload.name,
-            project_path=payload.key,
+            project_path=skill_key,
             default_branch=self.settings.gitlab_default_branch,
             initial_readme=default_readme,
             initial_skill_md=default_skill_md,
@@ -174,7 +176,7 @@ class SkillsService:
         )
 
         definition = SkillDefinition(
-            key=payload.key,
+            key=skill_key,
             name=payload.name,
             description=payload.description,
             status="active",
@@ -204,6 +206,18 @@ class SkillsService:
         session.refresh(definition)
 
         return self.get_skill_detail(session, definition.id)
+
+    def _generate_unique_skill_key(self, session: Session, name: str) -> str:
+        normalized_name = unicodedata.normalize("NFKD", name)
+        ascii_name = normalized_name.encode("ascii", "ignore").decode("ascii").lower()
+        base = re.sub(r"[^a-z0-9]+", "-", ascii_name).strip("-") or "skill"
+        max_base_length = SKILL_KEY_MAX_LENGTH - SKILL_KEY_SUFFIX_LENGTH - 1
+        base = base[:max_base_length].rstrip("-") or "skill"
+
+        while True:
+            candidate = f"{base}-{uuid4().hex[:SKILL_KEY_SUFFIX_LENGTH]}"
+            if self.repository.get_skill_definition_by_key(session, candidate) is None:
+                return candidate
 
     def get_skill_detail(self, session: Session, skill_id: str) -> SkillDetailResponse:
         definition = self._require_definition(session, skill_id)

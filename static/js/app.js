@@ -191,10 +191,6 @@
     return `/admin/agent-prompts/${definitionId}`;
   }
 
-  function generateSkillKey(name) {
-    return window.PSOPSkillKey.generateSkillKey(name);
-  }
-
   function resolveApiBaseUrl() {
     if (window.__PSOP_API_BASE_URL) {
       return window.__PSOP_API_BASE_URL;
@@ -772,7 +768,6 @@
     buildCompilerArtifactPath,
     buildSkillCompilerArtifactPath,
     buildAgentPromptPath,
-    generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
     escapeHtml,

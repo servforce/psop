@@ -12,7 +12,6 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
-    generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
     escapeHtml,
@@ -50,13 +49,9 @@
         this.createFormError = "";
 
         try {
-          const payload = {
-            ...this.createForm,
-            key: generateSkillKey(this.createForm.name)
-          };
           const created = await this.apiRequest("/skills", {
             method: "POST",
-            body: JSON.stringify(payload)
+            body: JSON.stringify(this.createForm)
           });
           this.createForm = { name: "", description: "" };
           this.createModalOpen = false;
@@ -94,7 +89,7 @@
             await this.loadSkills();
           }
 
-          this.showCenterToast("success", "Skill 已删除，对应 GitLab 仓库项目已归档。");
+          this.showCenterToast("success", "Skill 已归档；现在可以使用相同名称创建新的 Skill。");
         } catch (error) {
           this.showCenterToast("error", error.message || "删除 Skill 失败。");
         } finally {
