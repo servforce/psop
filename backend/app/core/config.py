@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     terminal_event_max_request_bytes: int = Field(default=27 * 1024 * 1024, gt=0)
     terminal_object_store_io_workers: int = Field(default=8, gt=0)
     raw_material_max_upload_bytes: int = 50 * 1024 * 1024
-    raw_material_video_max_upload_bytes: int = 2 * 1024 * 1024 * 1024
+    raw_material_video_max_upload_bytes: int = 3 * 1024 * 1024 * 1024
     raw_material_extract_text_max_chars: int = 80_000
     raw_material_url_timeout_seconds: float = 20.0
     video_max_analyzed_frames: int = 120

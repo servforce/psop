@@ -681,6 +681,9 @@ Agent Skill 与 PSOP Skill 是不同对象。
 | Skill Tests | `skill_test_scenario`、`skill_test_asset`、`skill_test_scenario_run`、`skill_test_expectation_evaluation` |
 | Prompts | `agent_prompt_definition`、`agent_prompt_version`、`agent_prompt_binding` |
 
+`artifact_object.size_bytes` 与 `skill_raw_material.size_bytes` 使用 `BIGINT`，以支持最大
+3 GiB 的视频原始素材；对象大小不得使用 PostgreSQL 32 位 `INTEGER` 存储。
+
 ### 9.2 新增 Agent Harness 表
 
 #### agent_run

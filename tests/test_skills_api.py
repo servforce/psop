@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import Request, UploadFile
 from fastapi.testclient import TestClient
+from sqlalchemy import BigInteger
 from starlette.datastructures import Headers
 
 from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
@@ -27,6 +28,7 @@ from app.api.routes.runtime import (
 )
 from app.app import create_app
 from app.core.config import Settings
+from app.domain.compiler.models import ArtifactObject
 from app.domain.jobs.models import RuntimeJob
 from app.domain.runtime.ingest import TerminalEventIngestService, run_object_store_io
 from app.domain.runtime.schemas import AppendTerminalEventRequest
@@ -1753,6 +1755,15 @@ def test_skill_raw_material_video_uses_dedicated_upload_limit() -> None:
 
     assert exc_info.value.message == "上传素材超过大小限制。"
     assert exc_info.value.details["max_bytes"] == 8
+
+
+def test_skill_raw_material_video_default_upload_limit_is_three_gib() -> None:
+    assert Settings.model_fields["raw_material_video_max_upload_bytes"].default == 3 * 1024 * 1024 * 1024
+
+
+def test_skill_raw_material_size_columns_support_files_larger_than_two_gib() -> None:
+    assert isinstance(ArtifactObject.__table__.c.size_bytes.type, BigInteger)
+    assert isinstance(SkillRawMaterial.__table__.c.size_bytes.type, BigInteger)
 
 
 def _fake_video_analysis_result() -> video_analysis.VideoAnalysisResult:
