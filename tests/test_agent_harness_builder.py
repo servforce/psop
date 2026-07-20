@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -12,7 +13,7 @@ from app.agent_harness.middlewares.tool_calls import ToolCallMiddleware
 from app.agent_harness.agents.psop.builder.schemas import BuilderCandidateValidationError, validate_builder_candidate
 from app.agent_harness.agents.registry import default_agent_registry
 from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
-from app.agent_harness.schemas import AgentInvocation
+from app.agent_harness.schemas import AgentEvent, AgentInvocation, AgentResult
 from app.agent_harness.service import AgentHarnessService
 from app.agent_harness.skills.loader import SkillLoader
 from app.agent_harness.tools.builtin.builder import BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY, register_builder_tools
@@ -21,6 +22,7 @@ from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
 from app.agent_harness.memory.file_store import FileMemoryStore
 from app.agent_harness.sandbox.local import LocalAgentSandboxProvider
 from app.core.config import Settings
+from app.domain.skills.service import SkillsService
 
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "psop_builder" / "minimal.json"
@@ -32,6 +34,7 @@ def test_psop_builder_definition_and_skills_load() -> None:
     loader = SkillLoader(settings.repo_root / "skills")
 
     assert package.definition.description.startswith("根据用户目标")
+    assert package.definition.version == "v2"
     assert package.definition.memory_scope == "psop.builder"
     middleware = {item.name: item.config for item in package.definition.middleware if not isinstance(item, str)}
     assert middleware["model_events"]["max_model_calls"] == 13
@@ -74,6 +77,7 @@ def test_psop_builder_scripted_run_creates_candidate_artifact(tmp_path) -> None:
     candidate = json.loads(artifact_path.read_text(encoding="utf-8"))
 
     assert result.status == "succeeded"
+    assert candidate["schema_version"] == "2.0"
     assert "agent.memory.read" in event_types
     assert {"psop.builder.read_current_source", "psop.builder.submit_candidate"}.issubset(completed_tools)
     assert any(artifact.artifact_type == "skill_draft_candidate" for artifact in result.artifacts)
@@ -183,7 +187,11 @@ def test_submit_candidate_materializes_reference_images_at_usage_site(tmp_path) 
     assert "data:image/" not in materialized_skill
     assert materialized_image.read_bytes() == b"fake-image"
     assert "## 嵌入参考图片" not in materialized_skill
-    assert materialized_skill.index("### 阶段 1") < materialized_skill.index(f"]({reference_path})") < materialized_skill.index("### 阶段 2")
+    assert (
+        materialized_skill.index("### [stage_01_entry]")
+        < materialized_skill.index(f"]({reference_path})")
+        < materialized_skill.index("### [stage_02_pressure]")
+    )
 
 
 def test_submit_candidate_invalid_payload_returns_auditable_repair_hint(tmp_path) -> None:
@@ -354,7 +362,7 @@ def test_submit_candidate_accepts_full_candidate_asset_after_truncated_list(tmp_
     assert result["validation_summary"]["reference_asset_count"] == 1
 
 
-def test_builder_candidate_accepts_common_evidence_source_aliases() -> None:
+def test_builder_candidate_rejects_v1_evidence_source_aliases() -> None:
     reference_path = "references/video-keyframes/material-1/000001.jpg"
     payload = _builder_candidate_payload(reference_path)
     payload["evidence_map"][0]["source_refs"] = [
@@ -362,31 +370,25 @@ def test_builder_candidate_accepts_common_evidence_source_aliases() -> None:
         "875f7af3-8bad-40e1-a23b-56e7dcdc47d0#keyframe-10",
     ]
 
-    validate_builder_candidate(
-        payload,
-        candidate_reference_assets=[
-            {
-                "id": "asset-1",
-                "material_id": "material-1",
-                "asset_kind": "video_keyframe",
-                "reference_path": reference_path,
-            }
-        ],
-        standard_search_results=[],
-    )
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(payload)
+
+    paths = {item["path"] for item in exc_info.value.diagnostics}
+    assert "evidence_map.0.source_refs.0.source_type" in paths
+    assert "evidence_map.0.source_refs.1" in paths
 
 
 def test_builder_candidate_matches_workflow_step_with_normalized_spacing() -> None:
     reference_path = "references/video-keyframes/material-1/000001.jpg"
     payload = _builder_candidate_payload(reference_path)
-    payload["files"]["SKILL.md"] += "\n### 首次点亮与 BIOS 配置\n确认 BIOS 设置。\n"
-    payload["workflow_step_candidates"].append({"title": "首次点亮与BIOS配置"})
+    payload["files"]["SKILL.md"] += "\n### [stage_03_bios] 首次点亮与 BIOS 配置\n确认 BIOS 设置。\n"
+    payload["workflow_step_candidates"].append({"stage_id": "stage_03_bios", "title": "首次点亮与BIOS配置"})
     payload["evidence_map"].append(
         {
             "claim": "首次点亮与 BIOS 配置需要人工确认。",
             "support_level": "observed_fact",
             "source_refs": [{"source_type": "material_analysis", "material_id": "material-1"}],
-            "used_in": ["首次点亮与BIOS配置"],
+            "used_in": [{"target_type": "workflow_stage", "target_id": "stage_03_bios"}],
         }
     )
 
@@ -404,14 +406,14 @@ def test_builder_candidate_matches_workflow_step_with_normalized_spacing() -> No
     )
 
 
-def test_builder_candidate_normalizes_only_unambiguous_current_source_path() -> None:
+def test_builder_candidate_accepts_structured_current_source_reference() -> None:
     payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
     payload["evidence_map"].append(
         {
             "claim": "当前 draft 需要修订。",
             "support_level": "current_source_fact",
-            "source_refs": [{"source_type": "current_source/SKILL.md"}],
-            "used_in": ["review_notes"],
+            "source_refs": [{"source_type": "current_source", "ref": "SKILL.md"}],
+            "used_in": [{"target_type": "review_notes", "target_id": "review_notes"}],
         }
     )
 
@@ -432,8 +434,8 @@ def test_builder_candidate_rejects_tool_timeout_as_evidence_source() -> None:
         validate_builder_candidate(payload)
 
     diagnostics = exc_info.value.diagnostics
-    assert diagnostics[0]["path"].endswith("source_type")
-    assert "industry_standard" in diagnostics[0]["allowed_values"]
+    diagnostic = next(item for item in diagnostics if item["path"].endswith("source_type"))
+    assert "industry_standard" in diagnostic["allowed_values"]
 
 
 def test_builder_candidate_rejects_unknown_support_level_with_repair_example() -> None:
@@ -447,6 +449,191 @@ def test_builder_candidate_rejects_unknown_support_level_with_repair_example() -
     assert diagnostic["path"] == "evidence_map.0.support_level"
     assert "observed_fact" in diagnostic["allowed_values"]
     assert diagnostic["example"] == "observed_fact"
+
+
+def test_builder_candidate_v2_rejects_missing_version_and_v1_aliases_together() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload.pop("schema_version")
+    payload["workflow_step_candidates"][0]["step_id"] = payload["workflow_step_candidates"][0].pop("stage_id")
+    payload["safety_constraints"][0]["applies_to"] = "stage_01_entry"
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(payload)
+
+    paths = {item["path"] for item in exc_info.value.diagnostics}
+    assert {
+        "schema_version",
+        "workflow_step_candidates.0.stage_id",
+        "workflow_step_candidates.0.step_id",
+        "safety_constraints.0.applies_to",
+    }.issubset(paths)
+
+
+def test_builder_candidate_v2_rejects_v1_schema_version() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["schema_version"] = "1.0"
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(payload)
+
+    diagnostic = next(item for item in exc_info.value.diagnostics if item["path"] == "schema_version")
+    assert diagnostic["allowed_values"] == ["2.0"]
+
+
+def test_builder_candidate_v2_accepts_all_stages_scope_with_empty_stage_ids() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["safety_constraints"][0]["scope"] = "all_stages"
+    payload["safety_constraints"][0]["stage_ids"] = []
+
+    candidate = validate_builder_candidate(payload)
+
+    assert candidate.safety_constraints[0].scope == "all_stages"
+    assert candidate.safety_constraints[0].stage_ids == []
+
+
+def test_builder_candidate_v2_collects_id_scope_and_reference_errors() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["workflow_step_candidates"].append({"stage_id": "stage_01_entry", "title": "重复阶段"})
+    payload["safety_constraints"][0]["scope"] = "all_stages"
+    payload["safety_constraints"].append(
+        {
+            "constraint_id": "safety_01_entry",
+            "scope": "selected_stages",
+            "stage_ids": [],
+            "constraint": "重复约束。",
+            "risk_type": "personal_safety",
+            "required_action": "停止。",
+        }
+    )
+    payload["expected_evidence_requirements"][0]["stage_id"] = "stage_99_unknown"
+    payload["expected_evidence_requirements"].append(
+        {
+            "requirement_id": "evidence_01_entry",
+            "stage_id": "stage_01_entry",
+            "evidence_type": "photo",
+            "completion_criteria": "重复证据要求。",
+        }
+    )
+    payload["selected_reference_assets"][0]["stage_ids"] = ["stage_98_unknown"]
+    payload["evidence_map"][0]["used_in"].extend(
+        [
+            {"target_type": "workflow_stage", "target_id": "stage_97_unknown"},
+            {"target_type": "safety_constraint", "target_id": "safety_99_unknown"},
+            {"target_type": "expected_evidence", "target_id": "evidence_99_unknown"},
+        ]
+    )
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(payload)
+
+    diagnostics = {(item["path"], item["code"]) for item in exc_info.value.diagnostics}
+    assert (
+        "workflow_step_candidates.2.stage_id",
+        "duplicate_id",
+    ) in diagnostics
+    assert ("safety_constraints.1.constraint_id", "duplicate_id") in diagnostics
+    assert ("expected_evidence_requirements.1.requirement_id", "duplicate_id") in diagnostics
+    assert ("safety_constraints.0.stage_ids", "invalid_scope_stage_ids") in diagnostics
+    assert ("safety_constraints.1.stage_ids", "missing_stage_ids") in diagnostics
+    assert ("expected_evidence_requirements.0.stage_id", "unknown_stage_id") in diagnostics
+    assert ("selected_reference_assets.0.stage_ids", "unknown_stage_id") in diagnostics
+    assert ("evidence_map.0.used_in.3.target_id", "unknown_evidence_target") in diagnostics
+    assert ("evidence_map.0.used_in.4.target_id", "unknown_evidence_target") in diagnostics
+    assert ("evidence_map.0.used_in.5.target_id", "unknown_evidence_target") in diagnostics
+
+
+def test_builder_candidate_v2_rejects_invalid_stable_id() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["workflow_step_candidates"][0]["stage_id"] = "Stage 1"
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(payload)
+
+    diagnostic = next(
+        item for item in exc_info.value.diagnostics if item["path"] == "workflow_step_candidates.0.stage_id"
+    )
+    assert diagnostic["code"] == "string_pattern_mismatch"
+
+
+def test_builder_candidate_reports_all_missing_safety_evidence_coverage() -> None:
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    payload["safety_constraints"].append(
+        {
+            "constraint_id": "safety_02_pressure",
+            "scope": "selected_stages",
+            "stage_ids": ["stage_02_pressure"],
+            "constraint": "压力读数异常不得继续。",
+            "risk_type": "equipment_pressure",
+            "required_action": "停止并请求复核。",
+        }
+    )
+    for evidence in payload["evidence_map"]:
+        evidence["used_in"] = [target for target in evidence["used_in"] if target["target_type"] != "safety_constraint"]
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(payload)
+
+    safety_paths = {
+        item["path"]
+        for item in exc_info.value.diagnostics
+        if item["code"] == "missing_evidence_coverage" and item["path"].startswith("safety_constraints.")
+    }
+    assert safety_paths == {"safety_constraints.0", "safety_constraints.1"}
+
+
+def test_builder_candidate_collects_errors_across_all_semantic_checks() -> None:
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    payload = _builder_candidate_payload(reference_path)
+    payload["files"].pop("README.md")
+    payload["files"]["tests/checklist.md"] += "\n- TODO：补充场景。\n"
+    payload["selected_reference_assets"][0].update(
+        {
+            "asset_id": "asset-missing",
+            "reference_path": "references/video-keyframes/material-1/missing.jpg",
+            "stage_ids": ["stage_99_unknown"],
+        }
+    )
+    payload["workflow_step_candidates"].append({"stage_id": "stage_03_uncovered", "title": "未声明标题阶段"})
+    payload["safety_constraints"].append(
+        {
+            "constraint_id": "safety_02_uncovered",
+            "scope": "selected_stages",
+            "stage_ids": ["stage_03_uncovered"],
+            "constraint": "未确认状态时停止。",
+            "risk_type": "unknown_state",
+            "required_action": "停止并请求复核。",
+        }
+    )
+    payload["expected_evidence_requirements"].append(
+        {
+            "requirement_id": "evidence_02_uncovered",
+            "stage_id": "stage_03_uncovered",
+            "evidence_type": "photo",
+            "completion_criteria": "照片显示状态。",
+        }
+    )
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(
+            payload,
+            candidate_reference_assets=[
+                {
+                    "asset_id": "asset-known",
+                    "reference_path": "references/video-keyframes/material-1/known.jpg",
+                }
+            ],
+        )
+
+    diagnostics = {(item["path"], item["code"]) for item in exc_info.value.diagnostics}
+    assert ("files.README.md", "missing_required_file") in diagnostics
+    assert ("files.tests/checklist.md", "placeholder_content") in diagnostics
+    assert ("selected_reference_assets.0.asset_id", "unknown_reference_asset") in diagnostics
+    assert ("selected_reference_assets.0.reference_path", "unknown_reference_path") in diagnostics
+    assert ("selected_reference_assets.0.stage_ids", "unknown_stage_id") in diagnostics
+    assert ("workflow_step_candidates.2.stage_id", "workflow_not_in_skill") in diagnostics
+    assert ("workflow_step_candidates.2", "missing_evidence_coverage") in diagnostics
+    assert ("safety_constraints.1", "missing_evidence_coverage") in diagnostics
+    assert ("expected_evidence_requirements.1", "missing_evidence_coverage") in diagnostics
 
 
 def test_submit_candidate_returns_grouped_repair_checklist_for_all_metadata_errors(tmp_path) -> None:
@@ -471,6 +658,69 @@ def test_submit_candidate_returns_grouped_repair_checklist_for_all_metadata_erro
     assert {"evidence_map", "missing_questions"}.issubset(fields)
 
 
+def test_submit_candidate_returns_all_diagnostics_without_eight_item_cap(tmp_path) -> None:
+    settings = Settings(database_url="sqlite+pysqlite:///:memory:", agent_harness_sandbox_root=str(tmp_path / "agent-runs"))
+    sandbox = LocalAgentSandboxProvider(settings).acquire(input_payload={})
+    writer = AgentEventWriter(sandbox.events_path)
+    registry = ToolRegistry()
+    register_builder_tools(registry)
+    context = ToolExecutionContext(
+        sandbox=sandbox,
+        memory_store=FileMemoryStore(sandbox.memory_path),
+        memory_scope="psop.builder",
+        event_writer=writer,
+        invocation_context={"candidate_reference_assets": []},
+    )
+    payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
+    for index in range(3, 14):
+        stage_id = f"stage_{index:02d}_uncovered"
+        payload["workflow_step_candidates"].append({"stage_id": stage_id, "title": f"未覆盖阶段 {index}"})
+        payload["files"]["SKILL.md"] += f"\n### [{stage_id}] 未覆盖阶段 {index}\n执行检查。\n"
+
+    result = registry.execute("psop.builder.submit_candidate", payload, context)
+
+    checklist_items = [item for group in result["repair_checklist"] for item in group["items"]]
+    event = writer.events[-1]
+    assert result["status"] == "error"
+    assert result["diagnostic_count"] == len(result["diagnostics"])
+    assert result["diagnostic_count"] >= 11
+    assert len(checklist_items) == result["diagnostic_count"]
+    assert event.event_type == "agent.validation.failed"
+    assert event.payload["diagnostic_count"] == result["diagnostic_count"]
+    assert event.payload["diagnostics"] == result["diagnostics"]
+    assert not (sandbox.outputs_path / "builder-result.json").exists()
+
+
+def test_skills_service_preserves_all_builder_validation_diagnostics() -> None:
+    diagnostics = [
+        {
+            "path": f"expected_evidence_requirements.{index}",
+            "code": "missing_evidence_coverage",
+            "message": f"缺少证据 {index}",
+        }
+        for index in range(12)
+    ]
+    result = AgentResult(
+        agent_run_id="run-diagnostics",
+        agent_key="psop.builder",
+        status="failed",
+        final_output="",
+        events=[
+            AgentEvent(
+                seq_no=1,
+                event_type="agent.validation.failed",
+                payload={"diagnostics": diagnostics},
+                occurred_at=datetime.now(timezone.utc),
+            )
+        ],
+    )
+
+    assert SkillsService._agent_validation_diagnostics(result) == diagnostics
+    message = SkillsService._agent_validation_failure_message(result)
+    assert "共 12 项" in message
+    assert diagnostics[0]["path"] in message
+
+
 def test_repeated_builder_validation_stops_before_fourth_submission(tmp_path) -> None:
     writer = AgentEventWriter(tmp_path / "events.jsonl")
     middleware = ToolCallMiddleware(writer, max_error_counts={"psop.builder.submit_candidate": 4})
@@ -492,14 +742,14 @@ def test_builder_candidate_rejects_current_source_section_path_as_legacy_alias()
             "claim": "伪造路径。",
             "support_level": "current_source_fact",
             "source_refs": [{"source_type": "current_source/SKILL.md/安全约束"}],
-            "used_in": ["review_notes"],
+            "used_in": [{"target_type": "review_notes", "target_id": "review_notes"}],
         }
     )
 
     with pytest.raises(BuilderCandidateValidationError) as exc_info:
         validate_builder_candidate(payload)
 
-    assert "current_source.ref" in exc_info.value.diagnostics[0]["message"]
+    assert any("source_type" in item["path"] for item in exc_info.value.diagnostics)
 
 
 def test_builder_candidate_allows_checklist_assertion_but_rejects_real_todo() -> None:
@@ -514,7 +764,14 @@ def test_builder_candidate_allows_checklist_assertion_but_rejects_real_todo() ->
 
 def test_builder_candidate_rejects_standard_reference_when_search_timed_out() -> None:
     payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
-    payload["industry_standard_usage"] = [{"standard_ref": "GB 1", "clause_ref": "1.1", "usage": "mandatory", "used_in": ["阶段 1"]}]
+    payload["industry_standard_usage"] = [
+        {
+            "standard_ref": "GB 1",
+            "clause_ref": "1.1",
+            "usage": "mandatory",
+            "used_in": [{"target_type": "workflow_stage", "target_id": "stage_01_entry"}],
+        }
+    ]
 
     with pytest.raises(BuilderCandidateValidationError) as exc_info:
         validate_builder_candidate(payload, standard_search_status="timeout")
@@ -575,15 +832,16 @@ def test_standard_search_uses_lightrag_query_endpoint_and_api_key(monkeypatch, t
 
 def _builder_candidate_payload(reference_path: str) -> dict:
     return {
+        "schema_version": "2.0",
         "directory_tree": "README.md\nSKILL.md\nprompts/system.md\nreferences/README.md\nexamples/input.md\nexamples/expected-output.md\ntests/checklist.md",
         "files": {
             "README.md": "# 泵房进入前安全检查\n\n用于指导进入前检查。\n",
             "SKILL.md": (
                 "# 泵房进入前安全检查\n\n"
                 "## Workflow\n"
-                "### 阶段 1\n"
+                "### [stage_01_entry] 入口状态确认\n"
                 f"参考 `{reference_path}` 判断入口状态。\n\n"
-                "### 阶段 2\n"
+                "### [stage_02_pressure] 压力表记录\n"
                 "记录压力表读数。\n\n"
                 "## Safety Constraints\n"
                 "PPE 不完整不得进入。\n"
@@ -604,6 +862,7 @@ def _builder_candidate_payload(reference_path: str) -> dict:
                 "material_id": "material-1",
                 "reference_path": reference_path,
                 "reason": "用于判断入口状态。",
+                "stage_ids": ["stage_01_entry"],
             }
         ],
         "evidence_map": [
@@ -611,13 +870,17 @@ def _builder_candidate_payload(reference_path: str) -> dict:
                 "claim": "阶段 1 需要确认入口状态。",
                 "support_level": "observed_fact",
                 "source_refs": [{"source_type": "reference_asset", "asset_id": "asset-1"}],
-                "used_in": ["阶段 1"],
+                "used_in": [
+                    {"target_type": "workflow_stage", "target_id": "stage_01_entry"},
+                    {"target_type": "safety_constraint", "target_id": "safety_01_entry"},
+                    {"target_type": "expected_evidence", "target_id": "evidence_01_entry"},
+                ],
             },
             {
                 "claim": "阶段 2 需要记录压力表读数。",
                 "support_level": "observed_fact",
                 "source_refs": [{"source_type": "material_analysis", "material_id": "material-1"}],
-                "used_in": ["阶段 2"],
+                "used_in": [{"target_type": "workflow_stage", "target_id": "stage_02_pressure"}],
             },
         ],
         "missing_questions": [
@@ -629,17 +892,24 @@ def _builder_candidate_payload(reference_path: str) -> dict:
         ],
         "safety_constraints": [
             {
+                "constraint_id": "safety_01_entry",
+                "scope": "selected_stages",
+                "stage_ids": ["stage_01_entry"],
                 "constraint": "PPE 不完整不得进入。",
-                "applies_to": "阶段 1",
                 "risk_type": "personal_safety",
                 "required_action": "停止并要求补齐证据。",
             }
         ],
         "workflow_step_candidates": [
-            {"step_id": "阶段 1", "title": "入口状态确认"},
-            {"step_id": "阶段 2", "title": "压力表记录"},
+            {"stage_id": "stage_01_entry", "title": "入口状态确认"},
+            {"stage_id": "stage_02_pressure", "title": "压力表记录"},
         ],
         "expected_evidence_requirements": [
-            {"stage_id": "阶段 1", "evidence_type": "photo", "completion_criteria": "入口状态清楚。"}
+            {
+                "requirement_id": "evidence_01_entry",
+                "stage_id": "stage_01_entry",
+                "evidence_type": "photo",
+                "completion_criteria": "入口状态清楚。",
+            }
         ],
     }

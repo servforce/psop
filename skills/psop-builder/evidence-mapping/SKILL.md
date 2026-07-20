@@ -26,7 +26,7 @@
 1. 调用 `psop.builder.list_reference_assets` 获取候选资产。
 2. 优先选择能帮助运行时判断状态、姿态、设备位置、缺陷、读数、工具摆放或安全边界的资产。
 3. 不选择封面、转场、重复画面或无法支撑运行时判断的资产。
-4. 每个 selected reference asset 必须说明 `used_in`，并在 `SKILL.md` 对应流程步骤附近用 Markdown 图片语法引用。
+4. 每个 selected reference asset 必须用 `stage_ids` 关联已声明 workflow 阶段，并在 `SKILL.md` 对应流程步骤附近用 Markdown 图片语法引用。
 5. 如果没有可用参考资产，不得伪造路径，必须写入 `review_notes` 和 `missing_questions`。
 
 ## 行业标准映射规则
@@ -51,7 +51,7 @@
 
 - `user_description`、`current_source`、`builder_inference`、`human_confirmation_required` 必须提供 `ref`。
 - `material_analysis` 必须提供 `material_id` 或 `ref`；`reference_asset` 必须提供 `asset_id` 或 `ref`；`industry_standard` 必须提供 `standard_ref` 或 `ref`。
-- 可无歧义识别的旧值 `current_source/SKILL.md` 可改写为 `{"source_type":"current_source","ref":"SKILL.md"}`；其他不明旧字符串必须修正，不能猜测。
+- Builder Candidate Schema v2 不接受旧字符串或别名；`current_source` 必须显式写为 `{"source_type":"current_source","ref":"SKILL.md"}`。
 - 强制 workflow、安全约束和完成标准只可由 `user_description`、`material_analysis`、`reference_asset`、`industry_standard` 支撑。`current_source` 仅定位待修订内容。
 - 标准检索超时/不可用时，不得生成 `industry_standard` 引用，且 `review_notes` 必须写入：`标准检索不可用，未引用行业标准。`
 
@@ -59,11 +59,13 @@
 
 提交前逐项核对，而不是只检查 Markdown：
 
+- `schema_version`：必须严格为 `"2.0"`；所有 ID 必须匹配 `^[a-z][a-z0-9_]{1,63}$` 并在各自类型内唯一。
 - `material_usage`：每项必须有 `material_id` 和 `usage`。
-- `evidence_map`：每项必须有 `claim`、`support_level`、`source_refs`、`used_in`；`support_level` 只能是 `observed_fact`、`standard_reference`、`current_source_fact`、`builder_inference`、`human_confirmation_required` 或 `confirmed_instruction`。
+- `evidence_map`：每项必须有 `claim`、`support_level`、`source_refs`、`used_in`；`used_in` 每项必须是含 `target_type`、`target_id` 的对象，不能是自由文本。
 - `missing_questions`：每项必须有 `question`、`reason`、`blocking_level`；无问题时使用空数组。
-- `safety_constraints`：每项必须有 `constraint`、`applies_to`、`risk_type`、`required_action`。
-- `workflow_step_candidates` 必须有阶段编号或标题；`expected_evidence_requirements` 必须有阶段关联、`evidence_type`、`completion_criteria`。
+- `safety_constraints`：每项必须有 `constraint_id`、`scope`、`stage_ids`、`constraint`、`risk_type`、`required_action`；`all_stages` 对应空 `stage_ids`，`selected_stages` 对应非空 `stage_ids`。
+- `workflow_step_candidates` 每项必须有 `stage_id` 和 `title`，且 `SKILL.md` 标题使用 `### [stage_id] title`；`expected_evidence_requirements` 每项必须有 `requirement_id`、`stage_id`、`evidence_type`、`completion_criteria`。
+- `selected_reference_assets.stage_ids` 和所有结构化 target 必须引用已声明 ID；每个 workflow、安全约束和预期证据要求都必须被可验证 evidence 覆盖。
 - 若标准检索不可用：`industry_standard_usage=[]`，并在 `review_notes` 原样写入 `标准检索不可用，未引用行业标准。`
 
 收到工具的 `repair_checklist` 时，必须修复其中全部项后再提交完整 candidate。

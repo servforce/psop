@@ -10,6 +10,7 @@ class ToolSpec(BaseModel):
     description: str
     purpose: str | None = None
     input_schema: dict[str, Any] = Field(default_factory=dict)
+    input_schema_mode: Literal["generated_model", "raw_json_schema"] = "generated_model"
     output_schema: dict[str, Any] | None = None
     source: Literal["builtin", "skill", "mcp"] = "builtin"
     risk_class: str = "read_only"

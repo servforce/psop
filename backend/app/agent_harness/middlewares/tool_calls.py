@@ -155,7 +155,8 @@ class ToolCallMiddleware(AgentMiddleware[AgentState]):
                 "tool_name": tool_name,
                 "failure_kind": "validation_failed",
                 "repeated_diagnostic_count": count,
-                "diagnostics": diagnostics[:8],
+                "diagnostic_count": len(diagnostics),
+                "diagnostics": diagnostics,
                 "message": "同一候选校验诊断重复出现，停止内部纠错。",
             },
         )
@@ -209,7 +210,9 @@ def _tool_result_payload(result: ToolMessage | Command) -> dict[str, Any]:
         }
     diagnostics = payload.get("diagnostics")
     if isinstance(diagnostics, list):
-        summary["validation_diagnostics"] = [item for item in diagnostics if isinstance(item, dict)][:8]
+        validation_diagnostics = [item for item in diagnostics if isinstance(item, dict)]
+        summary["validation_diagnostic_count"] = len(validation_diagnostics)
+        summary["validation_diagnostics"] = validation_diagnostics
     return summary
 
 

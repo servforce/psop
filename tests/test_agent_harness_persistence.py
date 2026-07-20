@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import inspect, text
 
 from app.agent_harness.persistence.models import AgentArtifactRecord, AgentEventRecord, AgentRunRecord
+from app.agent_harness.persistence.query_service import AgentRunQueryService
 from app.agent_harness.persistence.service import AgentHarnessPersistenceService
 from app.agent_harness.schemas import AgentArtifact, AgentEvent, AgentResult
 from app.infra.database import DatabaseManager
@@ -212,3 +213,38 @@ def test_agent_harness_persistence_can_preserve_live_events_when_persisting_resu
         assert record.related_runtime_run_id == "runtime-run-1"
         assert session.query(AgentEventRecord).count() == 1
         assert session.query(AgentArtifactRecord).count() == 1
+
+
+def test_agent_run_timeline_preserves_all_validation_diagnostics() -> None:
+    manager = DatabaseManager("sqlite+pysqlite:///:memory:")
+    manager.create_schema()
+    diagnostics = [
+        {"path": f"safety_constraints.{index}", "code": "missing_evidence_coverage"}
+        for index in range(12)
+    ]
+
+    with manager.session() as session:
+        AgentHarnessPersistenceService().start_run(
+            session,
+            agent_run_id="run-diagnostics",
+            agent_key="psop.builder",
+        )
+        session.flush()
+        session.add(
+            AgentEventRecord(
+                agent_run_id="run-diagnostics",
+                seq_no=1,
+                event_type="agent.validation.failed",
+                payload={"attempt": 1, "validation_stage": "schema_validation", "diagnostics": diagnostics},
+                occurred_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+
+        timeline = AgentRunQueryService().get_run_timeline(session, "run-diagnostics")
+
+    assert timeline.validation_diagnostic_count == 12
+    assert timeline.validation_diagnostics == diagnostics
+    validation_step = next(step for step in timeline.steps if step.event_type == "agent.validation.failed")
+    assert validation_step.metadata["diagnostic_count"] == 12
+    assert validation_step.metadata["diagnostics"] == diagnostics

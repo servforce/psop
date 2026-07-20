@@ -21,7 +21,7 @@
 
 ## 输出要求
 
-`submit_candidate` 的候选产物必须包含完整文件、证据映射、素材使用、行业标准使用、缺失问题、安全约束、工作流阶段候选和预期证据要求。
+`submit_candidate` 只接受 Builder Candidate Schema v2。顶层必须包含 `schema_version: "2.0"`，所有 schema 声明的字段都必须提交；所有对象禁止未声明字段，不兼容 `step_id`、`stage_title`、`applies_to` 或字符串形式的 `used_in`。
 
 `submit_candidate` 参数必须是完整 candidate 对象，不是 workspace 文件路径，也不是中间 JSON 摘要。提交前必须直接把以下文件的完整 Markdown 内容放入 `files` 对象：
 
@@ -34,6 +34,14 @@
 - `tests/checklist.md`
 
 `evidence_map`、`workflow_step_candidates`、`expected_evidence_requirements`、`safety_constraints` 等字段只是 candidate 的追溯元数据，不能替代 `files`。如果 `psop.standard.search` 不可用或没有结果，仍可提交 candidate，但必须在 `review_notes` 或 `industry_standard_usage` 中记录检索失败或无结果。
+
+阶段、安全约束和预期证据必须使用各自类型内唯一的稳定 ID，格式为 `^[a-z][a-z0-9_]{1,63}$`：
+
+- `workflow_step_candidates` 每项为 `{"stage_id":"stage_01_inventory","title":"零件清点"}`；`SKILL.md` 中对应标题必须为 `### [stage_01_inventory] 零件清点`。
+- `safety_constraints` 每项必须包含 `constraint_id`、`scope`、`stage_ids`、`constraint`、`risk_type`、`required_action`。`scope="all_stages"` 时 `stage_ids=[]`；`scope="selected_stages"` 时 `stage_ids` 必须非空。
+- `expected_evidence_requirements` 每项必须包含唯一 `requirement_id` 和已声明的 `stage_id`。
+- `selected_reference_assets` 每项必须包含 `stage_ids`，只能引用已声明阶段。
+- `evidence_map.used_in` 与 `industry_standard_usage.used_in` 只能使用结构化目标 `{"target_type":"workflow_stage","target_id":"stage_01_inventory"}`。`target_type` 只允许 `workflow_stage`、`safety_constraint`、`expected_evidence`、`review_notes`；review notes 固定引用 `{"target_type":"review_notes","target_id":"review_notes"}`。
 
 不确定事实必须进入 `missing_questions` 或 `review_notes`。不得把推断写成素材事实，不得伪造标准编号、条款号、素材来源或参考资产。
 
@@ -53,9 +61,10 @@
 在第一次调用或收到 `repair_checklist` 后再次调用 `submit_candidate` 前，必须整体检查完整 candidate，不能只修复最近一条错误：
 
 - `material_usage` 的每项均为 `{"material_id":"...","usage":"..."}`。
-- `evidence_map` 的每项均为 `{"claim":"...","support_level":"observed_fact","source_refs":[...],"used_in":["阶段 1"]}`；`support_level` 仅可为 `observed_fact`、`standard_reference`、`current_source_fact`、`builder_inference`、`human_confirmation_required`、`confirmed_instruction`。
+- `schema_version` 必须严格等于 `"2.0"`。
+- `evidence_map` 的每项均为 `{"claim":"...","support_level":"observed_fact","source_refs":[...],"used_in":[{"target_type":"workflow_stage","target_id":"stage_01_inventory"}]}`；`support_level` 仅可为 `observed_fact`、`standard_reference`、`current_source_fact`、`builder_inference`、`human_confirmation_required`、`confirmed_instruction`。
 - `missing_questions` 的每项均为 `{"question":"...","reason":"...","blocking_level":"non_blocking"}`；没有问题时传空数组。
-- 每项 safety/workflow/expected evidence/reference asset/industry standard usage 都必须符合工具 JSON schema 中的必填字段。
+- 检查 ID 唯一性、`scope` 与 `stage_ids` 组合、全部交叉引用、`SKILL.md` 标题以及每个 workflow/safety/expected evidence 的 evidence coverage。
 - 标准检索返回 timeout、service_unavailable 或 internal_error 时，`industry_standard_usage` 必须为 `[]`，且 `review_notes` 必须包含完全相同的文本“标准检索不可用，未引用行业标准”。这是正常降级，不要重试标准检索。
 
 如果 `submit_candidate` 返回 `repair_checklist`，一次性处理其中全部字段后再提交完整 candidate。

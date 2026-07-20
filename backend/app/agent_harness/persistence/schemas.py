@@ -46,6 +46,7 @@ class AgentRunTimelineResponse(BaseModel):
     job_attempt_no: int = 0
     job_max_attempts: int = 0
     failure_kind: str = ""
+    validation_diagnostic_count: int = 0
     validation_diagnostics: list[dict[str, Any]] = Field(default_factory=list)
     steps: list[AgentRunStepResponse] = Field(default_factory=list)
     final: AgentRunFinalResponse = Field(default_factory=AgentRunFinalResponse)

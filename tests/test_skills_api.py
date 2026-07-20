@@ -2031,7 +2031,11 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert f"]({reference_path})" in skill_md
     assert "## 嵌入参考图片" not in skill_md
     assert "## 嵌入参考图片" not in references_md
-    assert skill_md.index("### 阶段 1：PPE 与进入条件确认") < skill_md.index(f"]({reference_path})") < skill_md.index("### 阶段 2：阀门与压力表确认")
+    assert (
+        skill_md.index("### [stage_01_ppe] PPE 与进入条件确认")
+        < skill_md.index(f"]({reference_path})")
+        < skill_md.index("### [stage_02_valve_pressure] 阀门与压力表确认")
+    )
     assert "should-be-ignored" not in fake_gateway.projects[created["gitlab_project_id"]].files["skill.yaml"]
     assert detail_response.json()["latest_draft_head_sha"] == payload["committed_commit_sha"]
     assert detail_response.json()["updated_at"] != created["updated_at"]

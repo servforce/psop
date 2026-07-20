@@ -79,6 +79,39 @@ def test_tool_call_middleware_records_structured_error_and_stops_after_limit(tmp
     assert writer.events[-1].payload["tool_name"] == "psop.builder.submit_candidate"
 
 
+def test_tool_call_middleware_preserves_all_validation_diagnostics(tmp_path) -> None:
+    writer = AgentEventWriter(tmp_path / "events.jsonl")
+    middleware = ToolCallMiddleware(writer)
+    request = ToolCallRequest(
+        tool_call={"name": "psop.builder.submit_candidate", "id": "call-1", "args": {}},
+        tool=None,
+        state={},
+        runtime=None,
+    )
+    diagnostics = [
+        {"path": f"workflow_step_candidates.{index}", "code": "missing_evidence_coverage"}
+        for index in range(12)
+    ]
+    error_content = json.dumps(
+        {"status": "error", "type": "invalid_arguments", "diagnostics": diagnostics},
+        ensure_ascii=False,
+    )
+
+    middleware.wrap_tool_call(
+        request,
+        lambda _: ToolMessage(
+            content=error_content,
+            tool_call_id="call-1",
+            name="psop.builder.submit_candidate",
+            status="success",
+        ),
+    )
+
+    payload = writer.events[-1].payload
+    assert payload["validation_diagnostic_count"] == 12
+    assert payload["validation_diagnostics"] == diagnostics
+
+
 def test_tool_call_middleware_counts_failed_tool_errors_for_limit(tmp_path) -> None:
     writer = AgentEventWriter(tmp_path / "events.jsonl")
     middleware = ToolCallMiddleware(writer, max_error_counts={"psop.builder.submit_candidate": 2})

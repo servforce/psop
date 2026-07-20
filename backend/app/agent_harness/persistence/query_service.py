@@ -123,6 +123,7 @@ class AgentRunQueryService:
             job_attempt_no=job.attempt_no if job else 0,
             job_max_attempts=job.max_attempts if job else 0,
             failure_kind="validation_failed" if validation_diagnostics else "",
+            validation_diagnostic_count=len(validation_diagnostics),
             validation_diagnostics=validation_diagnostics,
             steps=[*self._job_steps(job), *self._event_steps(events)],
             final=self._final_for_generation(generation),
@@ -361,10 +362,12 @@ class AgentRunQueryService:
                 "result_type": str(payload.get("result_type") or ""),
             }
         if event_type == "agent.validation.failed":
+            diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), list) else []
             return {
                 "attempt": payload.get("attempt") or 0,
                 "validation_stage": str(payload.get("validation_stage") or ""),
-                "diagnostics": payload.get("diagnostics") if isinstance(payload.get("diagnostics"), list) else [],
+                "diagnostic_count": len(diagnostics),
+                "diagnostics": diagnostics,
             }
         if event_type == "agent.tool.standard_search":
             return {
@@ -390,7 +393,7 @@ class AgentRunQueryService:
             raw = (event.payload or {}).get("diagnostics")
             if not isinstance(raw, list):
                 continue
-            return [item for item in raw if isinstance(item, dict)][:8]
+            return [item for item in raw if isinstance(item, dict)]
         return []
 
     @staticmethod

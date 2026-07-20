@@ -26,6 +26,7 @@ _STANDARD_RESULTS_CONTEXT_KEY = "_psop_builder_standard_results"
 _STANDARD_SEARCH_STATUS_CONTEXT_KEY = "_psop_builder_standard_search_status"
 _SUBMIT_CANDIDATE_ERROR_COUNT_CONTEXT_KEY = "_psop_builder_submit_candidate_error_count"
 _SUBMIT_CANDIDATE_REQUIRED_FIELDS = [
+    "schema_version",
     "directory_tree",
     "files",
     "generation_reason",
@@ -137,6 +138,7 @@ def register_builder_tools(registry: ToolRegistry) -> None:
             description="提交并校验 PSOP Skill draft candidate。",
             purpose="用于 psop.builder 写入正式候选产物 builder-result.json，并将 PSOP Skill files 物化到 sandbox outputs/skill-draft。参数必须直接包含完整 candidate，不接受 workspace 文件路径或只包含 evidence_map 的部分参数。",
             input_schema=builder_candidate_input_schema(),
+            input_schema_mode="raw_json_schema",
             risk_class="write_local",
             side_effect_class="write_sandbox_file",
             resource_scope="sandbox_outputs",
@@ -718,6 +720,7 @@ def _submit_candidate_error_result(
             "attempt": attempt,
             "error_type": "invalid_arguments",
             "error": _truncate(message, 1000),
+            "diagnostic_count": len(diagnostics),
             "diagnostics": diagnostics,
             "repair_checklist": _repair_checklist(diagnostics),
         },
@@ -729,6 +732,7 @@ def _submit_candidate_error_result(
             "retry_requires_argument_correction": True,
             "attempt": attempt,
             "validation_stage": validation_stage,
+            "diagnostic_count": len(diagnostics),
             "diagnostics": diagnostics,
             "repair_checklist": _repair_checklist(diagnostics),
             "required_top_level_fields": _SUBMIT_CANDIDATE_REQUIRED_FIELDS,
@@ -749,7 +753,7 @@ def _correction_hint(diagnostics: list[dict[str, Any]]) -> str:
 
 def _repair_checklist(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
-    for diagnostic in diagnostics[:8]:
+    for diagnostic in diagnostics:
         path = str(diagnostic.get("path") or "candidate")
         root = path.split(".", 1)[0]
         group = grouped.setdefault(root, {"field": root, "items": []})

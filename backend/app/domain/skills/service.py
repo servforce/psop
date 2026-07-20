@@ -1409,6 +1409,7 @@ class SkillsService:
                     "agent_run_id": agent_result.agent_run_id,
                     "error": agent_result.error_message,
                     "failure_kind": "validation_failed" if validation_message else "agent_execution_failed",
+                    "validation_diagnostic_count": len(validation_diagnostics),
                     "validation_diagnostics": validation_diagnostics,
                 },
             )
@@ -1621,7 +1622,10 @@ class SkillsService:
             diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), list) else []
             if diagnostics and isinstance(diagnostics[0], dict):
                 first = diagnostics[0]
-                return f"PSOP builder 候选校验失败：{first.get('path') or 'candidate'}：{first.get('message') or payload.get('error') or ''}"
+                return (
+                    f"PSOP builder 候选校验失败（共 {len(diagnostics)} 项）："
+                    f"{first.get('path') or 'candidate'}：{first.get('message') or payload.get('error') or ''}"
+                )
             return f"PSOP builder 候选校验失败：{payload.get('error') or ''}".rstrip("：")
         return ""
 
@@ -1632,7 +1636,7 @@ class SkillsService:
                 continue
             diagnostics = event.payload.get("diagnostics") if isinstance(event.payload, dict) else None
             if isinstance(diagnostics, list):
-                return [item for item in diagnostics if isinstance(item, dict)][:8]
+                return [item for item in diagnostics if isinstance(item, dict)]
         return []
 
     def _latest_builder_validation_summary(self, session: Session, skill_definition_id: str) -> list[dict]:
@@ -1653,7 +1657,7 @@ class SkillsService:
             }
             for item in diagnostics
             if isinstance(item, dict)
-        ][:8]
+        ]
 
     @staticmethod
     def _agent_artifact_path(agent_result: AgentResult, artifact_type: str) -> str:
@@ -1708,7 +1712,7 @@ class SkillsService:
                 ],
                 "rules": [
                     "当前 draft 仅是待修订内容，不能单独支撑新的事实性或强制性流程。",
-                    "每个强制工作流、安全约束和完成标准必须由 evidence_map.used_in 关联到素材、用户确认或可追溯标准。",
+                    "每个强制工作流、安全约束和完成标准必须由结构化 evidence_map.used_in 目标关联到素材、用户确认或可追溯标准。",
                     "builder_inference 与 human_confirmation_required 只能用于可选建议、审阅风险或待确认项。",
                     "标准检索不可用时不得引用 industry_standard，必须在 review_notes 写入“标准检索不可用，未引用行业标准”。",
                     "previous_validation_summary 不为空时，必须在首次提交前逐项避免其中列出的字段错误。",
@@ -1718,6 +1722,7 @@ class SkillsService:
             "candidate_reference_assets": material_generation_context["candidate_reference_assets"],
             "output_contract": {
                 "format": "json_object",
+                "schema_version": "2.0",
                 "required_files": [
                     "README.md",
                     "SKILL.md",
@@ -1729,13 +1734,26 @@ class SkillsService:
                 ],
                 "forbidden_files": ["skill.yaml"],
                 "required_top_level_fields": [
+                    "schema_version",
                     "directory_tree",
                     "files",
                     "review_notes",
                     "generation_reason",
                     "material_usage",
+                    "industry_standard_usage",
                     "selected_reference_assets",
+                    "evidence_map",
+                    "missing_questions",
+                    "safety_constraints",
+                    "workflow_step_candidates",
+                    "expected_evidence_requirements",
                 ],
+                "id_policy": "所有 stage_id、constraint_id、requirement_id 必须匹配 ^[a-z][a-z0-9_]{1,63}$ 并在各自类型内唯一。",
+                "workflow_heading_policy": "SKILL.md workflow 标题必须使用 ### [stage_id] title，并与 workflow_step_candidates 精确关联。",
+                "structured_reference_policy": (
+                    "evidence_map.used_in 与 industry_standard_usage.used_in 必须是 target_type/target_id 对象数组；"
+                    "selected_reference_assets 必须包含 stage_ids；不得使用 v1 自由文本引用或兼容别名。"
+                ),
                 "draft_policy": "生成结果会提交到 GitLab draft 标准路径，但不会发布、不会编译。",
                 "video_reference_policy": (
                     f"必须从 candidate_reference_assets 中选择 1 到 {MAX_SKILL_REFERENCE_ASSETS} 张最适合 Skill 运行时参考的关键帧，"

@@ -98,6 +98,7 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
     reference_path = str(asset.get("reference_path") or "references/keyframes/pump-room-pressure.jpg")
     asset_id = str(asset.get("asset_id") or "asset-1")
     return {
+        "schema_version": "2.0",
         "directory_tree": "README.md\nSKILL.md\nprompts/system.md\nreferences/README.md\nexamples/input.md\nexamples/expected-output.md\ntests/checklist.md",
         "files": {
             "README.md": "# 泵房进入前安全检查\n\n用于指导现场人员在进入泵房前完成 PPE、阀门状态和压力表读数检查。\n",
@@ -108,9 +109,9 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
                 "## 输入\n- 操作员文本确认\n- PPE 照片或明确确认\n- 阀门状态观察\n- 压力表读数\n\n"
                 "## 输出\n- 是否允许进入泵房\n- 已记录的关键证据\n- 异常停止原因\n\n"
                 "## Workflow\n"
-                "### 阶段 1：PPE 与进入条件确认\n要求操作员确认 PPE 穿戴完整，并参考 "
+                "### [stage_01_ppe] PPE 与进入条件确认\n要求操作员确认 PPE 穿戴完整，并参考 "
                 f"{reference_path} 判断现场入口状态。缺少 PPE 时停止进入。\n\n"
-                "### 阶段 2：阀门与压力表确认\n确认目标阀门处于关闭状态，记录压力表读数。读数异常或阀门状态不清时停止并请求复核。\n\n"
+                "### [stage_02_valve_pressure] 阀门与压力表确认\n确认目标阀门处于关闭状态，记录压力表读数。读数异常或阀门状态不清时停止并请求复核。\n\n"
                 "## Wait Checkpoints\n- 阶段 1 等待 PPE 或入口状态证据。\n- 阶段 2 等待阀门状态和压力表读数。\n\n"
                 "## Expected Evidence\n- PPE 确认\n- 阀门关闭证据\n- 压力表读数\n\n"
                 "## Safety Constraints\n- PPE 不完整不得进入泵房。\n- 阀门状态不清不得继续。\n- 压力读数异常必须停止并升级复核。\n\n"
@@ -132,8 +133,8 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
                 "asset_id": asset_id,
                 "material_id": material_id,
                 "reference_path": reference_path,
-                "used_in": ["SKILL.md", "references/README.md"],
                 "reason": "该参考资产用于辅助判断泵房入口或设备状态。",
+                "stage_ids": ["stage_01_ppe"],
             }
         ],
         "evidence_map": [
@@ -141,19 +142,27 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
                 "claim": "作业需要在进入泵房前确认 PPE。",
                 "support_level": "observed_fact",
                 "source_refs": [{"source_type": "user_description", "ref": "input.user_description"}],
-                "used_in": ["阶段 1"],
+                "used_in": [
+                    {"target_type": "workflow_stage", "target_id": "stage_01_ppe"},
+                    {"target_type": "safety_constraint", "target_id": "safety_01_ppe"},
+                    {"target_type": "expected_evidence", "target_id": "evidence_01_ppe"},
+                ],
             },
             {
                 "claim": "阀门状态和压力表读数是关键完成证据。",
                 "support_level": "observed_fact",
                 "source_refs": [{"source_type": "material_analysis", "material_id": material_id}],
-                "used_in": ["阶段 2"],
+                "used_in": [
+                    {"target_type": "workflow_stage", "target_id": "stage_02_valve_pressure"},
+                    {"target_type": "safety_constraint", "target_id": "safety_02_pressure"},
+                    {"target_type": "expected_evidence", "target_id": "evidence_02_valve_pressure"},
+                ],
             },
             {
                 "claim": "行业标准适用性需要人工确认。",
                 "support_level": "human_confirmation_required",
                 "source_refs": [{"source_type": "human_confirmation_required", "ref": "standard_scope"}],
-                "used_in": ["review_notes"],
+                "used_in": [{"target_type": "review_notes", "target_id": "review_notes"}],
             },
         ],
         "missing_questions": [
@@ -165,25 +174,39 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
         ],
         "safety_constraints": [
             {
+                "constraint_id": "safety_01_ppe",
+                "scope": "selected_stages",
+                "stage_ids": ["stage_01_ppe"],
                 "constraint": "PPE 不完整不得进入泵房。",
-                "applies_to": "阶段 1",
                 "risk_type": "personal_safety",
                 "required_action": "停止进入并要求补齐 PPE 证据。",
             },
             {
+                "constraint_id": "safety_02_pressure",
+                "scope": "selected_stages",
+                "stage_ids": ["stage_02_valve_pressure"],
                 "constraint": "压力读数异常时不得继续。",
-                "applies_to": "阶段 2",
                 "risk_type": "equipment_pressure",
                 "required_action": "停止并请求现场负责人复核。",
             },
         ],
         "workflow_step_candidates": [
-            {"step_id": "阶段 1", "title": "PPE 与进入条件确认"},
-            {"step_id": "阶段 2", "title": "阀门与压力表确认"},
+            {"stage_id": "stage_01_ppe", "title": "PPE 与进入条件确认"},
+            {"stage_id": "stage_02_valve_pressure", "title": "阀门与压力表确认"},
         ],
         "expected_evidence_requirements": [
-            {"stage_id": "阶段 1", "evidence_type": "ppe_confirmation", "completion_criteria": "PPE 穿戴完整且入口状态可接受。"},
-            {"stage_id": "阶段 2", "evidence_type": "valve_and_pressure", "completion_criteria": "阀门关闭且压力表读数已记录。"},
+            {
+                "requirement_id": "evidence_01_ppe",
+                "stage_id": "stage_01_ppe",
+                "evidence_type": "ppe_confirmation",
+                "completion_criteria": "PPE 穿戴完整且入口状态可接受。",
+            },
+            {
+                "requirement_id": "evidence_02_valve_pressure",
+                "stage_id": "stage_02_valve_pressure",
+                "evidence_type": "valve_and_pressure",
+                "completion_criteria": "阀门关闭且压力表读数已记录。",
+            },
         ],
     }
 

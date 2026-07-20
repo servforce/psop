@@ -1,5 +1,5 @@
 agent_key: psop.builder
-version: v1
+version: v2
 runner_kind: langchain_agent
 factory: make_builder_agent
 description: 根据用户目标、当前 Skill source、素材分析结果和行业标准引用构建可审阅的 PSOP Skill draft candidate。
