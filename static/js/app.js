@@ -293,8 +293,83 @@
       .join("\n");
   }
 
-  function renderInlineMarkdown(value) {
-    return escapeHtml(value)
+  const repositoryImageExtensionPattern = /\.(?:gif|jpe?g|png|webp)$/i;
+  const inlineMarkdownImagePattern = /!\[([^\]]*)\]\((<[^>\n]+>|[^\s)\n]+)(?:\s+(?:"([^"\n]*)"|'([^'\n]*)'))?\)/g;
+
+  function resolveRepositoryImagePath(currentFilePath, rawTarget) {
+    let target = String(rawTarget || "").trim();
+    if (!target || target.includes("\\")) {
+      return "";
+    }
+
+    target = target.split(/[?#]/, 1)[0];
+    try {
+      target = decodeURIComponent(target);
+    } catch {
+      return "";
+    }
+
+    if (
+      !target ||
+      target.includes("\\") ||
+      target.startsWith("/") ||
+      /^[A-Za-z][A-Za-z0-9+.-]*:/.test(target) ||
+      /[\u0000-\u001f\u007f]/.test(target)
+    ) {
+      return "";
+    }
+
+    const parts = String(currentFilePath || "")
+      .replace(/\\/g, "/")
+      .split("/")
+      .filter(Boolean);
+    parts.pop();
+
+    for (const part of target.split("/")) {
+      if (!part || part === ".") {
+        continue;
+      }
+      if (part === "..") {
+        if (!parts.length) {
+          return "";
+        }
+        parts.pop();
+        continue;
+      }
+      parts.push(part);
+    }
+
+    const resolved = parts.join("/");
+    return repositoryImageExtensionPattern.test(resolved) ? resolved : "";
+  }
+
+  function renderInlineMarkdown(value, options = {}) {
+    const imageTokens = [];
+    const source = String(value || "").replace(
+      inlineMarkdownImagePattern,
+      (match, alt, wrappedTarget, doubleQuotedTitle, singleQuotedTitle) => {
+        const target = wrappedTarget.startsWith("<") && wrappedTarget.endsWith(">")
+          ? wrappedTarget.slice(1, -1)
+          : wrappedTarget;
+        const resolvedUrl = typeof options.resolveImageUrl === "function"
+          ? options.resolveImageUrl(target)
+          : "";
+        const token = `\u0000PSOP_MARKDOWN_IMAGE_${imageTokens.length}\u0000`;
+        if (!resolvedUrl) {
+          imageTokens.push(escapeHtml(match));
+          return token;
+        }
+
+        const title = doubleQuotedTitle ?? singleQuotedTitle;
+        const titleAttribute = title === undefined ? "" : ` title="${escapeHtml(title)}"`;
+        imageTokens.push(
+          `<img src="${escapeHtml(resolvedUrl)}" alt="${escapeHtml(alt)}"${titleAttribute} loading="lazy" decoding="async">`
+        );
+        return token;
+      }
+    );
+
+    let html = escapeHtml(source)
       .replace(/`([^`]+)`/g, "<code>$1</code>")
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\*([^*]+)\*/g, "<em>$1</em>")
@@ -302,9 +377,14 @@
         /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
         '<a href="$2" target="_blank" rel="noreferrer noopener">$1</a>'
       );
+
+    imageTokens.forEach((imageHtml, index) => {
+      html = html.replace(`\u0000PSOP_MARKDOWN_IMAGE_${index}\u0000`, imageHtml);
+    });
+    return html;
   }
 
-  function renderMarkdown(value) {
+  function renderMarkdown(value, options = {}) {
     const lines = String(value || "").replace(/\r\n/g, "\n").split("\n");
     const html = [];
     let inCodeBlock = false;
@@ -363,14 +443,14 @@
       if (heading) {
         closeList();
         const level = heading[1].length;
-        html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+        html.push(`<h${level}>${renderInlineMarkdown(heading[2], options)}</h${level}>`);
         continue;
       }
 
       const quote = trimmed.match(/^>\s?(.+)$/);
       if (quote) {
         closeList();
-        html.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`);
+        html.push(`<blockquote>${renderInlineMarkdown(quote[1], options)}</blockquote>`);
         continue;
       }
 
@@ -381,7 +461,7 @@
           listType = "ul";
           html.push("<ul>");
         }
-        html.push(`<li>${renderInlineMarkdown(unordered[1])}</li>`);
+        html.push(`<li>${renderInlineMarkdown(unordered[1], options)}</li>`);
         continue;
       }
 
@@ -392,12 +472,12 @@
           listType = "ol";
           html.push("<ol>");
         }
-        html.push(`<li>${renderInlineMarkdown(ordered[1])}</li>`);
+        html.push(`<li>${renderInlineMarkdown(ordered[1], options)}</li>`);
         continue;
       }
 
       closeList();
-      html.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
+      html.push(`<p>${renderInlineMarkdown(trimmed, options)}</p>`);
     }
 
     if (inCodeBlock) {
@@ -774,6 +854,7 @@
     highlightJson,
     highlightYamlScalar,
     highlightYaml,
+    resolveRepositoryImagePath,
     renderInlineMarkdown,
     renderMarkdown
   };

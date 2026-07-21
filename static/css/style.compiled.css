@@ -4389,6 +4389,14 @@
       }
     }
   }
+  .markdown-preview img {
+    margin-bottom: calc(var(--spacing) * 4);
+    display: block;
+    height: auto;
+    max-width: 100%;
+    -o-object-fit: contain;
+       object-fit: contain;
+  }
   .terminal-markdown {
     min-width: calc(var(--spacing) * 0);
     font-size: var(--text-sm);

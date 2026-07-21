@@ -209,7 +209,11 @@ class FakeGitLabGateway:
 
     def get_repository_file_bytes(self, project_id: str, ref: str, file_path: str) -> bytes:
         project = self.projects[project_id]
-        assert ref in {project.default_branch, project.head_commit_sha}
+        if ref not in {project.default_branch, project.head_commit_sha} or file_path not in project.files:
+            raise SkillsGatewayError(
+                "GitLab 返回错误响应。",
+                details={"status_code": 404, "file_path": file_path, "ref": ref},
+            )
         content = project.files[file_path]
         return content if isinstance(content, bytes) else content.encode("utf-8")
 
@@ -2272,6 +2276,76 @@ def test_repository_tree_file_and_folder_operations() -> None:
     assert manifest_response.status_code == 200
     assert manifest_save_response.status_code == 422
     assert manifest_save_response.json()["code"] == "skill_validation_error"
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "expected_mime_type"),
+    [
+        ("references/frame.jpg", b"jpeg-image", "image/jpeg"),
+        ("references/panel.png", b"png-image", "image/png"),
+    ],
+)
+def test_repository_image_content_returns_commit_scoped_bytes(
+    path: str,
+    content: bytes,
+    expected_mime_type: str,
+) -> None:
+    client, fake_gateway, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={"name": f"Image Preview {path}", "description": "Preview repository images."},
+        ).json()
+        other = client.post(
+            "/api/v1/skills",
+            json={"name": f"Other Image {path}", "description": "Keep repositories isolated."},
+        ).json()
+        fake_gateway.projects[created["gitlab_project_id"]].files[path] = content
+        fake_gateway.projects[other["gitlab_project_id"]].files[path] = b"other-project-image"
+
+        response = client.get(
+            f"/api/v1/skills/{created['id']}/repository/raw",
+            params={"path": path, "ref": created["latest_draft_head_sha"]},
+        )
+
+    assert response.status_code == 200
+    assert response.content == content
+    assert response.headers["content-type"] == expected_mime_type
+    assert response.headers["content-disposition"].startswith("inline;")
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.parametrize(
+    ("path", "ref", "expected_status"),
+    [
+        ("../references/frame.jpg", "current", 422),
+        ("references/icon.svg", "current", 422),
+        ("references/missing.jpg", "current", 404),
+        ("references/frame.jpg", "missing-commit", 404),
+    ],
+)
+def test_repository_image_content_rejects_invalid_or_missing_targets(
+    path: str,
+    ref: str,
+    expected_status: int,
+) -> None:
+    client, fake_gateway, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={"name": f"Invalid Image {path} {ref}", "description": "Reject invalid image targets."},
+        ).json()
+        project = fake_gateway.projects[created["gitlab_project_id"]]
+        project.files["references/frame.jpg"] = b"jpeg-image"
+        resolved_ref = created["latest_draft_head_sha"] if ref == "current" else ref
+        response = client.get(
+            f"/api/v1/skills/{created['id']}/repository/raw",
+            params={"path": path, "ref": resolved_ref},
+        )
+
+    assert response.status_code == expected_status
 
 
 def test_save_skill_source_rejects_stale_commit_sha() -> None:

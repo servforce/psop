@@ -116,6 +116,23 @@ def list_repository_tree(
     return service.list_repository_tree(session, skill_id=skill_id, path=path)
 
 
+@router.get("/{skill_id}/repository/raw")
+def get_repository_image_content(
+    skill_id: str,
+    path: str = Query(min_length=1, max_length=500),
+    ref: str = Query(min_length=1, max_length=128),
+    session: Session = Depends(get_db_session),
+    service: SkillsService = Depends(get_skills_service),
+) -> Response:
+    image = service.get_repository_image_content(session, skill_id=skill_id, path=path, ref=ref)
+    headers = {
+        "Content-Disposition": f"inline; filename*=UTF-8''{quote(image.filename)}",
+        "Content-Length": str(len(image.content)),
+        "X-Content-Type-Options": "nosniff",
+    }
+    return Response(content=image.content, media_type=image.mime_type, headers=headers)
+
+
 @router.get("/{skill_id}/repository/files", response_model=SkillRepositoryFileResponse)
 def get_repository_file(
     skill_id: str,

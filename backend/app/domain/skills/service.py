@@ -99,10 +99,24 @@ LOGGER = logging.getLogger(__name__)
 SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE = "skill_raw_material_generation"
 SKILL_KEY_MAX_LENGTH = 120
 SKILL_KEY_SUFFIX_LENGTH = 12
+REPOSITORY_IMAGE_MEDIA_TYPES = {
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 
 @dataclass(frozen=True, slots=True)
 class RawMaterialContent:
+    content: bytes
+    mime_type: str
+    filename: str
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryImageContent:
     content: bytes
     mime_type: str
     filename: str
@@ -462,6 +476,47 @@ class SkillsService:
             content=repository_file.content,
             ref=repository_file.ref,
             head_commit_sha=repository_file.head_commit_sha,
+        )
+
+    def get_repository_image_content(
+        self,
+        session: Session,
+        *,
+        skill_id: str,
+        path: str,
+        ref: str,
+    ) -> RepositoryImageContent:
+        definition = self._require_definition(session, skill_id)
+        normalized_path = self._normalize_repository_path(path)
+        normalized_ref = ref.strip()
+        if not normalized_ref:
+            raise SkillValidationError("仓库 Commit 不能为空。")
+
+        mime_type = REPOSITORY_IMAGE_MEDIA_TYPES.get(Path(normalized_path).suffix.lower())
+        if not mime_type:
+            raise SkillValidationError(
+                "源码预览仅支持 JPG、PNG、GIF 和 WebP 图片。",
+                details={"path": normalized_path},
+            )
+
+        try:
+            content = self.gitlab_gateway.get_repository_file_bytes(
+                definition.gitlab_project_id,
+                normalized_ref,
+                normalized_path,
+            )
+        except SkillsGatewayError as exc:
+            if exc.details.get("status_code") == 404:
+                raise SkillNotFoundError(
+                    "未找到仓库图片。",
+                    details={"path": normalized_path, "ref": normalized_ref},
+                ) from exc
+            raise
+
+        return RepositoryImageContent(
+            content=content,
+            mime_type=mime_type,
+            filename=Path(normalized_path).name,
         )
 
     def save_repository_file(

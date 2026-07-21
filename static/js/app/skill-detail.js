@@ -18,6 +18,7 @@
     highlightJson,
     highlightYamlScalar,
     highlightYaml,
+    resolveRepositoryImagePath,
     renderInlineMarkdown,
     renderMarkdown
   } = window.PSOPConsoleHelpers;
@@ -1316,11 +1317,11 @@
           return;
         }
 
-        const readmeEntry = this.repositoryEntries.find(
-          (entry) => entry.type === "blob" && entry.name.toLowerCase() === "readme.md"
+        const skillEntry = this.repositoryEntries.find(
+          (entry) => entry.type === "blob" && entry.name.toLowerCase() === "skill.md"
         );
-        if (readmeEntry) {
-          await this.loadRepositoryFile(readmeEntry.path);
+        if (skillEntry) {
+          await this.loadRepositoryFile(skillEntry.path);
         }
       },
 
@@ -2031,7 +2032,9 @@
       repositoryPreviewHtml() {
         const kind = this.repositoryPreviewKind();
         if (kind === "markdown") {
-          return renderMarkdown(this.repositoryFileForm.content);
+          return renderMarkdown(this.repositoryFileForm.content, {
+            resolveImageUrl: (target) => this.repositoryMarkdownImageUrl(target)
+          });
         }
         if (kind === "json") {
           return `<pre class="source-code-preview"><code>${highlightJson(this.repositoryFileForm.content)}</code></pre>`;
@@ -2041,6 +2044,19 @@
         }
 
         return `<pre class="source-code-preview"><code>${escapeHtml(this.repositoryFileForm.content)}</code></pre>`;
+      },
+
+
+      repositoryMarkdownImageUrl(target) {
+        const skillId = this.currentSkill?.id;
+        const ref = this.repositoryFileForm.base_commit_sha;
+        const path = resolveRepositoryImagePath(this.repositoryFileForm.path, target);
+        if (!skillId || !ref || !path) {
+          return "";
+        }
+
+        const params = new URLSearchParams({ path, ref });
+        return `${this.apiBaseUrl}/skills/${encodeURIComponent(skillId)}/repository/raw?${params}`;
       },
 
 
