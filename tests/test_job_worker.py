@@ -4,10 +4,14 @@ import asyncio
 import threading
 from dataclasses import FrozenInstanceError, replace
 from datetime import timedelta, timezone
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from sqlalchemy import event as sqlalchemy_event
 
+import app.domain.jobs.repository as job_repository_module
+import app.domain.skill_tests.service as skill_test_service_module
 from app.core.config import Settings
 from app.domain.compiler.models import SkillCompileRequest
 from app.domain.compiler.service import CompilerService
@@ -29,6 +33,7 @@ from app.domain.runtime.events import NoopRuntimeEventSink
 from app.domain.runtime.models import Run, SkillInvocation, TerminalEvent, TerminalSession, TraceEvent
 from app.domain.runtime.service import RuntimeService
 from app.domain.skill_tests.models import SkillTestScenarioRun
+from app.domain.skill_tests.service import SkillTestService
 from app.domain.skills.models import (
     SkillDefinition,
     SkillPublishRecord,
@@ -39,6 +44,7 @@ from app.domain.skills.models import (
     now_utc,
 )
 from app.infra.database import DatabaseManager
+from scripts.ops import cleanup_stuck_skill_test_drivers as cleanup_drivers
 
 
 @pytest.fixture
@@ -59,6 +65,201 @@ def job_store() -> tuple[Settings, DatabaseManager]:
         yield settings, manager
     finally:
         manager.dispose()
+
+
+def _seed_timeline_driver_job(
+    session,
+    *,
+    event_times_ms: tuple[int, ...],
+    time_origin=None,
+    max_attempts: int = 3,
+) -> dict[str, str]:
+    origin = time_origin or now_utc()
+    invocation = SkillInvocation(
+        skill_definition_id="skill-timeline-driver",
+        skill_version_id="version-timeline-driver",
+        compile_artifact_id="artifact-timeline-driver",
+        status="running",
+    )
+    session.add(invocation)
+    session.flush()
+    run = Run(
+        invocation_id=invocation.id,
+        skill_definition_id=invocation.skill_definition_id,
+        skill_version_id=invocation.skill_version_id,
+        compile_artifact_id=invocation.compile_artifact_id,
+        status="waiting_input",
+        runtime_phase="waiting_input",
+        started_at=origin,
+    )
+    session.add(run)
+    session.flush()
+    scenario_run = SkillTestScenarioRun(
+        skill_definition_id=invocation.skill_definition_id,
+        scenario_id="scenario-timeline-driver",
+        invocation_id=invocation.id,
+        run_id=run.id,
+        status="waiting_input",
+        driver_status="waiting_time",
+        timeline={
+            "duration_ms": max(event_times_ms, default=0) + 1_000,
+            "events": [
+                {
+                    "id": f"input-{index}",
+                    "lane_id": "input.text",
+                    "at_ms": at_ms,
+                    "event_kind": "terminal.text.input.v1",
+                    "mime_type": "text/plain",
+                    "payload_inline": f"input {index}",
+                }
+                for index, at_ms in enumerate(event_times_ms, start=1)
+            ],
+        },
+        time_origin=origin,
+        started_at=origin,
+        result_summary={"status": "waiting_input"},
+    )
+    session.add(scenario_run)
+    session.flush()
+    job = RuntimeJob(
+        job_type="skill_test_timeline_driver",
+        status="pending",
+        payload={"scenario_run_id": scenario_run.id},
+        run_id=run.id,
+        dedupe_key=f"job:skill-test-timeline-driver:{scenario_run.id}",
+        available_at=origin,
+        max_attempts=max_attempts,
+    )
+    session.add(job)
+    session.commit()
+    return {"job_id": job.id, "scenario_run_id": scenario_run.id, "run_id": run.id}
+
+
+def _timeline_driver_service(settings: Settings) -> SkillTestService:
+    return SkillTestService(
+        settings=settings,
+        inference_gateway=object(),  # type: ignore[arg-type]
+        object_store=object(),  # type: ignore[arg-type]
+        agent_harness_service=object(),  # type: ignore[arg-type]
+    )
+
+
+def test_cleanup_stuck_timeline_drivers_paginates_and_filters_candidates(monkeypatch) -> None:
+    jobs_by_page = {
+        ("pending", 0): [
+            {
+                "id": "job-open",
+                "status": "pending",
+                "attempt_no": 3,
+                "max_attempts": 3,
+                "payload": {"scenario_run_id": "scenario-open"},
+            },
+            {
+                "id": "job-under-budget",
+                "status": "pending",
+                "attempt_no": 2,
+                "max_attempts": 3,
+                "payload": {"scenario_run_id": "scenario-unread"},
+            },
+        ],
+        ("pending", 2): [
+            {
+                "id": "job-terminal-scenario",
+                "status": "pending",
+                "attempt_no": 4,
+                "max_attempts": 3,
+                "payload": {"scenario_run_id": "scenario-terminal"},
+            }
+        ],
+        ("retryable_failed", 0): [
+            {
+                "id": "job-terminal-driver",
+                "status": "retryable_failed",
+                "attempt_no": 3,
+                "max_attempts": 3,
+                "payload": {"scenario_run_id": "scenario-driver-terminal"},
+            }
+        ],
+    }
+    scenario_runs = {
+        "scenario-open": {
+            "id": "scenario-open",
+            "status": "running",
+            "driver_status": "waiting_time",
+            "driver_cursor": 7,
+            "run_id": "run-open",
+            "started_at": "2026-07-22T17:20:00Z",
+        },
+        "scenario-terminal": {
+            "id": "scenario-terminal",
+            "status": "cancelled",
+            "driver_status": "cancelled",
+        },
+        "scenario-driver-terminal": {
+            "id": "scenario-driver-terminal",
+            "status": "running",
+            "driver_status": "completed",
+        },
+    }
+    list_calls: list[tuple[str, int]] = []
+
+    def request_json(_base_url, path, **_kwargs):
+        if path.startswith("runtime/jobs?"):
+            query = parse_qs(urlsplit(path).query)
+            key = (query["status"][0], int(query["offset"][0]))
+            list_calls.append(key)
+            return jobs_by_page.get(key, [])
+        scenario_run_id = path.rsplit("/", 1)[-1]
+        return scenario_runs[scenario_run_id]
+
+    monkeypatch.setattr(cleanup_drivers, "request_json", request_json)
+    candidates = cleanup_drivers.list_exhausted_driver_candidates("http://psop/api/v1", page_size=2)
+
+    assert list_calls == [("pending", 0), ("pending", 2), ("retryable_failed", 0)]
+    assert candidates == [
+        {
+            "job_id": "job-open",
+            "job_status": "pending",
+            "attempt_no": 3,
+            "max_attempts": 3,
+            "available_at": None,
+            "job_created_at": None,
+            "job_updated_at": None,
+            "scenario_run_id": "scenario-open",
+            "scenario_status": "running",
+            "driver_status": "waiting_time",
+            "driver_cursor": 7,
+            "runtime_run_id": "run-open",
+            "time_origin": None,
+            "started_at": "2026-07-22T17:20:00Z",
+        }
+    ]
+
+
+def test_cleanup_stuck_timeline_drivers_dry_run_and_apply_failure(monkeypatch, capsys) -> None:
+    candidates = [{"job_id": "job-1", "scenario_run_id": "scenario-1"}]
+    monkeypatch.setattr(cleanup_drivers, "list_exhausted_driver_candidates", lambda *_args, **_kwargs: candidates)
+    cancel_calls: list[tuple[list[dict], str]] = []
+
+    def cancel(_base_url, selected, *, reason, timeout):
+        cancel_calls.append((selected, reason))
+        if not selected:
+            return [], []
+        return [], [{"job_id": "job-1", "scenario_run_id": "scenario-1", "error": "HTTP 500"}]
+
+    monkeypatch.setattr(cleanup_drivers, "cancel_candidates", cancel)
+    assert cleanup_drivers.main([]) == 0
+    assert cancel_calls == []
+    dry_run_output = capsys.readouterr().out
+    assert '"mode": "dry-run"' in dry_run_output
+
+    assert cleanup_drivers.main(["--apply", "--reason", "operator cleanup"]) == 1
+    assert cancel_calls == [(candidates, "operator cleanup")]
+    apply_output = capsys.readouterr().out
+    assert '"failed_count": 1' in apply_output
+
+    monkeypatch.setattr(cleanup_drivers, "list_exhausted_driver_candidates", lambda *_args, **_kwargs: [])
+    assert cleanup_drivers.main(["--apply"]) == 0
 
 
 def _seed_exhausted_domain_jobs(session, *, status: str = "running") -> dict[str, str]:
@@ -315,6 +516,185 @@ def test_non_runtime_session_fence_rejects_lost_health_before_commit(job_store) 
 
     with manager.session() as session:
         assert session.get(RuntimeJob, lease.job_id).payload == {"value": "before"}
+
+
+def test_timeline_driver_waiting_reschedule_commits_inside_lease_fence(job_store) -> None:
+    settings, manager = job_store
+    origin = now_utc()
+    with manager.session() as session:
+        ids = _seed_timeline_driver_job(session, event_times_ms=(60_000,), time_origin=origin)
+        lease = JobRepository().claim_next_job(
+            session,
+            job_type="skill_test_timeline_driver",
+            lease_seconds=60,
+            worker_name="timeline-owner-1",
+        )
+        assert lease is not None
+        claimed_started_at = session.get(RuntimeJob, ids["job_id"]).started_at
+
+    with manager.session() as session:
+        listener = _install_session_lease_fence(session, lease)
+        try:
+            response = _timeline_driver_service(settings).process_driver_job(session, lease.job_id)
+        finally:
+            sqlalchemy_event.remove(session, "after_begin", listener.after_begin)
+            sqlalchemy_event.remove(session, "before_commit", listener.before_commit)
+            session.info.pop("runtime_job_external_lease_fence", None)
+
+    assert response.driver_status == "waiting_time"
+    with manager.session() as session:
+        stored = session.get(RuntimeJob, ids["job_id"])
+        assert stored.status == "pending"
+        assert stored.attempt_no == 0
+        assert stored.worker_name == ""
+        assert stored.lease_until is None
+        assert stored.finished_at is None
+        assert stored.last_error == ""
+        assert stored.started_at == claimed_started_at
+        available_at = stored.available_at
+        if available_at.tzinfo is None:
+            available_at = available_at.replace(tzinfo=timezone.utc)
+        assert available_at == origin + timedelta(seconds=60)
+
+
+def test_timeline_driver_can_wake_more_times_than_max_attempts(job_store, monkeypatch) -> None:
+    settings, manager = job_store
+    clock = [now_utc()]
+    origin = clock[0]
+    monkeypatch.setattr(job_repository_module, "now_utc", lambda: clock[0])
+    monkeypatch.setattr(skill_test_service_module, "now_utc", lambda: clock[0])
+    event_times_ms = (0, 10_000, 20_000, 30_000)
+    with manager.session() as session:
+        ids = _seed_timeline_driver_job(
+            session,
+            event_times_ms=event_times_ms,
+            time_origin=origin,
+            max_attempts=3,
+        )
+
+    service = _timeline_driver_service(settings)
+    sent_event_ids: list[str] = []
+
+    def append_event(_session, _scenario_run, event, *, scheduled_at):
+        sent_event_ids.append(event["id"])
+        return SimpleNamespace(event_id=f"terminal-{event['id']}", seq_no=len(sent_event_ids))
+
+    def complete_evaluation(session, scenario_run_id):
+        scenario_run = session.get(SkillTestScenarioRun, scenario_run_id)
+        scenario_run.status = "passed"
+        scenario_run.result_summary = {"status": "passed"}
+        return service._build_run_response(scenario_run)
+
+    monkeypatch.setattr(service, "_append_timeline_input_event", append_event)
+    monkeypatch.setattr(
+        service,
+        "_process_runtime_after_timeline_batch",
+        lambda session, scenario_run: session.get(Run, scenario_run.run_id),
+    )
+    monkeypatch.setattr(service, "evaluate_run", complete_evaluation)
+
+    first_started_at = None
+    for index, at_ms in enumerate(event_times_ms, start=1):
+        clock[0] = origin + timedelta(milliseconds=at_ms)
+        with manager.session() as session:
+            lease = JobRepository().claim_next_job(
+                session,
+                job_type="skill_test_timeline_driver",
+                lease_seconds=60,
+                worker_name=f"timeline-owner-{index}",
+            )
+            assert lease is not None
+            assert lease.attempt_no == 1
+            first_started_at = first_started_at or session.get(RuntimeJob, ids["job_id"]).started_at
+
+        with manager.session() as session:
+            listener = _install_session_lease_fence(session, lease)
+            try:
+                service.process_driver_job(session, lease.job_id)
+            finally:
+                sqlalchemy_event.remove(session, "after_begin", listener.after_begin)
+                sqlalchemy_event.remove(session, "before_commit", listener.before_commit)
+                session.info.pop("runtime_job_external_lease_fence", None)
+
+        with manager.session() as session:
+            stored = session.get(RuntimeJob, ids["job_id"])
+            if index < len(event_times_ms):
+                assert stored.status == "pending"
+                assert stored.attempt_no == 0
+            else:
+                assert stored.status == "succeeded"
+
+    with manager.session() as session:
+        scenario_run = session.get(SkillTestScenarioRun, ids["scenario_run_id"])
+        stored = session.get(RuntimeJob, ids["job_id"])
+        assert scenario_run.driver_cursor == len(event_times_ms)
+        assert scenario_run.driver_status == "completed"
+        assert stored.started_at == first_started_at
+        assert stored.worker_name == ""
+        assert stored.lease_until is None
+        assert stored.finished_at is not None
+    assert sent_event_ids == [f"input-{index}" for index in range(1, 5)]
+
+
+def test_timeline_driver_failures_start_fresh_after_successful_wait(job_store) -> None:
+    settings, manager = job_store
+    with manager.session() as session:
+        ids = _seed_timeline_driver_job(session, event_times_ms=(60_000,), max_attempts=3)
+        lease = JobRepository().claim_next_job(
+            session,
+            job_type="skill_test_timeline_driver",
+            lease_seconds=60,
+            worker_name="timeline-success-owner",
+        )
+        assert lease is not None
+
+    with manager.session() as session:
+        listener = _install_session_lease_fence(session, lease)
+        try:
+            _timeline_driver_service(settings).process_driver_job(session, lease.job_id)
+        finally:
+            sqlalchemy_event.remove(session, "after_begin", listener.after_begin)
+            sqlalchemy_event.remove(session, "before_commit", listener.before_commit)
+            session.info.pop("runtime_job_external_lease_fence", None)
+
+    worker = RuntimeJobWorker(
+        settings=settings,
+        database_manager=manager,
+        gitlab_gateway=object(),  # type: ignore[arg-type]
+        inference_gateway=object(),  # type: ignore[arg-type]
+        asr_gateway=object(),  # type: ignore[arg-type]
+        object_store=object(),  # type: ignore[arg-type]
+        agent_harness_service=object(),  # type: ignore[arg-type]
+        job_types=("skill_test_timeline_driver",),
+    )
+    for attempt in range(1, 4):
+        with manager.session() as session:
+            stored = session.get(RuntimeJob, ids["job_id"])
+            stored.available_at = now_utc() - timedelta(seconds=1)
+            session.commit()
+            failed_lease = JobRepository().claim_next_job(
+                session,
+                job_type="skill_test_timeline_driver",
+                lease_seconds=60,
+                worker_name=f"timeline-failure-owner-{attempt}",
+            )
+            assert failed_lease is not None
+            assert failed_lease.attempt_no == attempt
+        assert worker._record_unhandled_failure(failed_lease, f"injected failure {attempt}") is True
+
+        with manager.session() as session:
+            stored = session.get(RuntimeJob, ids["job_id"])
+            assert stored.status == ("retryable_failed" if attempt < 3 else "failed")
+
+    with manager.session() as session:
+        scenario_run = session.get(SkillTestScenarioRun, ids["scenario_run_id"])
+        stored = session.get(RuntimeJob, ids["job_id"])
+        assert stored.attempt_no == 3
+        assert stored.last_error == "injected failure 3"
+        assert scenario_run.status == "failed"
+        assert scenario_run.driver_status == "failed"
+        assert scenario_run.result_summary["reason"] == "timeline_driver_job_attempts_exhausted"
+        assert scenario_run.driver_events == []
 
 
 def test_claim_skips_jobs_that_exhausted_attempt_budget(job_store) -> None:

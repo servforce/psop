@@ -844,6 +844,13 @@ payload.run_id = run_id
 
 worker 是 Runtime 推进唯一生产路径。测试可以显式调用 `process_run()`，但 router、terminal event API 和 invocation API 不直接推进 Runtime。
 
+`skill_test_timeline_driver` 的正常定时唤醒不属于失败重试。Driver 成功推进到下一个
+时间点时，必须在当前 lease-fenced 事务中原子将 job 重排为 `pending`，清空
+owner / lease / error 并把 `attempt_no` 重置为 `0`。因此 `attempt_no` 表示自上次成功
+进展后的连续失败次数，而不是时间轴总调度次数。释放 owner 的最终提交完成后，
+handler 不得继续使用同一个被 fence 保护的 Session 开启新事务。真实执行失败和
+lease 过期仍保留 `attempt_no`，并按通用退避与耗尽规则处理。
+
 API 与 worker 为独立进程。worker supervisor 创建三个隔离 pool：
 
 | Pool | Job types | 默认并发 |
