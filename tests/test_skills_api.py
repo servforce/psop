@@ -1093,7 +1093,8 @@ def test_terminal_upload_cancellation_waits_for_transfer_and_removes_uuid_object
 def test_terminal_upload_enforces_per_file_limit_while_hashing_stream() -> None:
     object_store = FakeObjectStore()
     ingest = _no_db_ingest(object_store)
-    ingest.settings.terminal_event_max_file_bytes = 4
+    assert ingest.settings.terminal_event_max_image_bytes == 5 * 1024 * 1024
+    ingest.settings.terminal_event_max_image_bytes = 4
 
     with pytest.raises(PayloadTooLargeError):
         asyncio.run(
@@ -1106,6 +1107,24 @@ def test_terminal_upload_enforces_per_file_limit_while_hashing_stream() -> None:
         )
 
     assert object_store.uploads == []
+
+
+def test_terminal_upload_uses_separate_image_and_other_media_limits() -> None:
+    object_store = FakeObjectStore()
+    ingest = _no_db_ingest(object_store)
+    ingest.settings.terminal_event_max_image_bytes = 4
+    ingest.settings.terminal_event_max_file_bytes = 6
+
+    inspected = asyncio.run(
+        ingest._inspect_uploads(
+            payload=AppendTerminalEventRequest(direction="input"),
+            uploads=[("files", _upload_file("audio.wav", b"12345", "audio/wav"))],
+        )
+    )
+
+    assert len(inspected) == 1
+    assert inspected[0].kind == "audio"
+    assert inspected[0].size_bytes == 5
 
 
 def test_terminal_upload_enforces_total_limit_before_s3_upload() -> None:
