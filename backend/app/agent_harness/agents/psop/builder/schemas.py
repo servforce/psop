@@ -19,6 +19,12 @@ REQUIRED_BUILDER_FILES = [
 FORBIDDEN_BUILDER_FILES = {"skill.yaml"}
 MAX_BUILDER_REFERENCE_ASSETS = 12
 BUILDER_CANDIDATE_SCHEMA_VERSION = "2.0"
+PLATFORM_BUILDER_FIELDS = {
+    "materialized_reference_image_count",
+    "materialized_reference_images",
+    "linked_reference_images",
+    "revision_provenance",
+}
 BUILDER_ID_PATTERN = r"^[a-z][a-z0-9_]{1,63}$"
 ALLOWED_EVIDENCE_SOURCE_TYPES = {
     "user_description",
@@ -220,6 +226,185 @@ class BuilderCandidate(BaseModel):
     expected_evidence_requirements: list[ExpectedEvidenceRequirement]
 
 
+def parse_builder_candidate(payload: dict[str, Any]) -> BuilderCandidate:
+    return BuilderCandidate.model_validate({key: value for key, value in payload.items() if key not in PLATFORM_BUILDER_FIELDS})
+
+
+def reconcile_builder_candidate(
+    payload: dict[str, Any],
+    *,
+    baseline_payload: dict[str, Any],
+    baseline_generation_id: str,
+    baseline_commit_sha: str,
+    baseline_candidate_hash: str,
+) -> tuple[dict[str, Any], dict[str, Any], set[tuple[str, str, str, str, str]]]:
+    """Mechanically inherit provenance for targets unchanged from an exact-commit baseline."""
+    try:
+        candidate = parse_builder_candidate(payload)
+        baseline = parse_builder_candidate(baseline_payload)
+    except ValidationError:
+        return payload, {}, set()
+
+    candidate_stage_bodies = _workflow_stage_bodies(candidate.files.get("SKILL.md", ""))
+    baseline_stage_bodies = _workflow_stage_bodies(baseline.files.get("SKILL.md", ""))
+    target_specs = (
+        (
+            "workflow_stage",
+            candidate.workflow_step_candidates,
+            baseline.workflow_step_candidates,
+            "stage_id",
+            lambda item, bodies: {"title": item.title, "body": bodies.get(item.stage_id, "")},
+        ),
+        (
+            "safety_constraint",
+            candidate.safety_constraints,
+            baseline.safety_constraints,
+            "constraint_id",
+            lambda item, _bodies: item.model_dump(mode="json", exclude={"constraint_id"}),
+        ),
+        (
+            "expected_evidence",
+            candidate.expected_evidence_requirements,
+            baseline.expected_evidence_requirements,
+            "requirement_id",
+            lambda item, _bodies: item.model_dump(mode="json", exclude={"requirement_id"}),
+        ),
+    )
+    inherited: dict[str, list[str]] = {item[0]: [] for item in target_specs}
+    changed: dict[str, list[str]] = {item[0]: [] for item in target_specs}
+    added: dict[str, list[str]] = {item[0]: [] for item in target_specs}
+    removed: dict[str, list[str]] = {item[0]: [] for item in target_specs}
+    rename_diagnostics: list[dict[str, Any]] = []
+
+    for target_type, current_items, baseline_items, id_field, business_value in target_specs:
+        current_by_id = {getattr(item, id_field): item for item in current_items}
+        baseline_by_id = {getattr(item, id_field): item for item in baseline_items}
+        current_bodies = candidate_stage_bodies if target_type == "workflow_stage" else {}
+        old_bodies = baseline_stage_bodies if target_type == "workflow_stage" else {}
+        for target_id, item in current_by_id.items():
+            old = baseline_by_id.get(target_id)
+            if old is None:
+                added[target_type].append(target_id)
+                renamed_from = next(
+                    (
+                        old_id
+                        for old_id, old_item in baseline_by_id.items()
+                        if old_id not in current_by_id
+                        and business_value(item, current_bodies) == business_value(old_item, old_bodies)
+                    ),
+                    None,
+                )
+                if renamed_from:
+                    rename_diagnostics.append(
+                        _diagnostic(
+                            f"{_target_collection_name(target_type)}.{target_id}",
+                            "stable_id_changed",
+                            f"未变化的 {target_type} 不得重命名稳定 ID；请恢复原 ID：{renamed_from}",
+                            example=renamed_from,
+                        )
+                    )
+            elif business_value(item, current_bodies) == business_value(old, old_bodies):
+                inherited[target_type].append(target_id)
+            else:
+                changed[target_type].append(target_id)
+        removed[target_type].extend(sorted(set(baseline_by_id) - set(current_by_id)))
+
+    if rename_diagnostics:
+        diagnostics = _sort_diagnostics(rename_diagnostics)
+        raise BuilderCandidateValidationError(_diagnostics_message(diagnostics), diagnostics)
+
+    inherited_targets = {
+        (target_type, target_id)
+        for target_type, target_ids in inherited.items()
+        for target_id in target_ids
+    }
+    candidate_payload = candidate.model_dump(mode="json")
+    current_evidence_targets = {
+        (target.target_type, target.target_id)
+        for item in candidate.evidence_map
+        for target in item.used_in
+    }
+    missing_evidence_targets = inherited_targets - current_evidence_targets
+    inherited_evidence_count = 0
+    for item in baseline.evidence_map:
+        selected_targets = [
+            target.model_dump(mode="json")
+            for target in item.used_in
+            if (target.target_type, target.target_id) in missing_evidence_targets
+        ]
+        if not selected_targets:
+            continue
+        inherited_item = item.model_dump(mode="json")
+        inherited_item["used_in"] = selected_targets
+        candidate_payload["evidence_map"].append(inherited_item)
+        inherited_evidence_count += len(selected_targets)
+
+    baseline_standard_targets = {
+        (item.standard_ref, item.clause_ref, item.usage, target.target_type, target.target_id)
+        for item in baseline.industry_standard_usage
+        for target in item.used_in
+        if (target.target_type, target.target_id) in inherited_targets
+    }
+    current_standard_targets = {
+        (target.target_type, target.target_id)
+        for item in candidate.industry_standard_usage
+        for target in item.used_in
+    }
+    missing_standard_targets = inherited_targets - current_standard_targets
+    inherited_standard_count = 0
+    for item in baseline.industry_standard_usage:
+        selected_targets = [
+            target.model_dump(mode="json")
+            for target in item.used_in
+            if (target.target_type, target.target_id) in missing_standard_targets
+        ]
+        if not selected_targets:
+            continue
+        inherited_item = item.model_dump(mode="json")
+        inherited_item["used_in"] = selected_targets
+        candidate_payload["industry_standard_usage"].append(inherited_item)
+        inherited_standard_count += len(selected_targets)
+
+    revision_provenance = {
+        "baseline_generation_id": baseline_generation_id,
+        "baseline_commit_sha": baseline_commit_sha,
+        "baseline_candidate_hash": baseline_candidate_hash,
+        "inherited_target_ids": {key: sorted(value) for key, value in inherited.items()},
+        "changed_target_ids": {key: sorted(value) for key, value in changed.items()},
+        "added_target_ids": {key: sorted(value) for key, value in added.items()},
+        "removed_target_ids": {key: sorted(value) for key, value in removed.items()},
+        "inherited_evidence_count": inherited_evidence_count,
+        "inherited_industry_standard_count": inherited_standard_count,
+    }
+    return candidate_payload, revision_provenance, baseline_standard_targets
+
+
+def _target_collection_name(target_type: str) -> str:
+    return {
+        "workflow_stage": "workflow_step_candidates",
+        "safety_constraint": "safety_constraints",
+        "expected_evidence": "expected_evidence_requirements",
+    }[target_type]
+
+
+def _workflow_stage_bodies(skill_md: str) -> dict[str, str]:
+    normalized = skill_md.replace("\r\n", "\n").replace("\r", "\n")
+    headings = list(re.finditer(r"^(?P<marks>#{1,6})\s+.*$", normalized, re.MULTILINE))
+    bodies: dict[str, str] = {}
+    for index, heading in enumerate(headings):
+        stage_match = WORKFLOW_HEADING_PATTERN.fullmatch(heading.group(0))
+        if stage_match is None:
+            continue
+        level = len(heading.group("marks"))
+        end = len(normalized)
+        for following in headings[index + 1 :]:
+            if len(following.group("marks")) <= level:
+                end = following.start()
+                break
+        bodies[stage_match.group("stage_id")] = normalized[heading.end() : end].strip()
+    return bodies
+
+
 def normalize_builder_path(value: str) -> str:
     normalized = value.strip().replace("\\", "/").lstrip("/")
     while "//" in normalized:
@@ -236,15 +421,10 @@ def validate_builder_candidate(
     candidate_reference_assets: list[dict[str, Any]] | None = None,
     standard_search_results: list[dict[str, Any]] | None = None,
     standard_search_status: str | None = None,
+    inherited_industry_standard_targets: set[tuple[str, str, str, str, str]] | None = None,
 ) -> BuilderCandidate:
     try:
-        candidate = BuilderCandidate.model_validate(
-            {
-                key: value
-                for key, value in payload.items()
-                if key not in {"materialized_reference_image_count", "materialized_reference_images", "linked_reference_images"}
-            }
-        )
+        candidate = parse_builder_candidate(payload)
     except ValidationError as exc:
         diagnostics = _sort_diagnostics([_pydantic_diagnostic(error) for error in exc.errors()])
         raise BuilderCandidateValidationError(_diagnostics_message(diagnostics), diagnostics) from exc
@@ -259,9 +439,16 @@ def validate_builder_candidate(
             candidate.industry_standard_usage,
             standard_search_results or [],
             standard_search_status,
+            inherited_industry_standard_targets or set(),
         )
     )
-    diagnostics.extend(_validate_standard_search_degradation(candidate, standard_search_status))
+    diagnostics.extend(
+        _validate_standard_search_degradation(
+            candidate,
+            standard_search_status,
+            inherited_industry_standard_targets or set(),
+        )
+    )
     diagnostics.extend(_validate_required_collections(candidate))
     diagnostics.extend(_validate_missing_questions(candidate.missing_questions, candidate.review_notes))
     diagnostics.extend(_validate_identifiers_and_references(candidate))
@@ -361,6 +548,7 @@ def _validate_industry_standard_usage(
     items: list[IndustryStandardUsageItem],
     search_results: list[dict[str, Any]],
     search_status: str | None,
+    inherited_targets: set[tuple[str, str, str, str, str]],
 ) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
     known_pairs = {
@@ -369,6 +557,8 @@ def _validate_industry_standard_usage(
         if str(item.get("citation_status") or "complete") != "incomplete"
     }
     for index, item in enumerate(items):
+        if _industry_usage_is_inherited(item, inherited_targets):
+            continue
         if item.usage == "reference_only" and search_status in {None, "success"}:
             continue
         missing = [
@@ -404,11 +594,17 @@ def _validate_industry_standard_usage(
 def _validate_standard_search_degradation(
     candidate: BuilderCandidate,
     search_status: str | None,
+    inherited_targets: set[tuple[str, str, str, str, str]],
 ) -> list[dict[str, Any]]:
     if search_status not in {"timeout", "service_unavailable", "internal_error"}:
         return []
     diagnostics: list[dict[str, Any]] = []
-    if candidate.industry_standard_usage:
+    current_usage = [
+        item
+        for item in candidate.industry_standard_usage
+        if not _industry_usage_is_inherited(item, inherited_targets)
+    ]
+    if current_usage:
         diagnostics.append(
             _diagnostic(
                 "industry_standard_usage",
@@ -427,6 +623,16 @@ def _validate_standard_search_degradation(
             )
         )
     return diagnostics
+
+
+def _industry_usage_is_inherited(
+    item: IndustryStandardUsageItem,
+    inherited_targets: set[tuple[str, str, str, str, str]],
+) -> bool:
+    return bool(item.used_in) and all(
+        (item.standard_ref, item.clause_ref, item.usage, target.target_type, target.target_id) in inherited_targets
+        for target in item.used_in
+    )
 
 
 def _validate_required_collections(candidate: BuilderCandidate) -> list[dict[str, Any]]:

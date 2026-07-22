@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,13 +11,21 @@ import pytest
 from app.agent_harness.events import AgentEventWriter
 from app.agent_harness.errors import AgentBudgetExceededError
 from app.agent_harness.middlewares.tool_calls import ToolCallMiddleware
-from app.agent_harness.agents.psop.builder.schemas import BuilderCandidateValidationError, validate_builder_candidate
+from app.agent_harness.agents.psop.builder.schemas import (
+    BuilderCandidateValidationError,
+    reconcile_builder_candidate,
+    validate_builder_candidate,
+)
 from app.agent_harness.agents.registry import default_agent_registry
 from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
 from app.agent_harness.schemas import AgentEvent, AgentInvocation, AgentResult
 from app.agent_harness.service import AgentHarnessService
 from app.agent_harness.skills.loader import SkillLoader
-from app.agent_harness.tools.builtin.builder import BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY, register_builder_tools
+from app.agent_harness.tools.builtin.builder import (
+    BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY,
+    BUILDER_REVISION_BASELINE_CONTEXT_KEY,
+    register_builder_tools,
+)
 from app.agent_harness.tools.builtin.standard import register_standard_tools
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
 from app.agent_harness.memory.file_store import FileMemoryStore
@@ -26,6 +35,9 @@ from app.domain.skills.service import SkillsService
 
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "psop_builder" / "minimal.json"
+REVISION_FIXTURE_PATH = (
+    Path(__file__).resolve().parent / "fixtures" / "psop_builder" / "skill_54bcfe2c_revision.json"
+)
 
 
 def test_psop_builder_definition_and_skills_load() -> None:
@@ -192,6 +204,49 @@ def test_submit_candidate_materializes_reference_images_at_usage_site(tmp_path) 
         < materialized_skill.index(f"]({reference_path})")
         < materialized_skill.index("### [stage_02_pressure]")
     )
+
+
+def test_submit_candidate_writes_platform_revision_provenance(tmp_path) -> None:
+    settings = Settings(database_url="sqlite+pysqlite:///:memory:", agent_harness_sandbox_root=str(tmp_path))
+    sandbox = LocalAgentSandboxProvider(settings).acquire(input_payload={})
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    baseline = _builder_candidate_payload(reference_path)
+    candidate = copy.deepcopy(baseline)
+    for evidence in candidate["evidence_map"]:
+        evidence["used_in"] = [
+            target for target in evidence["used_in"] if target["target_type"] != "safety_constraint"
+        ]
+    registry = ToolRegistry()
+    register_builder_tools(registry)
+    context = ToolExecutionContext(
+        sandbox=sandbox,
+        memory_store=FileMemoryStore(sandbox.memory_path),
+        memory_scope="psop.builder",
+        event_writer=AgentEventWriter(sandbox.events_path),
+        invocation_context={
+            "candidate_reference_assets": [{"id": "asset-1", "reference_path": reference_path}],
+            BUILDER_REVISION_BASELINE_CONTEXT_KEY: {
+                "inheritance_enabled": True,
+                "generation_id": "generation-baseline",
+                "commit_sha": "commit-baseline",
+                "candidate_hash": "candidate-hash",
+                "candidate": baseline,
+            },
+        },
+    )
+
+    result = registry.execute("psop.builder.submit_candidate", candidate, context)
+    artifact = json.loads((sandbox.outputs_path / "builder-result.json").read_text(encoding="utf-8"))
+
+    assert result["status"] == "success"
+    assert artifact["revision_provenance"]["baseline_generation_id"] == "generation-baseline"
+    assert artifact["revision_provenance"]["inherited_evidence_count"] == 1
+
+    forged = copy.deepcopy(candidate)
+    forged["revision_provenance"] = {"baseline_generation_id": "forged"}
+    rejected = registry.execute("psop.builder.submit_candidate", forged, context)
+    assert rejected["status"] == "error"
+    assert rejected["diagnostics"][0]["code"] == "platform_field_forbidden"
 
 
 def test_submit_candidate_invalid_payload_returns_auditable_repair_hint(tmp_path) -> None:
@@ -913,3 +968,215 @@ def _builder_candidate_payload(reference_path: str) -> dict:
             }
         ],
     }
+
+
+def test_revision_reconciliation_inherits_unchanged_safety_evidence_during_standard_timeout() -> None:
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    baseline = _builder_candidate_payload(reference_path)
+    baseline["industry_standard_usage"] = [
+        {
+            "standard_ref": "GB 1",
+            "clause_ref": "1.1",
+            "usage": "mandatory",
+            "used_in": [{"target_type": "safety_constraint", "target_id": "safety_01_entry"}],
+        }
+    ]
+    candidate = copy.deepcopy(baseline)
+    candidate["review_notes"].append("标准检索不可用，未引用行业标准。")
+    candidate["industry_standard_usage"] = []
+    for evidence in candidate["evidence_map"]:
+        evidence["used_in"] = [
+            target for target in evidence["used_in"] if target["target_type"] != "safety_constraint"
+        ]
+
+    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+        candidate,
+        baseline_payload=baseline,
+        baseline_generation_id="generation-baseline",
+        baseline_commit_sha="commit-baseline",
+        baseline_candidate_hash="candidate-hash",
+    )
+    validated = validate_builder_candidate(
+        reconciled,
+        candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
+        standard_search_status="timeout",
+        inherited_industry_standard_targets=inherited_standard_targets,
+    )
+
+    assert validated.safety_constraints[0].constraint_id == "safety_01_entry"
+    assert provenance["inherited_target_ids"]["safety_constraint"] == ["safety_01_entry"]
+    assert provenance["inherited_evidence_count"] == 1
+    assert provenance["inherited_industry_standard_count"] == 1
+
+
+def test_revision_reconciliation_does_not_inherit_changed_safety_constraint() -> None:
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    baseline = _builder_candidate_payload(reference_path)
+    candidate = copy.deepcopy(baseline)
+    candidate["review_notes"].append("标准检索不可用，未引用行业标准。")
+    candidate["safety_constraints"][0]["constraint"] = "PPE 不完整时记录风险后继续。"
+    for evidence in candidate["evidence_map"]:
+        evidence["used_in"] = [
+            target for target in evidence["used_in"] if target["target_type"] != "safety_constraint"
+        ]
+
+    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+        candidate,
+        baseline_payload=baseline,
+        baseline_generation_id="generation-baseline",
+        baseline_commit_sha="commit-baseline",
+        baseline_candidate_hash="candidate-hash",
+    )
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(
+            reconciled,
+            candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
+            inherited_industry_standard_targets=inherited_standard_targets,
+        )
+    assert provenance["changed_target_ids"]["safety_constraint"] == ["safety_01_entry"]
+    assert any(item["path"] == "safety_constraints.0" for item in exc_info.value.diagnostics)
+
+
+def test_revision_reconciliation_only_revalidates_changed_workflow_body() -> None:
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    baseline = _builder_candidate_payload(reference_path)
+    candidate = copy.deepcopy(baseline)
+    candidate["files"]["SKILL.md"] = candidate["files"]["SKILL.md"].replace(
+        f"参考 `{reference_path}` 判断入口状态。",
+        f"参考 `{reference_path}` 判断入口状态，并记录本轮新增读数。",
+    )
+    for evidence in candidate["evidence_map"]:
+        evidence["used_in"] = [
+            target
+            for target in evidence["used_in"]
+            if not (target["target_type"] == "workflow_stage" and target["target_id"] == "stage_01_entry")
+        ]
+
+    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+        candidate,
+        baseline_payload=baseline,
+        baseline_generation_id="generation-baseline",
+        baseline_commit_sha="commit-baseline",
+        baseline_candidate_hash="candidate-hash",
+    )
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(
+            reconciled,
+            candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
+            inherited_industry_standard_targets=inherited_standard_targets,
+        )
+    assert provenance["changed_target_ids"]["workflow_stage"] == ["stage_01_entry"]
+    assert provenance["inherited_target_ids"]["workflow_stage"] == ["stage_02_pressure"]
+    assert any(item["path"] == "workflow_step_candidates.0" for item in exc_info.value.diagnostics)
+
+
+def test_revision_reconciliation_rejects_stable_id_rename() -> None:
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    baseline = _builder_candidate_payload(reference_path)
+    candidate = copy.deepcopy(baseline)
+    candidate["safety_constraints"][0]["constraint_id"] = "safety_renamed_entry"
+    for evidence in candidate["evidence_map"]:
+        for target in evidence["used_in"]:
+            if target == {"target_type": "safety_constraint", "target_id": "safety_01_entry"}:
+                target["target_id"] = "safety_renamed_entry"
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        reconcile_builder_candidate(
+            candidate,
+            baseline_payload=baseline,
+            baseline_generation_id="generation-baseline",
+            baseline_commit_sha="commit-baseline",
+            baseline_candidate_hash="candidate-hash",
+        )
+
+    diagnostic = next(item for item in exc_info.value.diagnostics if item["code"] == "stable_id_changed")
+    assert diagnostic["example"] == "safety_01_entry"
+
+
+def test_skill_54bcfe2c_revision_keeps_four_safety_constraints_and_updates_wait_evidence() -> None:
+    fixture = json.loads(REVISION_FIXTURE_PATH.read_text(encoding="utf-8"))
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    baseline = _builder_candidate_payload(reference_path)
+    baseline["safety_constraints"] = fixture["safety_constraints"]
+    baseline["evidence_map"][0]["used_in"] = [
+        target
+        for target in baseline["evidence_map"][0]["used_in"]
+        if target["target_type"] != "safety_constraint"
+    ] + [
+        {"target_type": "safety_constraint", "target_id": item["constraint_id"]}
+        for item in fixture["safety_constraints"]
+    ]
+    candidate = copy.deepcopy(baseline)
+    candidate["review_notes"].append("标准检索不可用，未引用行业标准。")
+    candidate["expected_evidence_requirements"][0]["completion_criteria"] = (
+        "图片清楚显示安装状态即通过，无需二次文字确认或额外特写。"
+    )
+    for evidence in candidate["evidence_map"]:
+        evidence["used_in"] = [
+            target
+            for target in evidence["used_in"]
+            if target["target_type"] not in {"safety_constraint", "expected_evidence"}
+        ]
+    candidate["evidence_map"].append(
+        {
+            "claim": "清晰图片通过后无需二次文字确认或额外特写。",
+            "support_level": "confirmed_instruction",
+            "source_refs": [{"source_type": "user_description", "ref": fixture["revision_instruction"]}],
+            "used_in": [{"target_type": "expected_evidence", "target_id": "evidence_01_entry"}],
+        }
+    )
+
+    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+        candidate,
+        baseline_payload=baseline,
+        baseline_generation_id="generation-54bcfe2c",
+        baseline_commit_sha="commit-54bcfe2c",
+        baseline_candidate_hash="candidate-54bcfe2c",
+    )
+    validated = validate_builder_candidate(
+        reconciled,
+        candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
+        standard_search_status="timeout",
+        inherited_industry_standard_targets=inherited_standard_targets,
+    )
+
+    assert fixture["skill_id"] == "54bcfe2c-3aec-4db4-984f-bbc7084439b9"
+    assert [item.constraint_id for item in validated.safety_constraints] == [
+        "sc_no_live_work",
+        "sc_snug_fit_only",
+        "sc_esd_protection",
+        "sc_fault_stop",
+    ]
+    assert provenance["inherited_target_ids"]["safety_constraint"] == [
+        "sc_esd_protection",
+        "sc_fault_stop",
+        "sc_no_live_work",
+        "sc_snug_fit_only",
+    ]
+    assert provenance["changed_target_ids"]["expected_evidence"] == ["evidence_01_entry"]
+    assert provenance["inherited_evidence_count"] == 4
+
+
+def test_read_current_source_returns_revision_baseline_summary(tmp_path) -> None:
+    settings = Settings(database_url="sqlite+pysqlite:///:memory:", agent_harness_sandbox_root=str(tmp_path))
+    sandbox = LocalAgentSandboxProvider(settings).acquire(input_payload={})
+    registry = ToolRegistry()
+    register_builder_tools(registry)
+    context = ToolExecutionContext(
+        sandbox=sandbox,
+        memory_store=FileMemoryStore(sandbox.memory_path),
+        memory_scope="psop.builder",
+        event_writer=AgentEventWriter(sandbox.events_path),
+        invocation_input={"current_source": {"README.md": "# R", "SKILL.md": "# S"}, "skill": {}},
+        invocation_context={
+            BUILDER_REVISION_BASELINE_CONTEXT_KEY: {
+                "summary": {"status": "exact", "safety_constraint_ids": ["safety_01_entry"]}
+            }
+        },
+    )
+
+    result = registry.execute("psop.builder.read_current_source", {}, context)
+
+    assert result["revision_baseline"] == {"status": "exact", "safety_constraint_ids": ["safety_01_entry"]}

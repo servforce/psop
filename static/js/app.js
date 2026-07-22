@@ -548,7 +548,10 @@
         sseConnected: false,
         usingPolling: false,
         lastEventAt: "",
-        resultRefreshed: false
+        resultRefreshed: false,
+        intentPreview: null,
+        selectedIntentOption: "",
+        idempotencyKey: ""
       },
       builderAgentEventSource: null,
       builderAgentPollTimer: null,

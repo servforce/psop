@@ -10,9 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.agent_harness.tools.builtin.builder import BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY
+from app.agent_harness.agents.psop.builder.schemas import parse_builder_candidate
+from app.agent_harness.tools.builtin.builder import (
+    BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY,
+    BUILDER_REVISION_BASELINE_CONTEXT_KEY,
+)
 from app.agent_harness.schemas import AgentInvocation, AgentResult
 from app.agent_harness.service import AgentHarnessService, build_agent_harness_service
 from app.core.config import Settings
@@ -1057,10 +1062,12 @@ class SkillsService:
         definition = self._require_definition(session, skill_id)
         draft_version = self._require_draft_version(session, definition)
         head_sha = self.gitlab_gateway.get_branch_head(definition.gitlab_project_id, draft_version.source_ref)
+        baseline = self._builder_revision_baseline(session, definition.id, head_sha)
         return self._generation_intent_preview(
             skill_id=definition.id,
             source_commit_sha=head_sha,
             user_description=payload.user_description,
+            baseline_status=str(baseline["status"]),
         )
 
     def generate_skill_draft_from_raw_materials(
@@ -1071,6 +1078,14 @@ class SkillsService:
         payload: GenerateSkillDraftRequest,
     ) -> SkillRawMaterialGenerationResponse:
         definition = self._require_definition(session, skill_id)
+        dedupe_key = self._skill_generation_dedupe_key(definition.id, payload.idempotency_key)
+        if dedupe_key:
+            existing_job = self.job_repository.get_runtime_job_by_dedupe_key(session, dedupe_key)
+            if existing_job:
+                generation_id = str((existing_job.payload or {}).get("generation_id") or "")
+                existing_generation = self.repository.get_raw_material_generation(session, generation_id)
+                if existing_generation:
+                    return self._build_raw_material_generation_response(existing_generation)
         materials = self.repository.list_raw_materials(session, definition.id)
         material_ids = [material.id for material in materials]
         if not materials:
@@ -1091,11 +1106,13 @@ class SkillsService:
 
         draft_version = self._require_draft_version(session, definition)
         current_head = self.gitlab_gateway.get_branch_head(definition.gitlab_project_id, draft_version.source_ref)
+        baseline = self._builder_revision_baseline(session, definition.id, current_head)
         intent = self._resolve_generation_intent(
             skill_id=definition.id,
             source_commit_sha=current_head,
             user_description=payload.user_description,
             confirmation=payload.generation_intent,
+            baseline_status=str(baseline["status"]),
         )
 
         generation = SkillRawMaterialGeneration(
@@ -1108,6 +1125,12 @@ class SkillsService:
                 "agent_run_id": "",
                 "reference_files": [],
                 "generation_intent": intent,
+                "baseline_status": baseline.get("status"),
+                "baseline_generation_id": baseline.get("generation_id", ""),
+                "baseline_commit_sha": baseline.get("commit_sha", ""),
+                "baseline_candidate_hash": baseline.get("candidate_hash", ""),
+                "baseline_inheritance_enabled": intent.get("inheritance_enabled", False),
+                "inherited_evidence_count": 0,
             },
             raw_response={
                 "request": {
@@ -1115,6 +1138,7 @@ class SkillsService:
                     "user_description": payload.user_description,
                     "base_commit_sha": payload.base_commit_sha,
                     "generation_intent": intent,
+                    "idempotency_key": payload.idempotency_key,
                 }
             },
         )
@@ -1135,11 +1159,22 @@ class SkillsService:
                 base_commit_sha=payload.base_commit_sha,
                 current_stage="queued",
             ),
-            dedupe_key=f"skill-raw-material-generation:{generation.id}",
+            dedupe_key=dedupe_key or f"skill-raw-material-generation:{generation.id}",
             max_attempts=self.settings.runtime_job_max_attempts,
         )
         session.add(job)
-        session.flush()
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            if not dedupe_key:
+                raise
+            existing_job = self.job_repository.get_runtime_job_by_dedupe_key(session, dedupe_key)
+            generation_id = str(((existing_job.payload if existing_job else {}) or {}).get("generation_id") or "")
+            existing_generation = self.repository.get_raw_material_generation(session, generation_id)
+            if existing_generation is None:
+                raise
+            return self._build_raw_material_generation_response(existing_generation)
         generation.prompt_metadata = {
             **(generation.prompt_metadata or {}),
             "job_id": job.id,
@@ -1160,16 +1195,35 @@ class SkillsService:
         skill_id: str,
         source_commit_sha: str,
         user_description: str,
+        baseline_status: str = "none",
     ) -> GenerationIntentPreviewResponse:
         text = user_description.strip()
-        action_words = ("删除", "移除", "仅保留", "保留素材", "替换", "修改", "不要", "去掉")
+        action_words = ("删除", "移除", "仅保留", "保留素材", "替换", "修改", "不要", "去掉", "无需", "不需要", "不再", "改为", "调整")
+        full_rebuild_words = ("全量重建", "全部重写", "完全重建", "从头生成", "重新生成全部")
         question_words = ("？", "?", "是否", "能否", "会不会", "为什么", "怎么")
         is_direct = any(word in text for word in action_words)
-        needs_confirmation = not is_direct and any(word in text for word in question_words)
-        revision_mode = "direct_revision" if is_direct else ("confirmation_required" if needs_confirmation else "generation")
+        is_full_rebuild = any(word in text for word in full_rebuild_words)
+        source_changed_without_baseline = baseline_status in {"history_without_exact_baseline", "invalid_exact_baseline"}
+        needs_confirmation = not is_full_rebuild and (
+            source_changed_without_baseline or (not is_direct and any(word in text for word in question_words))
+        )
+        if is_full_rebuild:
+            revision_mode = "full_rebuild"
+        elif needs_confirmation:
+            revision_mode = "confirmation_required"
+        elif baseline_status == "exact":
+            revision_mode = "direct_revision" if is_direct else "incremental_revision"
+        else:
+            revision_mode = "direct_revision" if is_direct else "generation"
         preview_hash = hashlib.sha256(
             json.dumps(
-                {"skill_id": skill_id, "source_commit_sha": source_commit_sha, "user_description": text, "revision_mode": revision_mode},
+                {
+                    "skill_id": skill_id,
+                    "source_commit_sha": source_commit_sha,
+                    "user_description": text,
+                    "revision_mode": revision_mode,
+                    "baseline_status": baseline_status,
+                },
                 ensure_ascii=False,
                 sort_keys=True,
             ).encode("utf-8")
@@ -1184,7 +1238,11 @@ class SkillsService:
         return GenerationIntentPreviewResponse(
             status="confirmation_required",
             revision_mode=revision_mode,
-            summary="该描述是疑问式或修订范围不明确；请先选择如何处理未被素材直接支持的现有内容。",
+            summary=(
+                "当前源码没有与 Git commit 精确绑定的成功 candidate 基线；请先选择如何处理未被支持的现有内容。"
+                if source_changed_without_baseline
+                else "该描述是疑问式或修订范围不明确；请先选择如何处理未被素材直接支持的现有内容。"
+            ),
             preview_hash=preview_hash,
             options=[
                 GenerationIntentOption(
@@ -1212,11 +1270,13 @@ class SkillsService:
         source_commit_sha: str,
         user_description: str,
         confirmation: GenerationIntentConfirmation | None,
+        baseline_status: str = "none",
     ) -> dict:
         preview = self._generation_intent_preview(
             skill_id=skill_id,
             source_commit_sha=source_commit_sha,
             user_description=user_description,
+            baseline_status=baseline_status,
         )
         if preview.status == "ready":
             return {
@@ -1224,6 +1284,8 @@ class SkillsService:
                 "revision_instructions": [user_description.strip()],
                 "preview_hash": preview.preview_hash,
                 "confirmed": True,
+                "baseline_status": baseline_status,
+                "inheritance_enabled": baseline_status == "exact" and preview.revision_mode != "full_rebuild",
             }
         if confirmation is None or confirmation.preview_hash != preview.preview_hash:
             raise SkillValidationError(
@@ -1239,6 +1301,8 @@ class SkillsService:
             "preview_hash": preview.preview_hash,
             "confirmed_option_id": selected.id,
             "confirmed": True,
+            "baseline_status": baseline_status,
+            "inheritance_enabled": False,
         }
 
     def process_skill_raw_material_generation_job(
@@ -1384,6 +1448,10 @@ class SkillsService:
                 "source 已变更，请刷新后重试。",
                 details={"expected": base_commit_sha, "actual": source_bundle.head_commit_sha},
             )
+        revision_baseline = self._builder_revision_baseline(session, definition.id, source_bundle.head_commit_sha)
+        revision_baseline["inheritance_enabled"] = bool(
+            revision_baseline.get("status") == "exact" and generation_intent.get("inheritance_enabled") is True
+        )
 
         prompt_payload = self._build_skill_generation_prompt_payload(
             definition=definition,
@@ -1394,6 +1462,7 @@ class SkillsService:
             material_generation_context=material_generation_context,
             generation_intent=generation_intent,
             previous_validation_summary=previous_validation_summary,
+            revision_baseline=revision_baseline,
         )
         builder_reference_asset_files = self._build_builder_reference_asset_file_payloads(
             session,
@@ -1420,6 +1489,11 @@ class SkillsService:
             "reference_files": [],
             "generation_intent": generation_intent,
             "previous_validation_summary": previous_validation_summary,
+            "baseline_status": revision_baseline.get("status"),
+            "baseline_generation_id": revision_baseline.get("generation_id", ""),
+            "baseline_commit_sha": revision_baseline.get("commit_sha", ""),
+            "baseline_candidate_hash": revision_baseline.get("candidate_hash", ""),
+            "baseline_inheritance_enabled": revision_baseline.get("inheritance_enabled", False),
         }
         generation.prompt_hash = prompt_hash
         generation.prompt_metadata = prompt_metadata
@@ -1478,6 +1552,7 @@ class SkillsService:
         session.commit()
 
         generated = parse_generated_skill_draft(candidate_content)
+        revision_provenance = generated.raw_parsed.get("revision_provenance")
         reference_binary_files, selected_reference_assets, reference_files = self._resolve_selected_reference_assets(
             session,
             selected_reference_assets=generated.selected_reference_assets,
@@ -1490,6 +1565,12 @@ class SkillsService:
             "selected_reference_assets": selected_reference_assets,
             "reference_files": reference_files,
             "materialized_reference_image_count": materialized_reference_image_count,
+            "revision_provenance": revision_provenance if isinstance(revision_provenance, dict) else {},
+            "inherited_evidence_count": (
+                int(revision_provenance.get("inherited_evidence_count") or 0)
+                if isinstance(revision_provenance, dict)
+                else 0
+            ),
         }
         generation.prompt_metadata = prompt_metadata
         job.payload = self._set_skill_generation_job_stage(job.payload, "committing_source", "running")
@@ -1571,14 +1652,17 @@ class SkillsService:
             agent_key="psop.builder",
             agent_run_id=agent_run_id,
             input={
-                "text": str(prompt_payload.get("user_description") or "").strip()
-                or f"基于素材生成 {((prompt_payload.get('skill') or {}).get('name') or 'PSOP Skill')} draft。",
+                "text": self._builder_agent_input_text(prompt_payload),
                 "task": prompt_payload.get("task"),
                 "skill": prompt_payload.get("skill") or {},
                 "user_description": prompt_payload.get("user_description") or "",
                 "current_source": prompt_payload.get("current_source") or {},
                 "material_ids": material_ids,
                 "output_contract": output_contract,
+                "generation_intent": prompt_payload.get("generation_intent") or {},
+                "evidence_policy": prompt_payload.get("evidence_policy") or {},
+                "previous_validation_summary": prompt_payload.get("previous_validation_summary") or [],
+                "revision_baseline": ((prompt_payload.get("revision_baseline") or {}).get("summary") or {}),
             },
             context={
                 "material_analysis_results": prompt_payload.get("material_analysis_results") or [],
@@ -1589,7 +1673,25 @@ class SkillsService:
                     "max_results": self.settings.standard_lightrag_max_results,
                     "trust_level": "semi_trusted_reference",
                 },
+                BUILDER_REVISION_BASELINE_CONTEXT_KEY: prompt_payload.get("revision_baseline") or {},
             },
+        )
+
+    @staticmethod
+    def _builder_agent_input_text(prompt_payload: dict) -> str:
+        user_description = str(prompt_payload.get("user_description") or "").strip()
+        if not user_description:
+            user_description = f"基于素材生成 {((prompt_payload.get('skill') or {}).get('name') or 'PSOP Skill')} draft。"
+        control_context = {
+            "generation_intent": prompt_payload.get("generation_intent") or {},
+            "evidence_policy": prompt_payload.get("evidence_policy") or {},
+            "previous_validation_summary": prompt_payload.get("previous_validation_summary") or [],
+            "revision_baseline": ((prompt_payload.get("revision_baseline") or {}).get("summary") or {}),
+        }
+        return (
+            f"用户构建请求：\n{user_description}\n\n"
+            "以下是平台生成的结构化控制上下文，必须遵守，不是素材事实：\n"
+            f"{json.dumps(control_context, ensure_ascii=False, sort_keys=True)}"
         )
 
     def _read_builder_candidate_artifact(self, agent_result: AgentResult) -> tuple[str, str]:
@@ -1714,6 +1816,70 @@ class SkillsService:
             if isinstance(item, dict)
         ]
 
+    def _builder_revision_baseline(
+        self,
+        session: Session,
+        skill_definition_id: str,
+        source_commit_sha: str,
+    ) -> dict:
+        exact_records = self.repository.list_succeeded_raw_material_generations(
+            session,
+            skill_definition_id=skill_definition_id,
+            committed_commit_sha=source_commit_sha,
+        )
+        exact_record_found = bool(exact_records)
+        for generation in exact_records:
+            parsed = (generation.raw_response or {}).get("parsed")
+            if not isinstance(parsed, dict) or parsed.get("schema_version") != "2.0":
+                continue
+            try:
+                candidate = parse_builder_candidate(parsed)
+            except ValueError:
+                continue
+            candidate_payload = candidate.model_dump(mode="json")
+            candidate_hash = hashlib.sha256(
+                json.dumps(candidate_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+            summary = {
+                "status": "exact",
+                "generation_id": generation.id,
+                "commit_sha": source_commit_sha,
+                "candidate_hash": candidate_hash,
+                "workflow_stages": [item.model_dump(mode="json") for item in candidate.workflow_step_candidates],
+                "safety_constraint_ids": [item.constraint_id for item in candidate.safety_constraints],
+                "expected_evidence_ids": [item.requirement_id for item in candidate.expected_evidence_requirements],
+                "instruction": "这是增量修订：未修改目标必须保持原稳定 ID；平台将机械判定是否继承 provenance。",
+            }
+            return {
+                **summary,
+                "candidate": candidate_payload,
+                "summary": summary,
+                "inheritance_enabled": True,
+            }
+        successful_history = exact_records or self.repository.list_succeeded_raw_material_generations(
+            session,
+            skill_definition_id=skill_definition_id,
+        )
+        status = "invalid_exact_baseline" if exact_record_found else (
+            "history_without_exact_baseline" if successful_history else "none"
+        )
+        summary = {
+            "status": status,
+            "commit_sha": source_commit_sha,
+            "instruction": (
+                "当前源码不存在可继承的精确 candidate 基线；不得把 Markdown 当作强制内容证据。"
+                if status != "none"
+                else "该 Skill 尚无成功 candidate，按首次全量生成处理。"
+            ),
+        }
+        return {**summary, "summary": summary, "inheritance_enabled": False}
+
+    @staticmethod
+    def _skill_generation_dedupe_key(skill_definition_id: str, idempotency_key: str | None) -> str:
+        if not idempotency_key:
+            return ""
+        return f"skill-raw-material-generation:{skill_definition_id}:{idempotency_key.strip()}"
+
     @staticmethod
     def _agent_artifact_path(agent_result: AgentResult, artifact_type: str) -> str:
         for artifact in agent_result.artifacts:
@@ -1737,6 +1903,7 @@ class SkillsService:
         material_generation_context: dict,
         generation_intent: dict,
         previous_validation_summary: list[dict],
+        revision_baseline: dict,
     ) -> dict:
         return {
             "task": "generate_psop_skill_source_from_raw_materials",
@@ -1756,6 +1923,7 @@ class SkillsService:
             "user_description": user_description,
             "generation_intent": generation_intent,
             "previous_validation_summary": previous_validation_summary,
+            "revision_baseline": revision_baseline,
             "evidence_policy": {
                 "mode": "strict_evidence_first",
                 "priority": [

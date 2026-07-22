@@ -632,6 +632,12 @@
       closeRawMaterialGenerateModal() {
         this.stopBuilderAgentStreaming();
         this.stopBuilderAgentElapsedTimer();
+        if (!this.isBuilderAgentRunning()) {
+          this.builderAgentPanel.intentPreview = null;
+          this.builderAgentPanel.selectedIntentOption = "";
+          this.builderAgentPanel.idempotencyKey = "";
+          this.busy.rawMaterialGenerate = false;
+        }
         this.builderAgentPanel.open = false;
         this.rawMaterialGenerateModalOpen = false;
       },
@@ -639,6 +645,9 @@
 
       async generateSkillDraftFromRawMaterials(confirmedIntent = null) {
         if (!this.currentSkill || !this.canGenerateSkillDraftFromRawMaterials()) {
+          return;
+        }
+        if (this.busy.rawMaterialGenerate) {
           return;
         }
         const userDescription = (
@@ -650,6 +659,11 @@
           this.showCenterToast("error", "请输入生成描述。");
           return;
         }
+        if (!this.builderAgentPanel.idempotencyKey) {
+          this.builderAgentPanel.idempotencyKey = this.newBuilderGenerationIdempotencyKey();
+        }
+        const idempotencyKey = this.builderAgentPanel.idempotencyKey;
+        this.busy.rawMaterialGenerate = true;
 
         if (!confirmedIntent) {
           try {
@@ -661,15 +675,17 @@
               this.builderAgentPanel.intentPreview = preview;
               this.builderAgentPanel.selectedIntentOption = preview.options?.[0]?.id || "";
               this.builderAgentPanel.status = "idle";
+              this.busy.rawMaterialGenerate = false;
               return;
             }
           } catch (error) {
+            this.busy.rawMaterialGenerate = false;
+            this.builderAgentPanel.idempotencyKey = "";
             this.showCenterToast("error", error.message || "生成意图预览失败。");
             return;
           }
         }
 
-        this.busy.rawMaterialGenerate = true;
         let keepRunning = false;
         this.clearNotice();
         try {
@@ -703,7 +719,8 @@
             body: JSON.stringify({
               user_description: userDescription,
               base_commit_sha: this.currentSkill.latest_draft_head_sha,
-              generation_intent: confirmedIntent
+              generation_intent: confirmedIntent,
+              idempotency_key: idempotencyKey
             })
           });
           this.rawMaterialGenerationResult = result;
@@ -751,6 +768,22 @@
       },
 
 
+      cancelBuilderGenerationIntent() {
+        this.builderAgentPanel.intentPreview = null;
+        this.builderAgentPanel.selectedIntentOption = "";
+        this.builderAgentPanel.idempotencyKey = "";
+        this.busy.rawMaterialGenerate = false;
+      },
+
+
+      newBuilderGenerationIdempotencyKey() {
+        if (globalThis.crypto?.randomUUID) {
+          return globalThis.crypto.randomUUID();
+        }
+        return `builder-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      },
+
+
       defaultBuilderAgentUserInput() {
         return "";
       },
@@ -783,7 +816,8 @@
           lastEventAt: "",
           resultRefreshed: false,
           intentPreview: null,
-          selectedIntentOption: ""
+          selectedIntentOption: "",
+          idempotencyKey: ""
         };
       },
 

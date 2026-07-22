@@ -188,6 +188,7 @@ class GenerateSkillDraftRequest(BaseModel):
     user_description: str = Field(min_length=1, max_length=10000)
     base_commit_sha: str | None = Field(default=None, min_length=1)
     generation_intent: "GenerationIntentConfirmation | None" = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class GenerationIntentPreviewRequest(BaseModel):

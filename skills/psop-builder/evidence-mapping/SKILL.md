@@ -54,6 +54,8 @@
 - Builder Candidate Schema v2 不接受旧字符串或别名；`current_source` 必须显式写为 `{"source_type":"current_source","ref":"SKILL.md"}`。
 - 强制 workflow、安全约束和完成标准只可由 `user_description`、`material_analysis`、`reference_asset`、`industry_standard` 支撑。`current_source` 仅定位待修订内容。
 - 标准检索超时/不可用时，不得生成 `industry_standard` 引用，且 `review_notes` 必须写入：`标准检索不可用，未引用行业标准。`
+- 当前 source 只用于定位修订目标，不是强制内容证据。精确绑定当前 commit 的成功 candidate provenance 可以由平台为未变化目标继承；模型仍只为本轮变化或新增目标提供新证据。
+- 增量修订不得重命名未变化的 `stage_id`、`constraint_id` 或 `requirement_id`；`revision_provenance` 由平台写入 artifact，不能放进工具参数。
 
 ## Candidate metadata 提交清单
 
@@ -66,6 +68,6 @@
 - `safety_constraints`：每项必须有 `constraint_id`、`scope`、`stage_ids`、`constraint`、`risk_type`、`required_action`；`all_stages` 对应空 `stage_ids`，`selected_stages` 对应非空 `stage_ids`。
 - `workflow_step_candidates` 每项必须有 `stage_id` 和 `title`，且 `SKILL.md` 标题使用 `### [stage_id] title`；`expected_evidence_requirements` 每项必须有 `requirement_id`、`stage_id`、`evidence_type`、`completion_criteria`。
 - `selected_reference_assets.stage_ids` 和所有结构化 target 必须引用已声明 ID；每个 workflow、安全约束和预期证据要求都必须被可验证 evidence 覆盖。
-- 若标准检索不可用：`industry_standard_usage=[]`，并在 `review_notes` 原样写入 `标准检索不可用，未引用行业标准。`
+- 若标准检索不可用：本轮新增的 `industry_standard_usage=[]`，并在 `review_notes` 原样写入 `标准检索不可用，未引用行业标准。`；平台可恢复精确基线中未变化目标的已批准标准引用。
 
 收到工具的 `repair_checklist` 时，必须修复其中全部项后再提交完整 candidate。

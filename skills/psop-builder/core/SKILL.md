@@ -33,7 +33,7 @@
 
 ## 核心流程
 
-1. 调用 `psop.builder.read_current_source` 读取当前 README/SKILL，判断是全新构建、增量修订还是补全缺口。
+1. 调用 `psop.builder.read_current_source` 读取当前 README/SKILL 与 revision baseline 摘要，判断是全新构建、增量修订还是补全缺口。
 2. 调用 `psop.builder.list_materials` 建立本次素材边界。
 3. 对相关素材调用 `psop.builder.read_material_analysis`，提取动作、状态、风险、证据候选和不确定项。
 4. 对涉及安全、设备、工艺、质量或停止条件的内容调用 `psop.standard.search` 检索行业标准。
@@ -53,6 +53,7 @@
 - 行业标准只能作为参考依据写入，不能替代素材证据或用户确认。
 - 不确定事实必须进入 `missing_questions` 或 `review_notes`。
 - `submit_candidate.files` 必须直接包含完整 Markdown 文件内容；workspace 中间文件、证据草稿或参数摘要不能替代最终 `files`。
+- 增量修订时，未改变标题和阶段正文的 workflow、业务字段未变化的 safety constraint 与 expected evidence 必须保持原稳定 ID；平台负责机械继承 provenance，模型不得用换 ID 规避变更校验。
 
 ## 禁止事项
 

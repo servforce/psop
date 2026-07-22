@@ -10,6 +10,7 @@ from typing import Any
 from app.agent_harness.agents.psop.builder.schemas import (
     REQUIRED_BUILDER_FILES,
     builder_candidate_input_schema,
+    reconcile_builder_candidate,
     validate_builder_candidate,
     validation_diagnostics,
 )
@@ -21,6 +22,7 @@ from app.agent_harness.tools.spec import ToolSpec
 BUILDER_RESULT_VIRTUAL_PATH = f"{PSOP_OUTPUTS_VIRTUAL_ROOT}/builder-result.json"
 BUILDER_DRAFT_FILES_VIRTUAL_ROOT = f"{PSOP_OUTPUTS_VIRTUAL_ROOT}/skill-draft"
 BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY = "_psop_builder_reference_asset_files"
+BUILDER_REVISION_BASELINE_CONTEXT_KEY = "_psop_builder_revision_baseline"
 _REFERENCE_ASSETS_CONTEXT_KEY = "_psop_builder_reference_assets"
 _STANDARD_RESULTS_CONTEXT_KEY = "_psop_builder_standard_results"
 _STANDARD_SEARCH_STATUS_CONTEXT_KEY = "_psop_builder_standard_search_status"
@@ -162,6 +164,8 @@ def _read_current_source(arguments: dict[str, Any], context: ToolExecutionContex
         content = str(current_source.get(path) or "")
         files[path] = {"content": _truncate(content, 40000), "truncated": len(content) > 40000}
     skill = _input(context).get("skill") if isinstance(_input(context).get("skill"), dict) else {}
+    baseline = context.invocation_context.get(BUILDER_REVISION_BASELINE_CONTEXT_KEY)
+    baseline_summary = baseline.get("summary") if isinstance(baseline, dict) else None
     return {
         "status": "success",
         "summary": f"读取当前 Skill source：{', '.join(files)}。",
@@ -169,6 +173,7 @@ def _read_current_source(arguments: dict[str, Any], context: ToolExecutionContex
         "source_commit_sha": skill.get("source_commit_sha") or "",
         "files": files,
         "trust_level": "current_source",
+        "revision_baseline": baseline_summary if isinstance(baseline_summary, dict) else None,
         "truncated": any(item["truncated"] for item in files.values()),
         "next_valid_actions": ["psop.builder.list_materials", "psop.builder.read_material_analysis"],
     }
@@ -337,16 +342,46 @@ def _list_reference_assets(arguments: dict[str, Any], context: ToolExecutionCont
 
 
 def _submit_candidate(arguments: dict[str, Any], context: ToolExecutionContext) -> dict[str, Any]:
+    if "revision_provenance" in arguments:
+        return _submit_candidate_error_result(
+            context,
+            "revision_provenance 只能由平台生成。",
+            "schema_validation",
+            diagnostics=[
+                {
+                    "path": "revision_provenance",
+                    "code": "platform_field_forbidden",
+                    "message": "revision_provenance 只能由平台生成，模型不得提交。",
+                    "allowed_values": [],
+                    "example": None,
+                }
+            ],
+        )
     reference_assets = _reference_assets_for_validation(context)
     standard_results = context.invocation_context.get(_STANDARD_RESULTS_CONTEXT_KEY)
     if not isinstance(standard_results, list):
         standard_results = []
     try:
+        candidate_payload = arguments
+        revision_provenance: dict[str, Any] = {}
+        inherited_standard_targets: set[tuple[str, str, str, str, str]] = set()
+        baseline = context.invocation_context.get(BUILDER_REVISION_BASELINE_CONTEXT_KEY)
+        if isinstance(baseline, dict) and baseline.get("inheritance_enabled") is True:
+            baseline_candidate = baseline.get("candidate")
+            if isinstance(baseline_candidate, dict):
+                candidate_payload, revision_provenance, inherited_standard_targets = reconcile_builder_candidate(
+                    arguments,
+                    baseline_payload=baseline_candidate,
+                    baseline_generation_id=str(baseline.get("generation_id") or ""),
+                    baseline_commit_sha=str(baseline.get("commit_sha") or ""),
+                    baseline_candidate_hash=str(baseline.get("candidate_hash") or ""),
+                )
         candidate = validate_builder_candidate(
-            arguments,
+            candidate_payload,
             candidate_reference_assets=reference_assets,
             standard_search_results=standard_results,
             standard_search_status=str(context.invocation_context.get(_STANDARD_SEARCH_STATUS_CONTEXT_KEY) or "") or None,
+            inherited_industry_standard_targets=inherited_standard_targets,
         )
     except ValueError as exc:
         return _submit_candidate_error_result(
@@ -356,6 +391,8 @@ def _submit_candidate(arguments: dict[str, Any], context: ToolExecutionContext) 
             diagnostics=validation_diagnostics(exc),
         )
     payload = candidate.model_dump(mode="json")
+    if revision_provenance:
+        payload["revision_provenance"] = revision_provenance
     selected_reference_assets = [item.model_dump(mode="json") for item in candidate.selected_reference_assets]
     try:
         linked_files, linked_images = _link_reference_images_in_files(

@@ -18,10 +18,14 @@
 8. 如果选择参考图片，候选产物中仍应使用 `selected_reference_assets.reference_path` 完成校验；哪个流程步骤使用了参考图片，就在该步骤中用 Markdown 图片语法引用对应相对路径，例如 `![CPU 安装参考](references/video-keyframes/.../000950504.jpg)`。`submit_candidate` 会把选中的原图文件物化到 `outputs/skill-draft/references/` 对应目录，不会把图片集中追加到文档底部，也不会把图片写成 base64 data URI。
 9. 严格按证据优先级生成：已确认修订指令 > 素材直接证据 > 可追溯行业标准 > 既有 draft（仅待修订内容） > Builder 推断。既有 draft 不得单独支撑新的事实性或强制性流程。
 10. 每个强制工作流步骤、安全约束和完成标准，必须在 `evidence_map.used_in` 中关联到可验证来源。`builder_inference` 和 `human_confirmation_required` 只能形成可选建议、审阅风险或待确认项。
+11. `read_current_source.revision_baseline.status="exact"` 时按增量修订执行：用户未修改的 workflow、safety constraint 和 expected evidence 必须保持原稳定 ID。不要为未变化对象重新生成 ID；平台会机械比较对象与阶段正文并继承已批准 provenance。
+12. 当前 source 本身仍不是强制内容证据。只有与当前 commit 精确绑定的成功 candidate provenance 可由平台继承；无精确基线时不得自行复用旧 evidence。
 
 ## 输出要求
 
 `submit_candidate` 只接受 Builder Candidate Schema v2。顶层必须包含 `schema_version: "2.0"`，所有 schema 声明的字段都必须提交；所有对象禁止未声明字段，不兼容 `step_id`、`stage_title`、`applies_to` 或字符串形式的 `used_in`。
+
+`revision_provenance` 是平台审计字段，不属于模型工具参数，禁止在 `submit_candidate` 中提交或伪造。即使是增量修订，也必须提交完整 candidate；未变化目标缺失的历史 evidence 由平台在校验前补入。
 
 `submit_candidate` 参数必须是完整 candidate 对象，不是 workspace 文件路径，也不是中间 JSON 摘要。提交前必须直接把以下文件的完整 Markdown 内容放入 `files` 对象：
 
@@ -54,7 +58,7 @@
 - `industry_standard`：必须有 `standard_ref` 或 `ref`，且只能引用检索工具成功返回的可追溯条款。
 - `builder_inference`、`human_confirmation_required`：必须有 `ref`，且不得支撑强制要求。
 
-标准检索超时或不可用不是行业标准证据：`industry_standard_usage` 必须为空，并在 `review_notes` 原样写入“标准检索不可用，未引用行业标准”。
+标准检索超时或不可用不是新的行业标准证据：本轮新建的 `industry_standard_usage` 必须为空，并在 `review_notes` 原样写入“标准检索不可用，未引用行业标准”。平台可能在提交时恢复精确基线中未变化目标的已批准标准引用；不要为此伪造本轮检索结果。
 
 ## 提交前 metadata 自检（必须逐项完成）
 

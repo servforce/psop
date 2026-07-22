@@ -1990,15 +1990,76 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
             json={
                 "user_description": "请基于素材生成一个现场支持 Skill。",
                 "base_commit_sha": created["latest_draft_head_sha"],
+                "idempotency_key": "generate-skill-draft-once",
             },
         )
+        duplicate_response = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials/generate-skill-draft",
+            json={
+                "user_description": "请基于素材生成一个现场支持 Skill。",
+                "base_commit_sha": created["latest_draft_head_sha"],
+                "idempotency_key": "generate-skill-draft-once",
+            },
+        )
+        with client.app.state.db_manager.session() as session:
+            stored_generation = session.get(SkillRawMaterialGeneration, generate_response.json()["id"])
+            stored_invocation = stored_generation.raw_response["request"]["agent_invocation"]
+            generation_count = session.query(SkillRawMaterialGeneration).filter_by(skill_definition_id=skill_id).count()
+            generation_job_count = session.query(RuntimeJob).filter_by(job_type="skill_raw_material_generation").count()
         detail_response = client.get(f"/api/v1/skills/{skill_id}")
         source_response = client.get(f"/api/v1/skills/{skill_id}/source")
         publishes_response = client.get(f"/api/v1/skills/{skill_id}/publishes")
+        incremental_preview = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials/generation-intent-preview",
+            json={"user_description": "继续完善这个 Skill。"},
+        )
+        with client.app.state.db_manager.session() as session:
+            stored_generation = session.get(SkillRawMaterialGeneration, generate_response.json()["id"])
+            stored_generation.raw_response = {
+                **stored_generation.raw_response,
+                "parsed": {"schema_version": "1.0"},
+            }
+            session.commit()
+        invalid_exact_baseline_preview = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials/generation-intent-preview",
+            json={"user_description": "图片确认通过后无需二次文字确认。"},
+        )
+        fake_gateway.projects[created["gitlab_project_id"]].head_commit_sha = "external-commit"
+        external_source_preview = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials/generation-intent-preview",
+            json={"user_description": "图片确认通过后无需二次文字确认。"},
+        )
+        full_rebuild_preview = client.post(
+            f"/api/v1/skills/{skill_id}/raw-materials/generation-intent-preview",
+            json={"user_description": "全量重建并全部重写这个 Skill。"},
+        )
+        with client.app.state.db_manager.session() as session:
+            generation_count_after_previews = (
+                session.query(SkillRawMaterialGeneration).filter_by(skill_definition_id=skill_id).count()
+            )
 
     assert generate_response.status_code == 200
     payload = generate_response.json()
     assert payload["status"] == "succeeded"
+    assert incremental_preview.json()["revision_mode"] == "incremental_revision"
+    assert incremental_preview.json()["status"] == "ready"
+    assert invalid_exact_baseline_preview.json()["status"] == "confirmation_required"
+    assert external_source_preview.json()["status"] == "confirmation_required"
+    assert "没有与 Git commit 精确绑定" in external_source_preview.json()["summary"]
+    assert full_rebuild_preview.json()["status"] == "ready"
+    assert full_rebuild_preview.json()["revision_mode"] == "full_rebuild"
+    assert generation_count_after_previews == 1
+    assert duplicate_response.status_code == 200
+    assert duplicate_response.json()["id"] == payload["id"]
+    assert generation_count == 1
+    assert generation_job_count == 1
+    assert stored_invocation["input"]["generation_intent"]["mode"] == "generation"
+    assert stored_invocation["input"]["evidence_policy"]["mode"] == "strict_evidence_first"
+    assert stored_invocation["input"]["previous_validation_summary"] == []
+    assert '"generation_intent"' in stored_invocation["input"]["text"]
+    assert '"evidence_policy"' in stored_invocation["input"]["text"]
+    assert '"previous_validation_summary"' in stored_invocation["input"]["text"]
+    assert stored_invocation["context"]["_psop_builder_revision_baseline"]["status"] == "none"
     assert payload["material_ids"] == [video_material_id, material_id]
     assert payload["committed_commit_sha"].startswith("commit-")
     assert payload["prompt_metadata"]["agent_key"] == "psop.builder"
@@ -2123,6 +2184,10 @@ def test_generation_intent_preview_requires_confirmation_only_for_ambiguous_ques
             f"/api/v1/skills/{created['id']}/raw-materials/generation-intent-preview",
             json={"user_description": "删除电源供应器安装步骤，仅保留素材可证实内容。"},
         )
+        explicit_revision = client.post(
+            f"/api/v1/skills/{created['id']}/raw-materials/generation-intent-preview",
+            json={"user_description": "图片确认通过后无需二次文字确认，不再要求额外特写。"},
+        )
 
     assert ambiguous.status_code == 200
     assert ambiguous.json()["status"] == "confirmation_required"
@@ -2134,6 +2199,8 @@ def test_generation_intent_preview_requires_confirmation_only_for_ambiguous_ques
     assert direct.status_code == 200
     assert direct.json()["status"] == "ready"
     assert direct.json()["revision_mode"] == "direct_revision"
+    assert explicit_revision.json()["status"] == "ready"
+    assert explicit_revision.json()["revision_mode"] == "direct_revision"
 
 
 def test_generate_skill_draft_from_raw_materials_rejects_material_subset_field() -> None:
