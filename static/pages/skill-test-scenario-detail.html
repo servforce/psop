@@ -35,7 +35,7 @@
           <div class="flex h-full min-h-0 w-full flex-col">
             <div class="min-h-0 flex-1 overflow-y-auto overflow-x-visible">
               <template x-for="(lane, laneIndex) in skillTestTimelineLanes()" :key="lane.id">
-              <div class="grid min-h-16 grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] border-b border-slate-800">
+              <div class="grid min-h-14 grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] border-b border-slate-800">
                 <div class="flex items-center justify-center border-r border-slate-800/60">
                   <template x-if="shouldShowSkillTestTimelineLaneGroup(lane, laneIndex)">
                     <span class="whitespace-nowrap text-sm font-semibold text-slate-300" x-text="skillTestTimelineLaneGroupLabel(lane.id)"></span>
@@ -47,7 +47,7 @@
                     <p class="truncate text-sm font-semibold leading-5 text-slate-100" x-text="skillTestTimelineLaneLabel(lane)"></p>
                   </div>
                 </button>
-                <div class="relative min-h-16 cursor-crosshair overflow-visible px-3 transition hover:bg-slate-900/35" data-skill-test-timeline-track @click="canAddSkillTestTimelineEventToLane(lane.id) && addSkillTestTimelineEventFromLane($event, lane.id)">
+                <div class="relative min-h-14 cursor-crosshair overflow-visible px-3 transition hover:bg-slate-900/35" data-skill-test-timeline-track @click="canAddSkillTestTimelineEventToLane(lane.id) && addSkillTestTimelineEventFromLane($event, lane.id)">
                   <template x-for="item in skillTestTimelineEventsForLane(lane.id)" :key="item.render_key">
                     <div class="absolute top-1/2 z-20 w-20 max-w-[calc(100%-1.5rem)] -translate-x-1/2 -translate-y-1/2" :style="skillTestTimelineEventLeftStyle(item.event)" @click.stop @pointerdown.stop>
                       <button type="button" class="relative flex h-10 w-full items-center gap-2 overflow-hidden rounded-md border px-2 py-1 text-left shadow-sm transition hover:bg-slate-800" :class="skillTestTimelineEventFrameClass(item.event)" :aria-pressed="isSkillTestTimelineEventSelected(item.event)" data-tooltip="点击编辑；Ctrl/Cmd/Shift 点击多选；拖动已选事件可整体移动时间" @click.stop="handleSkillTestTimelineEventClick($event, item.event.id)" @pointerdown.stop.prevent="startSkillTestTimelineEventDrag($event, item.index)">
@@ -366,7 +366,7 @@
             <div class="flex h-full min-h-0 w-full flex-col">
               <div class="min-h-0 flex-1 overflow-y-auto overflow-x-visible pr-1">
                 <template x-for="(lane, laneIndex) in skillTestTimelineLanes()" :key="lane.id">
-                <div class="grid grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] border-b border-slate-800" :class="skillTestTimelineLaneHasExpandedEvent(lane.id) ? 'min-h-[22rem]' : 'min-h-16'">
+                <div class="grid grid-cols-[3.5rem_5.5rem_minmax(0,1fr)] border-b border-slate-800" :class="skillTestTimelineLaneHasExpandedEvent(lane.id) ? 'min-h-[22rem]' : 'min-h-14'">
                   <div class="flex items-center justify-center border-r border-slate-800/60">
                     <template x-if="shouldShowSkillTestTimelineLaneGroup(lane, laneIndex)">
                       <span class="whitespace-nowrap text-sm font-semibold text-slate-300" x-text="skillTestTimelineLaneGroupLabel(lane.id)"></span>
@@ -378,7 +378,7 @@
                       <p class="truncate text-sm font-semibold leading-5 text-slate-100" x-text="skillTestTimelineLaneLabel(lane)"></p>
                     </div>
                   </div>
-                  <div class="relative overflow-visible px-3 transition" :class="skillTestTimelineLaneHasExpandedEvent(lane.id) ? 'min-h-[22rem]' : 'min-h-16 cursor-crosshair hover:bg-slate-900/35'" data-skill-test-timeline-track @click="canAddSkillTestTimelineEventToLane(lane.id) && addSkillTestTimelineEventFromLane($event, lane.id)">
+                  <div class="relative overflow-visible px-3 transition" :class="skillTestTimelineLaneHasExpandedEvent(lane.id) ? 'min-h-[22rem]' : 'min-h-14 cursor-crosshair hover:bg-slate-900/35'" data-skill-test-timeline-track @click="canAddSkillTestTimelineEventToLane(lane.id) && addSkillTestTimelineEventFromLane($event, lane.id)">
                     <template x-for="item in skillTestTimelineEventsForLane(lane.id)" :key="item.render_key">
                       <div class="absolute top-1/2 z-20 max-w-[calc(100%-1.5rem)]" :class="isSkillTestTimelineEventExpanded(item.event) ? 'w-80 -translate-y-1/2' : 'w-20 -translate-x-1/2 -translate-y-1/2'" :style="isSkillTestTimelineEventExpanded(item.event) ? skillTestTimelineExpandedEventLeftStyle(item.event) : skillTestTimelineEventLeftStyle(item.event)" @click.stop @pointerdown.stop>
                         <template x-if="!isSkillTestTimelineEventExpanded(item.event)">
