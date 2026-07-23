@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import time
 from collections.abc import Sequence
 from datetime import timedelta
@@ -22,7 +23,7 @@ from app.agent_harness.schemas import AgentInvocation, AgentInvocationAttachment
 from app.agent_harness.service import AgentHarnessService
 from app.core.config import Settings
 from app.core.logging import log_context
-from app.core.observability import add_metric_counter, record_span_exception, start_span
+from app.core.observability import add_metric_counter, record_metric_histogram, record_span_exception, start_span
 from app.domain.agent_prompts.service import AgentPromptService
 from app.domain.jobs.models import RuntimeJob
 from app.domain.jobs.repository import JobLease, JobRepository
@@ -67,6 +68,8 @@ from app.infra.object_store import ObjectStoreService
 
 LOGGER = logging.getLogger(__name__)
 RUNNER_MAX_IMAGE_ATTACHMENTS = 4
+RUNNER_MAX_REFERENCE_ATTACHMENTS = 1
+RUNNER_TURN_CONTEXT_MAX_CHARS = 20_000
 
 RUNTIME_LLM_LANGUAGE_POLICY = """平台级输出语言要求：
 - 所有面向终端用户展示的自然语言必须使用简体中文。
@@ -1559,6 +1562,7 @@ class RuntimeService:
         source_ref: str,
         artifact_object_id: str,
         reason: str,
+        attachment_role: str = "evidence",
     ) -> None:
         self._append_trace_event(
             session,
@@ -1570,8 +1574,15 @@ class RuntimeService:
                 "source_ref": source_ref,
                 "artifact_object_id": artifact_object_id,
                 "reason": reason,
+                "attachment_role": attachment_role,
             },
         )
+        if attachment_role == "reference":
+            add_metric_counter(
+                "psop_runner_reference_download_failures_total",
+                attributes={"reason": reason.split(":", 1)[0]},
+                description="Runner step reference images that could not be attached",
+            )
 
     @staticmethod
     def _node_is_evaluation(node: dict[str, Any]) -> bool:
@@ -1590,12 +1601,20 @@ class RuntimeService:
 
     @staticmethod
     def _evaluation_summary(node: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
+        assessment = observation.get("evidence_assessment") if isinstance(observation.get("evidence_assessment"), dict) else {}
+        evaluated_refs = assessment.get("evaluated_event_refs") if isinstance(assessment.get("evaluated_event_refs"), list) else []
+        terminal_seqs = [
+            int(match.group(1))
+            for ref in evaluated_refs
+            if (match := re.fullmatch(r"terminal_event:(\d+)(?::[^:\s]+)?", str(ref or "")))
+        ]
         summary = {
             "node_id": str(node.get("id") or ""),
             "decision": str(observation.get("decision") or ""),
             "reason": str(observation.get("reason") or ""),
             "next_phase": str(observation.get("next_phase") or ""),
             "terminal_message": str(observation.get("terminal_message") or ""),
+            "based_on_terminal_seq": max(terminal_seqs, default=0),
         }
         if isinstance(observation.get("evidence_assessment"), dict):
             summary["evidence_assessment"] = observation["evidence_assessment"]
@@ -1713,7 +1732,9 @@ class RuntimeService:
         runtime_contract = artifact_payload.get("runtime_contract")
         expected_evidence = runtime_contract.get("expected_evidence") if isinstance(runtime_contract, dict) else {}
         raw = expected_evidence.get(workflow_step_id) if isinstance(expected_evidence, dict) else None
-        if isinstance(raw, dict) and isinstance(raw.get("items"), list):
+        if isinstance(raw, dict) and isinstance(raw.get("requirements"), list):
+            raw_items = raw["requirements"]
+        elif isinstance(raw, dict) and isinstance(raw.get("items"), list):
             raw_items = raw["items"]
         elif isinstance(raw, list):
             raw_items = raw
@@ -1736,11 +1757,23 @@ class RuntimeService:
             requirement = {
                 "requirement_key": requirement_key,
                 "description": description,
+                "required": item.get("required") is not False,
             }
             for field in ("kind", "event_kind"):
                 value = item.get(field)
                 if value:
                     requirement[field] = value
+            evidence_options = item.get("evidence_options")
+            if isinstance(evidence_options, list):
+                requirement["evidence_options"] = [
+                    {
+                        key: option[key]
+                        for key in ("option_key", "kind", "event_kind", "proof_mode")
+                        if key in option
+                    }
+                    for option in evidence_options
+                    if isinstance(option, dict)
+                ]
             requirements.append(requirement)
         return requirements
 
@@ -1786,7 +1819,7 @@ class RuntimeService:
             if not requirement:
                 continue
             status = str(result.get("status") or "").strip().lower()
-            if status not in {"accepted", "rejected", "missing", "ambiguous"}:
+            if status not in {"accepted", "rejected", "missing", "ambiguous", "not_applicable"}:
                 continue
             if requirement.get("status") == "accepted" and status in {"missing", "ambiguous"}:
                 continue
@@ -1794,6 +1827,7 @@ class RuntimeService:
             requirement["status"] = status
             requirement["latest_event_refs"] = event_refs
             requirement["reason"] = str(result.get("reason") or "")
+            requirement["satisfied_by"] = str(result.get("satisfied_by") or "")
             requirement["updated_at"] = now
             requirement["updated_by_node"] = str(node.get("id") or "")
             if status == "accepted":
@@ -3233,14 +3267,59 @@ class RuntimeService:
             invocation_context=invocation.context,
         )
         usage = self._agent_result_usage(result)
+        previous_evaluation = _get_path(token, "control.latest_evaluation")
+        previous_evaluation = previous_evaluation if isinstance(previous_evaluation, dict) else {}
+        previous_seq = self._runner_evaluation_terminal_seq(previous_evaluation)
+        latest_seq = _get_path(token, "control.latest_evidence.seq_no")
+        latest_seq = latest_seq if isinstance(latest_seq, int) and not isinstance(latest_seq, bool) else 0
+        record_metric_histogram(
+            "psop_runner_input_tokens",
+            int(usage.get("input_tokens") or 0),
+            unit="{token}",
+            description="Runner input tokens per evaluation",
+        )
+        record_metric_histogram(
+            "psop_runner_model_calls_per_evaluation",
+            int(usage.get("llm_calls") or 0),
+            unit="{call}",
+            description="Model calls made by each Runner evaluation",
+        )
+        if observation.get("decision") == "need_more_evidence":
+            add_metric_counter(
+                "psop_runner_need_more_evidence_total",
+                attributes={
+                    "repeated": str(previous_evaluation.get("decision") or "") == "need_more_evidence",
+                },
+                description="Runner need-more-evidence decisions",
+            )
         budgets = token.setdefault("budgets", {})
         budgets["llm_calls"] = int(budgets.get("llm_calls", 0)) + int(usage.get("llm_calls") or 0)
         self._accumulate_llm_usage(budgets, usage)
-        return self._map_runner_observation_to_runtime_observation(
+        mapped = self._map_runner_observation_to_runtime_observation(
             observation,
             agent_result=result,
             usage=usage,
         )
+        mapped["runner"].update(
+            {
+                "latest_evidence_seq": latest_seq,
+                "previous_evaluation_seq": previous_seq,
+                "stale_gap": max(0, latest_seq - previous_seq) if previous_seq else latest_seq,
+                "context_chars": int(invocation.context.get("runner_turn_context_chars") or 0),
+                "attachment_roles": [attachment.role for attachment in invocation.attachments],
+                "validator_failure_codes": [
+                    str(event.payload.get("failure_code") or "")
+                    for event in result.events
+                    if event.event_type == "agent.validation.failed" and event.payload.get("failure_code")
+                ],
+                "effective_requirement_statuses": {
+                    str(item.get("requirement_key") or ""): str(item.get("status") or "")
+                    for item in (observation.get("evidence_assessment") or {}).get("requirement_results") or []
+                    if isinstance(item, dict) and str(item.get("requirement_key") or "")
+                },
+            }
+        )
+        return mapped
 
     def _build_runner_invocation(
         self,
@@ -3263,6 +3342,7 @@ class RuntimeService:
             context=context,
         )
         context["runner_turn_context"] = runner_turn_context
+        context["runner_turn_context_chars"] = len(json.dumps(runner_turn_context, ensure_ascii=False, default=str))
         text = (
             f"node_id={node_id} 协助 PSOP Runtime 节点 `{node_id}`，模式：{mode}。\n\n"
             "请先基于以下 RunnerTurnContext 判断；只有上下文不足时才按需调用 read tools。\n"
@@ -3275,6 +3355,7 @@ class RuntimeService:
             run=run,
             node=node,
             token=token,
+            artifact_payload=artifact_payload,
             deadline_monotonic=deadline_monotonic,
         )
         if attachments:
@@ -3367,7 +3448,15 @@ class RuntimeService:
                 stage_index = index
                 break
         projected_control = prompt_view.get("control") if isinstance(prompt_view.get("control"), dict) else {}
-        return {
+        latest_evidence = context.get("latest_evidence") if isinstance(context.get("latest_evidence"), dict) else {}
+        previous_evaluation = (
+            projected_control.get("latest_evaluation")
+            if isinstance(projected_control.get("latest_evaluation"), dict)
+            else {}
+        )
+        based_on_terminal_seq = self._runner_evaluation_terminal_seq(previous_evaluation)
+        latest_seq = latest_evidence.get("seq_no") if isinstance(latest_evidence.get("seq_no"), int) else 0
+        compact_context = {
             "run_id": run.id,
             "node": {
                 "id": str(node.get("id") or ""),
@@ -3382,22 +3471,24 @@ class RuntimeService:
                 "total": len(workflow_steps),
                 "workflow_step_id": workflow_step_id,
             },
-            "current_workflow_step": current_workflow_step,
-            "previous_evaluation": (
-                projected_control.get("latest_evaluation")
-                if isinstance(projected_control.get("latest_evaluation"), dict)
-                else {}
+            "current_workflow_step": self._runner_current_workflow_step_summary(current_workflow_step),
+            "previous_evaluation": self._runner_previous_evaluation_summary(
+                previous_evaluation,
+                based_on_terminal_seq=based_on_terminal_seq,
+                latest_terminal_seq=int(latest_seq or context.get("terminal_cursor") or 0),
             ),
-            "prompt_view": prompt_view,
-            "current_checkpoint": current_checkpoint,
+            "current_checkpoint": self._runner_checkpoint_summary(current_checkpoint, latest_evidence),
             "evidence_progress": context.get("evidence_progress") if isinstance(context.get("evidence_progress"), dict) else {},
-            "latest_evidence": context.get("latest_evidence") if isinstance(context.get("latest_evidence"), dict) else {},
+            "latest_evidence": self._runner_latest_evidence_summary(latest_evidence),
             "recent_terminal_events": [
                 self._runner_terminal_event_summary(item)
-                for item in terminal_events[-5:]
+                for item in terminal_events[-3:]
                 if isinstance(item, dict)
             ],
-            "runtime_contract_slice": self._runner_runtime_contract_slice(runtime_contract),
+            "runtime_contract_slice": self._runner_runtime_contract_slice(
+                runtime_contract,
+                include_completion=bool(str(interaction.get("runner_turn_kind") or "") == "final_verification"),
+            ),
             "transition_contract": context.get("transition_contract") if isinstance(context.get("transition_contract"), dict) else {},
             "trust_labels": context.get("trust_labels") if isinstance(context.get("trust_labels"), dict) else {},
             "output_contract": {
@@ -3410,16 +3501,127 @@ class RuntimeService:
             },
             "terminal_cursor": int(context.get("terminal_cursor") or 0),
         }
+        return self._enforce_runner_turn_context_limit(compact_context)
 
-    def _runner_runtime_contract_slice(self, runtime_contract: dict[str, Any]) -> dict[str, Any]:
-        return {
+    def _runner_runtime_contract_slice(
+        self,
+        runtime_contract: dict[str, Any],
+        *,
+        include_completion: bool,
+    ) -> dict[str, Any]:
+        result = {
+            "evidence_contract_version": str(runtime_contract.get("evidence_contract_version") or "psop-evidence/v1"),
             "execution_goal": runtime_contract.get("execution_goal") or "",
             "applicability": runtime_contract.get("applicability") if isinstance(runtime_contract.get("applicability"), dict) else {},
-            "workflow_steps": runtime_contract.get("workflow_steps") if isinstance(runtime_contract.get("workflow_steps"), list) else [],
-            "expected_evidence": runtime_contract.get("expected_evidence") if isinstance(runtime_contract.get("expected_evidence"), dict) else {},
             "safety_constraints": runtime_contract.get("safety_constraints") if isinstance(runtime_contract.get("safety_constraints"), list) else [],
-            "completion_criteria": runtime_contract.get("completion_criteria") if isinstance(runtime_contract.get("completion_criteria"), list) else [],
         }
+        if include_completion:
+            result["completion_criteria"] = runtime_contract.get("completion_criteria") if isinstance(runtime_contract.get("completion_criteria"), list) else []
+        return result
+
+    @staticmethod
+    def _runner_current_workflow_step_summary(step: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "id",
+            "title",
+            "goal",
+            "preconditions",
+            "completion_criteria",
+            "stop_conditions",
+            "recovery_path",
+        }
+        return {key: value for key, value in step.items() if key in allowed and value not in (None, "", [], {})}
+
+    @staticmethod
+    def _runner_checkpoint_summary(checkpoint: dict[str, Any], latest_evidence: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "checkpoint_id",
+            "workflow_step_id",
+            "reason",
+            "expected_inputs",
+            "resume_phase",
+            "status",
+            "input_window",
+        }
+        result = {key: value for key, value in checkpoint.items() if key in allowed and value not in (None, "", [], {})}
+        if isinstance(latest_evidence.get("seq_no"), int):
+            result["latest_evidence_seq"] = latest_evidence["seq_no"]
+        return result
+
+    @staticmethod
+    def _runner_latest_evidence_summary(latest_evidence: dict[str, Any]) -> dict[str, Any]:
+        if not latest_evidence:
+            return {}
+        result = {
+            key: latest_evidence[key]
+            for key in ("seq_no", "direction", "event_kind", "mime_type", "text", "payload_inline", "occurred_at")
+            if key in latest_evidence and latest_evidence[key] not in (None, "", [], {})
+        }
+        result["parts"] = [
+            {
+                key: part[key]
+                for key in ("part_id", "order_index", "kind", "mime_type", "text", "size_bytes", "checksum")
+                if key in part and part[key] not in (None, "", [], {})
+            }
+            for part in latest_evidence.get("parts") or []
+            if isinstance(part, dict)
+        ]
+        return result
+
+    @staticmethod
+    def _runner_evaluation_terminal_seq(evaluation: dict[str, Any]) -> int:
+        direct = evaluation.get("based_on_terminal_seq")
+        if isinstance(direct, int) and not isinstance(direct, bool):
+            return direct
+        assessment = evaluation.get("evidence_assessment")
+        refs: list[str] = []
+        if isinstance(assessment, dict):
+            refs.extend(str(item) for item in assessment.get("evaluated_event_refs") or [])
+            for result in assessment.get("requirement_results") or []:
+                if isinstance(result, dict):
+                    refs.extend(str(item) for item in result.get("event_refs") or [])
+        seqs = [int(match.group(1)) for ref in refs if (match := re.fullmatch(r"terminal_event:(\d+)(?::[^:\s]+)?", ref))]
+        return max(seqs, default=0)
+
+    @staticmethod
+    def _runner_previous_evaluation_summary(
+        evaluation: dict[str, Any],
+        *,
+        based_on_terminal_seq: int,
+        latest_terminal_seq: int,
+    ) -> dict[str, Any]:
+        if not evaluation:
+            return {}
+        return {
+            "node_id": str(evaluation.get("node_id") or ""),
+            "decision": str(evaluation.get("decision") or ""),
+            "reason": str(evaluation.get("reason") or "")[:1200],
+            "based_on_terminal_seq": based_on_terminal_seq,
+            "stale_by_events": max(0, latest_terminal_seq - based_on_terminal_seq) if based_on_terminal_seq else latest_terminal_seq,
+            "historical_hint_only": True,
+        }
+
+    @staticmethod
+    def _enforce_runner_turn_context_limit(context: dict[str, Any]) -> dict[str, Any]:
+        def size() -> int:
+            return len(json.dumps(context, ensure_ascii=False, default=str))
+
+        if size() <= RUNNER_TURN_CONTEXT_MAX_CHARS:
+            return context
+        context["recent_terminal_events"] = []
+        if size() <= RUNNER_TURN_CONTEXT_MAX_CHARS:
+            return context
+        previous = context.get("previous_evaluation")
+        if isinstance(previous, dict):
+            previous["reason"] = str(previous.get("reason") or "")[:300]
+        task_identity = context.get("task_identity")
+        if isinstance(task_identity, dict):
+            task_identity["description"] = str(task_identity.get("description") or "")[:300]
+        if size() > RUNNER_TURN_CONTEXT_MAX_CHARS:
+            raise RuntimeError(
+                f"RunnerTurnContext 超过 {RUNNER_TURN_CONTEXT_MAX_CHARS} 字符，且不可裁剪当前 requirements 或 latest_evidence。"
+            )
+        return context
 
     @staticmethod
     def _runner_task_identity(artifact_payload: dict[str, Any]) -> dict[str, Any]:
@@ -3504,6 +3706,7 @@ class RuntimeService:
         run: Run,
         node: dict[str, Any],
         token: dict[str, Any],
+        artifact_payload: dict[str, Any],
         deadline_monotonic: float,
     ) -> list[AgentInvocationAttachment]:
         latest_evidence = _get_path(token, "control.latest_evidence")
@@ -3546,6 +3749,22 @@ class RuntimeService:
             )
             if attachment is not None:
                 attachments.append(attachment)
+        interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
+        if (
+            image_parts
+            and interaction.get("runner_turn_kind") == "evidence_evaluation"
+            and self._is_v2_evidence_artifact(artifact_payload)
+        ):
+            reference = self._resolve_runner_reference_attachment(
+                session=session,
+                run=run,
+                node=node,
+                token=token,
+                artifact_payload=artifact_payload,
+                deadline_monotonic=deadline_monotonic,
+            )
+            if reference is not None:
+                attachments.append(reference)
         self._commit_before_runtime_external_io(session)
         return attachments
 
@@ -3628,6 +3847,8 @@ class RuntimeService:
         self._ensure_runtime_deadline(deadline_monotonic)
         return AgentInvocationAttachment(
             attachment_id=source_ref,
+            role="evidence",
+            label=f"用户现场证据（可用于 requirement ledger）：{source_ref}",
             source_ref=source_ref,
             terminal_event_seq=seq_no,
             part_id=part_id,
@@ -3635,6 +3856,123 @@ class RuntimeService:
             media_type=media_type,
             size_bytes=int(part.get("size_bytes") or len(content) or 0),
             checksum=str(part.get("checksum") or ""),
+            artifact_object_id=artifact_object_id,
+            content_base64=base64.b64encode(content).decode("ascii"),
+        )
+
+    @staticmethod
+    def _is_v2_evidence_artifact(artifact_payload: dict[str, Any]) -> bool:
+        runtime_contract = artifact_payload.get("runtime_contract")
+        return (
+            isinstance(runtime_contract, dict)
+            and runtime_contract.get("evidence_contract_version") == "psop-evidence/v2"
+        )
+
+    def _resolve_runner_reference_attachment(
+        self,
+        *,
+        session: Session,
+        run: Run,
+        node: dict[str, Any],
+        token: dict[str, Any],
+        artifact_payload: dict[str, Any],
+        deadline_monotonic: float,
+    ) -> AgentInvocationAttachment | None:
+        if RUNNER_MAX_REFERENCE_ATTACHMENTS < 1:
+            return None
+        runtime_contract = artifact_payload.get("runtime_contract")
+        if not isinstance(runtime_contract, dict):
+            return None
+        interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
+        workflow_step_id = str(
+            _get_path(token, "control.wait.workflow_step_id")
+            or interaction.get("workflow_step_id")
+            or str(node.get("id") or "").removeprefix("evaluate_")
+        )
+        workflow_steps = runtime_contract.get("workflow_steps")
+        step = next(
+            (
+                item
+                for item in workflow_steps or []
+                if isinstance(item, dict) and str(item.get("id") or "") == workflow_step_id
+            ),
+            None,
+        )
+        if not isinstance(step, dict):
+            return None
+        references = [item for item in step.get("reference_images") or [] if isinstance(item, dict)]
+        if not references:
+            return None
+        reference = min(
+            references,
+            key=lambda item: (int(item.get("display_order") or 0), str(item.get("reference_image_ref") or "")),
+        )
+        reference_ref = str(reference.get("reference_image_ref") or f"step-reference:{workflow_step_id}")
+        source_ref = f"runtime_contract.workflow_steps.{workflow_step_id}.reference_images.{reference_ref}"
+        artifact_object_id = str(reference.get("artifact_object_id") or "")
+        if not artifact_object_id:
+            self._append_runner_attachment_warning(
+                session,
+                run=run,
+                node=node,
+                source_ref=source_ref,
+                artifact_object_id="",
+                reason="missing_artifact_object_id",
+                attachment_role="reference",
+            )
+            return None
+        artifact_object = self.repository.get_artifact_object(session, artifact_object_id)
+        if not artifact_object or self.object_store is None:
+            self._append_runner_attachment_warning(
+                session,
+                run=run,
+                node=node,
+                source_ref=source_ref,
+                artifact_object_id=artifact_object_id,
+                reason="artifact_object_not_found" if not artifact_object else "object_store_unavailable",
+                attachment_role="reference",
+            )
+            return None
+        media_type = str(reference.get("mime_type") or artifact_object.media_type or "application/octet-stream")
+        if not media_type.lower().startswith("image/"):
+            self._append_runner_attachment_warning(
+                session,
+                run=run,
+                node=node,
+                source_ref=source_ref,
+                artifact_object_id=artifact_object_id,
+                reason="unsupported_media_type",
+                attachment_role="reference",
+            )
+            return None
+        self._commit_before_runtime_external_io(session)
+        try:
+            content = self._download_runner_attachment_bytes(
+                bucket=artifact_object.bucket,
+                object_key=artifact_object.object_key,
+                deadline_monotonic=deadline_monotonic,
+            )
+        except Exception as exc:  # 参考图不可用不能阻断现场图评估。
+            self._append_runner_attachment_warning(
+                session,
+                run=run,
+                node=node,
+                source_ref=source_ref,
+                artifact_object_id=artifact_object_id,
+                reason=f"download_failed:{exc.__class__.__name__}",
+                attachment_role="reference",
+            )
+            return None
+        title = str(reference.get("title") or reference.get("caption") or "当前步骤参考图")
+        return AgentInvocationAttachment(
+            attachment_id=f"reference:{reference_ref}",
+            role="reference",
+            label=f"步骤参考图（仅用于视觉对照，绝不能作为用户已完成操作的 evidence）：{title}",
+            source_ref=source_ref,
+            filename=title,
+            media_type=media_type,
+            size_bytes=int(artifact_object.size_bytes or len(content) or 0),
+            checksum=str(artifact_object.checksum or ""),
             artifact_object_id=artifact_object_id,
             content_base64=base64.b64encode(content).decode("ascii"),
         )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -244,6 +245,10 @@ def test_runtime_projects_compiled_runner_turn_contract_without_inference(runtim
     assert turn_context["current_workflow_step"]["title"] == "收集上下文"
     assert turn_context["previous_evaluation"] == {}
     assert turn_context["runtime_contract_slice"]["applicability"] == artifact_payload["runtime_contract"]["applicability"]
+    assert "prompt_view" not in turn_context
+    assert "workflow_steps" not in turn_context["runtime_contract_slice"]
+    assert "evidence" not in turn_context["current_checkpoint"]
+    assert len(json.dumps(turn_context, ensure_ascii=False)) < 20_000
 
     legacy_node = json.loads(json.dumps(node, ensure_ascii=False))
     legacy_node["interaction"].pop("runner_turn_kind")
@@ -260,6 +265,69 @@ def test_runtime_projects_compiled_runner_turn_contract_without_inference(runtim
         context=legacy_context,
     )
     assert legacy_turn_context["turn_kind"] == ""
+
+
+def test_runner_turn_context_marks_previous_evaluation_stale_without_copying_history() -> None:
+    settings = create_test_settings()
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=AgentHarnessService(settings=settings),
+    )
+    artifact_payload = build_test_formal_v5_artifact()
+    node = next(item for item in artifact_payload["nodes"] if item["id"] == "evaluate_collect_context")
+    run = Run(id="run-stale-context", latest_snapshot_seq=4)
+    latest_evidence = {
+        "seq_no": 7,
+        "direction": "input",
+        "event_kind": "terminal.text.input.v1",
+        "text": "最新现场确认",
+        "parts": [{"part_id": "text_1", "kind": "text", "text": "最新现场确认"}],
+    }
+    token = {
+        "phase": "evaluate_collect_context",
+        "control": {
+            "wait": {
+                "checkpoint_id": "collect_context_evidence",
+                "workflow_step_id": "collect_context",
+                "expected_inputs": [{"kind": "text"}],
+                "evidence": [latest_evidence],
+            },
+            "latest_evidence": latest_evidence,
+            "latest_evaluation": {
+                "node_id": "evaluate_collect_context",
+                "decision": "need_more_evidence",
+                "reason": "旧结论" * 3000,
+                "based_on_terminal_seq": 4,
+                "evidence_assessment": {"missing_evidence": ["旧缺口"]},
+            },
+        },
+        "terminal": {"events": [{**latest_evidence, "seq_no": index, "text": "历史" * 1000} for index in range(1, 8)]},
+        "trace": [{"seq_no": index, "payload": "trace" * 1000} for index in range(10)],
+        "metadata": {"terminal_cursor": 7},
+    }
+    context = runtime_service._build_runner_context(
+        run=run,
+        node=node,
+        token=token,
+        artifact_payload=artifact_payload,
+    )
+
+    turn_context = runtime_service._build_runner_turn_context(
+        run=run,
+        node=node,
+        mode="evidence_evaluation",
+        context=context,
+    )
+
+    previous = turn_context["previous_evaluation"]
+    assert previous["based_on_terminal_seq"] == 4
+    assert previous["stale_by_events"] == 3
+    assert previous["historical_hint_only"] is True
+    assert "evidence_assessment" not in previous
+    assert len(previous["reason"]) <= 1200
+    assert len(json.dumps(turn_context, ensure_ascii=False)) < 20_000
+    assert "trace_summary" not in turn_context
 
 
 def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
@@ -312,7 +380,7 @@ def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
         database_manager.dispose()
 
 
-def test_compiler_reference_images_are_preserved_but_runner_outputs_text_only(tmp_path) -> None:
+def test_compiler_reference_image_is_attached_for_v2_evaluation_and_runner_outputs_text_only(tmp_path) -> None:
     settings = create_test_settings().model_copy(
         update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
     )
@@ -395,25 +463,80 @@ def test_compiler_reference_images_are_preserved_but_runner_outputs_text_only(tm
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
+            user_image_bytes = b"jpeg-user-evidence-bytes"
+            user_image_object = ArtifactObject(
+                bucket="test-bucket",
+                object_key="terminal/user-site.jpg",
+                media_type="image/jpeg",
+                size_bytes=len(user_image_bytes),
+                checksum="sha256-user-image",
+            )
+            session.add(user_image_object)
+            session.flush()
+            object_store.objects[(user_image_object.bucket, user_image_object.object_key)] = user_image_bytes
             runtime_service.append_terminal_event(
                 session,
                 invocation.run_id or "",
                 AppendTerminalEventRequest(
                     direction="input",
-                    event_kind="terminal.text.input.v1",
-                    mime_type="text/plain",
-                    payload_inline="现场说明已提交。",
+                    event_kind="terminal.multimodal.input.v1",
+                    mime_type="multipart/mixed",
+                    payload_inline={"text": "现场说明已提交。"},
+                    parts=[
+                        TerminalEventPartInput(
+                            part_id="text_1",
+                            kind="text",
+                            mime_type="text/plain",
+                            text="现场说明已提交。",
+                        ),
+                        TerminalEventPartInput(
+                            part_id="image_1",
+                            kind="image",
+                            mime_type="image/jpeg",
+                            artifact_object_id=user_image_object.id,
+                            size_bytes=len(user_image_bytes),
+                            checksum="sha256-user-image",
+                            metadata={"filename": "user-site.jpg"},
+                        ),
+                    ],
                     external_event_id="compiler-reference-images-input-001",
                 ),
             )
             runtime_service.process_run(session, invocation.run_id or "")
             terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+            image_agent_runs = (
+                session.query(AgentRunRecord)
+                .filter(AgentRunRecord.related_runtime_run_id == (invocation.run_id or ""))
+                .filter(AgentRunRecord.input_summary["image_attachment_count"].as_integer() == 2)
+                .all()
+            )
+            assert image_agent_runs
+            prepared_event = (
+                session.query(AgentEventRecord)
+                .filter(AgentEventRecord.agent_run_id == image_agent_runs[0].id)
+                .filter(AgentEventRecord.event_type == "agent.multimodal.attachments.prepared")
+                .one()
+            )
+            reference_evaluation_model_calls = (
+                session.query(AgentEventRecord)
+                .filter(AgentEventRecord.agent_run_id == image_agent_runs[0].id)
+                .filter(AgentEventRecord.event_type == "agent.model.completed")
+                .count()
+            )
+            prepared_payload = dict(prepared_event.payload)
+            sandbox_input = Path(image_agent_runs[0].sandbox_path, "input.json").read_text(encoding="utf-8")
 
         multimodal_events = [event for event in terminal_events if event.event_kind == "terminal.multimodal.output.v1"]
         text_outputs = [event for event in terminal_events if event.event_kind == "terminal.text.output.v1"]
         assert not multimodal_events
         assert text_outputs
         assert all(part.kind == "text" for event in text_outputs for part in event.parts)
+        assert [item["role"] for item in prepared_payload["attachments"]] == ["evidence", "reference"]
+        assert reference_evaluation_model_calls == 1
+        assert prepared_payload["attachments"][1]["label"].startswith("步骤参考图（仅用于视觉对照")
+        assert "jpeg-user-evidence-bytes" not in sandbox_input
+        assert "jpeg-reference-bytes" not in sandbox_input
+        assert "terminal/user-site.jpg" not in sandbox_input
     finally:
         database_manager.dispose()
 
@@ -655,7 +778,19 @@ def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> N
                 .filter(AgentEventRecord.event_type == "agent.multimodal.attachments.prepared")
                 .one()
             )
+            image_model_call_count = (
+                session.query(AgentEventRecord)
+                .filter(AgentEventRecord.agent_run_id == image_agent_run.id)
+                .filter(AgentEventRecord.event_type == "agent.model.completed")
+                .count()
+            )
             trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+            evaluation_trace = next(
+                event
+                for event in trace_events
+                if event.event_type == "runtime.agent.completed"
+                and event.payload.get("node_id") == "evaluate_collect_context"
+            )
             image_agent_run_summary = dict(image_agent_run.input_summary)
             prepared_payload = dict(prepared_event.payload)
             sandbox_input = Path(image_agent_run.sandbox_path, "input.json").read_text(encoding="utf-8")
@@ -665,7 +800,13 @@ def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> N
     serialized_event = json.dumps(prepared_payload, ensure_ascii=False)
     assert run.status == "succeeded"
     assert image_agent_run_summary["image_attachment_count"] == 1
+    assert image_model_call_count == 1
     assert image_agent_run_summary["attachment_source_refs"] == ["terminal_event:1:image_1"]
+    runner_trace = evaluation_trace.payload["observation"]["runner"]
+    assert runner_trace["latest_evidence_seq"] == 1
+    assert runner_trace["context_chars"] < 20_000
+    assert runner_trace["attachment_roles"] == ["evidence"]
+    assert runner_trace["effective_requirement_statuses"]
     assert prepared_payload["attachments"][0]["source_ref"] == "terminal_event:1:image_1"
     assert "aW1hZ2UtYnl0ZXM=" not in sandbox_input
     assert "terminal/site.jpg" not in sandbox_input
@@ -771,6 +912,66 @@ def test_runtime_runner_attachment_warning_when_object_store_unavailable(tmp_pat
     assert warning_events
     assert warning_events[0].payload["source_ref"] == "terminal_event:1:image_1"
     assert warning_events[0].payload["reason"] == "object_store_unavailable"
+
+
+def test_runtime_runner_reference_download_failure_warns_without_raising(monkeypatch) -> None:
+    settings = create_test_settings()
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=FailingInferenceGateway(),
+        object_store=FakeObjectStore(),
+        agent_harness_service=AgentHarnessService(settings=settings),
+    )
+    reference_object = SimpleNamespace(
+        bucket="test-bucket",
+        object_key="references/missing.jpg",
+        media_type="image/jpeg",
+        size_bytes=10,
+        checksum="sha256-reference",
+    )
+    monkeypatch.setattr(
+        runtime_service.repository,
+        "get_artifact_object",
+        lambda _session, artifact_object_id: reference_object if artifact_object_id == "reference-object" else None,
+    )
+    monkeypatch.setattr(runtime_service, "_commit_before_runtime_external_io", lambda _session: None)
+    warnings: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_service,
+        "_append_runner_attachment_warning",
+        lambda _session, **kwargs: warnings.append(kwargs),
+    )
+
+    attachment = runtime_service._resolve_runner_reference_attachment(
+        session=SimpleNamespace(),
+        run=Run(id="run-reference-warning"),
+        node={"id": "evaluate_mount_board", "interaction": {"evaluation": True}},
+        token={"control": {"wait": {"workflow_step_id": "mount_board"}}},
+        artifact_payload={
+            "runtime_contract": {
+                "evidence_contract_version": "psop-evidence/v2",
+                "workflow_steps": [
+                    {
+                        "id": "mount_board",
+                        "reference_images": [
+                            {
+                                "reference_image_ref": "skill-reference://steps/mount_board/overview",
+                                "title": "安装位置参考图",
+                                "artifact_object_id": "reference-object",
+                                "mime_type": "image/jpeg",
+                                "display_order": 1,
+                            }
+                        ],
+                    }
+                ],
+            }
+        },
+        deadline_monotonic=float("inf"),
+    )
+
+    assert attachment is None
+    assert warnings[0]["attachment_role"] == "reference"
+    assert str(warnings[0]["reason"]).startswith("download_failed:")
 
 
 def test_compiler_candidate_diagnostics_filters_standard_search_availability_notes() -> None:
@@ -2448,8 +2649,9 @@ def test_runtime_evidence_progress_initializes_new_checkpoint_independently() ->
     assert progress["requirements"] == [
         {
             "requirement_key": "evidence_1",
-            "description": "第二阶段照片",
-            "kind": "image",
+                "description": "第二阶段照片",
+                "required": True,
+                "kind": "image",
             "status": "missing",
             "accepted_event_refs": [],
             "rejected_event_refs": [],

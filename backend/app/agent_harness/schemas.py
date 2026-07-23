@@ -52,6 +52,8 @@ class AgentDefinition(BaseModel):
 
 class AgentInvocationAttachment(BaseModel):
     attachment_id: str
+    role: Literal["evidence", "reference"] = "evidence"
+    label: str = ""
     source_ref: str = ""
     terminal_event_seq: int | None = None
     part_id: str = ""
@@ -65,6 +67,8 @@ class AgentInvocationAttachment(BaseModel):
     def redacted_metadata(self) -> dict[str, Any]:
         return {
             "attachment_id": self.attachment_id,
+            "role": self.role,
+            "label": self.label,
             "source_ref": self.source_ref,
             "terminal_event_seq": self.terminal_event_seq,
             "part_id": self.part_id,

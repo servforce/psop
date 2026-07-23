@@ -51,6 +51,15 @@ def test_psop_runner_definition_and_skills_load() -> None:
     resource = loader.load_resource("psop-runner", "core/SKILL.md")
     assert "PSOP Runner Core" in resource["content"]
 
+    registry = ToolRegistry()
+    register_runner_tools(registry)
+    assert registry.get("psop.runner.submit_observation").spec.return_direct is True
+    assert all(
+        registry.get(tool_name).spec.return_direct is False
+        for tool_name in package.definition.tools
+        if tool_name.startswith("psop.runner.") and tool_name != "psop.runner.submit_observation"
+    )
+
 
 def test_psop_runner_config_and_prompt_guard_observation_format() -> None:
     settings = Settings(database_url="sqlite+pysqlite:///:memory:")
@@ -176,6 +185,7 @@ def test_psop_runner_scripted_run_creates_observation_artifact(tmp_path) -> None
     assert observation["schema"] == "psop.runner.observation.v1"
     assert observation["decision"] == "continue"
     assert observation["runtime_decision"] == "proceed"
+    assert sum(event.event_type == "agent.model.completed" for event in result.events) == 1
     validate_runner_observation(
         observation,
         invocation_input=payload["input"],
@@ -312,10 +322,19 @@ def test_runner_submit_observation_validates_and_writes_outputs(tmp_path) -> Non
         "wait_reason": "",
         "expected_inputs": [],
         "evidence_assessment": {
+            "evaluated_event_refs": ["terminal_event:1"],
             "accepted_event_refs": ["terminal_event:1"],
             "rejected_event_refs": [],
             "missing_evidence": [],
             "unsafe_or_ambiguous_facts": [],
+            "requirement_results": [
+                {
+                    "requirement_key": "evidence_1",
+                    "status": "accepted",
+                    "event_refs": ["terminal_event:1"],
+                    "reason": "现场说明满足要求。",
+                }
+            ],
         },
         "safety_flags": [],
         "final_response": "",
@@ -541,7 +560,9 @@ def test_runner_observation_rejects_missing_terminal_part_ref() -> None:
 def test_runner_observation_evidence_refs_only_allow_terminal_events() -> None:
     payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     observation = _valid_runner_observation()
-    observation["evidence_assessment"]["accepted_event_refs"] = ["runtime_contract.workflow_steps.collect_context"]
+    observation["evidence_assessment"]["requirement_results"][0]["event_refs"] = [
+        "runtime_contract.workflow_steps.collect_context"
+    ]
 
     with pytest.raises(ValueError, match="只能引用 terminal_event"):
         validate_runner_observation(
@@ -549,6 +570,167 @@ def test_runner_observation_evidence_refs_only_allow_terminal_events() -> None:
             invocation_input=payload["input"],
             invocation_context=payload["context"],
         )
+
+
+def test_runner_observation_rejects_stale_requirement_ledger_after_latest_image() -> None:
+    payload, observation = _v2_runner_validation_case()
+    old_event = json.loads(json.dumps(payload["context"]["latest_evidence"], ensure_ascii=False))
+    old_event["seq_no"] = 21
+    payload["context"]["terminal_events"] = [old_event, payload["context"]["latest_evidence"]]
+    payload["context"]["current_checkpoint"]["evidence"] = [old_event, payload["context"]["latest_evidence"]]
+    payload["context"]["latest_evidence"]["seq_no"] = 37
+    observation["evidence_assessment"]["evaluated_event_refs"] = ["terminal_event:37"]
+    observation["evidence_assessment"]["accepted_event_refs"] = ["terminal_event:21"]
+    observation["evidence_assessment"]["requirement_results"][0]["event_refs"] = ["terminal_event:21"]
+    observation["source_refs"] = ["runtime_contract.workflow_steps.collect_context", "terminal_event:37"]
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_runner_observation(
+            observation,
+            invocation_input=payload["input"],
+            invocation_context=payload["context"],
+        )
+
+    assert getattr(exc_info.value, "code", "") == "latest_evidence_not_reflected_in_ledger"
+
+
+def test_runner_observation_allows_latest_non_requirement_sensor_event_after_evaluation() -> None:
+    payload, observation = _v2_runner_validation_case()
+    text_event = json.loads(json.dumps(payload["context"]["latest_evidence"], ensure_ascii=False))
+    text_event["seq_no"] = 1
+    sensor_event = {
+        "seq_no": 2,
+        "direction": "input",
+        "event_kind": "sensor.pose3d.reading.v1",
+        "mime_type": "application/json",
+        "payload_inline": {"x": 1.0, "y": 2.0, "z": 3.0},
+        "parts": [{"part_id": "text_1", "kind": "text", "mime_type": "text/plain", "text": "pose"}],
+    }
+    payload["context"]["terminal_events"] = [text_event, sensor_event]
+    payload["context"]["latest_evidence"] = sensor_event
+    payload["context"]["current_checkpoint"]["evidence"] = [text_event, sensor_event]
+    payload["context"]["terminal_cursor"] = 2
+    observation["evidence_assessment"]["evaluated_event_refs"] = ["terminal_event:2"]
+    observation["evidence_assessment"]["requirement_results"][0]["event_refs"] = ["terminal_event:1"]
+    observation["source_refs"] = [
+        "runtime_contract.workflow_steps.collect_context",
+        "terminal_event:1",
+        "terminal_event:2",
+    ]
+
+    validated = validate_runner_observation(
+        observation,
+        invocation_input=payload["input"],
+        invocation_context=payload["context"],
+    )
+
+    assert validated["evidence_assessment"]["evaluated_event_refs"] == ["terminal_event:2"]
+    assert validated["evidence_assessment"]["accepted_event_refs"] == ["terminal_event:1"]
+
+
+def test_runner_observation_rejects_when_latest_evidence_was_not_evaluated() -> None:
+    payload, observation = _v2_runner_validation_case()
+    observation["evidence_assessment"]["evaluated_event_refs"] = []
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_runner_observation(
+            observation,
+            invocation_input=payload["input"],
+            invocation_context=payload["context"],
+        )
+
+    assert getattr(exc_info.value, "code", "") == "latest_evidence_not_evaluated"
+
+
+def test_runner_observation_rejects_accepted_without_event_refs() -> None:
+    payload, observation = _v2_runner_validation_case()
+    observation["evidence_assessment"]["requirement_results"][0]["event_refs"] = []
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_runner_observation(
+            observation,
+            invocation_input=payload["input"],
+            invocation_context=payload["context"],
+        )
+
+    assert getattr(exc_info.value, "code", "") == "accepted_without_event_refs"
+
+
+def test_runner_observation_rejects_invalid_satisfied_by() -> None:
+    payload, observation = _v2_runner_validation_case()
+    observation["evidence_assessment"]["requirement_results"][0]["satisfied_by"] = "image_visual"
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_runner_observation(
+            observation,
+            invocation_input=payload["input"],
+            invocation_context=payload["context"],
+        )
+
+    assert getattr(exc_info.value, "code", "") == "evidence_option_mismatch"
+
+
+def test_runner_observation_rejects_continue_with_missing_required_requirement() -> None:
+    payload, observation = _v2_runner_validation_case()
+    result = observation["evidence_assessment"]["requirement_results"][0]
+    result.update({"status": "missing", "event_refs": ["terminal_event:1"], "satisfied_by": ""})
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_runner_observation(
+            observation,
+            invocation_input=payload["input"],
+            invocation_context=payload["context"],
+        )
+
+    assert getattr(exc_info.value, "code", "") == "continue_with_unresolved_requirements"
+
+
+def test_runner_observation_allows_optional_not_applicable_and_normalizes_ledger() -> None:
+    payload, observation = _v2_runner_validation_case()
+    optional = {
+        "requirement_key": "optional_measurement",
+        "description": "可选测量值",
+        "required": False,
+        "status": "missing",
+        "evidence_options": [
+            {
+                "option_key": "measurement_text",
+                "kind": "text",
+                "event_kind": "terminal.text.input.v1",
+                "proof_mode": "measurement",
+            }
+        ],
+    }
+    payload["context"]["evidence_progress"]["requirements"].append(optional)
+    observation["evidence_assessment"].update(
+        {
+            "accepted_event_refs": ["terminal_event:999"],
+            "rejected_event_refs": ["terminal_event:999"],
+            "missing_evidence": ["模型维护的重复状态"],
+        }
+    )
+    observation["evidence_assessment"]["requirement_results"].append(
+        {
+            "requirement_key": "optional_measurement",
+            "status": "not_applicable",
+            "event_refs": [],
+            "satisfied_by": "",
+            "reason": "当前步骤不要求测量。",
+        }
+    )
+
+    # 顶层派生字段不是事实输入，即使模型维护了错误副本也会被 ledger 覆盖。
+    validated = validate_runner_observation(
+        observation,
+        invocation_input=payload["input"],
+        invocation_context=payload["context"],
+    )
+
+    assessment = validated["evidence_assessment"]
+    assert assessment["accepted_event_refs"] == ["terminal_event:1"]
+    assert assessment["rejected_event_refs"] == []
+    assert assessment["missing_evidence"] == []
+    assert assessment["requirement_results"][1]["status"] == "not_applicable"
 
 
 def test_runner_terminal_part_tool_does_not_expose_object_key(tmp_path) -> None:
@@ -605,13 +787,64 @@ def _valid_runner_observation() -> dict:
         "wait_reason": "",
         "expected_inputs": [],
         "evidence_assessment": {
+            "evaluated_event_refs": ["terminal_event:1"],
             "accepted_event_refs": ["terminal_event:1"],
             "rejected_event_refs": [],
             "missing_evidence": [],
             "unsafe_or_ambiguous_facts": [],
+            "requirement_results": [
+                {
+                    "requirement_key": "evidence_1",
+                    "status": "accepted",
+                    "event_refs": ["terminal_event:1"],
+                    "reason": "现场说明满足要求。",
+                }
+            ],
         },
         "safety_flags": [],
         "final_response": "",
         "source_refs": ["runtime_contract.workflow_steps.collect_context", "terminal_event:1"],
         "confidence": "high",
     }
+
+
+def _v2_runner_validation_case() -> tuple[dict, dict]:
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    payload["context"]["runtime_contract"]["evidence_contract_version"] = "psop-evidence/v2"
+    payload["context"]["evidence_progress"] = {
+        "checkpoint_id": "collect_context_evidence",
+        "workflow_step_id": "collect_context",
+        "requirements": [
+            {
+                "requirement_key": "site_state",
+                "description": "确认现场状态",
+                "required": True,
+                "status": "missing",
+                "evidence_options": [
+                    {
+                        "option_key": "text_attestation",
+                        "kind": "text",
+                        "event_kind": "terminal.text.input.v1",
+                        "proof_mode": "attestation",
+                    },
+                    {
+                        "option_key": "image_visual",
+                        "kind": "image",
+                        "event_kind": "terminal.multimodal.input.v1",
+                        "proof_mode": "visual",
+                    },
+                ],
+            }
+        ],
+    }
+    observation = _valid_runner_observation()
+    observation["evidence_assessment"]["requirement_results"] = [
+        {
+            "requirement_key": "site_state",
+            "status": "accepted",
+            "event_refs": ["terminal_event:1"],
+            "satisfied_by": "text_attestation",
+            "reason": "用户已明确确认现场状态。",
+        }
+    ]
+    return payload, observation

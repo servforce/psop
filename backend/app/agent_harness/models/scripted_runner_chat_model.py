@@ -113,6 +113,10 @@ def _observation(
         reason=reason,
         missing_evidence=missing_evidence,
     )
+    for result in requirement_results:
+        if isinstance(result, dict):
+            source_refs.extend(str(ref) for ref in result.get("event_refs") or [] if str(ref).strip())
+    source_refs = list(dict.fromkeys(source_refs))
     observation = {
         "schema": "psop.runner.observation.v1",
         "node_id": node_id,
@@ -123,6 +127,7 @@ def _observation(
         "wait_reason": "等待补充现场证据。" if decision in {"need_more_evidence", "retry"} else "",
         "expected_inputs": expected_inputs,
         "evidence_assessment": {
+            "evaluated_event_refs": [event_ref] if event_ref else [],
             "accepted_event_refs": [event_ref] if event_ref and not missing_evidence else [],
             "rejected_event_refs": [],
             "missing_evidence": missing_evidence,
@@ -136,7 +141,14 @@ def _observation(
     }
     override = observation_overrides_by_node.get(node_id)
     if override:
+        override = dict(override)
+        assessment_override = override.pop("evidence_assessment", None)
         observation.update(override)
+        if isinstance(assessment_override, dict):
+            observation["evidence_assessment"] = {
+                **observation["evidence_assessment"],
+                **assessment_override,
+            }
     return observation
 
 
@@ -162,23 +174,30 @@ def _requirement_results(
         current_status = str(requirement.get("status") or "").strip().lower()
         accepted_refs = requirement.get("accepted_event_refs") if isinstance(requirement.get("accepted_event_refs"), list) else []
         if decision in {"continue", "complete"}:
-            results.append(
-                {
+            matched_event_ref, satisfied_by = _scripted_evidence_match(requirement, context)
+            result = {
                     "requirement_key": requirement_key,
                     "status": "accepted",
-                    "event_refs": [event_ref] if event_ref else [str(ref) for ref in accepted_refs if str(ref).strip()],
+                    "event_refs": (
+                        [matched_event_ref]
+                        if matched_event_ref
+                        else ([event_ref] if event_ref else [str(ref) for ref in accepted_refs if str(ref).strip()])
+                    ),
                     "reason": reason,
                 }
-            )
+            if satisfied_by:
+                result["satisfied_by"] = satisfied_by
+            results.append(result)
         elif current_status == "accepted":
-            results.append(
-                {
+            result = {
                     "requirement_key": requirement_key,
                     "status": "accepted",
                     "event_refs": [str(ref) for ref in accepted_refs if str(ref).strip()],
                     "reason": str(requirement.get("reason") or "该证据项此前已通过。"),
                 }
-            )
+            if requirement.get("satisfied_by"):
+                result["satisfied_by"] = str(requirement["satisfied_by"])
+            results.append(result)
         else:
             results.append(
                 {
@@ -191,8 +210,43 @@ def _requirement_results(
     return results
 
 
+def _scripted_evidence_match(requirement: dict[str, Any], context: dict[str, Any]) -> tuple[str, str]:
+    options = [item for item in requirement.get("evidence_options") or [] if isinstance(item, dict)]
+    if not options:
+        return "", ""
+    candidates = [
+        item
+        for item in [
+            context.get("latest_evidence"),
+            *reversed(context.get("recent_terminal_events") or []),
+        ]
+        if isinstance(item, dict) and isinstance(item.get("seq_no"), int)
+    ]
+    for option in options:
+        expected_kind = str(option.get("kind") or "").lower()
+        expected_event_kind = str(option.get("event_kind") or "")
+        for event in candidates:
+            actual_event_kind = str(event.get("event_kind") or "")
+            alias_match = (
+                actual_event_kind == "terminal.multimodal.input.v1"
+                and expected_event_kind == f"terminal.{expected_kind}.input.v1"
+            )
+            if expected_event_kind and actual_event_kind != expected_event_kind and not alias_match:
+                continue
+            part_kinds = {
+                str(item.get("kind") or "").lower()
+                for item in event.get("parts") or []
+                if isinstance(item, dict)
+            }
+            if expected_kind == "text" and (event.get("text") or event.get("payload_inline")):
+                part_kinds.add("text")
+            if expected_kind in part_kinds:
+                return f"terminal_event:{event['seq_no']}", str(option.get("option_key") or "")
+    return "", str(options[0].get("option_key") or "")
+
+
 def _node_id_from_messages(messages: list[BaseMessage]) -> str:
-    content = "\n".join(str(message.content or "") for message in messages if isinstance(message, HumanMessage))
+    content = "\n".join(_human_message_text(message) for message in messages if isinstance(message, HumanMessage))
     match = re.search(r"node_id=([A-Za-z0-9_.:-]+)", content)
     if match:
         return match.group(1)
@@ -269,12 +323,24 @@ def _latest_tool_payload(messages: list[BaseMessage], tool_name: str) -> dict[st
 
 
 def _runner_turn_context_from_messages(messages: list[BaseMessage]) -> dict[str, Any]:
-    content = "\n".join(str(message.content or "") for message in messages if isinstance(message, HumanMessage))
+    content = "\n".join(_human_message_text(message) for message in messages if isinstance(message, HumanMessage))
     match = re.search(r"<RunnerTurnContext>\s*(\{.*\})\s*</RunnerTurnContext>", content, re.DOTALL)
     if not match:
         return {}
     parsed = _parse_jsonish(match.group(1))
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _human_message_text(message: HumanMessage) -> str:
+    if isinstance(message.content, str):
+        return message.content
+    if isinstance(message.content, list):
+        return "\n".join(
+            str(item.get("text") or "")
+            for item in message.content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return str(message.content or "")
 
 
 def _parse_jsonish(value: str) -> dict[str, Any]:

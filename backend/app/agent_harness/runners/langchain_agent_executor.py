@@ -237,6 +237,12 @@ def _initial_user_message(invocation: AgentInvocation) -> dict[str, Any]:
         return {"role": "user", "content": text}
     content_parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
     for attachment in image_attachments:
+        label = attachment.label or (
+            "步骤参考图（仅用于对照，不是用户证据）"
+            if attachment.role == "reference"
+            else f"用户现场证据：{attachment.source_ref or attachment.attachment_id}"
+        )
+        content_parts.append({"type": "text", "text": f"[{attachment.role}] {label}"})
         content_parts.append(
             {
                 "type": "image_url",

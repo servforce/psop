@@ -165,7 +165,7 @@ capability summary
 view graph summary
 ```
 
-`runtime_contract.workflow_steps[*].reference_images[]` 保留为 Compiler 生成的受控参考资产索引。字段中的 `artifact_object_id` 指向编译阶段创建的 `ArtifactObject`；当前 `psop.runner` 不读取专用参考图索引、不选择这些图片，也不把它们投影为终端输出。
+`runtime_contract.workflow_steps[*].reference_images[]` 是 Compiler 生成的受控参考资产索引。字段中的 `artifact_object_id` 指向编译阶段创建的 `ArtifactObject`。对于 `psop-evidence/v2` 图片评估，Runtime 按 `display_order` 自动选取当前步骤第一张参考图，并以 `role=reference` 单独附加给 `psop.runner`；参考图只用于视觉对照，不能进入 terminal evidence ledger，也不直接投影为终端输出。v1 artifact 保持原兼容行为，不自动附加参考图。
 
 当前 MVP 支持：
 
@@ -259,7 +259,7 @@ Runtime 同步所有 terminal facts，但 terminal input 只有在符合当前 w
 
 `metadata.terminal_cursor` 是已经按 `seq_no` 连续同步进 Session Token 的高水位，不能跨越尚未同步的 terminal event。Runtime 在 recoverable failure 中追加错误 output 时，只有该 output 紧邻当前 cursor 才能同步推进；如果它前面已有并发 input，恢复 snapshot 必须保留原 cursor，由下一轮从数据库事实流按序同步。input 是否已被 checkpoint 使用只以 `control.terminal_consumption` 为准，不能从 cursor 推断。
 
-`control.terminal_consumption` 只回答“某条 input 是否已经被当前 checkpoint 消费”，不回答“它满足了哪一项证据要求”。多证据 checkpoint 的验收进度由 `control.evidence_progress` 记录：Runtime 根据 `runtime_contract.expected_evidence[workflow_step_id]` 初始化证据项，并在每次 runner observation 返回后合并 `evidence_assessment.requirement_results`。已 `accepted` 的证据项是当前 checkpoint 的正式进度，后续 runner 不应要求用户重复提交；只有同一 `requirement_key` 被明确标记为 `rejected` 时，才会把该证据项改为不通过。
+`control.terminal_consumption` 只回答“某条 input 是否已经被当前 checkpoint 消费”，不回答“它满足了哪一项证据要求”。多证据 checkpoint 的验收进度由 `control.evidence_progress` 记录：Runtime 根据 `runtime_contract.expected_evidence[workflow_step_id]` 初始化证据项，并在每次 runner observation 返回后合并 `evidence_assessment.requirement_results`。`requirement_results` 是 observation 的唯一证据事实 ledger；顶层 accepted/rejected/missing 汇总由 validator 派生。v2 accepted result 必须引用 checkpoint 内 terminal event、声明合法 `satisfied_by`，并匹配 evidence option 的 kind/event kind。`decision=continue` 时全部必选 requirement 必须有效 accepted；可选 requirement 才允许 `not_applicable`。
 
 ### 4.6 Task Status 投影
 
@@ -445,6 +445,10 @@ state_authority: SessionTokenSnapshot
 LangChain Agent / LangGraph 不接管 runner 的正式状态。后续 Runtime 中的 LLM 节点可以通过 Agent Harness 执行，但输出仍以 observation 形式回到 RuntimeService merge。
 
 Runner observation 中的 `next_phase` 不拥有推进权。RuntimeService 会记录模型的原始建议用于排查，但正式 phase 只能来自 EG transition 解析结果。
+
+Runner 首轮只接收不超过 20,000 字符的动态 `RunnerTurnContext`：当前步骤、当前 requirements、latest evidence、accepted 状态摘要、安全约束和 transition。完整 Prompt View、checkpoint evidence history 和 runtime contract 继续通过 read tools 按需读取，不在首轮重复注入。`previous_evaluation` 必须携带 `based_on_terminal_seq` 与 `stale_by_events`，仅作历史提示；evidence evaluation 必须在 `evaluated_event_refs` 覆盖最新输入。图片 attachment 最多包含四张 `role=evidence` 的用户现场图，v2 额外允许一张 `role=reference` 的步骤参考图；构建多模态消息时每张图片前必须插入明确安全标签。
+
+`psop.runner.submit_observation` 是唯一启用 `return_direct` 的 Runner tool。artifact 成功写入后 agent graph 立即结束，Runtime 随后做第二次确定性校验并 merge observation；校验失败时工具返回 failure code 和最小 correction，模型只修正相应字段。
 
 ## 7. Agent Harness 架构
 

@@ -8,10 +8,12 @@ from app.agent_harness.agents.psop.runner.schemas import (
     RUNNER_OBSERVATION_ARTIFACT_REF,
     RUNNER_OBSERVATION_SCHEMA,
     RUNNER_OBSERVATION_VIRTUAL_PATH,
+    RunnerObservationValidationError,
     validate_runner_observation,
 )
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
 from app.agent_harness.tools.spec import ToolSpec
+from app.core.observability import add_metric_counter
 
 
 def register_runner_tools(registry: ToolRegistry) -> None:
@@ -133,6 +135,7 @@ def register_runner_tools(registry: ToolRegistry) -> None:
                         "type": "object",
                         "properties": {
                             "accepted_event_refs": {"type": "array", "items": {"type": "string"}},
+                            "evaluated_event_refs": {"type": "array", "items": {"type": "string"}},
                             "rejected_event_refs": {"type": "array", "items": {"type": "string"}},
                             "missing_evidence": {"type": "array", "items": {"type": "string"}},
                             "unsafe_or_ambiguous_facts": {"type": "array", "items": {"type": "string"}},
@@ -145,9 +148,10 @@ def register_runner_tools(registry: ToolRegistry) -> None:
                                         "requirement_key": {"type": "string"},
                                         "status": {
                                             "type": "string",
-                                            "enum": ["accepted", "rejected", "missing", "ambiguous"],
+                                            "enum": ["accepted", "rejected", "missing", "ambiguous", "not_applicable"],
                                         },
                                         "event_refs": {"type": "array", "items": {"type": "string"}},
+                                        "satisfied_by": {"type": "string"},
                                         "reason": {"type": "string"},
                                     },
                                     "additionalProperties": False,
@@ -168,6 +172,7 @@ def register_runner_tools(registry: ToolRegistry) -> None:
             resource_scope="sandbox_outputs",
             audit_event="agent.runner.observation.submitted",
             max_result_chars=8000,
+            return_direct=True,
         ),
         _submit_observation,
     )
@@ -285,6 +290,11 @@ def _submit_observation(arguments: dict[str, Any], context: ToolExecutionContext
                 "content_hash": content_hash,
             },
         )
+        add_metric_counter(
+            "psop_runner_observation_validation_total",
+            attributes={"result": "passed"},
+            description="Runner observation validation attempts",
+        )
         context.event_writer.record(
             "agent.artifact.created",
             {
@@ -308,15 +318,28 @@ def _submit_observation(arguments: dict[str, Any], context: ToolExecutionContext
             "next_valid_actions": [],
         }
     except Exception as exc:
+        failure_code = exc.code if isinstance(exc, RunnerObservationValidationError) else "invalid_observation"
+        correction = exc.correction if isinstance(exc, RunnerObservationValidationError) else {}
         context.event_writer.record(
             "agent.validation.failed",
             {
                 "tool_name": "psop.runner.submit_observation",
                 "error_type": exc.__class__.__name__,
+                "failure_code": failure_code,
                 "error": str(exc),
+                "correction": correction,
             },
         )
-        return _error_result("invalid_arguments", str(exc), ["psop.runner.submit_observation"])
+        add_metric_counter(
+            "psop_runner_observation_validation_total",
+            attributes={"result": "failed", "failure_code": failure_code},
+            description="Runner observation validation attempts",
+        )
+        return {
+            **_error_result("invalid_arguments", str(exc), ["psop.runner.submit_observation"]),
+            "failure_code": failure_code,
+            "correction": correction,
+        }
 
 
 def _safe_terminal_event(event: dict[str, Any], context: ToolExecutionContext | None = None) -> dict[str, Any]:

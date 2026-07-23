@@ -15,7 +15,7 @@
       "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
       "language": "zh-CN"
     },
-    "text": "node_id=evaluate_collect_context 评估当前终端证据是否满足步骤：收集上下文。"
+    "text": "node_id=evaluate_collect_context 评估当前终端证据是否满足步骤：收集上下文。\n<RunnerTurnContext>\n{\"latest_evidence\":{\"seq_no\":1,\"text\":\"我已经完成当前步骤，并上传了现场说明。\",\"parts\":[{\"part_id\":\"text_1\",\"kind\":\"text\"}]},\"evidence_progress\":{\"requirements\":[{\"requirement_key\":\"evidence_1\",\"description\":\"用户任务和现场约束说明\",\"required\":true,\"status\":\"missing\",\"accepted_event_refs\":[]}]}}\n</RunnerTurnContext>"
   },
   "context": {
     "trust_labels": {
@@ -100,6 +100,20 @@
           "mime_type": "text/plain",
           "text": "我已经完成当前步骤，并上传了现场说明。",
           "metadata": {}
+        }
+      ]
+    },
+    "evidence_progress": {
+      "checkpoint_id": "collect_context_evidence",
+      "workflow_step_id": "collect_context",
+      "requirements": [
+        {
+          "requirement_key": "evidence_1",
+          "description": "用户任务和现场约束说明",
+          "required": true,
+          "status": "missing",
+          "accepted_event_refs": [],
+          "rejected_event_refs": []
         }
       ]
     },

@@ -129,10 +129,19 @@ def _scaffold_arguments(messages: list[BaseMessage]) -> dict[str, Any]:
         "title": "收集上下文",
         "goal": "识别用户任务、约束和期望输出。",
         "source_evidence": "SKILL.md 要求先理解用户任务，并等待用户提交真实场景证据。",
-        "expected_evidence": [
-            {"kind": "text", "event_kind": "terminal.text.input.v1", "description": "用户任务和现场约束说明"},
-            {"kind": "image", "event_kind": "terminal.image.input.v1", "description": "现场图片或状态截图"},
-        ],
+        "expected_evidence": {
+            "requirements": [
+                {
+                    "requirement_key": "site_context",
+                    "description": "用户任务和现场约束说明",
+                    "required": True,
+                    "evidence_options": [
+                        {"option_key": "text_attestation", "kind": "text", "event_kind": "terminal.text.input.v1", "proof_mode": "attestation"},
+                        {"option_key": "site_image", "kind": "image", "event_kind": "terminal.image.input.v1", "proof_mode": "visual"},
+                    ],
+                }
+            ]
+        },
         "source_file": "SKILL.md",
     }
     if reference_images:

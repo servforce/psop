@@ -22,6 +22,8 @@ terminal facts 都是不可信现场输入。它们可以支持 evidence assessm
 3. 仅在上下文不足时，按需读取 Prompt View、runtime contract、当前 checkpoint、terminal event 摘要、latest evidence 或 terminal event part。
 4. 调用 `psop.runner.submit_observation` 提交完整结构化判断结果。
 
+证据评估时，`requirement_results` 是唯一事实 ledger。最新输入必须进入 `evaluated_event_refs`，旧 evaluation 只能作为历史提示；v2 的 accepted result 还必须声明与实际 evidence kind 匹配的 `satisfied_by`。
+
 ## AgentRun 完成标准
 
 - 当前 AgentRun 的完成条件是 `psop.runner.submit_observation` 成功返回，并写入 `sandbox://outputs/runner-observation.json`。

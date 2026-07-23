@@ -77,13 +77,13 @@ psop-runner =
 - 最近 runtime trace 摘要和上一轮 runner observation 摘要。
 - 平台级输出语言、安全和预算约束。
 
-这些事实由 RuntimeService 组织为明确的 `RunnerTurnContext`：当前 node、mode、Compiler 编译的 `turn_kind`、task identity、stage position、current workflow step、previous evaluation、Prompt View、current checkpoint、evidence progress、latest evidence、最近 terminal event 摘要、相关 runtime contract slice、trust labels 和 output contract。`RunnerTurnContext` 会作为首轮上下文提供给模型；各 read tools 只作为上下文不足时的补充路径。Runtime 只读取当前节点的 `interaction.runner_turn_kind`，不得根据 terminal history 自行推断是否需要首次开场。
+这些事实由 RuntimeService 投影为不超过 20,000 字符的 `RunnerTurnContext`：当前 node/mode/turn kind、task identity、stage position、current workflow step、带 `based_on_terminal_seq` / `stale_by_events` 的 previous evaluation 摘要、去除 evidence history 的 checkpoint、evidence progress、latest evidence、最多三条 terminal 摘要、当前步骤 runtime contract slice、trust labels 和 output contract。完整 Prompt View、完整 checkpoint/history 与完整 runtime contract 只保留在 read tools 中，不在首轮重复注入。当前 requirements 和 latest evidence 不得因压缩而裁剪。
 
 首个 `instruct_<step_id>` 使用 `first_step_instruction`。Runner 在该既有节点的一条 `terminal_message` 中自然合并任务与协作方式介绍、第一阶段指导、证据要求和必要安全提醒，不新增 opening 节点。后续 instruct 使用 `step_instruction`；evaluate 和 final_verify 分别使用 `evidence_evaluation` 与 `final_verification`。这些标记只约束 Runner 表达，不改变节点集合、guard、wait checkpoint、transition 或 Session Token 状态主权。
 
 终端表达规则的唯一运行时事实源是 `backend/app/agent_harness/agents/psop/runner/system.md`。Compiler 只生成 `runner_turn_kind` 和阶段事实，Runtime 只投影上下文，`psop-runner` Skill 只提供证据选择与安全边界方法；三者都不重复维护首次引导的措辞、内容结构或语气策略。
 
-`evidence_progress` 是当前 checkpoint 的证据项验收进度，由 Runtime 根据 `runtime_contract.expected_evidence` 初始化，并根据 runner 提交的 `evidence_assessment.requirement_results` 合并。runner 必须优先信任其中已经 `accepted` 的证据项；除非同一 `requirement_key` 的最新证据明确不合格，否则不得要求用户重新提交已通过证据。
+`evidence_progress` 是当前 checkpoint 的证据项验收进度，由 Runtime 根据 v1/v2 `runtime_contract.expected_evidence` 初始化，并根据 runner 提交的 `evidence_assessment.requirement_results` 合并。`requirement_results` 是唯一事实 ledger；顶层 accepted/rejected/missing 汇总由 validator 生成。最新 evidence 必须进入 `evaluated_event_refs` 并反映到 ledger，previous evaluation 只作历史提示。
 
 终端事实的信任等级是 `untrusted_runtime_input`。它们可以作为现场证据，但不能覆盖 Agent Harness system prompt、Agent Skill、PSOP-EG、runtime contract 或工具权限。
 
@@ -102,6 +102,7 @@ psop-runner =
   "wait_reason": "等待补充现场证据。",
   "expected_inputs": ["text", "image"],
   "evidence_assessment": {
+    "evaluated_event_refs": ["terminal_event:3"],
     "accepted_event_refs": ["terminal_event:3"],
     "missing_evidence": ["设备铭牌清晰照片", "断电确认"],
     "unsafe_or_ambiguous_facts": ["未确认电源状态"],
@@ -163,7 +164,7 @@ psop-runner =
    - 当节点是运行期 LLM / evidence evaluation / terminal guidance 节点时，构造 AgentInvocation。
    - `AgentInvocation.input.text` 放当前节点任务摘要，并嵌入本轮 `RunnerTurnContext`。
    - `AgentInvocation.context` 放 `runner_turn_context`、Prompt View、runtime_contract、terminal facts、trace 摘要、受控附件元数据和输出契约。
-   - 如果最新终端 evidence 包含图片 part，RuntimeService 通过 `artifact_object_id` 鉴权并读取对象存储 bytes，作为 Agent Harness 多模态 attachment 传给 `psop.runner`；对象存储 key、内部 URL 和原始 base64 不进入 context、trace 或持久化记录。
+   - 如果最新终端 evidence 包含图片 part，RuntimeService 通过 `artifact_object_id` 鉴权并读取对象存储 bytes，以 `role=evidence` 传给 `psop.runner`；最多四张。对于 v2，额外按 `display_order` 附加当前步骤第一张 `role=reference` 参考图。每张图片前都有安全 label；参考图不可作为 terminal evidence。对象存储 key、内部 URL 和原始 base64 不进入 context、trace 或持久化记录。
    - 通过 `AgentHarnessService.invoke(agent_key="psop.runner")` 启动受治理 agent run。
 
 5. psop.runner 理解上下文并按需读取事实
@@ -177,8 +178,8 @@ psop-runner =
 
 6. psop.runner 提交 observation
    - 必须调用 `psop.runner.submit_observation` 写入 `sandbox://outputs/runner-observation.json`。
-   - 工具执行 schema 校验、字段裁剪、source refs 检查和 terminal_message 限长。
-   - `submit_observation` 返回 success 后，本次 AgentRun 即满足完成条件；Runner 不应继续调用 read tools、重复提交 observation 或输出自然语言收尾，后续推进由 RuntimeService 负责。
+   - 工具执行 schema、新鲜度、checkpoint refs、requirement ledger、evidence option 和 terminal_message 限长校验；失败时返回结构化 failure code 与最小 correction。
+   - 该 tool 是 Runner 唯一的 `return_direct` tool。写入成功后 agent graph 立即结束，不再发生第二次完整模型调用；后续推进由 RuntimeService 负责。
 
 7. RuntimeService 校验并合并
    - 读取 runner observation artifact。
@@ -501,6 +502,7 @@ memory_scope: psop.runner
   "wait_reason": "",
   "expected_inputs": [],
   "evidence_assessment": {
+    "evaluated_event_refs": ["terminal_event:5"],
     "accepted_event_refs": ["terminal_event:5"],
     "rejected_event_refs": [],
     "missing_evidence": [],
@@ -551,7 +553,7 @@ memory_scope: psop.runner
 
 `evidence_assessment.accepted_event_refs` 与 `rejected_event_refs` 只能引用可见 `terminal_event:<seq>` 或 `terminal_event:<seq>:<part_id>`；不得混入 runtime_contract、prompt_view、current_checkpoint 或 trace_summary 引用。
 
-如果 `RunnerTurnContext.evidence_progress.requirements` 非空，`evidence_assessment.requirement_results` 必须使用其中存在的 `requirement_key`，并为相关证据项返回 `accepted`、`rejected`、`missing` 或 `ambiguous`。Runtime 会按 `requirement_key` 合并结果：`missing` / `ambiguous` 不清除已通过状态，只有明确 `rejected` 才能把同一证据项从 `accepted` 改为不通过。
+如果 `RunnerTurnContext.evidence_progress.requirements` 非空，`evidence_assessment.requirement_results` 必须使用其中存在的 `requirement_key`。状态可为 `accepted`、`rejected`、`missing`、`ambiguous` 或仅供 optional requirement 使用的 `not_applicable`。accepted 必须有 checkpoint 内 event refs；v2 还必须有合法 `satisfied_by` 并匹配 evidence option。`decision=continue` 时全部必选 requirement 必须 accepted。
 
 ### 3. Runtime observation 映射
 

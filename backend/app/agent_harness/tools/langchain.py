@@ -38,6 +38,7 @@ def to_langchain_tools(*, tool_names: list[str], registry: ToolRegistry, context
                 name=tool_name,
                 description=definition.spec.description,
                 args_schema=args_schema,
+                return_direct=definition.spec.return_direct,
             )
         )
     return tools

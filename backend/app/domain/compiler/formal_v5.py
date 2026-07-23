@@ -216,6 +216,7 @@ def validate_and_normalize_artifact(candidate: Any) -> FormalValidationResult:
     else:
         workflow_diagnostics, workflow_step_ids = _validate_workflow_contract(runtime_contract, node_ids)
         diagnostics.extend(workflow_diagnostics)
+        diagnostics.extend(_validate_evidence_contract(runtime_contract, workflow_step_ids))
         diagnostics.extend(_validate_workflow_nodes(nodes, workflow_step_ids))
 
     artifact.setdefault("artifact_version", ARTIFACT_VERSION)
@@ -589,6 +590,79 @@ def _validate_workflow_contract(runtime_contract: dict[str, Any], node_ids: set[
     else:
         diagnostics.append(_workflow_error("runtime_contract.wait_checkpoints 必须是数组。", "runtime_contract.wait_checkpoints"))
     return diagnostics, ordered_step_ids
+
+
+def _validate_evidence_contract(
+    runtime_contract: dict[str, Any],
+    workflow_step_ids: list[str],
+) -> list[FormalDiagnostic]:
+    version = str(runtime_contract.get("evidence_contract_version") or "")
+    if not version:
+        return []  # 已发布 v1 artifact 继续沿用 list/dict 兼容读取路径。
+    if version != "psop-evidence/v2":
+        return [_workflow_error(f"不支持的 evidence_contract_version：`{version}`。", "runtime_contract.evidence_contract_version")]
+    expected_evidence = runtime_contract.get("expected_evidence")
+    if not isinstance(expected_evidence, dict):
+        return [_workflow_error("v2 runtime_contract.expected_evidence 必须是对象。", "runtime_contract.expected_evidence")]
+
+    diagnostics: list[FormalDiagnostic] = []
+    for step_id in workflow_step_ids:
+        path = f"runtime_contract.expected_evidence.{step_id}"
+        step_contract = expected_evidence.get(step_id)
+        if not isinstance(step_contract, dict):
+            diagnostics.append(_workflow_error(f"v2 step `{step_id}` 缺少 evidence contract。", path))
+            continue
+        requirements = step_contract.get("requirements")
+        if not isinstance(requirements, list) or not requirements:
+            diagnostics.append(_workflow_error("v2 step evidence contract 必须包含非空 requirements。", f"{path}.requirements"))
+            continue
+        requirement_keys: set[str] = set()
+        for requirement_index, requirement in enumerate(requirements):
+            requirement_path = f"{path}.requirements[{requirement_index}]"
+            if not isinstance(requirement, dict):
+                diagnostics.append(_workflow_error("requirement 必须是对象。", requirement_path))
+                continue
+            requirement_key = requirement.get("requirement_key")
+            if not isinstance(requirement_key, str) or not requirement_key.strip():
+                diagnostics.append(_workflow_error("requirement_key 必须是非空字符串。", f"{requirement_path}.requirement_key"))
+            elif requirement_key in requirement_keys:
+                diagnostics.append(_workflow_error(f"requirement_key `{requirement_key}` 重复。", f"{requirement_path}.requirement_key"))
+            else:
+                requirement_keys.add(requirement_key)
+            if not isinstance(requirement.get("description"), str) or not str(requirement.get("description") or "").strip():
+                diagnostics.append(_workflow_error("requirement.description 必须是非空字符串。", f"{requirement_path}.description"))
+            if not isinstance(requirement.get("required"), bool):
+                diagnostics.append(_workflow_error("requirement.required 必须是 boolean。", f"{requirement_path}.required"))
+            options = requirement.get("evidence_options")
+            if not isinstance(options, list) or not options:
+                diagnostics.append(_workflow_error("requirement.evidence_options 必须是非空数组。", f"{requirement_path}.evidence_options"))
+                continue
+            option_keys: set[str] = set()
+            for option_index, option in enumerate(options):
+                option_path = f"{requirement_path}.evidence_options[{option_index}]"
+                if not isinstance(option, dict):
+                    diagnostics.append(_workflow_error("evidence option 必须是对象。", option_path))
+                    continue
+                option_key = option.get("option_key")
+                if not isinstance(option_key, str) or not option_key.strip():
+                    diagnostics.append(_workflow_error("option_key 必须是非空字符串。", f"{option_path}.option_key"))
+                elif option_key in option_keys:
+                    diagnostics.append(_workflow_error(f"option_key `{option_key}` 重复。", f"{option_path}.option_key"))
+                else:
+                    option_keys.add(option_key)
+                kind = str(option.get("kind") or "")
+                if kind not in {"image", "text", "audio", "video"}:
+                    diagnostics.append(_workflow_error(f"evidence option kind `{kind}` 不受支持。", f"{option_path}.kind"))
+                if not isinstance(option.get("event_kind"), str) or not str(option.get("event_kind") or "").strip():
+                    diagnostics.append(_workflow_error("evidence option.event_kind 必须是非空字符串。", f"{option_path}.event_kind"))
+                proof_mode = str(option.get("proof_mode") or "")
+                if proof_mode not in {"visual", "attestation", "measurement"}:
+                    diagnostics.append(_workflow_error(f"proof_mode `{proof_mode}` 不受支持。", f"{option_path}.proof_mode"))
+                if proof_mode == "visual" and kind not in {"image", "video"}:
+                    diagnostics.append(_workflow_error("proof_mode=visual 只能使用 image 或 video。", option_path))
+                if proof_mode == "attestation" and kind not in {"text", "audio"}:
+                    diagnostics.append(_workflow_error("proof_mode=attestation 只能使用 text 或 audio。", option_path))
+    return diagnostics
 
 
 def _validate_workflow_nodes(nodes: list[Any], workflow_step_ids: list[str]) -> list[FormalDiagnostic]:

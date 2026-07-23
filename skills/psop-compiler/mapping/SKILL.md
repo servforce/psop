@@ -27,7 +27,7 @@
 - `title`：Skill 中阶段标题。
 - `goal`：阶段完成目标。
 - `source_evidence`：来自 SKILL.md/README.md 的阶段摘要或片段。
-- `expected_evidence`：阶段要求用户提交的照片、截图、文字确认或文件。
+- `expected_evidence`：使用 v2 `requirements`/`evidence_options` 表达待证明事实和替代提交方式。`proof_mode` 只能是 `visual`、`attestation` 或 `measurement`。
 - `source_file`：通常为 `SKILL.md`。
 - `reference_images`：可选。只能从 `psop.compiler.read_skill_source` 返回的 `reference_assets` 中选择与该阶段相关的图片。每项包含 `reference_image_ref`、`title`、`caption`、`artifact_object_id`、`mime_type`、`source_ref`、`display_order`；`artifact_object_id` 必须来自 `reference_assets`，不能由模型编造。
 
@@ -37,6 +37,13 @@
 - `workflow_steps[].reference_images[].reference_image_ref` 是运行时 Runner 选择图片时使用的稳定引用。
 - 图片 bytes、base64、对象存储 key、内部 URL 不进入 runtime contract。
 - 如果无法确定某张图片适用于哪个步骤，不要强行映射；可以在 diagnostics 中说明 source 参考图缺少步骤语义。
+
+证据可证明性规则：
+
+- visual 图片/视频只能支持画面中直接可见的形状、位置、数量、标识和明显缺陷。
+- attestation 文本/音频支持用户对手感、操作方法和不可见过程的明确确认。
+- measurement 支持明确读数；不要用普通照片替代需要测量的结论。
+- “照片不足则补文字”是同一 requirement 的替代 option，不是额外必选项。
 
 ## Prompt View 要求
 

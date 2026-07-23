@@ -22,3 +22,4 @@ class ToolSpec(BaseModel):
     retry_policy: dict[str, Any] = Field(default_factory=dict)
     audit_event: str | None = None
     error_types: list[str] = Field(default_factory=list)
+    return_direct: bool = False
