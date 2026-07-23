@@ -385,6 +385,12 @@ def test_runner_submit_observation_rejects_forged_source_ref(tmp_path) -> None:
     assert result["status"] == "error"
     assert "terminal_event:999" in result["message"]
     assert writer.events[-1].event_type == "agent.validation.failed"
+    failure_payload = writer.events[-1].payload
+    assert failure_payload["node_id"] == "evaluate_collect_context"
+    assert failure_payload["node_mode"] == "evidence_evaluation"
+    assert failure_payload["turn_kind"] == ""
+    assert failure_payload["current_checkpoint_id"] == "collect_context_evidence"
+    assert failure_payload["previous_checkpoint_id"] == "collect_context_evidence"
     assert not sandbox.resolve_virtual_path(RUNNER_OBSERVATION_VIRTUAL_PATH).exists()
 
 
@@ -461,6 +467,59 @@ def test_runner_observation_validates_requirement_results() -> None:
     )
 
     assert validated["evidence_assessment"]["requirement_results"][0]["requirement_key"] == "evidence_1"
+
+
+def test_runner_guidance_allows_empty_ledger_with_stale_evidence_progress() -> None:
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    payload["input"]["node"].update({"id": "instruct_second_step", "mode": "terminal_guidance"})
+    observation = _valid_runner_observation()
+    observation["node_id"] = "instruct_second_step"
+    observation["decision"] = "need_more_evidence"
+    observation["evidence_assessment"] = {}
+
+    validated = validate_runner_observation(
+        observation,
+        invocation_input=payload["input"],
+        invocation_context=payload["context"],
+    )
+
+    assert validated["evidence_assessment"] == {
+        "evaluated_event_refs": [],
+        "accepted_event_refs": [],
+        "rejected_event_refs": [],
+        "missing_evidence": [],
+        "unsafe_or_ambiguous_facts": [],
+        "requirement_results": [],
+    }
+
+
+def test_runner_guidance_clears_copied_stale_evidence_ledger() -> None:
+    payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    payload["input"]["node"].update({"id": "instruct_second_step", "mode": "terminal_guidance"})
+    observation = _valid_runner_observation()
+    observation["node_id"] = "instruct_second_step"
+    observation["decision"] = "need_more_evidence"
+    observation["evidence_assessment"] = {
+        "evaluated_event_refs": ["terminal_event:1"],
+        "accepted_event_refs": ["terminal_event:1"],
+        "missing_evidence": ["上一步遗留缺口"],
+        "requirement_results": [
+            {
+                "requirement_key": "evidence_1",
+                "status": "accepted",
+                "event_refs": ["terminal_event:1"],
+                "reason": "复制了上一步结果。",
+            }
+        ],
+    }
+
+    validated = validate_runner_observation(
+        observation,
+        invocation_input=payload["input"],
+        invocation_context=payload["context"],
+    )
+
+    assert all(not value for value in validated["evidence_assessment"].values())
 
 
 def test_runner_observation_rejects_unknown_requirement_key() -> None:

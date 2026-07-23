@@ -83,7 +83,7 @@ psop-runner =
 
 终端表达规则的唯一运行时事实源是 `backend/app/agent_harness/agents/psop/runner/system.md`。Compiler 只生成 `runner_turn_kind` 和阶段事实，Runtime 只投影上下文，`psop-runner` Skill 只提供证据选择与安全边界方法；三者都不重复维护首次引导的措辞、内容结构或语气策略。
 
-`evidence_progress` 是当前 checkpoint 的证据项验收进度，由 Runtime 根据 v1/v2 `runtime_contract.expected_evidence` 初始化，并根据 runner 提交的 `evidence_assessment.requirement_results` 合并。`requirement_results` 是唯一事实 ledger；顶层 accepted/rejected/missing 汇总由 validator 生成。最新 evidence 必须进入 `evaluated_event_refs` 并反映到 ledger，previous evaluation 只作历史提示。
+`evidence_progress` 是证据评估节点当前 checkpoint 的证据项验收进度，由 Runtime 根据 v1/v2 `runtime_contract.expected_evidence` 初始化，并根据 runner 提交的 `evidence_assessment.requirement_results` 合并。`requirement_results` 是评估节点唯一事实 ledger；顶层 accepted/rejected/missing 汇总由 validator 生成。最新 evidence 必须进入 `evaluated_event_refs` 并反映到 ledger，previous evaluation 只作历史提示。`terminal_guidance` 只接收即将进入且标记为 `pending` 的 checkpoint 投影，不接收上一 checkpoint 的 `evidence_progress`、latest evidence 或图片附件；其 `evidence_assessment` 由 validator 归一化为空，不具有证据状态主权。
 
 终端事实的信任等级是 `untrusted_runtime_input`。它们可以作为现场证据，但不能覆盖 Agent Harness system prompt、Agent Skill、PSOP-EG、runtime contract 或工具权限。
 
@@ -553,7 +553,7 @@ memory_scope: psop.runner
 
 `evidence_assessment.accepted_event_refs` 与 `rejected_event_refs` 只能引用可见 `terminal_event:<seq>` 或 `terminal_event:<seq>:<part_id>`；不得混入 runtime_contract、prompt_view、current_checkpoint 或 trace_summary 引用。
 
-如果 `RunnerTurnContext.evidence_progress.requirements` 非空，`evidence_assessment.requirement_results` 必须使用其中存在的 `requirement_key`。状态可为 `accepted`、`rejected`、`missing`、`ambiguous` 或仅供 optional requirement 使用的 `not_applicable`。accepted 必须有 checkpoint 内 event refs；v2 还必须有合法 `satisfied_by` 并匹配 evidence option。`decision=continue` 时全部必选 requirement 必须 accepted。
+当 `input.node.mode=evidence_evaluation` 且 `RunnerTurnContext.evidence_progress.requirements` 非空时，`evidence_assessment.requirement_results` 必须使用其中存在的 `requirement_key`。状态可为 `accepted`、`rejected`、`missing`、`ambiguous` 或仅供 optional requirement 使用的 `not_applicable`。accepted 必须有 checkpoint 内 event refs；v2 还必须有合法 `satisfied_by` 并匹配 evidence option。`decision=continue` 时全部必选 requirement 必须 accepted。`terminal_guidance` 不执行上述证据校验；即使模型复制旧 ledger，validator 也会在持久化前将整个 `evidence_assessment` 清空。
 
 ### 3. Runtime observation 映射
 

@@ -107,21 +107,24 @@ def validate_runner_observation(
 
     _validate_source_refs(observation.get("source_refs") or [], invocation_context)
     evidence_assessment = observation.get("evidence_assessment") or {}
-    _validate_evidence_event_refs(_evidence_event_refs(evidence_assessment), invocation_context)
-    _validate_latest_evidence_freshness(
-        evidence_assessment,
-        invocation_input=invocation_input,
-        invocation_context=invocation_context,
-    )
-    _validate_requirement_results(
-        evidence_assessment,
-        decision=observation["decision"],
-        invocation_context=invocation_context,
-    )
-    observation["evidence_assessment"] = _normalize_evidence_assessment(
-        evidence_assessment,
-        invocation_context=invocation_context,
-    )
+    if _is_evidence_evaluation_invocation(invocation_input):
+        _validate_evidence_event_refs(_evidence_event_refs(evidence_assessment), invocation_context)
+        _validate_latest_evidence_freshness(
+            evidence_assessment,
+            invocation_input=invocation_input,
+            invocation_context=invocation_context,
+        )
+        _validate_requirement_results(
+            evidence_assessment,
+            decision=observation["decision"],
+            invocation_context=invocation_context,
+        )
+        observation["evidence_assessment"] = _normalize_evidence_assessment(
+            evidence_assessment,
+            invocation_context=invocation_context,
+        )
+    else:
+        observation["evidence_assessment"] = RunnerEvidenceAssessment().model_dump(mode="json")
     observation["runtime_decision"] = runner_decision_to_runtime_decision(observation["decision"])
     return observation
 
@@ -138,6 +141,11 @@ def _current_node_id(invocation_input: dict[str, Any]) -> str:
     if isinstance(node, dict):
         return str(node.get("id") or "")
     return ""
+
+
+def _is_evidence_evaluation_invocation(invocation_input: dict[str, Any]) -> bool:
+    node = invocation_input.get("node")
+    return isinstance(node, dict) and str(node.get("mode") or "") == "evidence_evaluation"
 
 
 def _allowed_decisions(invocation_input: dict[str, Any]) -> set[str]:
@@ -351,8 +359,7 @@ def _validate_latest_evidence_freshness(
     invocation_input: dict[str, Any],
     invocation_context: dict[str, Any],
 ) -> None:
-    node = invocation_input.get("node")
-    if not isinstance(node, dict) or str(node.get("mode") or "") != "evidence_evaluation":
+    if not _is_evidence_evaluation_invocation(invocation_input):
         return
     latest = invocation_context.get("latest_evidence")
     latest_seq = latest.get("seq_no") if isinstance(latest, dict) else None

@@ -320,6 +320,12 @@ def _submit_observation(arguments: dict[str, Any], context: ToolExecutionContext
     except Exception as exc:
         failure_code = exc.code if isinstance(exc, RunnerObservationValidationError) else "invalid_observation"
         correction = exc.correction if isinstance(exc, RunnerObservationValidationError) else {}
+        node = _dict_value(context.invocation_input, "node")
+        runner_turn_context = _dict_value(context.invocation_context, "runner_turn_context")
+        current_checkpoint = _dict_value(context.invocation_context, "current_checkpoint")
+        prompt_view = _dict_value(context.invocation_context, "prompt_view")
+        projected_control = _dict_value(prompt_view, "control")
+        previous_checkpoint = _dict_value(projected_control, "wait")
         context.event_writer.record(
             "agent.validation.failed",
             {
@@ -328,6 +334,11 @@ def _submit_observation(arguments: dict[str, Any], context: ToolExecutionContext
                 "failure_code": failure_code,
                 "error": str(exc),
                 "correction": correction,
+                "node_id": str(node.get("id") or ""),
+                "node_mode": str(node.get("mode") or ""),
+                "turn_kind": str(runner_turn_context.get("turn_kind") or ""),
+                "current_checkpoint_id": str(current_checkpoint.get("checkpoint_id") or ""),
+                "previous_checkpoint_id": str(previous_checkpoint.get("checkpoint_id") or ""),
             },
         )
         add_metric_counter(

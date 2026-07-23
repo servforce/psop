@@ -267,6 +267,92 @@ def test_runtime_projects_compiled_runner_turn_contract_without_inference(runtim
     assert legacy_turn_context["turn_kind"] == ""
 
 
+def test_runtime_projects_upcoming_checkpoint_for_guidance_after_evaluation(
+    runtime_stack,
+    monkeypatch,
+) -> None:
+    _, _, _, _, _, runtime_service = runtime_stack
+    artifact_payload = _add_second_wait_checkpoint_to_artifact(build_test_formal_v5_artifact())
+    node = next(item for item in artifact_payload["nodes"] if item["id"] == "instruct_second_step")
+    run = Run(id="run-next-guidance", latest_snapshot_seq=3)
+    previous_evidence = {
+        "seq_no": 4,
+        "direction": "input",
+        "event_kind": "terminal.multimodal.input.v1",
+        "parts": [
+            {
+                "part_id": "image_1",
+                "kind": "image",
+                "mime_type": "image/jpeg",
+                "artifact_object_id": "previous-image",
+            }
+        ],
+    }
+    token = {
+        "phase": "instruct_second_step",
+        "control": {
+            "wait": {
+                "checkpoint_id": "collect_context_evidence",
+                "workflow_step_id": "collect_context",
+                "expected_inputs": [{"kind": "text"}],
+                "evidence": [previous_evidence],
+            },
+            "latest_evidence": previous_evidence,
+            "evidence_progress": {
+                "checkpoint_id": "collect_context_evidence",
+                "workflow_step_id": "collect_context",
+                "requirements": [{"requirement_key": "evidence_1", "status": "accepted"}],
+            },
+            "latest_evaluation": {
+                "node_id": "evaluate_collect_context",
+                "decision": "continue",
+                "reason": "第一阶段证据已通过。",
+                "based_on_terminal_seq": 4,
+            },
+        },
+        "terminal": {"events": [previous_evidence]},
+        "metadata": {"terminal_cursor": 4},
+    }
+
+    context = runtime_service._build_runner_context(
+        run=run,
+        node=node,
+        token=token,
+        artifact_payload=artifact_payload,
+    )
+    turn_context = runtime_service._build_runner_turn_context(
+        run=run,
+        node=node,
+        mode="terminal_guidance",
+        context=context,
+    )
+
+    assert context["current_checkpoint"]["checkpoint_id"] == "second_step_evidence"
+    assert context["current_checkpoint"]["status"] == "pending"
+    assert context["evidence_progress"] == {}
+    assert context["latest_evidence"] == {}
+    assert turn_context["stage_position"]["workflow_step_id"] == "second_step"
+    assert turn_context["current_workflow_step"]["title"] == "第二阶段"
+    assert turn_context["previous_evaluation"]["historical_hint_only"] is True
+    assert turn_context["current_checkpoint"]["checkpoint_id"] == "second_step_evidence"
+    assert turn_context["evidence_progress"] == {}
+    assert turn_context["latest_evidence"] == {}
+
+    monkeypatch.setattr(
+        runtime_service,
+        "_resolve_runner_image_attachment",
+        lambda **_: pytest.fail("guidance node must not resolve previous evidence attachments"),
+    )
+    assert runtime_service._build_runner_input_attachments(
+        session=None,
+        run=run,
+        node=node,
+        token=token,
+        artifact_payload=artifact_payload,
+        deadline_monotonic=999999999.0,
+    ) == []
+
+
 def test_runner_turn_context_marks_previous_evaluation_stale_without_copying_history() -> None:
     settings = create_test_settings()
     runtime_service = RuntimeService(
@@ -2168,6 +2254,7 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     database_manager.create_schema()
     gitlab_gateway = FakeGitLabGateway()
     compile_gateway = FakeInferenceGateway()
+    object_store = FakeObjectStore()
     compiler_service = CompilerService(
         settings=settings,
         gitlab_gateway=gitlab_gateway,
@@ -2215,6 +2302,7 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     runtime_service = RuntimeService(
         settings=settings,
         inference_gateway=FailingInferenceGateway(),
+        object_store=object_store,
         agent_harness_service=agent_harness_service,
     )
 
@@ -2248,14 +2336,49 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
+            image_objects = []
+            for index in range(1, 5):
+                image_bytes = f"compressed-image-{index}".encode()
+                object_key = f"terminal/assembly-{index}.jpg"
+                object_store.objects[("test-bucket", object_key)] = image_bytes
+                image_object = ArtifactObject(
+                    bucket="test-bucket",
+                    object_key=object_key,
+                    media_type="image/jpeg",
+                    size_bytes=len(image_bytes),
+                    checksum=f"sha256-image-{index}",
+                )
+                session.add(image_object)
+                image_objects.append(image_object)
+            session.flush()
             runtime_service.append_terminal_event(
                 session,
                 invocation.run_id or "",
                 AppendTerminalEventRequest(
                     direction="input",
-                    event_kind="terminal.text.input.v1",
-                    mime_type="text/plain",
-                    payload_inline="海韵 focus gx-1200",
+                    event_kind="terminal.multimodal.input.v1",
+                    mime_type="multipart/mixed",
+                    payload_inline={"text": "海韵 focus gx-1200，已附四张装配照片。"},
+                    parts=[
+                        TerminalEventPartInput(
+                            part_id="text_1",
+                            kind="text",
+                            mime_type="text/plain",
+                            text="海韵 focus gx-1200，已附四张装配照片。",
+                        ),
+                        *[
+                            TerminalEventPartInput(
+                                part_id=f"image_{index}",
+                                kind="image",
+                                mime_type="image/jpeg",
+                                artifact_object_id=image_object.id,
+                                size_bytes=image_object.size_bytes,
+                                checksum=image_object.checksum,
+                                metadata={"filename": f"assembly-{index}.jpg"},
+                            )
+                            for index, image_object in enumerate(image_objects, start=1)
+                        ],
+                    ],
                     external_event_id="runtime-checkpoint-consumption-input-1",
                 ),
             )
@@ -2275,6 +2398,11 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
         event.payload["observation"]
         for event in trace_events
         if event.event_type == "runtime.agent.completed" and event.payload["node_id"] == "evaluate_collect_context"
+    )
+    second_instruction_payload = next(
+        event.payload["observation"]
+        for event in trace_events
+        if event.event_type == "runtime.agent.completed" and event.payload["node_id"] == "instruct_second_step"
     )
     agent_node_ids = [
         event.payload["node_id"]
@@ -2307,6 +2435,10 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     assert runner_turn_context["current_checkpoint"]["expected_inputs"] == [{"kind": "text"}, {"kind": "image"}]
     assert collect_eval_payload["next_phase"] == "second_step"
     assert collect_eval_payload["runner"]["suggested_next_phase"] == "second_step"
+    assert collect_eval_payload["runner"]["attachment_roles"] == ["evidence"] * 4
+    assert second_instruction_payload["evidence_assessment"]["requirement_results"] == []
+    assert second_instruction_payload["runner"]["attachment_roles"] == []
+    assert second_instruction_payload["runner"]["validator_failure_codes"] == []
     assert latest_token["control"]["latest_evaluation"]["resolved_next_phase"] == "instruct_second_step"
     assert consumption == [
         {
@@ -2318,6 +2450,8 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
         }
     ]
     assert "evaluate_second_step" not in agent_node_ids
+    assert not [event for event in trace_events if event.event_type == "runtime.message_processing.failed"]
+    assert not any("刚才服务器开小差了，请您重试！" in str(event.payload_inline or "") for event in terminal_events)
     assert [event.payload["resumed_from_existing_input"] for event in wait_traces] == [True, False]
     assert [event.direction for event in terminal_events] == ["input", "output", "output"]
 

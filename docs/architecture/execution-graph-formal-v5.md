@@ -186,7 +186,7 @@ v2 中，一个 requirement 表示一个待证明命题，多个 evidence option
 
 `proof_mode` 取 `visual`、`attestation` 或 `measurement`。Compiler 必须拆分需要不同证明方式的复合命题；fallback 输入是同一 requirement 的替代 option，不能被展开为额外必选 requirement。
 
-Runner observation 的证据账本满足以下不变量：
+证据评估 Runner observation 的证据账本满足以下不变量；操作指引 observation 不具有证据状态主权，其 `evidence_assessment` 归一化为空：
 
 1. 最新 evidence 必须出现在 `evaluated_event_refs`，并由至少一个相关 requirement result 引用；历史 `previous_evaluation` 不得替代本轮评估。
 2. `requirement_results` 是 accepted/rejected/missing 状态的唯一事实输入；顶层汇总由 validator 归一化。

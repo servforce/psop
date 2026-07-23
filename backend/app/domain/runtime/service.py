@@ -3399,6 +3399,7 @@ class RuntimeService:
         terminal = token.get("terminal") if isinstance(token.get("terminal"), dict) else {}
         terminal_events = terminal.get("events") if isinstance(terminal.get("events"), list) else []
         control = token.get("control") if isinstance(token.get("control"), dict) else {}
+        is_evaluation = self._node_is_evaluation(node)
         return {
             "trust_labels": {
                 "task_identity": "trusted_compiled_skill_snapshot",
@@ -3411,10 +3412,18 @@ class RuntimeService:
             "task_identity": self._runner_task_identity(artifact_payload),
             "runtime_contract": runtime_contract,
             "current_checkpoint": self._runner_current_checkpoint(run=run, node=node, token=token),
-            "evidence_progress": self._runner_evidence_progress(node=node, token=token, artifact_payload=artifact_payload),
+            "evidence_progress": (
+                self._runner_evidence_progress(node=node, token=token, artifact_payload=artifact_payload)
+                if is_evaluation
+                else {}
+            ),
             "transition_contract": self._runner_transition_contract(artifact_payload=artifact_payload, node=node),
             "terminal_events": terminal_events[-20:],
-            "latest_evidence": control.get("latest_evidence") if isinstance(control.get("latest_evidence"), dict) else {},
+            "latest_evidence": (
+                control.get("latest_evidence")
+                if is_evaluation and isinstance(control.get("latest_evidence"), dict)
+                else {}
+            ),
             "trace_summary": token.get("trace") if isinstance(token.get("trace"), list) else [],
             "allowed_runtime": {
                 "terminal_event_kinds": ["terminal.text.output.v1"],
@@ -3439,7 +3448,7 @@ class RuntimeService:
         interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
         current_checkpoint = context.get("current_checkpoint") if isinstance(context.get("current_checkpoint"), dict) else {}
         workflow_steps = runtime_contract.get("workflow_steps") if isinstance(runtime_contract.get("workflow_steps"), list) else []
-        workflow_step_id = str(current_checkpoint.get("workflow_step_id") or interaction.get("workflow_step_id") or "")
+        workflow_step_id = str(interaction.get("workflow_step_id") or current_checkpoint.get("workflow_step_id") or "")
         current_workflow_step: dict[str, Any] = {}
         stage_index = 0
         for index, step in enumerate(workflow_steps, start=1):
@@ -3709,6 +3718,8 @@ class RuntimeService:
         artifact_payload: dict[str, Any],
         deadline_monotonic: float,
     ) -> list[AgentInvocationAttachment]:
+        if not self._node_is_evaluation(node):
+            return []
         latest_evidence = _get_path(token, "control.latest_evidence")
         if not isinstance(latest_evidence, dict):
             return []
@@ -4051,15 +4062,16 @@ class RuntimeService:
     def _runner_current_checkpoint(self, *, run: Run, node: dict[str, Any], token: dict[str, Any]) -> dict[str, Any]:
         control = token.get("control") if isinstance(token.get("control"), dict) else {}
         wait = control.get("wait") if isinstance(control.get("wait"), dict) else None
-        if wait:
-            return dict(wait)
         interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
+        if self._node_is_evaluation(node) and wait:
+            return dict(wait)
         return {
             "checkpoint_id": str(interaction.get("checkpoint_id") or f"{node.get('id')}:wait"),
             "workflow_step_id": str(interaction.get("workflow_step_id") or node.get("id") or ""),
             "reason": str(interaction.get("wait_reason") or ""),
             "expected_inputs": interaction.get("expected_inputs") if isinstance(interaction.get("expected_inputs"), list) else [],
             "resume_phase": str(interaction.get("resume_phase") or f"evaluate_{node.get('id')}"),
+            "status": "pending" if interaction.get("wait_after_output") else "",
             "run_id": run.id,
             "evidence": [],
         }
