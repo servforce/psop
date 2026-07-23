@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -16,8 +16,13 @@ from app.domain.compiler.service import CompilerService, _extract_reference_imag
 from app.domain.compiler.formal_v5 import validate_and_normalize_artifact
 from app.domain.jobs.repository import JobRepository
 from app.domain.runtime.models import Run, SessionTokenSnapshot
-from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest, TerminalEventPartInput
-from app.domain.runtime.service import RuntimeService
+from app.domain.runtime.schemas import (
+    AppendTerminalEventRequest,
+    CreateInvocationRequest,
+    TerminalEventAppendResponse,
+    TerminalEventPartInput,
+)
+from app.domain.runtime.service import RuntimeService, RuntimeStepTimeoutError
 from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
 from app.domain.skills.schemas import CreateSkillRequest, PublishSkillRequest
 from app.domain.skills.service import SkillsService
@@ -68,6 +73,16 @@ class RaisingAgentHarnessService:
         self.exc = exc
 
     def invoke(self, *args, **kwargs):
+        raise self.exc
+
+
+class CallbackRaisingAgentHarnessService:
+    def __init__(self, callback: Callable[[], None], exc: Exception) -> None:
+        self.callback = callback
+        self.exc = exc
+
+    def invoke(self, *args, **kwargs):
+        self.callback()
         raise self.exc
 
 
@@ -2645,7 +2660,7 @@ def test_runtime_job_running_append_marks_rerun_and_finish_requeues_unsynced_inp
         job.attempt_no = 4
         session.commit()
 
-        runtime_service.append_terminal_event(
+        concurrent_input = runtime_service.append_terminal_event(
             session,
             invocation.run_id or "",
             AppendTerminalEventRequest(
@@ -2663,17 +2678,60 @@ def test_runtime_job_running_append_marks_rerun_and_finish_requeues_unsynced_inp
         run_model = runtime_service.repository.get_run(session, invocation.run_id or "")
         assert run_model is not None
         snapshot = runtime_service.repository.list_snapshots(session, invocation.run_id or "")[-1]
+        token = json.loads(json.dumps(snapshot.token_payload, ensure_ascii=False))
+        token.setdefault("metadata", {})["terminal_cursor"] = concurrent_input.seq_no
         runtime_service._finish_runtime_job_turn(
             session=session,
             job=job,
             run=run_model,
-            token=snapshot.token_payload,
+            token=token,
             status="succeeded",
         )
         assert job.status == "pending"
-        assert job.attempt_no == 4
+        assert job.attempt_no == 0
         assert job.payload == {"run_id": invocation.run_id}
         assert job.available_at is not None
+        assert job.worker_name == ""
+        assert job.lease_until is None
+        assert job.finished_at is None
+        assert job.last_error == ""
+
+        session.commit()
+        for index in range(4):
+            lease = JobRepository().claim_next_job(
+                session,
+                job_types=("runtime",),
+                lease_seconds=60,
+                worker_name=f"runtime-rerun-owner-{index}",
+            )
+            assert lease is not None
+            assert lease.attempt_no == 1
+            appended = runtime_service.append_terminal_event(
+                session,
+                invocation.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline=f"第 {index + 1} 次运行中追加输入",
+                    external_event_id=f"runtime-job-rerun-loop-input-{index}",
+                ),
+            )
+            run_model = runtime_service.repository.get_run(session, invocation.run_id or "")
+            claimed_job = JobRepository().get_runtime_job(session, lease.job_id)
+            assert run_model is not None
+            assert claimed_job is not None
+            token["metadata"]["terminal_cursor"] = appended.seq_no
+            runtime_service._finish_runtime_job_turn(
+                session=session,
+                job=claimed_job,
+                run=run_model,
+                token=token,
+                status="succeeded",
+            )
+            assert claimed_job.status == "pending"
+            assert claimed_job.attempt_no == 0
+            session.commit()
 
 
 def test_runtime_service_records_failed_run_when_runner_fails(runtime_stack) -> None:
@@ -2894,3 +2952,99 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
     assert snapshots[-1].token_payload["control"]["wait"]["recoverable_errors"]
     assert retry.seq_no > terminal_events[-1].seq_no
     assert final_run.status == "succeeded"
+
+
+def test_runtime_service_requeues_inputs_appended_while_terminal_message_processing_times_out(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+    concurrent_input: dict[str, TerminalEventAppendResponse] = {}
+    run_id = ""
+
+    def append_concurrent_input() -> None:
+        with database_manager.session() as concurrent_session:
+            concurrent_input["event"] = runtime_service.append_terminal_event(
+                concurrent_session,
+                run_id,
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="Runner 执行期间追加的输入",
+                    external_event_id="runtime-message-recover-concurrent-input",
+                ),
+            )
+
+    failing_runtime = RuntimeService(
+        settings=runtime_service.settings,
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=CallbackRaisingAgentHarnessService(
+            append_concurrent_input,
+            RuntimeStepTimeoutError("Runtime 节点执行超过总时限。"),
+        ),
+    )
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                name="Runtime Concurrent Message Recover",
+                description="Validate concurrent terminal input recovery.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime concurrent message recover publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key=skill.key,
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        run_id = invocation.run_id or ""
+        runtime_service.process_run(session, run_id)
+        failed_input = failing_runtime.append_terminal_event(
+            session,
+            run_id,
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="触发超时的输入",
+                external_event_id="runtime-message-recover-timeout-input",
+            ),
+        )
+
+        failing_runtime.process_run(session, run_id)
+        recovered_snapshot = runtime_service.list_snapshots(session, run_id)[-1]
+        terminal_events = runtime_service.list_terminal_events(session, run_id)
+        recovery_output = terminal_events[-1]
+        job = JobRepository().get_runtime_job_by_dedupe_key(session, f"job:runtime:{run_id}")
+
+        appended = concurrent_input["event"]
+        concurrent_seq = appended.seq_no
+        assert recovered_snapshot.token_payload["metadata"]["terminal_cursor"] == failed_input.seq_no
+        assert concurrent_seq == failed_input.seq_no + 1
+        assert recovery_output.seq_no == concurrent_seq + 1
+        assert recovery_output.direction == "output"
+        assert recovery_output.seq_no not in {
+            item["seq_no"] for item in recovered_snapshot.token_payload["terminal"]["events"]
+        }
+        assert job is not None
+        assert job.status == "pending"
+        assert job.attempt_no == 0
+        assert job.payload == {"run_id": run_id}
+
+        runtime_service.process_run(session, run_id)
+        final_run = runtime_service.get_run(session, run_id)
+        final_token = runtime_service.list_snapshots(session, run_id)[-1].token_payload
+        synced_seqs = [item["seq_no"] for item in final_token["terminal"]["events"]]
+        consumed_seqs = [item["seq_no"] for item in final_token["control"]["terminal_consumption"]]
+
+    assert final_run.status == "succeeded"
+    assert synced_seqs.count(concurrent_seq) == 1
+    assert synced_seqs.count(recovery_output.seq_no) == 1
+    assert consumed_seqs.count(concurrent_seq) == 1

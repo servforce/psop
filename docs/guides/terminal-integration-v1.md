@@ -849,6 +849,7 @@ Idempotency-Key: <client-event-id>
 - POST 返回时，Run 可能仍是 `waiting_runtime/start` 或 `waiting_input`，output terminal events 和 trace events 需要随后通过 WebSocket 或 REST 获取。
 - Runtime output 现在按节点级提交后增量可见；同一次输入触发多个节点时，终端可能陆续收到多条 output/trace，而不是等整轮 Runtime 完成后一次性出现。
 - Runtime 只会把 input 消费到当前 wait checkpoint 的输入窗口内。已被一个 checkpoint 记入 `control.terminal_consumption` 的 input，不会被后续 checkpoint 自动复用为 evidence。
+- Runtime 正在处理上一条消息时仍可继续接收新 input。服务端会持久化输入并设置 durable rerun 标记；当前处理结束或 recoverable timeout 后，worker 必须再运行一轮，不会用后续错误 output 的序号跳过该 input。
 - 如果一条 input 只是触发 Runtime 输出下一阶段指令，Runtime 创建的新 checkpoint 会从该 input 之后开始接收证据；终端用户需要再发送新消息或新附件，才会被作为新 checkpoint 的 evidence。
 - 终端客户端不要构造 `parts[]`；服务端会根据 `text` 和文件字段生成 part。
 - `payload_inline` 只作为摘要或旧展示兼容字段；正式文本内容以服务端生成的 text part 为准。

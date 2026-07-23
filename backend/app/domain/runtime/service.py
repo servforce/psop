@@ -448,6 +448,7 @@ class RuntimeService:
         session.flush()
 
         token: dict[str, Any] = {}
+        expected_snapshot_seq = run.latest_snapshot_seq
         try:
             token = self.repository.list_snapshots(session, run.id)[-1].token_payload
             token = self._compact_runtime_token(token)
@@ -541,6 +542,7 @@ class RuntimeService:
                         session,
                         run_id=run.id,
                         expected_snapshot_seq=expected_snapshot_seq,
+                        job_id=job.id if job is not None else None,
                     )
                     token = self._merge_observation(node=node, token=token, observation=observation)
                     token, entered_wait = self._apply_node_interaction(
@@ -639,6 +641,12 @@ class RuntimeService:
                 session.rollback()
                 raise
             if self._is_recoverable_terminal_turn_failure(token):
+                run = self._lock_runtime_write(
+                    session,
+                    run_id=run.id,
+                    expected_snapshot_seq=expected_snapshot_seq,
+                    job_id=job.id if job is not None else None,
+                )
                 self._recover_terminal_turn_failure(
                     session,
                     run=run,
@@ -1995,12 +2003,27 @@ class RuntimeService:
         run.exit_reason = ""
         run.ended_at = None
         invocation.status = "running"
-        self._finish_runtime_job_turn(session=session, job=job, run=run, token=recovered_token, status="succeeded")
+        cursor_before_recovery = int(_get_path(token, "metadata.terminal_cursor") or 0)
+        rerun_requested = bool((job.payload or {}).get("rerun_requested")) if job is not None else False
         self._append_recoverable_failure_snapshot(
             session,
             run=run,
             token=recovered_token,
             trace_event=failure_trace,
+        )
+        self._finish_runtime_job_turn(session=session, job=job, run=run, token=recovered_token, status="succeeded")
+        recovery_output_seq = terminal_event.seq_no if terminal_event is not None else None
+        LOGGER.info(
+            "runtime recoverable turn finalized",
+            extra={
+                "terminal_cursor_before_recovery": cursor_before_recovery,
+                "recovery_output_seq": recovery_output_seq,
+                "terminal_sequence_gap": bool(
+                    recovery_output_seq is not None and recovery_output_seq != cursor_before_recovery + 1
+                ),
+                "rerun_requested": rerun_requested,
+                "runtime_job_status": job.status if job is not None else None,
+            },
         )
 
     def _append_runtime_recoverable_failure_terminal_event(
@@ -2221,7 +2244,11 @@ class RuntimeService:
         }
         recovered["status"] = "waiting"
         recovered["phase"] = "waiting"
-        if terminal_event:
+        cursor = int(_get_path(recovered, "metadata.terminal_cursor") or 0)
+        # A cursor is a gap-free synchronization watermark. If concurrent
+        # terminal events precede this output, the next runtime turn must load
+        # the entire suffix from the durable event stream in sequence order.
+        if terminal_event and terminal_event.seq_no == cursor + 1:
             event_payload = self._terminal_event_token_payload(terminal_event)
             terminal = recovered.setdefault("terminal", {})
             terminal.setdefault("events", []).append(event_payload)
@@ -2678,7 +2705,9 @@ class RuntimeService:
             raise RuntimeLeaseLostError("Runtime advisory lock 已失效，丢弃本次 observation。")
         transaction = session.get_transaction()
         fence_marker = (lease.owner, id(transaction)) if transaction is not None else None
-        if session.info.get("runtime_lease_fence") == fence_marker:
+        # An absent marker and an unopened transaction are both represented by
+        # None; that does not mean this transaction already holds the Job lock.
+        if fence_marker is not None and session.info.get("runtime_lease_fence") == fence_marker:
             return session.get(RuntimeJob, lease.job_id)
         job = session.scalar(
             select(RuntimeJob)
@@ -2690,6 +2719,7 @@ class RuntimeService:
                 RuntimeJob.lease_until > now_utc(),
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if job is None:
             raise RuntimeLeaseLostError("Runtime job lease 已失效，丢弃本次 observation。")
@@ -2703,8 +2733,11 @@ class RuntimeService:
         *,
         run_id: str,
         expected_snapshot_seq: int,
+        job_id: str | None = None,
     ) -> Run:
-        self._validate_active_job_lease(session)
+        locked_job = self._validate_active_job_lease(session)
+        if locked_job is None and job_id is not None:
+            self.job_repository.get_runtime_job_for_update(session, job_id)
         run = self.repository.get_run_for_update(session, run_id)
         if run is None:
             raise SkillNotFoundError("未找到 Run。", details={"run_id": run_id})
@@ -2821,21 +2854,36 @@ class RuntimeService:
     ) -> None:
         if not job:
             return
-        self._validate_active_job_lease(session)
+        locked_job = self._validate_active_job_lease(session)
+        if locked_job is None:
+            locked_job = self.job_repository.get_runtime_job_for_update(session, job.id)
+        if locked_job is not None:
+            job = locked_job
         payload = dict(job.payload or {})
-        payload.pop("rerun_requested", None)
+        rerun_requested = bool(payload.pop("rerun_requested", False))
         job.payload = payload or {"run_id": run.id}
-        if run.status not in {"succeeded", "failed", "cancelled", "aborted"} and self._has_unsynced_terminal_inputs(
+        run_is_open = run.status not in {"succeeded", "failed", "cancelled", "aborted"}
+        has_unsynced_inputs = run_is_open and self._has_unsynced_terminal_inputs(
             session,
             run_id=run.id,
             token=token,
-        ):
+        )
+        if run_is_open and (rerun_requested or has_unsynced_inputs):
             job.status = "pending"
             job.available_at = now_utc()
+            job.attempt_no = 0
             job.lease_until = None
             job.worker_name = ""
             job.finished_at = None
             job.last_error = ""
+            LOGGER.info(
+                "runtime job requeued for terminal input",
+                extra={
+                    "rerun_requested": rerun_requested,
+                    "has_unsynced_terminal_inputs": has_unsynced_inputs,
+                    "terminal_cursor": int(_get_path(token, "metadata.terminal_cursor") or 0),
+                },
+            )
             return
         job.status = status
         job.lease_until = None
