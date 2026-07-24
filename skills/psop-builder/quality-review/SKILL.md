@@ -55,7 +55,7 @@
 - `selected_reference_assets` 最多 12 项，每项的 `stage_ids` 必须引用已声明阶段，并且每个 `reference_path` 必须在 `SKILL.md` 的使用步骤附近以 Markdown 图片链接形式出现。
 - 如果 LightRAG 检索失败，不要伪造行业标准；在 `review_notes` 中说明失败状态，并保持 `industry_standard_usage` 为空数组或只写可追溯的 `reference_only` 项。
 
-不得把 workspace 中的 `submit-params.json`、证据映射草稿或参考资产选择草稿当作最终候选产物。
+不得创建 workspace 中间文件；证据映射、参考资产选择和全部 Markdown 必须直接进入完整 `submit_candidate` 参数。
 
 ## Metadata 完整性门禁
 

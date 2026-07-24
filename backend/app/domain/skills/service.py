@@ -1441,7 +1441,11 @@ class SkillsService:
 
         material_generation_context = self._collect_generation_material_context(session, materials)
         generation_intent = dict((generation.prompt_metadata or {}).get("generation_intent") or {})
-        previous_validation_summary = self._latest_builder_validation_summary(session, definition.id)
+        previous_validation_summary = self._latest_builder_validation_summary(
+            session,
+            definition.id,
+            current_generation_id=generation.id,
+        )
         source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, draft_version.source_ref)
         if base_commit_sha and source_bundle.head_commit_sha != base_commit_sha:
             raise SkillSourceConflictError(
@@ -1532,14 +1536,25 @@ class SkillsService:
         if agent_result.status != "succeeded":
             validation_message = self._agent_validation_failure_message(agent_result)
             validation_diagnostics = self._agent_validation_diagnostics(agent_result)
+            budget_failure_details = self._agent_budget_failure_details(agent_result)
+            failure_kind = (
+                "validation_failed"
+                if validation_message
+                else str(budget_failure_details.get("failure_kind") or "agent_execution_failed")
+            )
             raise SkillsGatewayError(
                 validation_message or "PSOP builder 智能体运行失败。",
                 details={
                     "agent_run_id": agent_result.agent_run_id,
                     "error": agent_result.error_message,
-                    "failure_kind": "validation_failed" if validation_message else "agent_execution_failed",
+                    "failure_kind": failure_kind,
                     "validation_diagnostic_count": len(validation_diagnostics),
                     "validation_diagnostics": validation_diagnostics,
+                    **{
+                        key: value
+                        for key, value in budget_failure_details.items()
+                        if key != "failure_kind"
+                    },
                 },
             )
         candidate_content, builder_artifact_path = self._read_builder_candidate_artifact(agent_result)
@@ -1663,6 +1678,7 @@ class SkillsService:
                 "evidence_policy": prompt_payload.get("evidence_policy") or {},
                 "previous_validation_summary": prompt_payload.get("previous_validation_summary") or [],
                 "revision_baseline": ((prompt_payload.get("revision_baseline") or {}).get("summary") or {}),
+                "execution_budget": prompt_payload.get("execution_budget") or {},
             },
             context={
                 "material_analysis_results": prompt_payload.get("material_analysis_results") or [],
@@ -1687,6 +1703,7 @@ class SkillsService:
             "evidence_policy": prompt_payload.get("evidence_policy") or {},
             "previous_validation_summary": prompt_payload.get("previous_validation_summary") or [],
             "revision_baseline": ((prompt_payload.get("revision_baseline") or {}).get("summary") or {}),
+            "execution_budget": prompt_payload.get("execution_budget") or {},
         }
         return (
             f"用户构建请求：\n{user_description}\n\n"
@@ -1758,6 +1775,39 @@ class SkillsService:
         }
 
     @staticmethod
+    def _agent_budget_failure_details(agent_result: AgentResult) -> dict:
+        budget_event = next(
+            (
+                event
+                for event in reversed(agent_result.events)
+                if event.event_type == "agent.budget.exceeded"
+                and isinstance(event.payload, dict)
+                and event.payload.get("budget_type") == "model_calls"
+            ),
+            None,
+        )
+        if budget_event is None:
+            return {}
+        tool_names = [
+            str(event.payload.get("tool_name") or "")
+            for event in agent_result.events
+            if event.event_type == "agent.tool.started" and isinstance(event.payload, dict)
+        ]
+        submit_count = sum(tool_name == "psop.builder.submit_candidate" for tool_name in tool_names)
+        payload = budget_event.payload
+        return {
+            "failure_kind": (
+                "candidate_not_submitted_within_model_budget"
+                if submit_count == 0
+                else "model_call_budget_exceeded_during_repair"
+            ),
+            "model_call_limit": int(payload.get("limit") or 0),
+            "model_call_count": int(payload.get("actual") or 0),
+            "submit_candidate_call_count": submit_count,
+            "last_tool_name": tool_names[-1] if tool_names else "",
+        }
+
+    @staticmethod
     def _agent_result_summary(agent_result: AgentResult) -> dict:
         return {
             "agent_run_id": agent_result.agent_run_id,
@@ -1796,12 +1846,21 @@ class SkillsService:
                 return [item for item in diagnostics if isinstance(item, dict)]
         return []
 
-    def _latest_builder_validation_summary(self, session: Session, skill_definition_id: str) -> list[dict]:
-        failed = self.repository.get_latest_failed_raw_material_generation(
+    def _latest_builder_validation_summary(
+        self,
+        session: Session,
+        skill_definition_id: str,
+        *,
+        current_generation_id: str,
+    ) -> list[dict]:
+        previous = self.repository.get_latest_completed_raw_material_generation(
             session,
             skill_definition_id=skill_definition_id,
+            exclude_generation_id=current_generation_id,
         )
-        error_details = ((failed.raw_response or {}).get("error_details") or {}) if failed else {}
+        if previous is None or previous.status != "failed":
+            return []
+        error_details = (previous.raw_response or {}).get("error_details") or {}
         diagnostics = error_details.get("validation_diagnostics") if isinstance(error_details, dict) else None
         if not isinstance(diagnostics, list):
             return []
@@ -1924,6 +1983,12 @@ class SkillsService:
             "generation_intent": generation_intent,
             "previous_validation_summary": previous_validation_summary,
             "revision_baseline": revision_baseline,
+            "execution_budget": {
+                "max_model_calls": 13,
+                "first_submit_by_model_call": 8,
+                "reserved_repair_calls": 4,
+                "workspace_staging_allowed": False,
+            },
             "evidence_policy": {
                 "mode": "strict_evidence_first",
                 "priority": [

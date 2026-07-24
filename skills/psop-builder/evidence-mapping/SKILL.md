@@ -36,15 +36,9 @@
 - 如果标准和素材存在冲突，不得自行裁决，必须进入 `missing_questions` 或 `review_notes`。
 - 当 `psop.standard.search` 返回 `citation_status="incomplete"` 时，只能作为 `reference_only` 使用或写入审阅说明。
 
-## 建议中间产物
+## 提交约束
 
-可用 `workspace.write_text` 写入：
-
-- `/mnt/psop/workspace/evidence-map-draft.md`
-- `/mnt/psop/workspace/reference-asset-selection.md`
-- `/mnt/psop/workspace/standard-usage-draft.md`
-
-这些中间产物只用于审阅和调试，最终仍以 `psop.builder.submit_candidate` 输入为准。
+证据映射、参考资产选择和标准使用必须直接进入完整 `psop.builder.submit_candidate` 参数。不得创建 workspace 中间文件或逐文件暂存最终 Markdown；独立只读工具应在同一轮并行调用，标准检索完成后立即提交 candidate。
 # 证据治理补充
 
 `source_refs` 是对象数组，禁止把 `psop.standard.search`、`timeout`、任意文件路径或自由文本当作 `source_type`。
@@ -55,7 +49,7 @@
 - 强制 workflow、安全约束和完成标准只可由 `user_description`、`material_analysis`、`reference_asset`、`industry_standard` 支撑。`current_source` 仅定位待修订内容。
 - 标准检索超时/不可用时，不得生成 `industry_standard` 引用，且 `review_notes` 必须写入：`标准检索不可用，未引用行业标准。`
 - 当前 source 只用于定位修订目标，不是强制内容证据。精确绑定当前 commit 的成功 candidate provenance 可以由平台为未变化目标继承；模型仍只为本轮变化或新增目标提供新证据。
-- 增量修订不得重命名未变化的 `stage_id`、`constraint_id` 或 `requirement_id`；`revision_provenance` 由平台写入 artifact，不能放进工具参数。
+- 增量修订必须从 `read_current_source.revision_baseline.target_snapshots` 逐字段复制未变化对象；不得只保留 `stage_id`、`constraint_id` 或 `requirement_id` 后改写其他字段。`revision_provenance` 由平台写入 artifact，不能放进工具参数。
 
 ## Candidate metadata 提交清单
 

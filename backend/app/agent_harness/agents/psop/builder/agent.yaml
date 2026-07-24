@@ -16,9 +16,6 @@ tools:
   - psop.builder.list_reference_assets
   - psop.standard.search
   - psop.builder.submit_candidate
-  - workspace.read_text
-  - workspace.write_text
-  - workspace.list
 middleware:
   - name: dangling_tool_call
   - name: model_events

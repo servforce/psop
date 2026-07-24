@@ -42,24 +42,23 @@ _SUBMIT_CANDIDATE_REQUIRED_FIELDS = [
     "workflow_step_candidates",
     "expected_evidence_requirements",
 ]
+_AUXILIARY_BUILDER_FILES = tuple(
+    path for path in REQUIRED_BUILDER_FILES if path not in {"README.md", "SKILL.md"}
+)
 
 
 def register_builder_tools(registry: ToolRegistry) -> None:
     registry.register(
         ToolSpec(
             name="psop.builder.read_current_source",
-            description="读取本次构建请求中的当前 Skill source。",
-            purpose="用于 psop.builder 获取已由应用层准备好的 README.md 和 SKILL.md，不直接访问 GitLab。",
+            description="使用空对象参数读取当前 README.md、SKILL.md 和精确 revision baseline。",
+            purpose=(
+                "用于 psop.builder 获取已由应用层准备好的 README.md、SKILL.md、结构化目标快照和辅助文件快照，"
+                "不直接访问 GitLab。"
+            ),
             input_schema={
                 "type": "object",
-                "properties": {
-                    "paths": {
-                        "type": "array",
-                        "items": {"type": "string", "enum": ["README.md", "SKILL.md"]},
-                        "minItems": 1,
-                        "maxItems": 2,
-                    }
-                },
+                "properties": {},
                 "additionalProperties": False,
             },
             max_result_chars=40000,
@@ -155,17 +154,36 @@ def _read_current_source(arguments: dict[str, Any], context: ToolExecutionContex
     current_source = _input(context).get("current_source")
     if not isinstance(current_source, dict):
         return _error_result("not_found", "本次 invocation input 中缺少 current_source。", ["psop.builder.list_materials"])
-    requested = arguments.get("paths")
-    paths = [str(path) for path in requested] if isinstance(requested, list) and requested else ["README.md", "SKILL.md"]
+    paths = ["README.md", "SKILL.md"]
     files = {}
     for path in paths:
-        if path not in {"README.md", "SKILL.md"}:
-            return _error_result("invalid_arguments", f"不支持读取 source path：{path}", ["psop.builder.read_current_source"])
         content = str(current_source.get(path) or "")
         files[path] = {"content": _truncate(content, 40000), "truncated": len(content) > 40000}
     skill = _input(context).get("skill") if isinstance(_input(context).get("skill"), dict) else {}
     baseline = context.invocation_context.get(BUILDER_REVISION_BASELINE_CONTEXT_KEY)
     baseline_summary = baseline.get("summary") if isinstance(baseline, dict) else None
+    revision_baseline = dict(baseline_summary) if isinstance(baseline_summary, dict) else None
+    baseline_candidate = baseline.get("candidate") if isinstance(baseline, dict) else None
+    if (
+        revision_baseline is not None
+        and revision_baseline.get("status") == "exact"
+        and isinstance(baseline_candidate, dict)
+    ):
+        revision_baseline["target_snapshots"] = {
+            field_name: [dict(item) for item in baseline_candidate.get(field_name, []) if isinstance(item, dict)]
+            for field_name in (
+                "safety_constraints",
+                "workflow_step_candidates",
+                "expected_evidence_requirements",
+            )
+        }
+        candidate_files = baseline_candidate.get("files")
+        if isinstance(candidate_files, dict):
+            revision_baseline["auxiliary_file_snapshots"] = {
+                path: str(candidate_files[path])
+                for path in _AUXILIARY_BUILDER_FILES
+                if isinstance(candidate_files.get(path), str)
+            }
     return {
         "status": "success",
         "summary": f"读取当前 Skill source：{', '.join(files)}。",
@@ -173,7 +191,7 @@ def _read_current_source(arguments: dict[str, Any], context: ToolExecutionContex
         "source_commit_sha": skill.get("source_commit_sha") or "",
         "files": files,
         "trust_level": "current_source",
-        "revision_baseline": baseline_summary if isinstance(baseline_summary, dict) else None,
+        "revision_baseline": revision_baseline,
         "truncated": any(item["truncated"] for item in files.values()),
         "next_valid_actions": ["psop.builder.list_materials", "psop.builder.read_material_analysis"],
     }

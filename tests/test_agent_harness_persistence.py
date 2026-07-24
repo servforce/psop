@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from sqlalchemy import inspect, text
 
+from app.agent_harness.events import AgentEventWriter
 from app.agent_harness.persistence.models import AgentArtifactRecord, AgentEventRecord, AgentRunRecord
 from app.agent_harness.persistence.query_service import AgentRunQueryService
 from app.agent_harness.persistence.service import AgentHarnessPersistenceService
 from app.agent_harness.schemas import AgentArtifact, AgentEvent, AgentResult
+from app.agent_harness.service import AgentHarnessService
 from app.infra.database import DatabaseManager
 
 
@@ -213,6 +217,38 @@ def test_agent_harness_persistence_can_preserve_live_events_when_persisting_resu
         assert record.related_runtime_run_id == "runtime-run-1"
         assert session.query(AgentEventRecord).count() == 1
         assert session.query(AgentArtifactRecord).count() == 1
+
+
+def test_agent_event_writer_serializes_parallel_live_event_persistence(tmp_path) -> None:
+    manager = DatabaseManager("sqlite+pysqlite:///:memory:")
+    manager.create_schema()
+
+    with manager.session() as session:
+        AgentHarnessPersistenceService().start_run(
+            session,
+            agent_run_id="parallel-run",
+            agent_key="psop.builder",
+        )
+        session.commit()
+        writer = AgentEventWriter(
+            tmp_path / "events.jsonl",
+            on_event=AgentHarnessService._live_event_sink(session, "parallel-run"),
+        )
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            list(executor.map(lambda index: writer.record("agent.tool.completed", {"index": index}), range(30)))
+
+        records = (
+            session.query(AgentEventRecord)
+            .filter(AgentEventRecord.agent_run_id == "parallel-run")
+            .order_by(AgentEventRecord.seq_no.asc())
+            .all()
+        )
+
+    file_events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [event.seq_no for event in writer.events] == list(range(1, 31))
+    assert [record.seq_no for record in records] == list(range(1, 31))
+    assert [event["seq_no"] for event in file_events] == list(range(1, 31))
 
 
 def test_agent_run_timeline_preserves_all_validation_diagnostics() -> None:

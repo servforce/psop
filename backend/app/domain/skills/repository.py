@@ -146,19 +146,24 @@ class SkillsRepository:
             .with_for_update()
         )
 
-    def get_latest_failed_raw_material_generation(
+    def get_latest_completed_raw_material_generation(
         self,
         session: Session,
         *,
         skill_definition_id: str,
+        exclude_generation_id: str,
     ) -> SkillRawMaterialGeneration | None:
         return session.scalar(
             select(SkillRawMaterialGeneration)
             .where(
                 SkillRawMaterialGeneration.skill_definition_id == skill_definition_id,
-                SkillRawMaterialGeneration.status == "failed",
+                SkillRawMaterialGeneration.id != exclude_generation_id,
+                SkillRawMaterialGeneration.status.in_(("succeeded", "failed", "cancelled")),
             )
-            .order_by(SkillRawMaterialGeneration.created_at.desc())
+            .order_by(
+                SkillRawMaterialGeneration.created_at.desc(),
+                SkillRawMaterialGeneration.id.desc(),
+            )
             .limit(1)
         )
 

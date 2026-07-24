@@ -20,6 +20,7 @@ from starlette.datastructures import Headers
 from app.agent_harness.models.scripted_builder_chat_model import ScriptedBuilderChatModel
 from app.agent_harness.models.scripted_compiler_chat_model import ScriptedCompilerChatModel
 from app.agent_harness.models.scripted_runner_chat_model import ScriptedRunnerChatModel
+from app.agent_harness.persistence.models import AgentEventRecord
 from app.agent_harness.service import AgentHarnessService
 from app.api.routes.runtime import (
     _stream_terminal_content_response,
@@ -1484,6 +1485,98 @@ def test_process_skill_raw_material_generation_job_rolls_back_before_marking_fai
         assert (stored_job.payload or {})["current_stage"] == "failed"
 
 
+@pytest.mark.parametrize(
+    ("history", "expected_diagnostics"),
+    [
+        (["failed_validation", "succeeded"], []),
+        (
+            ["succeeded", "failed_validation"],
+            [
+                {
+                    "path": "safety_constraints.0",
+                    "code": "missing_evidence_coverage",
+                    "message": "安全约束缺少证据。",
+                    "example": {"target_type": "safety_constraint", "target_id": "safety_01"},
+                }
+            ],
+        ),
+        (["failed_validation", "cancelled"], []),
+        (["failed_validation", "failed_non_validation"], []),
+    ],
+)
+def test_builder_validation_summary_uses_only_latest_completed_generation(
+    history: list[str],
+    expected_diagnostics: list[dict],
+) -> None:
+    settings = create_test_settings()
+    manager = DatabaseManager(settings.sqlalchemy_database_url)
+    manager.create_schema()
+    service = skills_service_module.SkillsService(
+        settings=settings,
+        gitlab_gateway=FakeGitLabGateway(),
+        inference_gateway=FakeInferenceGateway(),
+        asr_gateway=FakeAsrGateway(),
+        object_store=FakeObjectStore(),
+    )
+    validation_diagnostic = {
+        "path": "safety_constraints.0",
+        "code": "missing_evidence_coverage",
+        "message": "安全约束缺少证据。",
+        "example": {"target_type": "safety_constraint", "target_id": "safety_01"},
+    }
+
+    with manager.session() as session:
+        definition = SkillDefinition(
+            key="builder-feedback-freshness",
+            name="Builder Feedback Freshness",
+            gitlab_project_id="builder-feedback-freshness-project",
+            repository_url="https://gitlab.example.local/skills/builder-feedback-freshness",
+        )
+        session.add(definition)
+        session.flush()
+        for index, history_item in enumerate(history, start=1):
+            status = {
+                "failed_validation": "failed",
+                "failed_non_validation": "failed",
+                "succeeded": "succeeded",
+                "cancelled": "cancelled",
+            }[history_item]
+            raw_response = (
+                {"error_details": {"validation_diagnostics": [validation_diagnostic]}}
+                if history_item == "failed_validation"
+                else {"error_details": {"message": "provider unavailable"}}
+                if history_item == "failed_non_validation"
+                else {}
+            )
+            session.add(
+                SkillRawMaterialGeneration(
+                    skill_definition_id=definition.id,
+                    material_ids=[],
+                    user_description=history_item,
+                    status=status,
+                    raw_response=raw_response,
+                    created_at=datetime(2026, 7, 24, 0, index, tzinfo=timezone.utc),
+                )
+            )
+        current = SkillRawMaterialGeneration(
+            skill_definition_id=definition.id,
+            material_ids=[],
+            user_description="current",
+            status="running",
+            created_at=datetime(2026, 7, 24, 0, len(history) + 1, tzinfo=timezone.utc),
+        )
+        session.add(current)
+        session.commit()
+
+        result = service._latest_builder_validation_summary(
+            session,
+            definition.id,
+            current_generation_id=current.id,
+        )
+
+    assert result == expected_diagnostics
+
+
 def test_parse_generated_skill_draft_handles_outer_fence_and_inner_markdown_fences() -> None:
     content = json.dumps(
         {
@@ -2023,6 +2116,12 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
         with client.app.state.db_manager.session() as session:
             stored_generation = session.get(SkillRawMaterialGeneration, generate_response.json()["id"])
             stored_invocation = stored_generation.raw_response["request"]["agent_invocation"]
+            agent_events = (
+                session.query(AgentEventRecord)
+                .filter(AgentEventRecord.agent_run_id == generate_response.json()["id"])
+                .order_by(AgentEventRecord.seq_no.asc())
+                .all()
+            )
             generation_count = session.query(SkillRawMaterialGeneration).filter_by(skill_definition_id=skill_id).count()
             generation_job_count = session.query(RuntimeJob).filter_by(job_type="skill_raw_material_generation").count()
         detail_response = client.get(f"/api/v1/skills/{skill_id}")
@@ -2075,9 +2174,31 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert stored_invocation["input"]["generation_intent"]["mode"] == "generation"
     assert stored_invocation["input"]["evidence_policy"]["mode"] == "strict_evidence_first"
     assert stored_invocation["input"]["previous_validation_summary"] == []
+    assert stored_invocation["input"]["execution_budget"] == {
+        "max_model_calls": 13,
+        "first_submit_by_model_call": 8,
+        "reserved_repair_calls": 4,
+        "workspace_staging_allowed": False,
+    }
     assert '"generation_intent"' in stored_invocation["input"]["text"]
     assert '"evidence_policy"' in stored_invocation["input"]["text"]
     assert '"previous_validation_summary"' in stored_invocation["input"]["text"]
+    assert '"execution_budget"' in stored_invocation["input"]["text"]
+    submit_seq_no = next(
+        event.seq_no
+        for event in agent_events
+        if event.event_type == "agent.tool.started"
+        and event.payload.get("tool_name") == "psop.builder.submit_candidate"
+    )
+    assert sum(
+        event.event_type == "agent.model.completed" and event.seq_no < submit_seq_no
+        for event in agent_events
+    ) <= 8
+    assert not any(
+        event.event_type == "agent.tool.started"
+        and str(event.payload.get("tool_name") or "").startswith("workspace.")
+        for event in agent_events
+    )
     assert stored_invocation["context"]["_psop_builder_revision_baseline"]["status"] == "none"
     assert payload["material_ids"] == [video_material_id, material_id]
     assert payload["committed_commit_sha"].startswith("commit-")

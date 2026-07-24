@@ -40,19 +40,27 @@ class ScriptedBuilderChatModel(BaseChatModel):
 def _next_builder_message(messages: list[BaseMessage], tool_names: set[str]) -> AIMessage:
     if "load_skill" in tool_names and not _has_tool_result(messages, "load_skill", "psop-builder"):
         return _tool_call("call_load_builder_skill", "load_skill", {"skill_name": "psop-builder"})
-    for resource_path, call_id in (
-        ("core/SKILL.md", "call_load_builder_core"),
-        ("evidence-mapping/SKILL.md", "call_load_builder_evidence"),
-        ("quality-review/SKILL.md", "call_load_builder_quality"),
-    ):
-        if "load_skill_resource" in tool_names and not _has_resource_result(messages, "psop-builder", resource_path):
-            return _tool_call(
+    missing_resources = [
+        (resource_path, call_id)
+        for resource_path, call_id in (
+            ("core/SKILL.md", "call_load_builder_core"),
+            ("evidence-mapping/SKILL.md", "call_load_builder_evidence"),
+            ("quality-review/SKILL.md", "call_load_builder_quality"),
+        )
+        if "load_skill_resource" in tool_names
+        and not _has_resource_result(messages, "psop-builder", resource_path)
+    ]
+    if missing_resources:
+        return _tool_calls([
+            (
                 call_id,
                 "load_skill_resource",
                 {"skill_name": "psop-builder", "resource_path": resource_path, "max_chars": 60000},
             )
+            for resource_path, call_id in missing_resources
+        ])
     if "psop.builder.read_current_source" in tool_names and not _has_tool_result(messages, "psop.builder.read_current_source"):
-        return _tool_call("call_read_source", "psop.builder.read_current_source", {"paths": ["README.md", "SKILL.md"]})
+        return _tool_call("call_read_source", "psop.builder.read_current_source", {})
     if "psop.builder.list_materials" in tool_names and not _has_tool_result(messages, "psop.builder.list_materials"):
         return _tool_call("call_list_materials", "psop.builder.list_materials", {"max_items": 20})
     if "psop.builder.read_material_analysis" in tool_names and not _has_tool_result(messages, "psop.builder.read_material_analysis"):
@@ -72,16 +80,6 @@ def _next_builder_message(messages: list[BaseMessage], tool_names: set[str]) -> 
                 "hazard_types": ["机械伤害", "压力风险"],
                 "equipment_keywords": ["泵房", "阀门", "压力表"],
                 "max_results": 3,
-            },
-        )
-    if "workspace.write_text" in tool_names and not _has_tool_result(messages, "workspace.write_text"):
-        return _tool_call(
-            "call_workspace_note",
-            "workspace.write_text",
-            {
-                "path": "evidence-map-draft.md",
-                "content": "# Evidence Map Draft\n\n- 已读取素材分析、参考资产和标准检索状态。\n",
-                "mode": "overwrite",
             },
         )
     if "psop.builder.submit_candidate" in tool_names and not _has_tool_result(messages, "psop.builder.submit_candidate"):
@@ -212,9 +210,13 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
 
 
 def _tool_call(call_id: str, name: str, args: dict[str, Any]) -> AIMessage:
+    return _tool_calls([(call_id, name, args)])
+
+
+def _tool_calls(calls: list[tuple[str, str, dict[str, Any]]]) -> AIMessage:
     return AIMessage(
         content="",
-        tool_calls=[{"id": call_id, "name": name, "args": args}],
+        tool_calls=[{"id": call_id, "name": name, "args": args} for call_id, name, args in calls],
         usage_metadata={"input_tokens": 12, "output_tokens": 6, "total_tokens": 18},
     )
 

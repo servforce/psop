@@ -51,10 +51,21 @@ def test_psop_builder_definition_and_skills_load() -> None:
     middleware = {item.name: item.config for item in package.definition.middleware if not isinstance(item, str)}
     assert middleware["model_events"]["max_model_calls"] == 13
     assert middleware["tool_calls"]["max_error_counts"]["psop.builder.submit_candidate"] == 4
+    assert not any(tool_name.startswith("workspace.") for tool_name in package.definition.tools)
     for skill_name in package.definition.skills:
         skill = loader.load_metadata(skill_name)
         assert skill.description
         assert "psop" in skill.name
+        assert not any(tool_name.startswith("workspace.") for tool_name in skill.allowed_tools)
+
+    registry = ToolRegistry()
+    register_builder_tools(registry)
+    read_source_schema = registry.get("psop.builder.read_current_source").spec.input_schema
+    assert read_source_schema == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
 
 
 def test_psop_builder_scripted_run_creates_candidate_artifact(tmp_path) -> None:
@@ -92,6 +103,19 @@ def test_psop_builder_scripted_run_creates_candidate_artifact(tmp_path) -> None:
     assert candidate["schema_version"] == "2.0"
     assert "agent.memory.read" in event_types
     assert {"psop.builder.read_current_source", "psop.builder.submit_candidate"}.issubset(completed_tools)
+    assert not any(tool_name.startswith("workspace.") for tool_name in completed_tools)
+    assert sum(event.event_type == "agent.model.completed" for event in result.events) <= 9
+    submit_event = next(
+        event
+        for event in result.events
+        if event.event_type == "agent.tool.started"
+        and event.payload.get("tool_name") == "psop.builder.submit_candidate"
+    )
+    model_calls_before_submit = sum(
+        event.event_type == "agent.model.completed" and event.seq_no < submit_event.seq_no
+        for event in result.events
+    )
+    assert model_calls_before_submit <= 8
     assert any(artifact.artifact_type == "skill_draft_candidate" for artifact in result.artifacts)
     assert any(artifact.artifact_type == "skill_draft_files" for artifact in result.artifacts)
     assert (files_root / "README.md").read_text(encoding="utf-8") == candidate["files"]["README.md"]
@@ -776,6 +800,66 @@ def test_skills_service_preserves_all_builder_validation_diagnostics() -> None:
     assert diagnostics[0]["path"] in message
 
 
+def test_skills_service_classifies_model_budget_exhaustion_before_first_submission() -> None:
+    result = AgentResult(
+        agent_run_id="run-budget",
+        agent_key="psop.builder",
+        status="failed",
+        final_output="",
+        error_message="模型调用次数超过限制：13。",
+        events=[
+            AgentEvent(
+                seq_no=1,
+                event_type="agent.tool.started",
+                payload={"tool_name": "psop.standard.search"},
+                occurred_at=datetime.now(timezone.utc),
+            ),
+            AgentEvent(
+                seq_no=2,
+                event_type="agent.budget.exceeded",
+                payload={"budget_type": "model_calls", "limit": 13, "actual": 14},
+                occurred_at=datetime.now(timezone.utc),
+            ),
+        ],
+    )
+
+    assert SkillsService._agent_budget_failure_details(result) == {
+        "failure_kind": "candidate_not_submitted_within_model_budget",
+        "model_call_limit": 13,
+        "model_call_count": 14,
+        "submit_candidate_call_count": 0,
+        "last_tool_name": "psop.standard.search",
+    }
+
+
+def test_skills_service_classifies_model_budget_exhaustion_during_repair() -> None:
+    result = AgentResult(
+        agent_run_id="run-repair-budget",
+        agent_key="psop.builder",
+        status="failed",
+        final_output="",
+        error_message="模型调用次数超过限制：13。",
+        events=[
+            AgentEvent(
+                seq_no=1,
+                event_type="agent.tool.started",
+                payload={"tool_name": "psop.builder.submit_candidate"},
+                occurred_at=datetime.now(timezone.utc),
+            ),
+            AgentEvent(
+                seq_no=2,
+                event_type="agent.budget.exceeded",
+                payload={"budget_type": "model_calls", "limit": 13, "actual": 14},
+                occurred_at=datetime.now(timezone.utc),
+            ),
+        ],
+    )
+
+    assert SkillsService._agent_budget_failure_details(result)["failure_kind"] == (
+        "model_call_budget_exceeded_during_repair"
+    )
+
+
 def test_repeated_builder_validation_stops_before_fourth_submission(tmp_path) -> None:
     writer = AgentEventWriter(tmp_path / "events.jsonl")
     middleware = ToolCallMiddleware(writer, max_error_counts={"psop.builder.submit_candidate": 4})
@@ -1009,6 +1093,50 @@ def test_revision_reconciliation_inherits_unchanged_safety_evidence_during_stand
     assert provenance["inherited_industry_standard_count"] == 1
 
 
+def test_revision_reconciliation_inherits_baseline_evidence_over_current_source_placeholder() -> None:
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    baseline = _builder_candidate_payload(reference_path)
+    candidate = copy.deepcopy(baseline)
+    candidate["evidence_map"][0]["used_in"] = [
+        target
+        for target in candidate["evidence_map"][0]["used_in"]
+        if target["target_type"] != "safety_constraint"
+    ]
+    candidate["evidence_map"].append(
+        {
+            "claim": "当前 source 保留原安全约束。",
+            "support_level": "current_source_fact",
+            "source_refs": [{"source_type": "current_source", "ref": "SKILL.md#Safety-Constraints"}],
+            "used_in": [{"target_type": "safety_constraint", "target_id": "safety_01_entry"}],
+        }
+    )
+
+    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+        candidate,
+        baseline_payload=baseline,
+        baseline_generation_id="generation-baseline",
+        baseline_commit_sha="commit-baseline",
+        baseline_candidate_hash="candidate-hash",
+    )
+    validated = validate_builder_candidate(
+        reconciled,
+        candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
+        inherited_industry_standard_targets=inherited_standard_targets,
+    )
+
+    safety_evidence = [
+        item
+        for item in validated.evidence_map
+        if any(target.target_type == "safety_constraint" for target in item.used_in)
+    ]
+    assert provenance["inherited_target_ids"]["safety_constraint"] == ["safety_01_entry"]
+    assert provenance["inherited_evidence_count"] == 1
+    assert {source.source_type for item in safety_evidence for source in item.source_refs} == {
+        "current_source",
+        "reference_asset",
+    }
+
+
 def test_revision_reconciliation_does_not_inherit_changed_safety_constraint() -> None:
     reference_path = "references/video-keyframes/material-1/000001.jpg"
     baseline = _builder_candidate_payload(reference_path)
@@ -1036,6 +1164,58 @@ def test_revision_reconciliation_does_not_inherit_changed_safety_constraint() ->
         )
     assert provenance["changed_target_ids"]["safety_constraint"] == ["safety_01_entry"]
     assert any(item["path"] == "safety_constraints.0" for item in exc_info.value.diagnostics)
+
+
+def test_changed_safety_constraint_reports_unsupported_current_source_evidence() -> None:
+    reference_path = "references/video-keyframes/material-1/000001.jpg"
+    baseline = _builder_candidate_payload(reference_path)
+    candidate = copy.deepcopy(baseline)
+    candidate["safety_constraints"][0]["required_action"] = "停止操作并重新确认 PPE 状态。"
+    candidate["evidence_map"][0]["used_in"] = [
+        target
+        for target in candidate["evidence_map"][0]["used_in"]
+        if target["target_type"] != "safety_constraint"
+    ]
+    candidate["evidence_map"].append(
+        {
+            "claim": "当前 source 包含该安全约束。",
+            "support_level": "current_source_fact",
+            "source_refs": [{"source_type": "current_source", "ref": "SKILL.md#Safety-Constraints"}],
+            "used_in": [{"target_type": "safety_constraint", "target_id": "safety_01_entry"}],
+        }
+    )
+
+    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+        candidate,
+        baseline_payload=baseline,
+        baseline_generation_id="generation-baseline",
+        baseline_commit_sha="commit-baseline",
+        baseline_candidate_hash="candidate-hash",
+    )
+
+    with pytest.raises(BuilderCandidateValidationError) as exc_info:
+        validate_builder_candidate(
+            reconciled,
+            candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
+            inherited_industry_standard_targets=inherited_standard_targets,
+        )
+
+    diagnostic = next(
+        item
+        for item in exc_info.value.diagnostics
+        if item["code"] == "unsupported_evidence_source_for_required_target"
+    )
+    assert provenance["changed_target_ids"]["safety_constraint"] == ["safety_01_entry"]
+    assert diagnostic["path"].endswith(".source_refs")
+    assert diagnostic["allowed_values"] == [
+        "industry_standard",
+        "material_analysis",
+        "reference_asset",
+        "user_description",
+    ]
+    assert diagnostic["example"]["used_in"] == [
+        {"target_type": "safety_constraint", "target_id": "safety_01_entry"}
+    ]
 
 
 def test_revision_reconciliation_only_revalidates_changed_workflow_body() -> None:
@@ -1172,11 +1352,66 @@ def test_read_current_source_returns_revision_baseline_summary(tmp_path) -> None
         invocation_input={"current_source": {"README.md": "# R", "SKILL.md": "# S"}, "skill": {}},
         invocation_context={
             BUILDER_REVISION_BASELINE_CONTEXT_KEY: {
-                "summary": {"status": "exact", "safety_constraint_ids": ["safety_01_entry"]}
+                "summary": {"status": "exact", "safety_constraint_ids": ["safety_01_entry"]},
+                "candidate": _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg"),
             }
         },
     )
 
     result = registry.execute("psop.builder.read_current_source", {}, context)
 
-    assert result["revision_baseline"] == {"status": "exact", "safety_constraint_ids": ["safety_01_entry"]}
+    assert result["revision_baseline"]["status"] == "exact"
+    assert result["revision_baseline"]["safety_constraint_ids"] == ["safety_01_entry"]
+    assert result["revision_baseline"]["target_snapshots"] == {
+        "safety_constraints": [
+            {
+                "constraint_id": "safety_01_entry",
+                "scope": "selected_stages",
+                "stage_ids": ["stage_01_entry"],
+                "constraint": "PPE 不完整不得进入。",
+                "risk_type": "personal_safety",
+                "required_action": "停止并要求补齐证据。",
+            }
+        ],
+        "workflow_step_candidates": [
+            {"stage_id": "stage_01_entry", "title": "入口状态确认"},
+            {"stage_id": "stage_02_pressure", "title": "压力表记录"},
+        ],
+        "expected_evidence_requirements": [
+            {
+                "requirement_id": "evidence_01_entry",
+                "stage_id": "stage_01_entry",
+                "evidence_type": "photo",
+                "completion_criteria": "入口状态清楚。",
+            }
+        ],
+    }
+    assert result["revision_baseline"]["auxiliary_file_snapshots"] == {
+        "prompts/system.md": "按 SKILL.md 推进。\n",
+        "references/README.md": (
+            "# 参考资料\n\n"
+            "![入口关键帧](references/video-keyframes/material-1/000001.jpg)\n"
+        ),
+        "examples/input.md": "# 输入\n\n检查泵房。\n",
+        "examples/expected-output.md": "# 输出\n\n阶段 1 后进入阶段 2。\n",
+        "tests/checklist.md": "# 检查\n\n- 阶段 1 使用参考图。\n",
+    }
+
+
+def test_read_current_source_without_exact_candidate_omits_target_snapshots(tmp_path) -> None:
+    settings = Settings(database_url="sqlite+pysqlite:///:memory:", agent_harness_sandbox_root=str(tmp_path))
+    sandbox = LocalAgentSandboxProvider(settings).acquire(input_payload={})
+    registry = ToolRegistry()
+    register_builder_tools(registry)
+    context = ToolExecutionContext(
+        sandbox=sandbox,
+        memory_store=FileMemoryStore(sandbox.memory_path),
+        memory_scope="psop.builder",
+        event_writer=AgentEventWriter(sandbox.events_path),
+        invocation_input={"current_source": {"README.md": "# R", "SKILL.md": "# S"}, "skill": {}},
+        invocation_context={BUILDER_REVISION_BASELINE_CONTEXT_KEY: {"summary": {"status": "none"}}},
+    )
+
+    result = registry.execute("psop.builder.read_current_source", {}, context)
+
+    assert result["revision_baseline"] == {"status": "none"}

@@ -35,6 +35,12 @@ ALLOWED_EVIDENCE_SOURCE_TYPES = {
     "builder_inference",
     "human_confirmation_required",
 }
+SUPPORTED_REQUIRED_EVIDENCE_SOURCE_TYPES = {
+    "user_description",
+    "material_analysis",
+    "reference_asset",
+    "industry_standard",
+}
 ALLOWED_EVIDENCE_TARGET_TYPES = {
     "workflow_stage",
     "safety_constraint",
@@ -322,6 +328,7 @@ def reconcile_builder_candidate(
     current_evidence_targets = {
         (target.target_type, target.target_id)
         for item in candidate.evidence_map
+        if _evidence_item_has_supported_source(item)
         for target in item.used_in
     }
     missing_evidence_targets = inherited_targets - current_evidence_targets
@@ -795,6 +802,30 @@ def _validate_evidence_coverage(candidate: BuilderCandidate) -> list[dict[str, A
     ]
     for field_name, index, target_type, target_id, label in required_targets:
         if (target_type, target_id) not in supported_targets:
+            matching_evidence = [
+                (evidence_index, item)
+                for evidence_index, item in enumerate(candidate.evidence_map)
+                if any(target.target_type == target_type and target.target_id == target_id for target in item.used_in)
+            ]
+            if matching_evidence:
+                evidence_index, item = matching_evidence[0]
+                unsupported_sources = sorted({source.source_type for source in item.source_refs})
+                diagnostics.append(
+                    _diagnostic(
+                        f"evidence_map.{evidence_index}.source_refs",
+                        "unsupported_evidence_source_for_required_target",
+                        (
+                            f"{label} {target_id} 仅由不可验证来源支撑：{unsupported_sources}；"
+                            "强制目标必须引用用户确认、素材分析、参考资产或可追溯行业标准。"
+                        ),
+                        allowed_values=sorted(SUPPORTED_REQUIRED_EVIDENCE_SOURCE_TYPES),
+                        example={
+                            "source_refs": [{"source_type": "material_analysis", "material_id": "material-1"}],
+                            "used_in": [{"target_type": target_type, "target_id": target_id}],
+                        },
+                    )
+                )
+                continue
             diagnostics.append(
                 _diagnostic(
                     f"{field_name}.{index}",
@@ -808,7 +839,7 @@ def _validate_evidence_coverage(candidate: BuilderCandidate) -> list[dict[str, A
 
 def _evidence_item_has_supported_source(item: EvidenceMapItem) -> bool:
     return any(
-        source.source_type in {"user_description", "material_analysis", "reference_asset", "industry_standard"}
+        source.source_type in SUPPORTED_REQUIRED_EVIDENCE_SOURCE_TYPES
         for source in item.source_refs
     )
 
