@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,8 +17,13 @@ from app.domain.compiler.service import CompilerService, _extract_reference_imag
 from app.domain.compiler.formal_v5 import validate_and_normalize_artifact
 from app.domain.jobs.repository import JobRepository
 from app.domain.runtime.models import Run, SessionTokenSnapshot
-from app.domain.runtime.schemas import AppendTerminalEventRequest, CreateInvocationRequest, TerminalEventPartInput
-from app.domain.runtime.service import RuntimeService
+from app.domain.runtime.schemas import (
+    AppendTerminalEventRequest,
+    CreateInvocationRequest,
+    TerminalEventAppendResponse,
+    TerminalEventPartInput,
+)
+from app.domain.runtime.service import RuntimeService, RuntimeStepTimeoutError
 from app.domain.skills.exceptions import SkillsGatewayError, SkillValidationError
 from app.domain.skills.schemas import CreateSkillRequest, PublishSkillRequest
 from app.domain.skills.service import SkillsService
@@ -68,6 +74,16 @@ class RaisingAgentHarnessService:
         self.exc = exc
 
     def invoke(self, *args, **kwargs):
+        raise self.exc
+
+
+class CallbackRaisingAgentHarnessService:
+    def __init__(self, callback: Callable[[], None], exc: Exception) -> None:
+        self.callback = callback
+        self.exc = exc
+
+    def invoke(self, *args, **kwargs):
+        self.callback()
         raise self.exc
 
 
@@ -137,7 +153,6 @@ def test_compiler_emits_mvp_formal_v5_artifact(runtime_stack) -> None:
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="compiler-unit",
                 name="Compiler Unit",
                 description="Validate compiler output.",
             ),
@@ -230,6 +245,10 @@ def test_runtime_projects_compiled_runner_turn_contract_without_inference(runtim
     assert turn_context["current_workflow_step"]["title"] == "收集上下文"
     assert turn_context["previous_evaluation"] == {}
     assert turn_context["runtime_contract_slice"]["applicability"] == artifact_payload["runtime_contract"]["applicability"]
+    assert "prompt_view" not in turn_context
+    assert "workflow_steps" not in turn_context["runtime_contract_slice"]
+    assert "evidence" not in turn_context["current_checkpoint"]
+    assert len(json.dumps(turn_context, ensure_ascii=False)) < 20_000
 
     legacy_node = json.loads(json.dumps(node, ensure_ascii=False))
     legacy_node["interaction"].pop("runner_turn_kind")
@@ -246,6 +265,155 @@ def test_runtime_projects_compiled_runner_turn_contract_without_inference(runtim
         context=legacy_context,
     )
     assert legacy_turn_context["turn_kind"] == ""
+
+
+def test_runtime_projects_upcoming_checkpoint_for_guidance_after_evaluation(
+    runtime_stack,
+    monkeypatch,
+) -> None:
+    _, _, _, _, _, runtime_service = runtime_stack
+    artifact_payload = _add_second_wait_checkpoint_to_artifact(build_test_formal_v5_artifact())
+    node = next(item for item in artifact_payload["nodes"] if item["id"] == "instruct_second_step")
+    run = Run(id="run-next-guidance", latest_snapshot_seq=3)
+    previous_evidence = {
+        "seq_no": 4,
+        "direction": "input",
+        "event_kind": "terminal.multimodal.input.v1",
+        "parts": [
+            {
+                "part_id": "image_1",
+                "kind": "image",
+                "mime_type": "image/jpeg",
+                "artifact_object_id": "previous-image",
+            }
+        ],
+    }
+    token = {
+        "phase": "instruct_second_step",
+        "control": {
+            "wait": {
+                "checkpoint_id": "collect_context_evidence",
+                "workflow_step_id": "collect_context",
+                "expected_inputs": [{"kind": "text"}],
+                "evidence": [previous_evidence],
+            },
+            "latest_evidence": previous_evidence,
+            "evidence_progress": {
+                "checkpoint_id": "collect_context_evidence",
+                "workflow_step_id": "collect_context",
+                "requirements": [{"requirement_key": "evidence_1", "status": "accepted"}],
+            },
+            "latest_evaluation": {
+                "node_id": "evaluate_collect_context",
+                "decision": "continue",
+                "reason": "第一阶段证据已通过。",
+                "based_on_terminal_seq": 4,
+            },
+        },
+        "terminal": {"events": [previous_evidence]},
+        "metadata": {"terminal_cursor": 4},
+    }
+
+    context = runtime_service._build_runner_context(
+        run=run,
+        node=node,
+        token=token,
+        artifact_payload=artifact_payload,
+    )
+    turn_context = runtime_service._build_runner_turn_context(
+        run=run,
+        node=node,
+        mode="terminal_guidance",
+        context=context,
+    )
+
+    assert context["current_checkpoint"]["checkpoint_id"] == "second_step_evidence"
+    assert context["current_checkpoint"]["status"] == "pending"
+    assert context["evidence_progress"] == {}
+    assert context["latest_evidence"] == {}
+    assert turn_context["stage_position"]["workflow_step_id"] == "second_step"
+    assert turn_context["current_workflow_step"]["title"] == "第二阶段"
+    assert turn_context["previous_evaluation"]["historical_hint_only"] is True
+    assert turn_context["current_checkpoint"]["checkpoint_id"] == "second_step_evidence"
+    assert turn_context["evidence_progress"] == {}
+    assert turn_context["latest_evidence"] == {}
+
+    monkeypatch.setattr(
+        runtime_service,
+        "_resolve_runner_image_attachment",
+        lambda **_: pytest.fail("guidance node must not resolve previous evidence attachments"),
+    )
+    assert runtime_service._build_runner_input_attachments(
+        session=None,
+        run=run,
+        node=node,
+        token=token,
+        artifact_payload=artifact_payload,
+        deadline_monotonic=999999999.0,
+    ) == []
+
+
+def test_runner_turn_context_marks_previous_evaluation_stale_without_copying_history() -> None:
+    settings = create_test_settings()
+    runtime_service = RuntimeService(
+        settings=settings,
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=AgentHarnessService(settings=settings),
+    )
+    artifact_payload = build_test_formal_v5_artifact()
+    node = next(item for item in artifact_payload["nodes"] if item["id"] == "evaluate_collect_context")
+    run = Run(id="run-stale-context", latest_snapshot_seq=4)
+    latest_evidence = {
+        "seq_no": 7,
+        "direction": "input",
+        "event_kind": "terminal.text.input.v1",
+        "text": "最新现场确认",
+        "parts": [{"part_id": "text_1", "kind": "text", "text": "最新现场确认"}],
+    }
+    token = {
+        "phase": "evaluate_collect_context",
+        "control": {
+            "wait": {
+                "checkpoint_id": "collect_context_evidence",
+                "workflow_step_id": "collect_context",
+                "expected_inputs": [{"kind": "text"}],
+                "evidence": [latest_evidence],
+            },
+            "latest_evidence": latest_evidence,
+            "latest_evaluation": {
+                "node_id": "evaluate_collect_context",
+                "decision": "need_more_evidence",
+                "reason": "旧结论" * 3000,
+                "based_on_terminal_seq": 4,
+                "evidence_assessment": {"missing_evidence": ["旧缺口"]},
+            },
+        },
+        "terminal": {"events": [{**latest_evidence, "seq_no": index, "text": "历史" * 1000} for index in range(1, 8)]},
+        "trace": [{"seq_no": index, "payload": "trace" * 1000} for index in range(10)],
+        "metadata": {"terminal_cursor": 7},
+    }
+    context = runtime_service._build_runner_context(
+        run=run,
+        node=node,
+        token=token,
+        artifact_payload=artifact_payload,
+    )
+
+    turn_context = runtime_service._build_runner_turn_context(
+        run=run,
+        node=node,
+        mode="evidence_evaluation",
+        context=context,
+    )
+
+    previous = turn_context["previous_evaluation"]
+    assert previous["based_on_terminal_seq"] == 4
+    assert previous["stale_by_events"] == 3
+    assert previous["historical_hint_only"] is True
+    assert "evidence_assessment" not in previous
+    assert len(previous["reason"]) <= 1200
+    assert len(json.dumps(turn_context, ensure_ascii=False)) < 20_000
+    assert "trace_summary" not in turn_context
 
 
 def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
@@ -276,7 +444,6 @@ def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="compiler-harness",
                     name="Compiler Harness",
                     description="Validate psop.compiler harness integration.",
                 ),
@@ -299,7 +466,7 @@ def test_compiler_can_use_psop_compiler_agent_harness(tmp_path) -> None:
         database_manager.dispose()
 
 
-def test_compiler_reference_images_flow_to_runner_multimodal_output(tmp_path) -> None:
+def test_compiler_reference_image_is_attached_for_v2_evaluation_and_runner_outputs_text_only(tmp_path) -> None:
     settings = create_test_settings().model_copy(
         update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
     )
@@ -339,7 +506,6 @@ def test_compiler_reference_images_flow_to_runner_multimodal_output(tmp_path) ->
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="compiler-reference-images",
                     name="Compiler Reference Images",
                     description="Validate Skill reference image output flow.",
                 ),
@@ -383,27 +549,80 @@ def test_compiler_reference_images_flow_to_runner_multimodal_output(tmp_path) ->
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
+            user_image_bytes = b"jpeg-user-evidence-bytes"
+            user_image_object = ArtifactObject(
+                bucket="test-bucket",
+                object_key="terminal/user-site.jpg",
+                media_type="image/jpeg",
+                size_bytes=len(user_image_bytes),
+                checksum="sha256-user-image",
+            )
+            session.add(user_image_object)
+            session.flush()
+            object_store.objects[(user_image_object.bucket, user_image_object.object_key)] = user_image_bytes
             runtime_service.append_terminal_event(
                 session,
                 invocation.run_id or "",
                 AppendTerminalEventRequest(
                     direction="input",
-                    event_kind="terminal.text.input.v1",
-                    mime_type="text/plain",
-                    payload_inline="现场说明已提交。",
+                    event_kind="terminal.multimodal.input.v1",
+                    mime_type="multipart/mixed",
+                    payload_inline={"text": "现场说明已提交。"},
+                    parts=[
+                        TerminalEventPartInput(
+                            part_id="text_1",
+                            kind="text",
+                            mime_type="text/plain",
+                            text="现场说明已提交。",
+                        ),
+                        TerminalEventPartInput(
+                            part_id="image_1",
+                            kind="image",
+                            mime_type="image/jpeg",
+                            artifact_object_id=user_image_object.id,
+                            size_bytes=len(user_image_bytes),
+                            checksum="sha256-user-image",
+                            metadata={"filename": "user-site.jpg"},
+                        ),
+                    ],
                     external_event_id="compiler-reference-images-input-001",
                 ),
             )
             runtime_service.process_run(session, invocation.run_id or "")
             terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
+            image_agent_runs = (
+                session.query(AgentRunRecord)
+                .filter(AgentRunRecord.related_runtime_run_id == (invocation.run_id or ""))
+                .filter(AgentRunRecord.input_summary["image_attachment_count"].as_integer() == 2)
+                .all()
+            )
+            assert image_agent_runs
+            prepared_event = (
+                session.query(AgentEventRecord)
+                .filter(AgentEventRecord.agent_run_id == image_agent_runs[0].id)
+                .filter(AgentEventRecord.event_type == "agent.multimodal.attachments.prepared")
+                .one()
+            )
+            reference_evaluation_model_calls = (
+                session.query(AgentEventRecord)
+                .filter(AgentEventRecord.agent_run_id == image_agent_runs[0].id)
+                .filter(AgentEventRecord.event_type == "agent.model.completed")
+                .count()
+            )
+            prepared_payload = dict(prepared_event.payload)
+            sandbox_input = Path(image_agent_runs[0].sandbox_path, "input.json").read_text(encoding="utf-8")
 
-        multimodal_events = [
-            event for event in terminal_events if event.event_kind == "terminal.multimodal.output.v1"
-        ]
-        assert multimodal_events
-        image_parts = [part for part in multimodal_events[0].parts if part.kind == "image"]
-        assert len(image_parts) == 1
-        assert image_parts[0].artifact_object_id == reference_image["artifact_object_id"]
+        multimodal_events = [event for event in terminal_events if event.event_kind == "terminal.multimodal.output.v1"]
+        text_outputs = [event for event in terminal_events if event.event_kind == "terminal.text.output.v1"]
+        assert not multimodal_events
+        assert text_outputs
+        assert all(part.kind == "text" for event in text_outputs for part in event.parts)
+        assert [item["role"] for item in prepared_payload["attachments"]] == ["evidence", "reference"]
+        assert reference_evaluation_model_calls == 1
+        assert prepared_payload["attachments"][1]["label"].startswith("步骤参考图（仅用于视觉对照")
+        assert "jpeg-user-evidence-bytes" not in sandbox_input
+        assert "jpeg-reference-bytes" not in sandbox_input
+        assert "terminal/user-site.jpg" not in sandbox_input
     finally:
         database_manager.dispose()
 
@@ -467,7 +686,6 @@ def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-runner-harness",
                     name="Runtime Runner Harness",
                     description="Validate psop.runner harness integration.",
                 ),
@@ -482,7 +700,7 @@ def test_runtime_service_can_use_psop_runner_agent_harness(tmp_path) -> None:
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-runner-harness",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -576,7 +794,6 @@ def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> N
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-runner-image-attachment",
                     name="Runtime Runner Image Attachment",
                     description="Validate uploaded images are passed to psop.runner.",
                 ),
@@ -590,7 +807,7 @@ def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> N
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-runner-image-attachment",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -647,7 +864,19 @@ def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> N
                 .filter(AgentEventRecord.event_type == "agent.multimodal.attachments.prepared")
                 .one()
             )
+            image_model_call_count = (
+                session.query(AgentEventRecord)
+                .filter(AgentEventRecord.agent_run_id == image_agent_run.id)
+                .filter(AgentEventRecord.event_type == "agent.model.completed")
+                .count()
+            )
             trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
+            evaluation_trace = next(
+                event
+                for event in trace_events
+                if event.event_type == "runtime.agent.completed"
+                and event.payload.get("node_id") == "evaluate_collect_context"
+            )
             image_agent_run_summary = dict(image_agent_run.input_summary)
             prepared_payload = dict(prepared_event.payload)
             sandbox_input = Path(image_agent_run.sandbox_path, "input.json").read_text(encoding="utf-8")
@@ -657,7 +886,13 @@ def test_runtime_runner_passes_uploaded_image_as_agent_attachment(tmp_path) -> N
     serialized_event = json.dumps(prepared_payload, ensure_ascii=False)
     assert run.status == "succeeded"
     assert image_agent_run_summary["image_attachment_count"] == 1
+    assert image_model_call_count == 1
     assert image_agent_run_summary["attachment_source_refs"] == ["terminal_event:1:image_1"]
+    runner_trace = evaluation_trace.payload["observation"]["runner"]
+    assert runner_trace["latest_evidence_seq"] == 1
+    assert runner_trace["context_chars"] < 20_000
+    assert runner_trace["attachment_roles"] == ["evidence"]
+    assert runner_trace["effective_requirement_statuses"]
     assert prepared_payload["attachments"][0]["source_ref"] == "terminal_event:1:image_1"
     assert "aW1hZ2UtYnl0ZXM=" not in sandbox_input
     assert "terminal/site.jpg" not in sandbox_input
@@ -698,7 +933,6 @@ def test_runtime_runner_attachment_warning_when_object_store_unavailable(tmp_pat
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-runner-image-attachment-warning",
                     name="Runtime Runner Image Attachment Warning",
                     description="Validate unavailable attachments warn without failing Runtime.",
                 ),
@@ -712,7 +946,7 @@ def test_runtime_runner_attachment_warning_when_object_store_unavailable(tmp_pat
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-runner-image-attachment-warning",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -766,195 +1000,64 @@ def test_runtime_runner_attachment_warning_when_object_store_unavailable(tmp_pat
     assert warning_events[0].payload["reason"] == "object_store_unavailable"
 
 
-def test_runtime_runner_outputs_reference_image_when_artifact_resolves(tmp_path) -> None:
-    result = _run_runner_reference_image_case(
-        tmp_path,
-        skill_key="runtime-runner-reference-image",
-        reference_image_artifact_object_id="__valid__",
-    )
-
-    multimodal_events = [
-        event for event in result["terminal_events"] if event.event_kind == "terminal.multimodal.output.v1"
-    ]
-    warning_events = [
-        event for event in result["trace_events"] if event.event_type == "runtime.runner.reference_image.warning"
-    ]
-
-    assert multimodal_events
-    image_parts = [part for part in multimodal_events[0].parts if part.kind == "image"]
-    assert image_parts
-    assert image_parts[0].artifact_object_id == result["reference_artifact_object_id"]
-    assert not warning_events
-
-
-def test_runtime_ignores_runner_supplied_reference_image_artifact_object_id(tmp_path) -> None:
-    result = _run_runner_reference_image_case(
-        tmp_path,
-        skill_key="runtime-runner-reference-image-spoof",
-        reference_image_artifact_object_id="__valid__",
-        runner_reference_image_artifact_object_id="spoofed-artifact-object",
-    )
-
-    multimodal_events = [
-        event for event in result["terminal_events"] if event.event_kind == "terminal.multimodal.output.v1"
-    ]
-    image_parts = [part for part in multimodal_events[0].parts if part.kind == "image"]
-
-    assert image_parts[0].artifact_object_id == result["reference_artifact_object_id"]
-
-
-def test_runtime_runner_reference_image_warning_falls_back_to_text(tmp_path) -> None:
-    result = _run_runner_reference_image_case(
-        tmp_path,
-        skill_key="runtime-runner-reference-image-warning",
-        reference_image_artifact_object_id="missing-artifact-object",
-    )
-
-    multimodal_events = [
-        event for event in result["terminal_events"] if event.event_kind == "terminal.multimodal.output.v1"
-    ]
-    text_outputs = [
-        event for event in result["terminal_events"] if event.event_kind == "terminal.text.output.v1"
-    ]
-    warning_events = [
-        event for event in result["trace_events"] if event.event_type == "runtime.runner.reference_image.warning"
-    ]
-
-    assert not multimodal_events
-    assert text_outputs
-    assert warning_events
-    assert warning_events[0].payload["reference_image_ref"] == "skill-reference://steps/collect-context/site-overview"
-    assert warning_events[0].payload["artifact_object_id"] == "missing-artifact-object"
-    assert warning_events[0].payload["reason"] == "artifact_object_not_found"
-
-
-def _run_runner_reference_image_case(
-    tmp_path,
-    *,
-    skill_key: str,
-    reference_image_artifact_object_id: str,
-    runner_reference_image_artifact_object_id: str | None = None,
-) -> dict:
-    settings = create_test_settings().model_copy(
-        update={"agent_harness_sandbox_root": str(tmp_path / "agent-runs")}
-    )
-    database_manager = DatabaseManager(settings.sqlalchemy_database_url)
-    database_manager.create_schema()
-    gitlab_gateway = FakeGitLabGateway()
-    compile_gateway = FakeInferenceGateway()
-    compiler_service = CompilerService(
-        settings=settings,
-        gitlab_gateway=gitlab_gateway,
-        inference_gateway=compile_gateway,
-    )
-    skills_service = SkillsService(
-        settings=settings,
-        gitlab_gateway=gitlab_gateway,
-        compiler_service=compiler_service,
-    )
-    reference_image_ref = "skill-reference://steps/collect-context/site-overview"
-
-    def _runner_model(_definition):
-        if runner_reference_image_artifact_object_id:
-            return ScriptedRunnerChatModel(
-                observation_overrides_by_node={
-                    "instruct_collect_context": {
-                        "reference_images": [
-                            {
-                                "reference_image_ref": reference_image_ref,
-                                "artifact_object_id": runner_reference_image_artifact_object_id,
-                                "mime_type": "image/jpeg",
-                            }
-                        ]
-                    }
-                }
-            )
-        return ScriptedRunnerChatModel()
-
-    agent_harness_service = AgentHarnessService(
-        settings=settings,
-        chat_model_factory=_runner_model,
-    )
+def test_runtime_runner_reference_download_failure_warns_without_raising(monkeypatch) -> None:
+    settings = create_test_settings()
     runtime_service = RuntimeService(
         settings=settings,
         inference_gateway=FailingInferenceGateway(),
-        agent_harness_service=agent_harness_service,
+        object_store=FakeObjectStore(),
+        agent_harness_service=AgentHarnessService(settings=settings),
     )
-    try:
-        with database_manager.session() as session:
-            skill = skills_service.create_skill(
-                session,
-                CreateSkillRequest(
-                    key=skill_key,
-                    name=skill_key,
-                    description="Validate psop.runner reference image handling.",
-                ),
-            )
-            published = skills_service.publish_skill(
-                session,
-                skill_id=skill.id,
-                payload=PublishSkillRequest(publish_reason="Runtime runner reference image"),
-            )
-            compiled = process_publish_job(session, compiler_service, published.compile_request.id)
-            artifact = compiler_service.get_artifact(session, compiled.artifact_id or "")
-            artifact_object = session.get(ArtifactObject, artifact.artifact_object_id)
-            assert artifact_object is not None
-            reference_artifact_object_id = reference_image_artifact_object_id
-            if reference_image_artifact_object_id == "__valid__":
-                reference_object = ArtifactObject(
-                    bucket="psop-test",
-                    object_key=f"reference/{skill_key}.jpg",
-                    media_type="image/jpeg",
-                    size_bytes=10,
-                    checksum="reference-image-checksum",
-                )
-                session.add(reference_object)
-                session.flush()
-                reference_artifact_object_id = reference_object.id
-            artifact_payload = json.loads(json.dumps(artifact_object.content_json, ensure_ascii=False))
-            artifact_payload["runtime_contract"]["workflow_steps"][0]["reference_images"] = [
-                {
-                    "reference_image_ref": reference_image_ref,
-                    "title": "现场概览参考图",
-                    "caption": "请按参考图角度拍摄现场整体状态。",
-                    "artifact_object_id": reference_artifact_object_id,
-                    "mime_type": "image/jpeg",
-                    "source_ref": "runtime_contract.workflow_steps.collect_context.reference_images.site-overview",
-                }
-            ]
-            artifact_object.content_json = artifact_payload
-            session.flush()
+    reference_object = SimpleNamespace(
+        bucket="test-bucket",
+        object_key="references/missing.jpg",
+        media_type="image/jpeg",
+        size_bytes=10,
+        checksum="sha256-reference",
+    )
+    monkeypatch.setattr(
+        runtime_service.repository,
+        "get_artifact_object",
+        lambda _session, artifact_object_id: reference_object if artifact_object_id == "reference-object" else None,
+    )
+    monkeypatch.setattr(runtime_service, "_commit_before_runtime_external_io", lambda _session: None)
+    warnings: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_service,
+        "_append_runner_attachment_warning",
+        lambda _session, **kwargs: warnings.append(kwargs),
+    )
 
-            invocation = runtime_service.create_invocation(
-                session,
-                CreateInvocationRequest(
-                    skill_key=skill_key,
-                    terminal_context={"terminal_kind": "web"},
-                ),
-            )
-            runtime_service.append_terminal_event(
-                session,
-                invocation.run_id or "",
-                AppendTerminalEventRequest(
-                    direction="input",
-                    event_kind="terminal.text.input.v1",
-                    mime_type="text/plain",
-                    payload_inline="现场说明已提交。",
-                    external_event_id=f"{skill_key}-evidence-001",
-                ),
-            )
-            runtime_service.process_run(session, invocation.run_id or "")
-            run = runtime_service.get_run(session, invocation.run_id or "")
-            trace_events = runtime_service.list_trace_events(session, invocation.run_id or "")
-            terminal_events = runtime_service.list_terminal_events(session, invocation.run_id or "")
-            return {
-                "run": run,
-                "trace_events": trace_events,
-                "terminal_events": terminal_events,
-                "reference_artifact_object_id": reference_artifact_object_id,
+    attachment = runtime_service._resolve_runner_reference_attachment(
+        session=SimpleNamespace(),
+        run=Run(id="run-reference-warning"),
+        node={"id": "evaluate_mount_board", "interaction": {"evaluation": True}},
+        token={"control": {"wait": {"workflow_step_id": "mount_board"}}},
+        artifact_payload={
+            "runtime_contract": {
+                "evidence_contract_version": "psop-evidence/v2",
+                "workflow_steps": [
+                    {
+                        "id": "mount_board",
+                        "reference_images": [
+                            {
+                                "reference_image_ref": "skill-reference://steps/mount_board/overview",
+                                "title": "安装位置参考图",
+                                "artifact_object_id": "reference-object",
+                                "mime_type": "image/jpeg",
+                                "display_order": 1,
+                            }
+                        ],
+                    }
+                ],
             }
-    finally:
-        database_manager.dispose()
+        },
+        deadline_monotonic=float("inf"),
+    )
+
+    assert attachment is None
+    assert warnings[0]["attachment_role"] == "reference"
+    assert str(warnings[0]["reason"]).startswith("download_failed:")
 
 
 def test_compiler_candidate_diagnostics_filters_standard_search_availability_notes() -> None:
@@ -994,7 +1097,6 @@ def test_compiler_records_diagnostics_for_unsupported_formal_revision(runtime_st
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="bad-formal",
                 name="Bad Formal",
                 description="Validate compiler diagnostics.",
             ),
@@ -1054,7 +1156,6 @@ def test_compiler_repairs_invalid_agent_json_once() -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="agent-repair",
                     name="Agent Repair",
                     description="Validate compiler repair.",
                 ),
@@ -1098,7 +1199,6 @@ def test_compiler_injects_selected_domain_pack() -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="maintenance-pack",
                     name="Maintenance Pack",
                     description="Validate equipment maintenance domain pack.",
                 ),
@@ -1153,7 +1253,6 @@ def test_compiler_falls_back_for_unknown_domain_pack() -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="fallback-pack",
                     name="Fallback Pack",
                     description="Validate domain pack fallback.",
                 ),
@@ -1196,6 +1295,46 @@ def process_publish_job(session, compiler_service: CompilerService, compile_requ
         session.commit()
     compiler_service.process_compile_job(session, job.id)
     return compiler_service.get_compile_request(session, compile_request_id)
+
+
+def test_runtime_list_runs_filters_multiple_statuses(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                name="List Runs Statuses",
+                description="Validate filtering runs by multiple statuses.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="List runs status filter test"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+
+        waiting_invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(skill_key=skill.key),
+        )
+        failed_invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(skill_key=skill.key),
+        )
+        excluded_invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(skill_key=skill.key),
+        )
+        session.get(Run, waiting_invocation.run_id).status = "waiting_input"
+        session.get(Run, failed_invocation.run_id).status = "failed"
+        session.get(Run, excluded_invocation.run_id).status = "succeeded"
+        session.flush()
+
+        runs = runtime_service.list_runs(session, status=["waiting_input", "failed"])
+
+    assert {run.id for run in runs} == {waiting_invocation.run_id, failed_invocation.run_id}
 
 
 def build_test_abort_formal_v5_artifact() -> dict:
@@ -1244,7 +1383,6 @@ def test_compiler_fails_when_agent_repair_still_invalid() -> None:
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="agent-failure",
                     name="Agent Failure",
                     description="Validate compiler failure.",
                 ),
@@ -1326,7 +1464,6 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-unit",
                 name="Runtime Unit",
                 description="Validate runtime loop.",
             ),
@@ -1341,7 +1478,7 @@ def test_runtime_service_waits_for_real_world_evidence_and_builds_replay(runtime
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-unit",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -1447,7 +1584,6 @@ def test_runtime_task_status_projects_waiting_stage_and_current_evidence(runtime
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-task-status",
                 name="Runtime Task Status",
                 description="Validate the terminal task status projection.",
             ),
@@ -1461,7 +1597,7 @@ def test_runtime_task_status_projects_waiting_stage_and_current_evidence(runtime
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-task-status",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -1526,7 +1662,6 @@ def test_runtime_task_status_projects_multistage_finalizing_terminal_and_legacy_
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-task-status-states",
                 name="Runtime Task Status States",
                 description="Validate multistage and compatibility task status projection.",
             ),
@@ -1540,7 +1675,7 @@ def test_runtime_task_status_projects_multistage_finalizing_terminal_and_legacy_
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-task-status-states",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -1622,7 +1757,6 @@ def test_runtime_service_batches_inputs_that_arrive_before_first_checkpoint(runt
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-early-input-batch",
                 name="Runtime Early Input Batch",
                 description="Validate early terminal inputs are delivered once the first checkpoint exists.",
             ),
@@ -1637,7 +1771,7 @@ def test_runtime_service_batches_inputs_that_arrive_before_first_checkpoint(runt
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-early-input-batch",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -1731,7 +1865,6 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> No
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-abort",
                     name="Runtime Abort",
                     description="Validate semantic abort path.",
                 ),
@@ -1746,7 +1879,7 @@ def test_runtime_service_treats_abort_decision_as_semantic_abort(tmp_path) -> No
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-abort",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -1811,7 +1944,6 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="terminal-event-unit",
                 name="Terminal Event Unit",
                 description="Validate terminal transcript append.",
             ),
@@ -1825,7 +1957,7 @@ def test_terminal_event_append_is_ordered_and_idempotent(runtime_stack) -> None:
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="terminal-event-unit",
+                skill_key=skill.key,
                 input_envelope={"user_input": "初始输入"},
             ),
         )
@@ -1889,7 +2021,6 @@ def test_terminal_event_append_refreshes_stale_run_before_assigning_seq(runtime_
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="terminal-event-stale-run",
                 name="Terminal Event Stale Run",
                 description="Validate stale Run seq refresh.",
             ),
@@ -1902,7 +2033,7 @@ def test_terminal_event_append_refreshes_stale_run_before_assigning_seq(runtime_
         process_publish_job(session, compiler_service, published.compile_request.id)
         invocation = runtime_service.create_invocation(
             session,
-            CreateInvocationRequest(skill_key="terminal-event-stale-run"),
+            CreateInvocationRequest(skill_key=skill.key),
         )
         run_id = invocation.run_id or ""
 
@@ -1962,7 +2093,6 @@ def test_runtime_service_publishes_terminal_trace_and_task_status_events_after_c
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-event-sink",
                 name="Runtime Event Sink",
                 description="Validate runtime event sink publishing.",
             ),
@@ -1976,7 +2106,7 @@ def test_runtime_service_publishes_terminal_trace_and_task_status_events_after_c
         invocation = service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-event-sink",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -2041,7 +2171,6 @@ def test_runtime_service_publish_uses_precommit_upper_bounds(runtime_stack) -> N
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-event-upper-bound",
                 name="Runtime Event Upper Bound",
                 description="Validate runtime event publish upper bounds.",
             ),
@@ -2054,7 +2183,7 @@ def test_runtime_service_publish_uses_precommit_upper_bounds(runtime_stack) -> N
         process_publish_job(session, compiler_service, published.compile_request.id)
         invocation = service.create_invocation(
             session,
-            CreateInvocationRequest(skill_key="runtime-event-upper-bound"),
+            CreateInvocationRequest(skill_key=skill.key),
         )
         run_id = invocation.run_id or ""
         service.append_terminal_event(
@@ -2125,6 +2254,7 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     database_manager.create_schema()
     gitlab_gateway = FakeGitLabGateway()
     compile_gateway = FakeInferenceGateway()
+    object_store = FakeObjectStore()
     compiler_service = CompilerService(
         settings=settings,
         gitlab_gateway=gitlab_gateway,
@@ -2172,6 +2302,7 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     runtime_service = RuntimeService(
         settings=settings,
         inference_gateway=FailingInferenceGateway(),
+        object_store=object_store,
         agent_harness_service=agent_harness_service,
     )
 
@@ -2180,7 +2311,6 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-checkpoint-consumption",
                     name="Runtime Checkpoint Consumption",
                     description="Validate checkpoint-scoped terminal input consumption.",
                 ),
@@ -2202,18 +2332,53 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-checkpoint-consumption",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
+            image_objects = []
+            for index in range(1, 5):
+                image_bytes = f"compressed-image-{index}".encode()
+                object_key = f"terminal/assembly-{index}.jpg"
+                object_store.objects[("test-bucket", object_key)] = image_bytes
+                image_object = ArtifactObject(
+                    bucket="test-bucket",
+                    object_key=object_key,
+                    media_type="image/jpeg",
+                    size_bytes=len(image_bytes),
+                    checksum=f"sha256-image-{index}",
+                )
+                session.add(image_object)
+                image_objects.append(image_object)
+            session.flush()
             runtime_service.append_terminal_event(
                 session,
                 invocation.run_id or "",
                 AppendTerminalEventRequest(
                     direction="input",
-                    event_kind="terminal.text.input.v1",
-                    mime_type="text/plain",
-                    payload_inline="海韵 focus gx-1200",
+                    event_kind="terminal.multimodal.input.v1",
+                    mime_type="multipart/mixed",
+                    payload_inline={"text": "海韵 focus gx-1200，已附四张装配照片。"},
+                    parts=[
+                        TerminalEventPartInput(
+                            part_id="text_1",
+                            kind="text",
+                            mime_type="text/plain",
+                            text="海韵 focus gx-1200，已附四张装配照片。",
+                        ),
+                        *[
+                            TerminalEventPartInput(
+                                part_id=f"image_{index}",
+                                kind="image",
+                                mime_type="image/jpeg",
+                                artifact_object_id=image_object.id,
+                                size_bytes=image_object.size_bytes,
+                                checksum=image_object.checksum,
+                                metadata={"filename": f"assembly-{index}.jpg"},
+                            )
+                            for index, image_object in enumerate(image_objects, start=1)
+                        ],
+                    ],
                     external_event_id="runtime-checkpoint-consumption-input-1",
                 ),
             )
@@ -2233,6 +2398,11 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
         event.payload["observation"]
         for event in trace_events
         if event.event_type == "runtime.agent.completed" and event.payload["node_id"] == "evaluate_collect_context"
+    )
+    second_instruction_payload = next(
+        event.payload["observation"]
+        for event in trace_events
+        if event.event_type == "runtime.agent.completed" and event.payload["node_id"] == "instruct_second_step"
     )
     agent_node_ids = [
         event.payload["node_id"]
@@ -2265,6 +2435,10 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
     assert runner_turn_context["current_checkpoint"]["expected_inputs"] == [{"kind": "text"}, {"kind": "image"}]
     assert collect_eval_payload["next_phase"] == "second_step"
     assert collect_eval_payload["runner"]["suggested_next_phase"] == "second_step"
+    assert collect_eval_payload["runner"]["attachment_roles"] == ["evidence"] * 4
+    assert second_instruction_payload["evidence_assessment"]["requirement_results"] == []
+    assert second_instruction_payload["runner"]["attachment_roles"] == []
+    assert second_instruction_payload["runner"]["validator_failure_codes"] == []
     assert latest_token["control"]["latest_evaluation"]["resolved_next_phase"] == "instruct_second_step"
     assert consumption == [
         {
@@ -2276,6 +2450,8 @@ def test_runtime_service_does_not_reuse_terminal_input_across_checkpoints(tmp_pa
         }
     ]
     assert "evaluate_second_step" not in agent_node_ids
+    assert not [event for event in trace_events if event.event_type == "runtime.message_processing.failed"]
+    assert not any("刚才服务器开小差了，请您重试！" in str(event.payload_inline or "") for event in terminal_events)
     assert [event.payload["resumed_from_existing_input"] for event in wait_traces] == [True, False]
     assert [event.direction for event in terminal_events] == ["input", "output", "output"]
 
@@ -2343,7 +2519,6 @@ def test_runtime_new_checkpoint_does_not_consume_same_turn_trigger_input(tmp_pat
             skill = skills_service.create_skill(
                 session,
                 CreateSkillRequest(
-                    key="runtime-same-turn-trigger",
                     name="Runtime Same Turn Trigger",
                     description="Validate new checkpoints ignore the input that triggered the instruct node.",
                 ),
@@ -2365,7 +2540,7 @@ def test_runtime_new_checkpoint_does_not_consume_same_turn_trigger_input(tmp_pat
             invocation = runtime_service.create_invocation(
                 session,
                 CreateInvocationRequest(
-                    skill_key="runtime-same-turn-trigger",
+                    skill_key=skill.key,
                     terminal_context={"terminal_kind": "web"},
                 ),
             )
@@ -2608,8 +2783,9 @@ def test_runtime_evidence_progress_initializes_new_checkpoint_independently() ->
     assert progress["requirements"] == [
         {
             "requirement_key": "evidence_1",
-            "description": "第二阶段照片",
-            "kind": "image",
+                "description": "第二阶段照片",
+                "required": True,
+                "kind": "image",
             "status": "missing",
             "accepted_event_refs": [],
             "rejected_event_refs": [],
@@ -2628,7 +2804,6 @@ def test_runtime_missing_evaluation_transition_fails_before_success_output(runti
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-missing-transition",
                 name="Runtime Missing Transition",
                 description="Validate missing evaluation transition recovery.",
             ),
@@ -2654,7 +2829,7 @@ def test_runtime_missing_evaluation_transition_fails_before_success_output(runti
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-missing-transition",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -2787,7 +2962,6 @@ def test_runtime_job_running_append_marks_rerun_and_finish_requeues_unsynced_inp
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-job-rerun",
                 name="Runtime Job Rerun",
                 description="Validate runtime job rerun marker.",
             ),
@@ -2801,7 +2975,7 @@ def test_runtime_job_running_append_marks_rerun_and_finish_requeues_unsynced_inp
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-job-rerun",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -2822,7 +2996,7 @@ def test_runtime_job_running_append_marks_rerun_and_finish_requeues_unsynced_inp
         job.attempt_no = 4
         session.commit()
 
-        runtime_service.append_terminal_event(
+        concurrent_input = runtime_service.append_terminal_event(
             session,
             invocation.run_id or "",
             AppendTerminalEventRequest(
@@ -2840,17 +3014,60 @@ def test_runtime_job_running_append_marks_rerun_and_finish_requeues_unsynced_inp
         run_model = runtime_service.repository.get_run(session, invocation.run_id or "")
         assert run_model is not None
         snapshot = runtime_service.repository.list_snapshots(session, invocation.run_id or "")[-1]
+        token = json.loads(json.dumps(snapshot.token_payload, ensure_ascii=False))
+        token.setdefault("metadata", {})["terminal_cursor"] = concurrent_input.seq_no
         runtime_service._finish_runtime_job_turn(
             session=session,
             job=job,
             run=run_model,
-            token=snapshot.token_payload,
+            token=token,
             status="succeeded",
         )
         assert job.status == "pending"
-        assert job.attempt_no == 4
+        assert job.attempt_no == 0
         assert job.payload == {"run_id": invocation.run_id}
         assert job.available_at is not None
+        assert job.worker_name == ""
+        assert job.lease_until is None
+        assert job.finished_at is None
+        assert job.last_error == ""
+
+        session.commit()
+        for index in range(4):
+            lease = JobRepository().claim_next_job(
+                session,
+                job_types=("runtime",),
+                lease_seconds=60,
+                worker_name=f"runtime-rerun-owner-{index}",
+            )
+            assert lease is not None
+            assert lease.attempt_no == 1
+            appended = runtime_service.append_terminal_event(
+                session,
+                invocation.run_id or "",
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline=f"第 {index + 1} 次运行中追加输入",
+                    external_event_id=f"runtime-job-rerun-loop-input-{index}",
+                ),
+            )
+            run_model = runtime_service.repository.get_run(session, invocation.run_id or "")
+            claimed_job = JobRepository().get_runtime_job(session, lease.job_id)
+            assert run_model is not None
+            assert claimed_job is not None
+            token["metadata"]["terminal_cursor"] = appended.seq_no
+            runtime_service._finish_runtime_job_turn(
+                session=session,
+                job=claimed_job,
+                run=run_model,
+                token=token,
+                status="succeeded",
+            )
+            assert claimed_job.status == "pending"
+            assert claimed_job.attempt_no == 0
+            session.commit()
 
 
 def test_runtime_service_records_failed_run_when_runner_fails(runtime_stack) -> None:
@@ -2865,7 +3082,6 @@ def test_runtime_service_records_failed_run_when_runner_fails(runtime_stack) -> 
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-failure",
                 name="Runtime Failure",
                 description="Validate runtime failure trace.",
             ),
@@ -2880,7 +3096,7 @@ def test_runtime_service_records_failed_run_when_runner_fails(runtime_stack) -> 
         invocation = failing_runtime.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-failure",
+                skill_key=skill.key,
                 input_envelope={"user_input": "触发失败"},
             ),
         )
@@ -2931,7 +3147,6 @@ def test_runtime_service_records_runner_gateway_error_details_in_failed_trace_pa
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-gateway-failure",
                 name="Runtime Gateway Failure",
                 description="Validate gateway failure trace details.",
             ),
@@ -2946,7 +3161,7 @@ def test_runtime_service_records_runner_gateway_error_details_in_failed_trace_pa
         invocation = failing_runtime.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-gateway-failure",
+                skill_key=skill.key,
                 input_envelope={"user_input": "触发 gateway 失败"},
             ),
         )
@@ -2997,7 +3212,6 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
         skill = skills_service.create_skill(
             session,
             CreateSkillRequest(
-                key="runtime-message-recover",
                 name="Runtime Message Recover",
                 description="Validate recoverable terminal message failures.",
             ),
@@ -3012,7 +3226,7 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
         invocation = runtime_service.create_invocation(
             session,
             CreateInvocationRequest(
-                skill_key="runtime-message-recover",
+                skill_key=skill.key,
                 terminal_context={"terminal_kind": "web"},
             ),
         )
@@ -3074,3 +3288,99 @@ def test_runtime_service_recovers_when_single_terminal_message_processing_fails(
     assert snapshots[-1].token_payload["control"]["wait"]["recoverable_errors"]
     assert retry.seq_no > terminal_events[-1].seq_no
     assert final_run.status == "succeeded"
+
+
+def test_runtime_service_requeues_inputs_appended_while_terminal_message_processing_times_out(runtime_stack) -> None:
+    database_manager, _, _, compiler_service, skills_service, runtime_service = runtime_stack
+    concurrent_input: dict[str, TerminalEventAppendResponse] = {}
+    run_id = ""
+
+    def append_concurrent_input() -> None:
+        with database_manager.session() as concurrent_session:
+            concurrent_input["event"] = runtime_service.append_terminal_event(
+                concurrent_session,
+                run_id,
+                AppendTerminalEventRequest(
+                    direction="input",
+                    event_kind="terminal.text.input.v1",
+                    mime_type="text/plain",
+                    payload_inline="Runner 执行期间追加的输入",
+                    external_event_id="runtime-message-recover-concurrent-input",
+                ),
+            )
+
+    failing_runtime = RuntimeService(
+        settings=runtime_service.settings,
+        inference_gateway=FailingInferenceGateway(),
+        agent_harness_service=CallbackRaisingAgentHarnessService(
+            append_concurrent_input,
+            RuntimeStepTimeoutError("Runtime 节点执行超过总时限。"),
+        ),
+    )
+
+    with database_manager.session() as session:
+        skill = skills_service.create_skill(
+            session,
+            CreateSkillRequest(
+                name="Runtime Concurrent Message Recover",
+                description="Validate concurrent terminal input recovery.",
+            ),
+        )
+        published = skills_service.publish_skill(
+            session,
+            skill_id=skill.id,
+            payload=PublishSkillRequest(publish_reason="Runtime concurrent message recover publish"),
+        )
+        process_publish_job(session, compiler_service, published.compile_request.id)
+
+        invocation = runtime_service.create_invocation(
+            session,
+            CreateInvocationRequest(
+                skill_key=skill.key,
+                terminal_context={"terminal_kind": "web"},
+            ),
+        )
+        run_id = invocation.run_id or ""
+        runtime_service.process_run(session, run_id)
+        failed_input = failing_runtime.append_terminal_event(
+            session,
+            run_id,
+            AppendTerminalEventRequest(
+                direction="input",
+                event_kind="terminal.text.input.v1",
+                mime_type="text/plain",
+                payload_inline="触发超时的输入",
+                external_event_id="runtime-message-recover-timeout-input",
+            ),
+        )
+
+        failing_runtime.process_run(session, run_id)
+        recovered_snapshot = runtime_service.list_snapshots(session, run_id)[-1]
+        terminal_events = runtime_service.list_terminal_events(session, run_id)
+        recovery_output = terminal_events[-1]
+        job = JobRepository().get_runtime_job_by_dedupe_key(session, f"job:runtime:{run_id}")
+
+        appended = concurrent_input["event"]
+        concurrent_seq = appended.seq_no
+        assert recovered_snapshot.token_payload["metadata"]["terminal_cursor"] == failed_input.seq_no
+        assert concurrent_seq == failed_input.seq_no + 1
+        assert recovery_output.seq_no == concurrent_seq + 1
+        assert recovery_output.direction == "output"
+        assert recovery_output.seq_no not in {
+            item["seq_no"] for item in recovered_snapshot.token_payload["terminal"]["events"]
+        }
+        assert job is not None
+        assert job.status == "pending"
+        assert job.attempt_no == 0
+        assert job.payload == {"run_id": run_id}
+
+        runtime_service.process_run(session, run_id)
+        final_run = runtime_service.get_run(session, run_id)
+        final_token = runtime_service.list_snapshots(session, run_id)[-1].token_payload
+        synced_seqs = [item["seq_no"] for item in final_token["terminal"]["events"]]
+        consumed_seqs = [item["seq_no"] for item in final_token["control"]["terminal_consumption"]]
+
+    assert final_run.status == "succeeded"
+    assert synced_seqs.count(concurrent_seq) == 1
+    assert synced_seqs.count(recovery_output.seq_no) == 1
+    assert consumed_seqs.count(concurrent_seq) == 1

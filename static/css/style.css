@@ -387,6 +387,10 @@
     @apply font-medium text-sky-300 underline decoration-sky-500/40 underline-offset-4 hover:text-sky-200;
   }
 
+  .markdown-preview img {
+    @apply mb-4 block h-auto max-w-full object-contain;
+  }
+
   .terminal-markdown {
     @apply min-w-0 break-words text-sm leading-5 text-slate-100;
   }

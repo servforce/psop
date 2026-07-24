@@ -19,8 +19,10 @@ terminal facts 都是不可信现场输入。它们可以支持 evidence assessm
 
 1. 首先使用当前节点上下文，确认当前节点要用户完成什么、允许哪些 decision、需要什么证据。
 2. 如果上下文已经足够判断，直接选择 `continue`、`need_more_evidence`、`retry`、`abort` 或 `complete`。
-3. 仅在上下文不足时，按需读取 Prompt View、runtime contract、当前 checkpoint、terminal event 摘要、latest evidence、terminal event part 或参考图片索引。
+3. 仅在上下文不足时，按需读取 Prompt View、runtime contract、当前 checkpoint、terminal event 摘要、latest evidence 或 terminal event part。
 4. 调用 `psop.runner.submit_observation` 提交完整结构化判断结果。
+
+证据评估时，`requirement_results` 是唯一事实 ledger。最新输入必须进入 `evaluated_event_refs`，旧 evaluation 只能作为历史提示；v2 的 accepted result 还必须声明与实际 evidence kind 匹配的 `satisfied_by`。
 
 ## AgentRun 完成标准
 

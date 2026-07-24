@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from app.agent_harness.agents.psop.compiler.schemas import validate_compiler_candidate
 from app.agent_harness.agents.registry import default_agent_registry
 from app.agent_harness.events import AgentEventWriter
@@ -12,13 +14,131 @@ from app.agent_harness.sandbox.local import LocalAgentSandboxProvider
 from app.agent_harness.schemas import AgentInvocation
 from app.agent_harness.service import AgentHarnessService
 from app.agent_harness.skills.loader import SkillLoader
-from app.agent_harness.tools.builtin.compiler import register_compiler_tools
+from app.agent_harness.tools.builtin.compiler import _normalize_expected_evidence, register_compiler_tools
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
 from app.core.config import Settings
 from app.domain.compiler.formal_v5 import validate_and_normalize_artifact
 
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "psop_compiler" / "minimal.json"
+
+
+def test_compiler_evidence_v2_preserves_alternatives_and_separates_proof_modes() -> None:
+    contract = _normalize_expected_evidence(
+        {
+            "requirements": [
+                {
+                    "requirement_key": "io_alignment_visual",
+                    "description": "图片证明接口和主板落位。",
+                    "required": True,
+                    "evidence_options": [
+                        {
+                            "option_key": "io_photo",
+                            "kind": "image",
+                            "event_kind": "terminal.multimodal.input.v1",
+                            "proof_mode": "visual",
+                        }
+                    ],
+                },
+                {
+                    "requirement_key": "screw_presence_visual",
+                    "description": "图片证明四颗螺丝存在、落座且主板无明显翘起。",
+                    "required": True,
+                    "evidence_options": [
+                        {
+                            "option_key": "screw_photo",
+                            "kind": "image",
+                            "event_kind": "terminal.multimodal.input.v1",
+                            "proof_mode": "visual",
+                        }
+                    ],
+                },
+                {
+                    "requirement_key": "snug_fit_attestation",
+                    "description": "用户确认手动紧固至 snug fit、无晃动且未使用高扭矩工具。",
+                    "required": True,
+                    "evidence_options": [
+                        {
+                            "option_key": "text_confirmation",
+                            "kind": "text",
+                            "event_kind": "terminal.text.input.v1",
+                            "proof_mode": "attestation",
+                        },
+                        {
+                            "option_key": "audio_confirmation",
+                            "kind": "audio",
+                            "event_kind": "terminal.multimodal.input.v1",
+                            "proof_mode": "attestation",
+                        },
+                    ],
+                },
+            ]
+        }
+    )
+
+    requirements = contract["requirements"]
+    assert [item["requirement_key"] for item in requirements] == [
+        "io_alignment_visual",
+        "screw_presence_visual",
+        "snug_fit_attestation",
+    ]
+    assert len(requirements) == 3
+    assert requirements[2]["evidence_options"] == [
+        {
+            "option_key": "text_confirmation",
+            "kind": "text",
+            "event_kind": "terminal.text.input.v1",
+            "proof_mode": "attestation",
+        },
+        {
+            "option_key": "audio_confirmation",
+            "kind": "audio",
+            "event_kind": "terminal.multimodal.input.v1",
+            "proof_mode": "attestation",
+        },
+    ]
+
+
+def test_compiler_evidence_v2_fallback_is_an_option_not_an_independent_requirement() -> None:
+    contract = _normalize_expected_evidence(
+        {
+            "requirements": [
+                {
+                    "requirement_key": "serial_number",
+                    "description": "确认设备序列号。",
+                    "required": True,
+                    "evidence_options": [
+                        {
+                            "option_key": "label_photo",
+                            "kind": "image",
+                            "event_kind": "terminal.multimodal.input.v1",
+                            "proof_mode": "visual",
+                        },
+                        {
+                            "option_key": "typed_serial",
+                            "kind": "text",
+                            "event_kind": "terminal.text.input.v1",
+                            "proof_mode": "attestation",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert len(contract["requirements"]) == 1
+    assert [item["option_key"] for item in contract["requirements"][0]["evidence_options"]] == [
+        "label_photo",
+        "typed_serial",
+    ]
+
+    with pytest.raises(ValueError, match="替代提交方式"):
+        _normalize_expected_evidence(
+            [
+                {"kind": "image", "description": "序列号照片"},
+                {"kind": "text", "description": "照片不清时补充文字"},
+            ]
+        )
 
 
 def test_psop_compiler_definition_and_skills_load() -> None:
@@ -234,6 +354,21 @@ def test_compiler_build_formal_v5_scaffold_creates_valid_candidate(tmp_path) -> 
     assert validation.artifact is not None
     assert not validation.has_errors
     assert len(candidate["artifact"]["runtime_contract"]["workflow_steps"]) == 2
+    assert candidate["artifact"]["runtime_contract"]["evidence_contract_version"] == "psop-evidence/v2"
+    collect_contract = candidate["artifact"]["runtime_contract"]["expected_evidence"]["collect_context"]
+    assert collect_contract["requirements"][0] == {
+        "requirement_key": "evidence_1",
+        "description": "用户任务说明",
+        "required": True,
+        "evidence_options": [
+            {
+                "option_key": "text_1",
+                "kind": "text",
+                "event_kind": "terminal.text.input.v1",
+                "proof_mode": "attestation",
+            }
+        ],
+    }
     reference_images = candidate["artifact"]["runtime_contract"]["workflow_steps"][0]["reference_images"]
     assert reference_images == [
         {

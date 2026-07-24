@@ -12,7 +12,6 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
-    generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
     escapeHtml,
@@ -502,9 +501,9 @@
         const firstMs = Number(events[0]?.at_ms || 0);
         const lastMs = Number(events[events.length - 1]?.at_ms || 0);
         if (firstMs === lastMs) {
-          return `仅 ${this.formatSkillTestTimelineMs(firstMs)}`;
+          return `仅 ${this.formatSkillTestTimelineEventSeconds(firstMs)}`;
         }
-        return `${this.formatSkillTestTimelineMs(firstMs)} - ${this.formatSkillTestTimelineMs(lastMs)}`;
+        return `${this.formatSkillTestTimelineEventSeconds(firstMs)} - ${this.formatSkillTestTimelineEventSeconds(lastMs)}`;
       },
 
       skillTestTimelineLaneAssetCount(laneId) {
@@ -581,6 +580,12 @@
         const minutes = Math.floor(totalSeconds / 60);
         const seconds = totalSeconds % 60;
         return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+      },
+
+
+      formatSkillTestTimelineEventSeconds(value) {
+        const ms = Math.max(0, Number(value || 0));
+        return `${Math.round(ms / 1000)}s`;
       },
 
 
@@ -805,17 +810,6 @@
       },
 
 
-      skillTestTimelineAcceptForLane(laneId) {
-        if (laneId === "input.audio") {
-          return "audio/*";
-        }
-        if (laneId === "input.video") {
-          return "video/*";
-        }
-        return "image/*";
-      },
-
-
       skillTestTimelinePartsAccept() {
         return "image/*,audio/*,video/*";
       },
@@ -834,19 +828,21 @@
       },
 
       skillTestTimelineEventAssetLabel(event) {
-        if (!event?.asset_id) {
+        const assetId = event?.asset_id || this.skillTestTimelineEventParts(event).find((part) => part?.asset_id)?.asset_id;
+        if (!assetId) {
           return "未上传文件";
         }
-        const asset = this.skillTestAssetById(event.asset_id);
+        const asset = this.skillTestAssetById(assetId);
         return asset ? this.skillTestAssetLabel(asset) : "文件已绑定";
       },
 
 
       skillTestTimelineEventAsset(event) {
-        if (!event?.asset_id) {
+        const assetId = event?.asset_id || this.skillTestTimelineEventParts(event).find((part) => part?.asset_id)?.asset_id;
+        if (!assetId) {
           return null;
         }
-        return this.skillTestAssetById(event.asset_id);
+        return this.skillTestAssetById(assetId);
       },
 
 
@@ -914,6 +910,28 @@
           return "";
         }
         return this.skillTestAssetContentUrl(asset);
+      },
+
+
+      skillTestTimelineEventPreviewParts(event) {
+        const parts = this.skillTestTimelineEventParts(event).filter(
+          (part) => part?.asset_id && this.skillTestTimelinePartPreviewUrl(part)
+        );
+        if (parts.length || !event?.asset_id) {
+          return parts;
+        }
+        const asset = this.skillTestTimelineEventAsset(event);
+        if (!asset) {
+          return [];
+        }
+        return [
+          {
+            part_id: `asset_${event.asset_id}`,
+            kind: this.normalizeSkillTestTimelinePartKind(asset.mime_type || event.mime_type || ""),
+            mime_type: asset.mime_type || event.mime_type || "",
+            asset_id: event.asset_id
+          }
+        ];
       },
 
 
@@ -1003,45 +1021,6 @@
           return "";
         }
         return `${this.apiBaseUrl}/skills/${encodeURIComponent(skillId)}/test-scenarios/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(asset.id)}/content`;
-      },
-
-
-      skillTestTimelineAssetPreviewKind(event) {
-        const laneId = event?.lane_id || "";
-        const asset = this.skillTestTimelineEventAsset(event);
-        const mimeType = asset?.mime_type || event?.mime_type || "";
-        if (mimeType.startsWith("image/") || laneId === "input.image") {
-          return "image";
-        }
-        if (mimeType.startsWith("audio/") || laneId === "input.audio") {
-          return "audio";
-        }
-        if (mimeType.startsWith("video/") || laneId === "input.video") {
-          return "video";
-        }
-        return "";
-      },
-
-
-      skillTestTimelineAssetPreviewUrl(event) {
-        const asset = this.skillTestTimelineEventAsset(event);
-        return this.skillTestAssetContentUrl(asset);
-      },
-
-
-      skillTestTimelineAssetPreviewMeta(event) {
-        const asset = this.skillTestTimelineEventAsset(event);
-        if (!asset) {
-          return "";
-        }
-        const parts = [];
-        if (asset.mime_type) {
-          parts.push(asset.mime_type);
-        }
-        if (asset.size_bytes) {
-          parts.push(this.formatBytes(asset.size_bytes));
-        }
-        return parts.join(" · ");
       },
 
 
@@ -2475,9 +2454,9 @@
         const firstMs = Number(events[0]?.at_ms || 0);
         const lastMs = Number(events[events.length - 1]?.at_ms || 0);
         if (firstMs === lastMs) {
-          return `仅 ${this.formatSkillTestTimelineMs(firstMs)}`;
+          return `仅 ${this.formatSkillTestTimelineEventSeconds(firstMs)}`;
         }
-        return `${this.formatSkillTestTimelineMs(firstMs)} - ${this.formatSkillTestTimelineMs(lastMs)}`;
+        return `${this.formatSkillTestTimelineEventSeconds(firstMs)} - ${this.formatSkillTestTimelineEventSeconds(lastMs)}`;
       },
 
 
@@ -2832,7 +2811,7 @@
             {
               id: `${event.id || "expectation"}:expectation`,
               title: "阶段期望",
-              meta: this.formatSkillTestTimelineMs(event.at_ms || 0),
+              meta: this.formatSkillTestTimelineEventSeconds(event.at_ms || 0),
               content: event.expectation || "暂无语义期望。"
             }
           ];
@@ -2841,9 +2820,9 @@
             sections.push({
               id: `${event.id || "expectation"}:slice`,
               title: "阶段切面",
-              meta: this.formatSkillTestTimelineMs(stageOutput.time_ms ?? event.at_ms ?? 0),
+              meta: this.formatSkillTestTimelineEventSeconds(stageOutput.time_ms ?? event.at_ms ?? 0),
               content: [
-                `切面时间: ${this.formatSkillTestTimelineMs(stageOutput.time_ms ?? event.at_ms ?? 0)}`,
+                `切面时间: ${this.formatSkillTestTimelineEventSeconds(stageOutput.time_ms ?? event.at_ms ?? 0)}`,
                 `Terminal Seq: ${cursor.terminal_seq === undefined || cursor.terminal_seq === null ? 0 : cursor.terminal_seq}`,
                 `Snapshot Seq: ${cursor.snapshot_seq === undefined || cursor.snapshot_seq === null ? 0 : cursor.snapshot_seq}`
               ].join("\n")
@@ -2853,7 +2832,7 @@
             ...this.skillTestReviewRuntimeOutputsForExpectation(event).map((outputEvent, index) => ({
               id: outputEvent.id || `${event.id || "expectation"}:runtime:${index}`,
               title: `真实输出 #${index + 1}`,
-              meta: this.formatSkillTestTimelineMs(outputEvent.at_ms || 0),
+              meta: this.formatSkillTestTimelineEventSeconds(outputEvent.at_ms || 0),
               content: this.skillTestReviewRuntimeOutputLabel(outputEvent)
             }))
           );
@@ -2878,7 +2857,7 @@
             {
               id: `${event.id || "runtime"}:runtime`,
               title: "真实输出",
-              meta: this.formatSkillTestTimelineMs(event.at_ms || 0),
+              meta: this.formatSkillTestTimelineEventSeconds(event.at_ms || 0),
               content: this.skillTestReviewRuntimeOutputLabel(event)
             }
           ];
@@ -2907,15 +2886,15 @@
           sections.push({
             id: `${event.id || "input"}:payload`,
             title: this.skillTestTimelineEventUsesAsset(event) ? "输入说明" : "输入内容",
-            meta: this.formatSkillTestTimelineMs(event.at_ms || 0),
+            meta: this.formatSkillTestTimelineEventSeconds(event.at_ms || 0),
             content: payload
           });
         }
-        if (!sections.length) {
+        if (!sections.length && !this.skillTestTimelineEventPreviewParts(event).length) {
           sections.push({
             id: `${event.id || "event"}:fallback`,
             title: "事件信息",
-            meta: this.formatSkillTestTimelineMs(event.at_ms || 0),
+            meta: this.formatSkillTestTimelineEventSeconds(event.at_ms || 0),
             content: event.event_kind || "暂无事件内容。"
           });
         }
@@ -3166,7 +3145,7 @@
 
       skillTestReviewEventTooltip(event) {
         const parts = [
-          `${this.formatSkillTestTimelineMs(event?.at_ms || 0)} · ${this.skillTestTimelineLaneLabel({ id: event?.lane_id })}`,
+          `${this.formatSkillTestTimelineEventSeconds(event?.at_ms || 0)} · ${this.skillTestTimelineLaneLabel({ id: event?.lane_id })}`,
           this.skillTestTimelineEventLabel(event),
           this.skillTestReviewEventStatusLabel(event),
           "点击查看完整内容"

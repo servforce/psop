@@ -98,7 +98,7 @@ checkpoint 和结构化证据要求。阶段来自编译产物 `runtime_contract
 | --- | --- | --- |
 | `terminal.multimodal.input.v1` | input | 同一条用户输入气泡内展示文本、图片、音频、视频 part。 |
 | `terminal.text.output.v1` | output | 系统输出文本；正式文本位于 text part。 |
-| `terminal.multimodal.output.v1` | output | 同一条系统输出气泡内展示文本和参考图片 part。 |
+| `terminal.multimodal.output.v1` | output | 历史兼容事件；展示旧版 Runner 已持久化的文本和参考图片 part，当前 Runner 不再新增此类事件。 |
 
 终端事件的正式展示内容优先读取 `parts[]`。`payload_inline` 只作为事件级摘要、小文本摘要或旧客户端兼容字段，不应承载二进制内容、对象存储地址或 MinIO object key。旧数据或少量兼容事件可能没有 `parts[]`，客户端可在这种情况下回退读取 `payload_inline`。
 
@@ -107,7 +107,7 @@ part 常见类型：
 | part.kind | 内容来源 | 展示建议 |
 | --- | --- | --- |
 | `text` | `parts[].text` | 文本段落。 |
-| `image` | part content endpoint | 图片缩略图，可点击预览；对 output 事件通常是当前步骤参考图。 |
+| `image` | part content endpoint | 图片缩略图，可点击预览；历史 output 事件中的 image part 是旧版 Runner 参考图。 |
 | `audio` | part content endpoint | 音频播放器。 |
 | `video` | part content endpoint | 视频播放器。 |
 
@@ -227,7 +227,7 @@ Content-Type: application/json
 如果创建 invocation 后用户已经有首条输入，终端应立即通过 terminal event 提交。该输入会先作为 pending terminal fact 持久化在 `terminal_event` 中；Runtime worker 建立首个匹配的 wait checkpoint 后，再把这些 pending input 批量交付为 checkpoint evidence。若首个 checkpoint 因早到输入直接进入 evaluation，Runtime 会抑制被跳过的 instruct 提示，只输出 evaluation 的正式反馈。
 
 
-终端侧可用响应示例：
+终端侧可用响应示例。以下包含一个历史多模态 output，说明客户端如何恢复旧 Run；当前 Runner 的新输出为 `terminal.text.output.v1`：
 
 ```json
 {
@@ -706,11 +706,11 @@ Range: bytes=0-1048575
   `If-None-Match` 获取零对象读取的 `304`；`If-Range` 不匹配时服务端返回完整 `200`。
 - 终端侧不需要也不应该读取或保存 MinIO bucket/object key。
 
-## 接收 Runner 参考图片输出
+## 兼容历史 Runner 参考图片输出
 
-`psop.runner` 在协助终端用户执行 PSOP Skill 时，可能会把当前步骤的参考图片作为回答的一部分返回给终端。Runtime 会把这类回答保存为 `direction = "output"`、`event_kind = "terminal.multimodal.output.v1"` 的终端事件；终端可以通过事件列表 REST 接口或 WebSocket `terminal.event.appended` 增量消息接收。
+当前 `psop.runner` 只产生 `terminal.text.output.v1`，不会再把 Skill 参考图片作为回答的一部分返回给终端。历史 Run 中已经持久化的参考图片仍以 `direction = "output"`、`event_kind = "terminal.multimodal.output.v1"` 保存；终端通过事件列表 REST 接口、Replay 或 WebSocket 恢复旧事件时仍可能读到它们。
 
-参考图片来自已发布 Skill source 的 `references/` 目录，并在编译阶段被镜像为受控 `ArtifactObject` 写入 `runtime_contract.workflow_steps[*].reference_images`。Runner 运行时只选择当前步骤允许的 `reference_image_ref`；最终 image part 由 Runtime 校验并补齐。因此终端协议不需要新增上传、下载或附件字段，也不应把参考图片理解为 Runner 临时生成的外部附件。
+这些历史参考图片来自已发布 Skill source 的 `references/` 目录，并在旧版运行链路中由受控 `ArtifactObject` 生成 image part。兼容读取继续复用现有 part 内容接口，不需要新增上传、下载或附件字段。
 
 终端侧处理规则：
 
@@ -719,7 +719,7 @@ Range: bytes=0-1048575
 - `kind = "image"` 的 part 通过 part 内容接口读取二进制内容，使用 `event.id` 和 `part.part_id` 构造 URL。
 - 可使用 `parts[].metadata.title`、`parts[].metadata.caption` 展示参考图片标题和说明。
 - 不要从 `artifact_object_id` 拼接下载地址，也不要期待 `payload_inline` 或 `parts[]` 中出现图片 base64。
-- 如果 output 事件中没有 image part，说明本次输出没有可展示的参考图片；终端只展示 text part 即可。旧事件没有 `parts[]` 时再回退展示 `payload_inline`。
+- 当前文本 output 只展示 text part；历史事件没有 `parts[]` 时再回退展示 `payload_inline`。
 
 前端展示示例：
 
@@ -849,6 +849,7 @@ Idempotency-Key: <client-event-id>
 - POST 返回时，Run 可能仍是 `waiting_runtime/start` 或 `waiting_input`，output terminal events 和 trace events 需要随后通过 WebSocket 或 REST 获取。
 - Runtime output 现在按节点级提交后增量可见；同一次输入触发多个节点时，终端可能陆续收到多条 output/trace，而不是等整轮 Runtime 完成后一次性出现。
 - Runtime 只会把 input 消费到当前 wait checkpoint 的输入窗口内。已被一个 checkpoint 记入 `control.terminal_consumption` 的 input，不会被后续 checkpoint 自动复用为 evidence。
+- Runtime 正在处理上一条消息时仍可继续接收新 input。服务端会持久化输入并设置 durable rerun 标记；当前处理结束或 recoverable timeout 后，worker 必须再运行一轮，不会用后续错误 output 的序号跳过该 input。
 - 如果一条 input 只是触发 Runtime 输出下一阶段指令，Runtime 创建的新 checkpoint 会从该 input 之后开始接收证据；终端用户需要再发送新消息或新附件，才会被作为新 checkpoint 的 evidence。
 - 终端客户端不要构造 `parts[]`；服务端会根据 `text` 和文件字段生成 part。
 - `payload_inline` 只作为摘要或旧展示兼容字段；正式文本内容以服务端生成的 text part 为准。
@@ -921,8 +922,9 @@ Idempotency-Key: <client-event-id>
 
 - 文本直接写在 `event` JSON 的 `text` 字段中。没有文本时可以省略。
 - 图片、音频、视频通过重复的 `files` 字段提交。服务端根据每个文件的 MIME 推导 part kind。
-- 每个事件最多 4 个媒体文件；单文件不超过 25 MiB，媒体合计不超过 25 MiB，
-  multipart 请求体默认不超过 27 MiB。限制可由部署配置调整。
+- 每个事件最多 4 个媒体文件；图片单文件不超过 5 MiB，其他媒体单文件不超过
+  25 MiB，媒体合计不超过 25 MiB，multipart 请求体默认不超过 27 MiB。
+  限制可由部署配置调整。
 - 终端侧不要上传对象存储 key；服务端会在同一次请求内保存文件并创建 part 级对象引用。
 
 命令示例：
@@ -1025,7 +1027,7 @@ curl -sS -X POST "$PSOP_API_BASE/terminal/sessions/$RUN_ID/events" \
 - 原始二进制不要通过 `payload_inline` 传输。
 - 上传失败或响应丢失后可以使用同一个 `Idempotency-Key` 和 `external_event_id` 重试，服务端会避免重复创建终端消息。
 - 终端展示媒体时调用 `/terminal/sessions/{run_id}/events/{event_id}/parts/{part_id}/content`，不要使用 `artifact_object_id` 拼接下载地址。
-- 终端展示 output 事件时，应在同一条系统消息内按 `order_index` 展示 text part 和参考图片 part；参考图片可使用 `metadata.title`、`metadata.caption` 作为辅助说明。
+- 终端恢复历史多模态 output 时，应在同一条系统消息内按 `order_index` 展示 text part 和 image part；可使用 `metadata.title`、`metadata.caption` 作为辅助说明。
 
 ## 订阅 WebSocket
 
@@ -1140,7 +1142,7 @@ WebSocket 服务端消息统一外层结构：
 | `payload.event_kind` | 终端事件类型。 |
 | `payload.mime_type` | 内容 MIME。 |
 | `payload.payload_inline` | 事件级摘要、小文本或结构化小 JSON。 |
-| `payload.parts` | 服务端生成的事件 part 列表；output 事件可能包含当前步骤参考图片。 |
+| `payload.parts` | 服务端生成的事件 part 列表；历史多模态 output 可能包含旧版 Runner 参考图片。 |
 | `payload.seq_no` | 服务端终端事件序号。 |
 | `payload.external_event_id` | 终端侧提交的幂等 ID。 |
 | `payload.source_ref` | 终端侧提交的来源信息。 |
@@ -1223,7 +1225,7 @@ Runtime trace 增量会以 `trace.event.appended` 推送，终端可用于调试
 }
 ```
 
-Runner 参考图片输出推送示例：
+历史 Runner 参考图片输出推送示例（仅用于旧 Run 兼容与 Replay）：
 
 ```json
 {

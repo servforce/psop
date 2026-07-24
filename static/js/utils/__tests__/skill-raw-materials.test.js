@@ -127,6 +127,12 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(skillDetailJs).toContain("素材正在分析中，不能重复解析。");
   expect(skillDetailJs).toContain("/raw-materials");
   expect(skillDetailJs).toContain("/raw-materials/generate-skill-draft");
+  expect(skillDetailJs).toContain("newBuilderGenerationIdempotencyKey");
+  expect(skillDetailJs).toContain("idempotency_key: idempotencyKey");
+  expect(skillDetailJs.indexOf("this.busy.rawMaterialGenerate = true;")).toBeLessThan(
+    skillDetailJs.indexOf("/raw-materials/generation-intent-preview")
+  );
+  expect(skillDetailJs).toContain("this.builderAgentPanel.idempotencyKey = \"\";");
   expect(skillDetailJs).toContain("/analysis");
   expect(skillDetailJs).toContain("/analyze");
   expect(skillDetailJs).toContain("/derived-assets/");

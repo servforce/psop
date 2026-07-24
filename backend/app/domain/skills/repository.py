@@ -146,6 +146,43 @@ class SkillsRepository:
             .with_for_update()
         )
 
+    def get_latest_completed_raw_material_generation(
+        self,
+        session: Session,
+        *,
+        skill_definition_id: str,
+        exclude_generation_id: str,
+    ) -> SkillRawMaterialGeneration | None:
+        return session.scalar(
+            select(SkillRawMaterialGeneration)
+            .where(
+                SkillRawMaterialGeneration.skill_definition_id == skill_definition_id,
+                SkillRawMaterialGeneration.id != exclude_generation_id,
+                SkillRawMaterialGeneration.status.in_(("succeeded", "failed", "cancelled")),
+            )
+            .order_by(
+                SkillRawMaterialGeneration.created_at.desc(),
+                SkillRawMaterialGeneration.id.desc(),
+            )
+            .limit(1)
+        )
+
+    def list_succeeded_raw_material_generations(
+        self,
+        session: Session,
+        *,
+        skill_definition_id: str,
+        committed_commit_sha: str | None = None,
+    ) -> list[SkillRawMaterialGeneration]:
+        query = select(SkillRawMaterialGeneration).where(
+            SkillRawMaterialGeneration.skill_definition_id == skill_definition_id,
+            SkillRawMaterialGeneration.status == "succeeded",
+        )
+        if committed_commit_sha is not None:
+            query = query.where(SkillRawMaterialGeneration.committed_commit_sha == committed_commit_sha)
+        query = query.order_by(SkillRawMaterialGeneration.created_at.desc())
+        return list(session.scalars(query).all())
+
     def get_latest_raw_material_analysis(
         self,
         session: Session,

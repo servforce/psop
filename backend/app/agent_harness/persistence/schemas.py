@@ -40,6 +40,14 @@ class AgentRunTimelineResponse(BaseModel):
     progress: RuntimeJobProgressResponse | None = None
     elapsed_ms: int | None = None
     token_usage: RuntimeJobTokenUsageResponse | None = None
+    model_call_count: int = 0
+    candidate_submission_attempts: int = 0
+    candidate_correction_attempts: int = 0
+    job_attempt_no: int = 0
+    job_max_attempts: int = 0
+    failure_kind: str = ""
+    validation_diagnostic_count: int = 0
+    validation_diagnostics: list[dict[str, Any]] = Field(default_factory=list)
     steps: list[AgentRunStepResponse] = Field(default_factory=list)
     final: AgentRunFinalResponse = Field(default_factory=AgentRunFinalResponse)
     error_message: str = ""

@@ -19,7 +19,6 @@ function loadSkillTestMethods() {
     "buildSkillTestScenarioNewPath",
     "buildSkillTestScenarioRunReviewPath",
     "buildCompilerArtifactPath",
-    "generateSkillKey",
     "resolveApiBaseUrl",
     "resolveWsUrl",
     "escapeHtml",
@@ -180,6 +179,14 @@ test("timeline event icons use lane defaults and schedule icon for trigger event
   expect(app.skillTestTimelineEventIcon({ lane_id: "expected.semantic" })).toBe("fact_check");
   expect(app.skillTestTimelineEventIcon({ lane_id: "input.text", event_kind: "terminal.schedule.trigger.v1" })).toBe("schedule");
   expect(app.skillTestTimelineEventIcon({ lane_id: "input.text", trigger_event_id: "expected_1" })).toBe("schedule");
+});
+
+test("timeline event times always display in seconds", () => {
+  const app = createTimelineHarness();
+
+  expect(app.formatSkillTestTimelineEventSeconds(0)).toBe("0s");
+  expect(app.formatSkillTestTimelineEventSeconds(220000)).toBe("220s");
+  expect(app.formatSkillTestTimelineMs(220000)).toBe("3m 40s");
 });
 
 test("default timeline and sensor events normalize structured payloads", () => {
@@ -430,7 +437,7 @@ test("timeline event editor keeps the original channel immutable", () => {
   expect(app.skillTestTimelineEvents().find((event) => event.id === "input_1").lane_id).toBe("input.text");
 });
 
-test("multimodal timeline events resolve preview urls from bound assets", () => {
+test("multimodal timeline events resolve every preview part from bound assets", () => {
   const app = createTimelineHarness();
   app.apiBaseUrl = "/api/v1";
   app.currentSkill = { id: "skill-1" };
@@ -444,18 +451,50 @@ test("multimodal timeline events resolve preview urls from bound assets", () => 
       filename: "site.png",
       mime_type: "image/png",
       size_bytes: 9
-    }
+    },
+    ...[2, 3, 4, 5].map((index) => ({
+      id: `asset-${index}`,
+      skill_definition_id: "skill-1",
+      scenario_id: "scenario-1",
+      name: `现场图片 ${index}`,
+      filename: `site-${index}.png`,
+      mime_type: "image/png",
+      size_bytes: index
+    }))
   ];
-  app.formatBytes = (value) => `${value} B`;
-
   const event = { id: "image_1", lane_id: "input.image", asset_id: "asset-1", mime_type: "image/*" };
 
   expect(app.skillTestTimelineEventAsset(event).filename).toBe("site.png");
-  expect(app.skillTestTimelineAssetPreviewKind(event)).toBe("image");
-  expect(app.skillTestTimelineAssetPreviewUrl(event)).toBe(
+
+  const multipartEvent = {
+    id: "image_2",
+    lane_id: "input.image",
+    mime_type: "multipart/mixed",
+    parts: [1, 2, 3, 4, 5].map((index) => ({
+      part_id: `image_${index}`,
+      kind: "image",
+      asset_id: `asset-${index}`,
+      mime_type: "image/png"
+    }))
+  };
+
+  expect(app.skillTestTimelineEventAsset(multipartEvent).filename).toBe("site.png");
+  expect(app.skillTestTimelineEventPreviewParts(multipartEvent)).toHaveLength(5);
+  expect(app.skillTestTimelineEventPreviewParts(multipartEvent).map((part) => part.part_id)).toEqual([
+    "image_1",
+    "image_2",
+    "image_3",
+    "image_4",
+    "image_5"
+  ]);
+  expect(app.skillTestReviewEventContentSections(multipartEvent)).toEqual([]);
+
+  expect(app.skillTestTimelineEventPreviewParts(event)).toEqual([
+    expect.objectContaining({ kind: "image", asset_id: "asset-1" })
+  ]);
+  expect(app.skillTestTimelinePartPreviewUrl(app.skillTestTimelineEventPreviewParts(event)[0])).toBe(
     "/api/v1/skills/skill-1/test-scenarios/scenario-1/assets/asset-1/content"
   );
-  expect(app.skillTestTimelineAssetPreviewMeta(event)).toBe("image/png · 9 B");
 });
 
 test("timeline input events can hold ordered text and asset parts", () => {
@@ -819,7 +858,7 @@ test("review lane header opens lane time details and event clicks replace it", (
   expect(app.isSkillTestReviewLaneSelected("expected.semantic")).toBe(true);
   expect(app.skillTestReviewSelectedLane().id).toBe("expected.semantic");
   expect(app.skillTestReviewSelectedLaneEvents()).toHaveLength(3);
-  expect(app.skillTestReviewLaneRangeLabel("expected.semantic")).toBe("3m 10s - 6m 2s");
+  expect(app.skillTestReviewLaneRangeLabel("expected.semantic")).toBe("190s - 362s");
   expect(app.skillTestReviewLaneReachedCount("expected.semantic")).toBe(1);
   expect(app.skillTestReviewLaneRuntimeOutputCount("expected.semantic")).toBe(1);
 

@@ -1,8 +1,8 @@
 # PSOP Runner Agent 实施计划
 
-本文是阶段性实施计划，不是长期架构事实源。`psop.runner` 的职责、工具、Agent Skills、RuntimeService 接入方式、终端协作、证据评估、参考图片输出和 observation 契约以 [PSOP Runner Agent 详细设计](../../architecture/psop-runner-agent-design.md) 为准；Agent Harness 总体边界以 [系统架构设计](../../architecture/system-architecture.md) 为准；PSOP-EG 与 Session Token 的形式语义以 [Execution Graph formal-v5](../../architecture/execution-graph-formal-v5.md) 为准；终端事件与多模态输出边界以 [终端接入说明](../../guides/terminal-integration-v1.md) 为准。
+本文是阶段性实施计划，不是长期架构事实源。`psop.runner` 的职责、工具、Agent Skills、RuntimeService 接入方式、终端协作、证据评估和 observation 契约以 [PSOP Runner Agent 详细设计](../../architecture/psop-runner-agent-design.md) 为准；Agent Harness 总体边界以 [系统架构设计](../../architecture/system-architecture.md) 为准；PSOP-EG 与 Session Token 的形式语义以 [Execution Graph formal-v5](../../architecture/execution-graph-formal-v5.md) 为准；终端事件边界以 [终端接入说明](../../guides/terminal-integration-v1.md) 为准。
 
-> 状态：已实现；`psop.runner` 已成为 Runtime LLM / evidence evaluation 节点的默认执行路径；AgentRun Runtime 关联、参考图片 warning trace、严格 source ref 校验和终端上传图片的 Harness multimodal attachment 直连识别已补齐。Runtime 不生成图片 safe summary，图片语义判断由 `psop.runner` 多模态模型完成。
+> 状态：历史实施计划，主体已实现；后续已移除 Runner 参考图片选择、warning trace 和多模态 output 新增逻辑。`psop.runner` 仍是 Runtime LLM / evidence evaluation 节点的默认执行路径，终端上传图片的 Harness multimodal attachment 直连识别继续保留。
 >
 > 更新说明：2026-07 的 Runtime 异步边界与 Runner context-first 改造已经取代本计划中“每轮必须 load_skill / load_skill_resource / 读取全部 runner tools”的旧验收口径。当前基线以 `RunnerTurnContext` 优先、read tools 按需、唯一强制 `psop.runner.submit_observation` 为准。
 >

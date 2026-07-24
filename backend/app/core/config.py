@@ -60,12 +60,13 @@ class Settings(BaseSettings):
     object_store_auto_create_bucket: bool = True
     test_data_max_upload_bytes: int = 25 * 1024 * 1024
     terminal_event_max_upload_files: int = Field(default=4, gt=0)
+    terminal_event_max_image_bytes: int = Field(default=5 * 1024 * 1024, gt=0)
     terminal_event_max_file_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     terminal_event_max_total_file_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     terminal_event_max_request_bytes: int = Field(default=27 * 1024 * 1024, gt=0)
     terminal_object_store_io_workers: int = Field(default=8, gt=0)
     raw_material_max_upload_bytes: int = 50 * 1024 * 1024
-    raw_material_video_max_upload_bytes: int = 2 * 1024 * 1024 * 1024
+    raw_material_video_max_upload_bytes: int = 3 * 1024 * 1024 * 1024
     raw_material_extract_text_max_chars: int = 80_000
     raw_material_url_timeout_seconds: float = 20.0
     video_max_analyzed_frames: int = 120
@@ -117,6 +118,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_terminal_media_limits(self) -> "Settings":
+        if self.terminal_event_max_image_bytes > self.terminal_event_max_total_file_bytes:
+            raise ValueError("终端事件图片上限不能大于文件总量上限")
         if self.terminal_event_max_file_bytes > self.terminal_event_max_total_file_bytes:
             raise ValueError("终端事件单文件上限不能大于文件总量上限")
         if self.terminal_event_max_total_file_bytes >= self.terminal_event_max_request_bytes:

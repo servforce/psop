@@ -40,19 +40,27 @@ class ScriptedBuilderChatModel(BaseChatModel):
 def _next_builder_message(messages: list[BaseMessage], tool_names: set[str]) -> AIMessage:
     if "load_skill" in tool_names and not _has_tool_result(messages, "load_skill", "psop-builder"):
         return _tool_call("call_load_builder_skill", "load_skill", {"skill_name": "psop-builder"})
-    for resource_path, call_id in (
-        ("core/SKILL.md", "call_load_builder_core"),
-        ("evidence-mapping/SKILL.md", "call_load_builder_evidence"),
-        ("quality-review/SKILL.md", "call_load_builder_quality"),
-    ):
-        if "load_skill_resource" in tool_names and not _has_resource_result(messages, "psop-builder", resource_path):
-            return _tool_call(
+    missing_resources = [
+        (resource_path, call_id)
+        for resource_path, call_id in (
+            ("core/SKILL.md", "call_load_builder_core"),
+            ("evidence-mapping/SKILL.md", "call_load_builder_evidence"),
+            ("quality-review/SKILL.md", "call_load_builder_quality"),
+        )
+        if "load_skill_resource" in tool_names
+        and not _has_resource_result(messages, "psop-builder", resource_path)
+    ]
+    if missing_resources:
+        return _tool_calls([
+            (
                 call_id,
                 "load_skill_resource",
                 {"skill_name": "psop-builder", "resource_path": resource_path, "max_chars": 60000},
             )
+            for resource_path, call_id in missing_resources
+        ])
     if "psop.builder.read_current_source" in tool_names and not _has_tool_result(messages, "psop.builder.read_current_source"):
-        return _tool_call("call_read_source", "psop.builder.read_current_source", {"paths": ["README.md", "SKILL.md"]})
+        return _tool_call("call_read_source", "psop.builder.read_current_source", {})
     if "psop.builder.list_materials" in tool_names and not _has_tool_result(messages, "psop.builder.list_materials"):
         return _tool_call("call_list_materials", "psop.builder.list_materials", {"max_items": 20})
     if "psop.builder.read_material_analysis" in tool_names and not _has_tool_result(messages, "psop.builder.read_material_analysis"):
@@ -74,16 +82,6 @@ def _next_builder_message(messages: list[BaseMessage], tool_names: set[str]) -> 
                 "max_results": 3,
             },
         )
-    if "workspace.write_text" in tool_names and not _has_tool_result(messages, "workspace.write_text"):
-        return _tool_call(
-            "call_workspace_note",
-            "workspace.write_text",
-            {
-                "path": "evidence-map-draft.md",
-                "content": "# Evidence Map Draft\n\n- 已读取素材分析、参考资产和标准检索状态。\n",
-                "mode": "overwrite",
-            },
-        )
     if "psop.builder.submit_candidate" in tool_names and not _has_tool_result(messages, "psop.builder.submit_candidate"):
         return _tool_call("call_submit_candidate", "psop.builder.submit_candidate", _candidate(messages))
     return AIMessage(
@@ -98,6 +96,7 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
     reference_path = str(asset.get("reference_path") or "references/keyframes/pump-room-pressure.jpg")
     asset_id = str(asset.get("asset_id") or "asset-1")
     return {
+        "schema_version": "2.0",
         "directory_tree": "README.md\nSKILL.md\nprompts/system.md\nreferences/README.md\nexamples/input.md\nexamples/expected-output.md\ntests/checklist.md",
         "files": {
             "README.md": "# 泵房进入前安全检查\n\n用于指导现场人员在进入泵房前完成 PPE、阀门状态和压力表读数检查。\n",
@@ -108,9 +107,9 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
                 "## 输入\n- 操作员文本确认\n- PPE 照片或明确确认\n- 阀门状态观察\n- 压力表读数\n\n"
                 "## 输出\n- 是否允许进入泵房\n- 已记录的关键证据\n- 异常停止原因\n\n"
                 "## Workflow\n"
-                "### 阶段 1：PPE 与进入条件确认\n要求操作员确认 PPE 穿戴完整，并参考 "
+                "### [stage_01_ppe] PPE 与进入条件确认\n要求操作员确认 PPE 穿戴完整，并参考 "
                 f"{reference_path} 判断现场入口状态。缺少 PPE 时停止进入。\n\n"
-                "### 阶段 2：阀门与压力表确认\n确认目标阀门处于关闭状态，记录压力表读数。读数异常或阀门状态不清时停止并请求复核。\n\n"
+                "### [stage_02_valve_pressure] 阀门与压力表确认\n确认目标阀门处于关闭状态，记录压力表读数。读数异常或阀门状态不清时停止并请求复核。\n\n"
                 "## Wait Checkpoints\n- 阶段 1 等待 PPE 或入口状态证据。\n- 阶段 2 等待阀门状态和压力表读数。\n\n"
                 "## Expected Evidence\n- PPE 确认\n- 阀门关闭证据\n- 压力表读数\n\n"
                 "## Safety Constraints\n- PPE 不完整不得进入泵房。\n- 阀门状态不清不得继续。\n- 压力读数异常必须停止并升级复核。\n\n"
@@ -124,7 +123,7 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
             "tests/checklist.md": "# 测试清单\n\n- happy path：阶段 1 和阶段 2 均有证据。\n- 缺失证据：缺少 PPE 时等待。\n- 风险停止：压力读数异常时停止。\n- 人工确认：阀门状态不清时请求复核。\n",
         },
         "generation_reason": "根据用户目标、素材分析和候选参考资产构建了泵房进入前检查 Skill draft。",
-        "review_notes": ["行业标准检索结果仅作为参考，发布前需要人工确认适用标准条款。"],
+        "review_notes": ["标准检索不可用，未引用行业标准。", "发布前需要人工确认适用标准条款。"],
         "material_usage": [{"material_id": material_id, "usage": "用于识别 PPE、阀门关闭和压力表读数三个关键检查点。"}],
         "industry_standard_usage": [],
         "selected_reference_assets": [
@@ -132,8 +131,8 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
                 "asset_id": asset_id,
                 "material_id": material_id,
                 "reference_path": reference_path,
-                "used_in": ["SKILL.md", "references/README.md"],
                 "reason": "该参考资产用于辅助判断泵房入口或设备状态。",
+                "stage_ids": ["stage_01_ppe"],
             }
         ],
         "evidence_map": [
@@ -141,19 +140,27 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
                 "claim": "作业需要在进入泵房前确认 PPE。",
                 "support_level": "observed_fact",
                 "source_refs": [{"source_type": "user_description", "ref": "input.user_description"}],
-                "used_in": ["阶段 1"],
+                "used_in": [
+                    {"target_type": "workflow_stage", "target_id": "stage_01_ppe"},
+                    {"target_type": "safety_constraint", "target_id": "safety_01_ppe"},
+                    {"target_type": "expected_evidence", "target_id": "evidence_01_ppe"},
+                ],
             },
             {
                 "claim": "阀门状态和压力表读数是关键完成证据。",
                 "support_level": "observed_fact",
                 "source_refs": [{"source_type": "material_analysis", "material_id": material_id}],
-                "used_in": ["阶段 2"],
+                "used_in": [
+                    {"target_type": "workflow_stage", "target_id": "stage_02_valve_pressure"},
+                    {"target_type": "safety_constraint", "target_id": "safety_02_pressure"},
+                    {"target_type": "expected_evidence", "target_id": "evidence_02_valve_pressure"},
+                ],
             },
             {
                 "claim": "行业标准适用性需要人工确认。",
                 "support_level": "human_confirmation_required",
                 "source_refs": [{"source_type": "human_confirmation_required", "ref": "standard_scope"}],
-                "used_in": ["review_notes"],
+                "used_in": [{"target_type": "review_notes", "target_id": "review_notes"}],
             },
         ],
         "missing_questions": [
@@ -165,33 +172,51 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
         ],
         "safety_constraints": [
             {
+                "constraint_id": "safety_01_ppe",
+                "scope": "selected_stages",
+                "stage_ids": ["stage_01_ppe"],
                 "constraint": "PPE 不完整不得进入泵房。",
-                "applies_to": "阶段 1",
                 "risk_type": "personal_safety",
                 "required_action": "停止进入并要求补齐 PPE 证据。",
             },
             {
+                "constraint_id": "safety_02_pressure",
+                "scope": "selected_stages",
+                "stage_ids": ["stage_02_valve_pressure"],
                 "constraint": "压力读数异常时不得继续。",
-                "applies_to": "阶段 2",
                 "risk_type": "equipment_pressure",
                 "required_action": "停止并请求现场负责人复核。",
             },
         ],
         "workflow_step_candidates": [
-            {"step_id": "阶段 1", "title": "PPE 与进入条件确认"},
-            {"step_id": "阶段 2", "title": "阀门与压力表确认"},
+            {"stage_id": "stage_01_ppe", "title": "PPE 与进入条件确认"},
+            {"stage_id": "stage_02_valve_pressure", "title": "阀门与压力表确认"},
         ],
         "expected_evidence_requirements": [
-            {"stage_id": "阶段 1", "evidence_type": "ppe_confirmation", "completion_criteria": "PPE 穿戴完整且入口状态可接受。"},
-            {"stage_id": "阶段 2", "evidence_type": "valve_and_pressure", "completion_criteria": "阀门关闭且压力表读数已记录。"},
+            {
+                "requirement_id": "evidence_01_ppe",
+                "stage_id": "stage_01_ppe",
+                "evidence_type": "ppe_confirmation",
+                "completion_criteria": "PPE 穿戴完整且入口状态可接受。",
+            },
+            {
+                "requirement_id": "evidence_02_valve_pressure",
+                "stage_id": "stage_02_valve_pressure",
+                "evidence_type": "valve_and_pressure",
+                "completion_criteria": "阀门关闭且压力表读数已记录。",
+            },
         ],
     }
 
 
 def _tool_call(call_id: str, name: str, args: dict[str, Any]) -> AIMessage:
+    return _tool_calls([(call_id, name, args)])
+
+
+def _tool_calls(calls: list[tuple[str, str, dict[str, Any]]]) -> AIMessage:
     return AIMessage(
         content="",
-        tool_calls=[{"id": call_id, "name": name, "args": args}],
+        tool_calls=[{"id": call_id, "name": name, "args": args} for call_id, name, args in calls],
         usage_metadata={"input_tokens": 12, "output_tokens": 6, "total_tokens": 18},
     )
 

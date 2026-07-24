@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -172,12 +174,12 @@ class RuntimeRepository:
         self,
         session: Session,
         *,
-        status: str | None = None,
+        status: Sequence[str] | None = None,
         skill_id: str | None = None,
     ) -> list[Run]:
         query = select(Run).order_by(Run.created_at.desc())
         if status:
-            query = query.where(Run.status == status)
+            query = query.where(Run.status.in_(status))
         if skill_id:
             query = query.where(Run.skill_definition_id == skill_id)
         return list(session.scalars(query).all())

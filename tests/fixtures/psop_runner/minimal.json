@@ -13,10 +13,9 @@
       "schema": "psop.runner.observation.v1",
       "required_artifact": "sandbox://outputs/runner-observation.json",
       "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
-      "language": "zh-CN",
-      "allow_reference_images": true
+      "language": "zh-CN"
     },
-    "text": "node_id=evaluate_collect_context 评估当前终端证据是否满足步骤：收集上下文。"
+    "text": "node_id=evaluate_collect_context 评估当前终端证据是否满足步骤：收集上下文。\n<RunnerTurnContext>\n{\"latest_evidence\":{\"seq_no\":1,\"text\":\"我已经完成当前步骤，并上传了现场说明。\",\"parts\":[{\"part_id\":\"text_1\",\"kind\":\"text\"}]},\"evidence_progress\":{\"requirements\":[{\"requirement_key\":\"evidence_1\",\"description\":\"用户任务和现场约束说明\",\"required\":true,\"status\":\"missing\",\"accepted_event_refs\":[]}]}}\n</RunnerTurnContext>"
   },
   "context": {
     "trust_labels": {
@@ -56,16 +55,6 @@
       "safety_constraints": ["证据不足时暂停。"],
       "completion_criteria": ["当前步骤证据已满足。"]
     },
-    "step_reference_images": [
-      {
-        "reference_image_ref": "skill-reference://steps/collect-context/site-overview",
-        "title": "现场概览参考图",
-        "caption": "请按参考图角度拍摄现场整体状态。",
-        "workflow_step_id": "collect_context",
-        "artifact_ref": "artifact://reference-image-id",
-        "source_ref": "runtime_contract.workflow_steps.collect_context.reference_images.site-overview"
-      }
-    ],
     "current_checkpoint": {
       "checkpoint_id": "collect_context_evidence",
       "workflow_step_id": "collect_context",
@@ -114,11 +103,25 @@
         }
       ]
     },
+    "evidence_progress": {
+      "checkpoint_id": "collect_context_evidence",
+      "workflow_step_id": "collect_context",
+      "requirements": [
+        {
+          "requirement_key": "evidence_1",
+          "description": "用户任务和现场约束说明",
+          "required": true,
+          "status": "missing",
+          "accepted_event_refs": [],
+          "rejected_event_refs": []
+        }
+      ]
+    },
     "trace_summary": [],
     "allowed_runtime": {
-      "terminal_event_kinds": ["terminal.text.output.v1", "terminal.multimodal.output.v1"],
+      "terminal_event_kinds": ["terminal.text.output.v1"],
       "input_part_kinds": ["text", "image", "audio", "video"],
-      "output_part_kinds": ["text", "image"],
+      "output_part_kinds": ["text"],
       "max_terminal_message_chars": 2000
     }
   }

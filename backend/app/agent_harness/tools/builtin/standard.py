@@ -10,9 +10,12 @@ import httpx
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
 from app.agent_harness.tools.spec import ToolSpec
 from app.core.config import Settings
+from app.core.observability import add_metric_counter, record_metric_histogram
 
 
 _STANDARD_RESULTS_CONTEXT_KEY = "_psop_builder_standard_results"
+_STANDARD_SEARCH_STATUS_CONTEXT_KEY = "_psop_builder_standard_search_status"
+STANDARD_UNAVAILABLE_REVIEW_NOTE = "标准检索不可用，未引用行业标准。"
 _STANDARD_REF_PATTERN = re.compile(r"\b(?:GB(?:/T)?|AQ(?:/T)?|DL(?:/T)?|SY(?:/T)?|HG(?:/T)?|JB(?:/T)?|NB(?:/T)?)\s*[0-9][0-9A-Za-z./-]*")
 _CLAUSE_REF_PATTERN = re.compile(r"(?:第\s*)?[0-9]+(?:\.[0-9]+){1,}(?:\s*条)?|第\s*[一二三四五六七八九十百]+条")
 
@@ -194,6 +197,29 @@ def _record_standard_search_event(
     started_at: float,
 ) -> None:
     items = result.get("items") if isinstance(result.get("items"), list) else []
+    status = str(result.get("status") or "error")
+    error_type = str(result.get("type") or "")
+    duration_seconds = max(0.0, time.perf_counter() - started_at)
+    context.invocation_context[_STANDARD_SEARCH_STATUS_CONTEXT_KEY] = "success" if status == "success" else str(result.get("type") or "internal_error")
+    if status != "success":
+        result["evidence_observation"] = {
+            "kind": "industry_standard_unavailable",
+            "usable_as_evidence": False,
+            "review_note": STANDARD_UNAVAILABLE_REVIEW_NOTE,
+        }
+    add_metric_counter(
+        "psop_builder_standard_search_total",
+        1,
+        attributes={"status": status, "error_type": error_type or "none"},
+    )
+    if error_type == "timeout":
+        add_metric_counter("psop_builder_standard_search_timeout_total", 1)
+    record_metric_histogram(
+        "psop_builder_standard_search_duration_seconds",
+        duration_seconds,
+        attributes={"status": status},
+        unit="s",
+    )
     context.event_writer.record(
         "agent.tool.standard_search",
         {
@@ -201,7 +227,7 @@ def _record_standard_search_event(
             "query_hash": _hash_text(str(arguments.get("query") or "")),
             "result_count": len(items),
             "standard_refs": [str(item.get("standard_ref") or "") for item in items if isinstance(item, dict) and item.get("standard_ref")][:8],
-            "duration_ms": int((time.perf_counter() - started_at) * 1000),
+            "duration_ms": int(duration_seconds * 1000),
             "status": result.get("status"),
             "error_type": result.get("type", ""),
         },

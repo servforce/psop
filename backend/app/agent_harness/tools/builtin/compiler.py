@@ -202,6 +202,15 @@ def allowed_runtime_snapshot() -> dict[str, Any]:
             "minimum_llm_calls": "2 * workflow_steps.length + 1",
         },
         "formal_v5_contract": {
+            "evidence_contract_version": "psop-evidence/v2",
+            "evidence_contract": {
+                "step_shape": {"requirements": "array"},
+                "requirement_fields": ["requirement_key", "description", "required", "evidence_options"],
+                "option_fields": ["option_key", "kind", "event_kind", "proof_mode"],
+                "supported_kinds": ["image", "text", "audio", "video"],
+                "supported_proof_modes": ["visual", "attestation", "measurement"],
+                "legacy_list_policy": "single_item_only; multi-item lists must be rewritten as explicit v2 requirements/options",
+            },
             "recommended_builder_tool": "psop.compiler.build_formal_v5_scaffold",
             "workflow_step_node_pattern": ["instruct_<step_id>", "evaluate_<step_id>"],
             "workflow_step_optional_fields": ["reference_images"],
@@ -766,33 +775,127 @@ def _safe_reference_slug(value: str, index: int) -> str:
     return slug or f"image-{index}"
 
 
-def _normalize_expected_evidence(raw_value: Any) -> list[dict[str, Any]]:
-    values = raw_value if isinstance(raw_value, list) else []
-    normalized: list[dict[str, Any]] = []
-    for item in values:
-        if isinstance(item, dict):
-            kind = _non_empty_text(item.get("kind"), "text")
-            evidence = {
-                "kind": kind,
-                "event_kind": _non_empty_text(item.get("event_kind"), _event_kind_for_evidence(kind)),
-            }
-            if item.get("description"):
-                evidence["description"] = str(item["description"])
-            normalized.append(evidence)
-        elif isinstance(item, str) and item.strip():
-            normalized.append(
+def _normalize_expected_evidence(raw_value: Any) -> dict[str, Any]:
+    if isinstance(raw_value, dict) and isinstance(raw_value.get("requirements"), list):
+        raw_requirements = raw_value["requirements"]
+    elif isinstance(raw_value, list):
+        if len(raw_value) > 1:
+            raise ValueError(
+                "expected_evidence 的多项 legacy list 语义不明确；请使用 v2 requirements，并把替代提交方式放入同一 evidence_options。"
+            )
+        raw_requirements = raw_value
+    else:
+        raw_requirements = []
+
+    requirements: list[dict[str, Any]] = []
+    used_requirement_keys: set[str] = set()
+    for index, item in enumerate(raw_requirements, start=1):
+        if isinstance(item, str):
+            item = {"description": item, "kind": "text"}
+        if not isinstance(item, dict):
+            continue
+        description = _non_empty_text(item.get("description") or item.get("title"), f"步骤证据要求 {index}")
+        requirement_key = _safe_evidence_key(
+            item.get("requirement_key") or item.get("id") or item.get("key"),
+            fallback=f"evidence_{index}",
+            used=used_requirement_keys,
+        )
+        used_requirement_keys.add(requirement_key)
+        raw_options = item.get("evidence_options")
+        if not isinstance(raw_options, list):
+            raw_options = [item]
+        options: list[dict[str, Any]] = []
+        used_option_keys: set[str] = set()
+        for option_index, raw_option in enumerate(raw_options, start=1):
+            if not isinstance(raw_option, dict):
+                continue
+            kind = _non_empty_text(raw_option.get("kind"), "text").lower()
+            option_key = _safe_evidence_key(
+                raw_option.get("option_key") or raw_option.get("id") or raw_option.get("key"),
+                fallback=f"{kind}_{option_index}",
+                used=used_option_keys,
+            )
+            used_option_keys.add(option_key)
+            options.append(
                 {
-                    "kind": "text",
-                    "event_kind": "terminal.text.input.v1",
-                    "description": item.strip(),
+                    "option_key": option_key,
+                    "kind": kind,
+                    "event_kind": _non_empty_text(
+                        raw_option.get("event_kind"),
+                        _event_kind_for_evidence(kind),
+                    ),
+                    "proof_mode": _non_empty_text(
+                        raw_option.get("proof_mode"),
+                        _proof_mode_for_evidence(kind),
+                    ).lower(),
                 }
             )
-    if normalized:
-        return normalized
-    return [
-        {"kind": "text", "event_kind": "terminal.text.input.v1", "description": "现场状态文字说明。"},
-        {"kind": "image", "event_kind": "terminal.image.input.v1", "description": "关键步骤照片或截图。"},
-    ]
+        if not options:
+            continue
+        requirements.append(
+            {
+                "requirement_key": requirement_key,
+                "description": description,
+                "required": item.get("required") is not False,
+                "evidence_options": options,
+            }
+        )
+    if not requirements:
+        requirements = [
+            {
+                "requirement_key": "site_state",
+                "description": "确认当前步骤的现场状态。",
+                "required": True,
+                "evidence_options": [
+                    {
+                        "option_key": "image_1",
+                        "kind": "image",
+                        "event_kind": "terminal.image.input.v1",
+                        "proof_mode": "visual",
+                    },
+                    {
+                        "option_key": "text_2",
+                        "kind": "text",
+                        "event_kind": "terminal.text.input.v1",
+                        "proof_mode": "attestation",
+                    },
+                ],
+            }
+        ]
+    return {"requirements": requirements}
+
+
+def _safe_evidence_key(raw_value: Any, *, fallback: str, used: set[str]) -> str:
+    value = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(raw_value or "").strip()).strip("_").lower() or fallback
+    candidate = value
+    suffix = 2
+    while candidate in used:
+        candidate = f"{value}_{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _proof_mode_for_evidence(kind: str) -> str:
+    return "visual" if kind in {"image", "video"} else "attestation"
+
+
+def _expected_inputs_for_evidence_contract(contract: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for requirement in contract.get("requirements") or []:
+        if not isinstance(requirement, dict):
+            continue
+        for option in requirement.get("evidence_options") or []:
+            if not isinstance(option, dict):
+                continue
+            kind = str(option.get("kind") or "text")
+            event_kind = str(option.get("event_kind") or _event_kind_for_evidence(kind))
+            identity = (kind, event_kind)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            result.append({"kind": kind, "event_kind": event_kind})
+    return result
 
 
 def _scaffold_artifact(
@@ -835,6 +938,7 @@ def _scaffold_artifact(
         "dependency_graph_for_view": dependency_graph_for_view,
         "runtime_contract": {
             "llm_route_key": llm_route_key,
+            "evidence_contract_version": "psop-evidence/v2",
             "skill_instruction": "严格遵循 frozen SKILL.md 中的现实世界协作流程；每次只推进当前阶段，等待用户证据后再判断是否进入下一阶段。",
             "execution_goal": execution_goal,
             "applicability": applicability,
@@ -853,8 +957,8 @@ def _scaffold_artifact(
                     "checkpoint_id": f"{step['id']}_evidence",
                     "workflow_step_id": step["id"],
                     "expected_inputs": [
-                        {"kind": item.get("kind", "text"), "event_kind": item.get("event_kind", _event_kind_for_evidence(str(item.get("kind") or "text")))}
-                        for item in step["expected_evidence"]
+                        item
+                        for item in _expected_inputs_for_evidence_contract(step["expected_evidence"])
                     ],
                 }
                 for step in workflow_steps
@@ -895,7 +999,7 @@ def _instruct_node(step: dict[str, Any], *, first_step: bool) -> dict[str, Any]:
             "checkpoint_id": f"{step_id}_evidence",
             "workflow_step_id": step_id,
             "wait_reason": f"等待用户提交「{step['title']}」的现场证据。",
-            "expected_inputs": step["expected_evidence"],
+            "expected_inputs": _expected_inputs_for_evidence_contract(step["expected_evidence"]),
             "resume_phase": f"evaluate_{step_id}",
         },
         "projection": {
@@ -1127,10 +1231,8 @@ def _safe_step_id(value: str, *, index: int, used_ids: set[str]) -> str:
 
 
 def _event_kind_for_evidence(kind: str) -> str:
-    if kind == "image":
-        return "terminal.image.input.v1"
-    if kind == "file":
-        return "terminal.file.input.v1"
+    if kind in {"image", "audio", "video"}:
+        return "terminal.multimodal.input.v1"
     return "terminal.text.input.v1"
 
 

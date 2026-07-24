@@ -22,17 +22,23 @@ def to_langchain_tools(*, tool_names: list[str], registry: ToolRegistry, context
         _run_tool = _make_tool(tool_name)
         _run_tool.__name__ = tool_name
         _run_tool.__doc__ = definition.spec.description
+        args_schema = (
+            definition.spec.input_schema
+            if definition.spec.input_schema_mode == "raw_json_schema"
+            else _args_schema_from_json_schema(
+                create_model=create_model,
+                field=Field,
+                tool_name=tool_name,
+                schema=definition.spec.input_schema,
+            )
+        )
         tools.append(
             StructuredTool.from_function(
                 _run_tool,
                 name=tool_name,
                 description=definition.spec.description,
-                args_schema=_args_schema_from_json_schema(
-                    create_model=create_model,
-                    field=Field,
-                    tool_name=tool_name,
-                    schema=definition.spec.input_schema,
-                ),
+                args_schema=args_schema,
+                return_direct=definition.spec.return_direct,
             )
         )
     return tools

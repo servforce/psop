@@ -15,7 +15,7 @@
 - `examples/input.md` 与 `examples/expected-output.md` 展示典型调用和期望行为。
 - `tests/checklist.md` 覆盖 happy path、缺失证据、风险停止、标准引用和人工确认。
 - `evidence_map` 中每个关键 claim 都有合法 source refs。
-- `workflow_step_candidates` 和 `expected_evidence_requirements` 能对应 `SKILL.md` 的阶段。
+- `workflow_step_candidates` 和 `expected_evidence_requirements` 通过稳定 ID 对应 `SKILL.md` 的 `### [stage_id] title` 阶段标题。
 - `industry_standard_usage` 中的标准引用可追溯，没有被写成未受支持的强制要求。
 
 ## 发布审阅标准
@@ -49,9 +49,23 @@
 
 调用 `psop.builder.submit_candidate` 时，参数必须直接包含完整 candidate：
 
+- `schema_version` 必须为 `"2.0"`；对象不得包含旧版兼容别名或未声明字段。
 - `files` 中必须有所有必需 Markdown 文件的完整内容。
-- `directory_tree`、`generation_reason`、`material_usage`、`evidence_map`、`safety_constraints`、`workflow_step_candidates`、`expected_evidence_requirements` 必须同时提交。
-- `selected_reference_assets` 最多 12 项，并且每个 `reference_path` 必须在 `SKILL.md` 的使用步骤附近以 Markdown 图片链接形式出现。
+- `directory_tree`、`generation_reason`、`review_notes`、`material_usage`、`industry_standard_usage`、`selected_reference_assets`、`evidence_map`、`missing_questions`、`safety_constraints`、`workflow_step_candidates`、`expected_evidence_requirements` 必须同时提交。
+- `selected_reference_assets` 最多 12 项，每项的 `stage_ids` 必须引用已声明阶段，并且每个 `reference_path` 必须在 `SKILL.md` 的使用步骤附近以 Markdown 图片链接形式出现。
 - 如果 LightRAG 检索失败，不要伪造行业标准；在 `review_notes` 中说明失败状态，并保持 `industry_standard_usage` 为空数组或只写可追溯的 `reference_only` 项。
 
-不得把 workspace 中的 `submit-params.json`、证据映射草稿或参考资产选择草稿当作最终候选产物。
+不得创建 workspace 中间文件；证据映射、参考资产选择和全部 Markdown 必须直接进入完整 `submit_candidate` 参数。
+
+## Metadata 完整性门禁
+
+提交前必须逐项确认：
+
+- 每个 `material_usage` 含 `material_id`、`usage`。
+- 每个 `evidence_map` 含 `claim`、`support_level`、`source_refs`、结构化 `used_in`；`support_level` 和 `target_type` 必须使用平台枚举值。
+- 每个 `missing_questions` 含 `question`、`reason`、`blocking_level`。
+- 每个安全约束、workflow、expected evidence、参考资产和标准使用项都满足工具 schema 的必填字段、唯一 ID、scope 组合及交叉引用规则。
+- 每个 workflow、安全约束和 expected evidence 都由可验证 `evidence_map.used_in` 目标覆盖。
+- 标准检索不可用是正常降级：不写标准引用，且 `review_notes` 必须含 `标准检索不可用，未引用行业标准。`
+
+若工具返回 `repair_checklist`，视为整份 candidate 的重新审查任务；必须修复清单中的全部字段，不得只修复第一项后重新提交。

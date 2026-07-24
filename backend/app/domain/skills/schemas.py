@@ -88,7 +88,6 @@ class SkillRepositoryFileResponse(BaseModel):
 
 
 class CreateSkillRequest(BaseModel):
-    key: str = Field(min_length=2, max_length=120, pattern=r"^[a-z0-9][a-z0-9-]*$")
     name: str = Field(min_length=2, max_length=255)
     description: str = Field(default="", max_length=5000)
 
@@ -188,6 +187,38 @@ class GenerateSkillDraftRequest(BaseModel):
 
     user_description: str = Field(min_length=1, max_length=10000)
     base_commit_sha: str | None = Field(default=None, min_length=1)
+    generation_intent: "GenerationIntentConfirmation | None" = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class GenerationIntentPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_description: str = Field(min_length=1, max_length=10000)
+
+
+class GenerationIntentOption(BaseModel):
+    id: str
+    label: str
+    revision_instruction: str
+
+
+class GenerationIntentPreviewResponse(BaseModel):
+    status: str
+    revision_mode: str
+    summary: str
+    preview_hash: str
+    options: list[GenerationIntentOption] = Field(default_factory=list)
+
+
+class GenerationIntentConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preview_hash: str = Field(min_length=16, max_length=128)
+    confirmed_option_id: str = Field(min_length=1, max_length=64)
+
+
+GenerateSkillDraftRequest.model_rebuild()
 
 
 class SkillRawMaterialGenerationResponse(BaseModel):

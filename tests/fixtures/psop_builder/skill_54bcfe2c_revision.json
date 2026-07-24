@@ -1,0 +1,38 @@
+{
+  "skill_id": "54bcfe2c-3aec-4db4-984f-bbc7084439b9",
+  "revision_instruction": "图片确认通过后无需二次文字确认，不再要求额外特写。",
+  "safety_constraints": [
+    {
+      "constraint_id": "sc_no_live_work",
+      "scope": "all_stages",
+      "stage_ids": [],
+      "constraint": "不得在带电状态下安装或拆卸部件。",
+      "risk_type": "electrical_safety",
+      "required_action": "立即停止并确认设备已断电。"
+    },
+    {
+      "constraint_id": "sc_snug_fit_only",
+      "scope": "all_stages",
+      "stage_ids": [],
+      "constraint": "部件未贴合或需要异常外力时不得继续。",
+      "risk_type": "mechanical_damage",
+      "required_action": "停止操作并复核方向、接口和异物。"
+    },
+    {
+      "constraint_id": "sc_esd_protection",
+      "scope": "all_stages",
+      "stage_ids": [],
+      "constraint": "接触静电敏感部件前必须落实防静电措施。",
+      "risk_type": "electrostatic_discharge",
+      "required_action": "停止接触并恢复有效接地防护。"
+    },
+    {
+      "constraint_id": "sc_fault_stop",
+      "scope": "all_stages",
+      "stage_ids": [],
+      "constraint": "出现异味、异响、火花或异常发热时不得继续。",
+      "risk_type": "equipment_fault",
+      "required_action": "立即停止、断电并记录异常。"
+    }
+  ]
+}
