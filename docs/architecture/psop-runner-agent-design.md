@@ -77,7 +77,7 @@ psop-runner =
 - 最近 runtime trace 摘要和上一轮 runner observation 摘要。
 - 平台级输出语言、安全和预算约束。
 
-这些事实由 RuntimeService 投影为不超过 20,000 字符的 `RunnerTurnContext`：当前 node/mode/turn kind、task identity、stage position、current workflow step、带 `based_on_terminal_seq` / `stale_by_events` 的 previous evaluation 摘要、去除 evidence history 的 checkpoint、evidence progress、latest evidence、最多三条 terminal 摘要、当前步骤 runtime contract slice、trust labels 和 output contract。完整 Prompt View、完整 checkpoint/history 与完整 runtime contract 只保留在 read tools 中，不在首轮重复注入。当前 requirements 和 latest evidence 不得因压缩而裁剪。
+这些事实由 RuntimeService 投影为不超过 20,000 字符的 `RunnerTurnContext`：当前 node/mode/turn kind、task identity、stage position、current workflow step、带 `based_on_terminal_seq` / `stale_by_events` 的 previous evaluation 摘要、去除 evidence history 的 checkpoint、evidence progress、latest evidence、最多三条 terminal 摘要、当前步骤 runtime contract slice、trust labels 和 output contract。对于 terminal guidance，current workflow step 额外包含从 `source_evidence` 投影出的静态 `guidance`，并附带 `current_step_expected_evidence`；二者只说明当前步骤应如何执行和应提交什么，不代表任何 evidence 已被验收。完整 Prompt View、完整 checkpoint/history 与完整 runtime contract 只保留在 read tools 中，不在首轮重复注入。当前 guidance、requirements 和 latest evidence 不得因压缩而裁剪。
 
 首个 `instruct_<step_id>` 使用 `first_step_instruction`。Runner 在该既有节点的一条 `terminal_message` 中自然合并任务与协作方式介绍、第一阶段指导、证据要求和必要安全提醒，不新增 opening 节点。后续 instruct 使用 `step_instruction`；evaluate 和 final_verify 分别使用 `evidence_evaluation` 与 `final_verification`。这些标记只约束 Runner 表达，不改变节点集合、guard、wait checkpoint、transition 或 Session Token 状态主权。
 
@@ -169,7 +169,7 @@ psop-runner =
 
 5. psop.runner 理解上下文并按需读取事实
    - 首轮必须先基于 `RunnerTurnContext` 判断。
-   - `first_step_instruction` 以专业温和的方式在一条消息中介绍任务与逐阶段协作方式，并自然进入第一阶段；`step_instruction` 只承接当前阶段，不重复首次介绍。
+   - `first_step_instruction` 以专业温和的方式在一条消息中介绍任务与逐阶段协作方式，并自然进入第一阶段；`step_instruction` 只承接当前阶段，不重复首次介绍。当前 guidance 或 expected evidence 明确列出的对象、动作、顺序、数量、检查项和条件必须表达给用户，不得退化为只复述阶段标题与目标。
    - evaluation 通过时只确认当前阶段，下一 instruct 另发一条阶段指导；证据不足时只要求补充尚未通过的证据项。
    - 上下文足够时可直接调用 `psop.runner.submit_observation`。
    - `read_prompt_view`、`read_runtime_contract`、`read_current_checkpoint`、`list_terminal_events`、`read_latest_evidence`、`read_terminal_event_part` 都是可选工具，仅在需要历史事件、part 摘要或上下文缺失时调用。

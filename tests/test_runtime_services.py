@@ -204,6 +204,27 @@ def test_runtime_projects_compiled_runner_turn_contract_without_inference(runtim
         "description": "指导用户完成台式电脑主机安装。",
         "version_no": 3,
     }
+    artifact_payload["runtime_contract"]["workflow_steps"][0]["source_evidence"] = (
+        "SKILL.md 要求用户依次展示主板、内存条、散热风扇、固态硬盘和机箱，"
+        "并确认主板、风扇、SSD 支架螺丝及批头匹配。"
+    )
+    artifact_payload["runtime_contract"]["expected_evidence"]["collect_context"] = {
+        "requirements": [
+            {
+                "requirement_key": "components_visual_check",
+                "description": "照片清晰显示五类配件均已展示且无可见损伤。",
+                "required": True,
+                "evidence_options": [
+                    {
+                        "option_key": "components_photo",
+                        "kind": "image",
+                        "event_kind": "terminal.multimodal.input.v1",
+                        "proof_mode": "visual",
+                    }
+                ],
+            }
+        ]
+    }
     node = next(item for item in artifact_payload["nodes"] if item["id"] == "instruct_collect_context")
     run = Run(id="run-turn-context", latest_snapshot_seq=0)
     token = {
@@ -243,12 +264,33 @@ def test_runtime_projects_compiled_runner_turn_contract_without_inference(runtim
         "workflow_step_id": "collect_context",
     }
     assert turn_context["current_workflow_step"]["title"] == "收集上下文"
+    assert "主板、内存条、散热风扇、固态硬盘和机箱" in turn_context["current_workflow_step"]["guidance"]
+    assert turn_context["current_step_expected_evidence"] == artifact_payload["runtime_contract"]["expected_evidence"][
+        "collect_context"
+    ]
     assert turn_context["previous_evaluation"] == {}
     assert turn_context["runtime_contract_slice"]["applicability"] == artifact_payload["runtime_contract"]["applicability"]
     assert "prompt_view" not in turn_context
     assert "workflow_steps" not in turn_context["runtime_contract_slice"]
     assert "evidence" not in turn_context["current_checkpoint"]
     assert len(json.dumps(turn_context, ensure_ascii=False)) < 20_000
+
+    artifact_payload["runtime_contract"]["workflow_steps"][0].pop("source_evidence")
+    artifact_payload["runtime_contract"]["expected_evidence"].pop("collect_context")
+    fallback_context = runtime_service._build_runner_context(
+        run=run,
+        node=node,
+        token=token,
+        artifact_payload=artifact_payload,
+    )
+    fallback_turn_context = runtime_service._build_runner_turn_context(
+        run=run,
+        node=node,
+        mode="terminal_guidance",
+        context=fallback_context,
+    )
+    assert "guidance" not in fallback_turn_context["current_workflow_step"]
+    assert fallback_turn_context["current_step_expected_evidence"] == {}
 
     legacy_node = json.loads(json.dumps(node, ensure_ascii=False))
     legacy_node["interaction"].pop("runner_turn_kind")
@@ -333,6 +375,10 @@ def test_runtime_projects_upcoming_checkpoint_for_guidance_after_evaluation(
     assert context["latest_evidence"] == {}
     assert turn_context["stage_position"]["workflow_step_id"] == "second_step"
     assert turn_context["current_workflow_step"]["title"] == "第二阶段"
+    assert turn_context["current_workflow_step"]["guidance"] == "测试用第二阶段。"
+    assert turn_context["current_step_expected_evidence"] == artifact_payload["runtime_contract"]["expected_evidence"][
+        "second_step"
+    ]
     assert turn_context["previous_evaluation"]["historical_hint_only"] is True
     assert turn_context["current_checkpoint"]["checkpoint_id"] == "second_step_evidence"
     assert turn_context["evidence_progress"] == {}
@@ -411,6 +457,8 @@ def test_runner_turn_context_marks_previous_evaluation_stale_without_copying_his
     assert previous["stale_by_events"] == 3
     assert previous["historical_hint_only"] is True
     assert "evidence_assessment" not in previous
+    assert "guidance" not in turn_context["current_workflow_step"]
+    assert turn_context["current_step_expected_evidence"] == {}
     assert len(previous["reason"]) <= 1200
     assert len(json.dumps(turn_context, ensure_ascii=False)) < 20_000
     assert "trace_summary" not in turn_context

@@ -3448,6 +3448,11 @@ class RuntimeService:
         interaction = node.get("interaction") if isinstance(node.get("interaction"), dict) else {}
         current_checkpoint = context.get("current_checkpoint") if isinstance(context.get("current_checkpoint"), dict) else {}
         workflow_steps = runtime_contract.get("workflow_steps") if isinstance(runtime_contract.get("workflow_steps"), list) else []
+        expected_evidence = (
+            runtime_contract.get("expected_evidence")
+            if isinstance(runtime_contract.get("expected_evidence"), dict)
+            else {}
+        )
         workflow_step_id = str(interaction.get("workflow_step_id") or current_checkpoint.get("workflow_step_id") or "")
         current_workflow_step: dict[str, Any] = {}
         stage_index = 0
@@ -3465,6 +3470,14 @@ class RuntimeService:
         )
         based_on_terminal_seq = self._runner_evaluation_terminal_seq(previous_evaluation)
         latest_seq = latest_evidence.get("seq_no") if isinstance(latest_evidence.get("seq_no"), int) else 0
+        current_workflow_step_summary = self._runner_current_workflow_step_summary(current_workflow_step)
+        if mode == "terminal_guidance":
+            guidance = str(current_workflow_step.get("source_evidence") or "").strip()
+            if guidance:
+                current_workflow_step_summary["guidance"] = guidance
+        current_step_expected_evidence = expected_evidence.get(workflow_step_id)
+        if not isinstance(current_step_expected_evidence, (dict, list)):
+            current_step_expected_evidence = {}
         compact_context = {
             "run_id": run.id,
             "node": {
@@ -3480,7 +3493,10 @@ class RuntimeService:
                 "total": len(workflow_steps),
                 "workflow_step_id": workflow_step_id,
             },
-            "current_workflow_step": self._runner_current_workflow_step_summary(current_workflow_step),
+            "current_workflow_step": current_workflow_step_summary,
+            "current_step_expected_evidence": (
+                current_step_expected_evidence if mode == "terminal_guidance" else {}
+            ),
             "previous_evaluation": self._runner_previous_evaluation_summary(
                 previous_evaluation,
                 based_on_terminal_seq=based_on_terminal_seq,
@@ -3628,7 +3644,8 @@ class RuntimeService:
             task_identity["description"] = str(task_identity.get("description") or "")[:300]
         if size() > RUNNER_TURN_CONTEXT_MAX_CHARS:
             raise RuntimeError(
-                f"RunnerTurnContext 超过 {RUNNER_TURN_CONTEXT_MAX_CHARS} 字符，且不可裁剪当前 requirements 或 latest_evidence。"
+                f"RunnerTurnContext 超过 {RUNNER_TURN_CONTEXT_MAX_CHARS} 字符，"
+                "且不可裁剪当前 guidance、requirements 或 latest_evidence。"
             )
         return context
 

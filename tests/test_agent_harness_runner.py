@@ -94,6 +94,9 @@ def test_psop_runner_config_and_prompt_guard_observation_format() -> None:
     assert "`runtime_contract.safety_constraints`" in prompt
     assert "`task_identity.*`" in prompt
     assert "`first_step_instruction`" in prompt
+    assert "`current_step_expected_evidence`" in prompt
+    assert "不得压缩为“必要配件”“相关部件”“按清单检查”等模糊说法" in prompt
+    assert "省略当前阶段的具名清单" in prompt
     assert '"decision": "need_more_evidence"' in prompt
     assert '`decision: "continue"`' in prompt
     assert '`decision: "complete"`' in prompt
