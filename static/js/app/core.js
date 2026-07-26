@@ -13,7 +13,6 @@
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
     buildAgentPromptPath,
-    generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
     escapeHtml,

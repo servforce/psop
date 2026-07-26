@@ -415,12 +415,24 @@ class SkillTestService:
             raise SkillValidationError("测试时间轴 Driver Job 缺少 scenario_run_id。", details={"job_id": job_id})
         response = self.process_timeline_driver_for_run(session, str(scenario_run_id))
         scenario_run = self._get_scenario_run(session, str(scenario_run_id))
+        self._sync_driver_job_metrics(session, job, str(scenario_run_id))
         if scenario_run.driver_status in {"completed", "failed", "cancelled"}:
             job.status = "succeeded" if scenario_run.driver_status == "completed" else scenario_run.driver_status
+            job.worker_name = ""
+            job.lease_until = None
+            job.finished_at = job.finished_at or now_utc()
+        elif scenario_run.driver_status == "waiting_time":
+            input_events = self._timeline_input_events(scenario_run.timeline)
+            cursor = max(0, min(scenario_run.driver_cursor, len(input_events)))
+            available_at = (
+                self._scenario_time(scenario_run, int(input_events[cursor].get("at_ms") or 0))
+                if cursor < len(input_events)
+                else now_utc()
+            )
+            self._ensure_driver_job_pending(session, scenario_run, available_at=available_at)
         elif job.status == "running":
-            job.status = "pending"
+            self._ensure_driver_job_pending(session, scenario_run)
         job.last_error = ""
-        self._sync_driver_job_metrics(session, job, str(scenario_run_id))
         session.commit()
         return response
 
@@ -508,8 +520,6 @@ class SkillTestService:
                         continue
                 scenario_run.driver_status = "waiting_time"
                 scenario_run.driver_cursor = cursor
-                self._ensure_driver_job_pending(session, scenario_run, available_at=scheduled_at)
-                session.commit()
                 return self._build_run_response(scenario_run)
             append_response = self._append_timeline_input_event(session, scenario_run, event, scheduled_at=scheduled_at)
             actual_sent_at = now_utc()
@@ -934,13 +944,15 @@ class SkillTestService:
         dedupe_key = f"job:skill-test-timeline-driver:{scenario_run.id}"
         job = self.job_repository.get_runtime_job_by_dedupe_key(session, dedupe_key)
         if job:
-            if job.status in {"succeeded", "failed", "cancelled"}:
-                job.attempt_no = 0
             job.job_type = TIMELINE_DRIVER_JOB_TYPE
             job.status = "pending"
             job.payload = {"scenario_run_id": scenario_run.id}
             job.run_id = scenario_run.run_id
             job.available_at = available_at or now_utc()
+            job.attempt_no = 0
+            job.worker_name = ""
+            job.lease_until = None
+            job.finished_at = None
             job.last_error = ""
             return job
         job = RuntimeJob(

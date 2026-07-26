@@ -1,5 +1,5 @@
 agent_key: psop.builder
-version: v1
+version: v2
 runner_kind: langchain_agent
 factory: make_builder_agent
 description: 根据用户目标、当前 Skill source、素材分析结果和行业标准引用构建可审阅的 PSOP Skill draft candidate。
@@ -16,17 +16,14 @@ tools:
   - psop.builder.list_reference_assets
   - psop.standard.search
   - psop.builder.submit_candidate
-  - workspace.read_text
-  - workspace.write_text
-  - workspace.list
 middleware:
   - name: dangling_tool_call
   - name: model_events
     config:
-      max_model_calls: 12
+      max_model_calls: 13
   - name: token_usage
   - name: tool_calls
     config:
       max_error_counts:
-        psop.builder.submit_candidate: 3
+        psop.builder.submit_candidate: 4
 memory_scope: psop.builder

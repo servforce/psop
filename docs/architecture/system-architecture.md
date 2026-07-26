@@ -165,7 +165,7 @@ capability summary
 view graph summary
 ```
 
-`runtime_contract.workflow_steps[*].reference_images[]` 是当前步骤可展示参考图片的正式运行时契约字段。字段中的 `artifact_object_id` 指向编译阶段创建的 `ArtifactObject`；Runtime 不在运行时回读 GitLab source，也不接受 Runner 临时上传或编造的图片对象。
+`runtime_contract.workflow_steps[*].reference_images[]` 是 Compiler 生成的受控参考资产索引。字段中的 `artifact_object_id` 指向编译阶段创建的 `ArtifactObject`。对于 `psop-evidence/v2` 图片评估，Runtime 按 `display_order` 自动选取当前步骤第一张参考图，并以 `role=reference` 单独附加给 `psop.runner`；参考图只用于视觉对照，不能进入 terminal evidence ledger，也不直接投影为终端输出。v1 artifact 保持原兼容行为，不自动附加参考图。
 
 当前 MVP 支持：
 
@@ -245,18 +245,21 @@ RuntimeService 只能通过受控 merge 与 snapshot 追加推进 Session Token�
 
 `terminal_event_part` 表示输入事件中的多模态 part，例如文本、图片、音频、视频或文件。非文本内容通过 `artifact_object` 关联对象存储。
 
-输出事件中的参考图片同样通过 `terminal_event_part.artifact_object_id` 关联对象存储，但它们不是终端用户上传的 evidence，而是来自编译产物 `runtime_contract.workflow_steps[*].reference_images` 的受控展示资产。
+历史 Run 可能包含由旧版 Runner 生成的 `terminal.multimodal.output.v1` 参考图片事件；这些既有事件继续通过 `terminal_event_part.artifact_object_id` 关联对象存储并参与 Replay。当前 Runner 只追加 `terminal.text.output.v1`，不会新增参考图片输出事件。
 
-终端 multipart 输入最多包含 4 个媒体文件，单文件与单事件媒体总量均默认不超过
-25 MiB。API 只负责校验、分块摘要和流式上传；同步 S3 操作统一进入应用专用
-Object Store executor，上传期间不持有数据库连接。上传完成后用短事务锁定 Run、
+终端 multipart 输入最多包含 4 个媒体文件，图片单文件默认不超过 5 MiB，其他媒体
+单文件与单事件媒体总量均默认不超过 25 MiB。API 只负责校验、分块摘要和流式上传；
+同步 S3 操作统一进入应用专用 Object Store executor，上传期间不持有数据库连接。
+上传完成后用短事务锁定 Run、
 再次执行幂等检查并创建 `ArtifactObject`、event/parts 与 runtime job；并发幂等输家
 删除本次 UUID 对象。现有 content URL 保持不变，内容接口直接代理 S3 单 Range，
 并提供 ETag、private immutable cache、304/206/416 语义，流式读取期间不持有 Session。
 
 Runtime 同步所有 terminal facts，但 terminal input 只有在符合当前 wait checkpoint 的 `input_window` 且未出现在 `control.terminal_consumption` 时，才能进入 `wait.evidence` / `latest_evidence`。同一条 input 不能跨 checkpoint 或 workflow step 被重复当作 evidence。
 
-`control.terminal_consumption` 只回答“某条 input 是否已经被当前 checkpoint 消费”，不回答“它满足了哪一项证据要求”。多证据 checkpoint 的验收进度由 `control.evidence_progress` 记录：Runtime 根据 `runtime_contract.expected_evidence[workflow_step_id]` 初始化证据项，并在每次 runner observation 返回后合并 `evidence_assessment.requirement_results`。已 `accepted` 的证据项是当前 checkpoint 的正式进度，后续 runner 不应要求用户重复提交；只有同一 `requirement_key` 被明确标记为 `rejected` 时，才会把该证据项改为不通过。
+`metadata.terminal_cursor` 是已经按 `seq_no` 连续同步进 Session Token 的高水位，不能跨越尚未同步的 terminal event。Runtime 在 recoverable failure 中追加错误 output 时，只有该 output 紧邻当前 cursor 才能同步推进；如果它前面已有并发 input，恢复 snapshot 必须保留原 cursor，由下一轮从数据库事实流按序同步。input 是否已被 checkpoint 使用只以 `control.terminal_consumption` 为准，不能从 cursor 推断。
+
+`control.terminal_consumption` 只回答“某条 input 是否已经被当前 checkpoint 消费”，不回答“它满足了哪一项证据要求”。多证据 checkpoint 的验收进度由 `control.evidence_progress` 记录：Runtime 根据 `runtime_contract.expected_evidence[workflow_step_id]` 初始化证据项，并在证据评估节点的 runner observation 返回后合并 `evidence_assessment.requirement_results`。`requirement_results` 是评估 observation 的唯一证据事实 ledger；顶层 accepted/rejected/missing 汇总由 validator 派生。v2 accepted result 必须引用 checkpoint 内 terminal event、声明合法 `satisfied_by`，并匹配 evidence option 的 kind/event kind。`decision=continue` 时全部必选 requirement 必须有效 accepted；可选 requirement 才允许 `not_applicable`。操作指引节点不合并证据 ledger，其 `evidence_assessment` 固定归一化为空。
 
 ### 4.6 Task Status 投影
 
@@ -443,6 +446,10 @@ LangChain Agent / LangGraph 不接管 runner 的正式状态。后续 Runtime �
 
 Runner observation 中的 `next_phase` 不拥有推进权。RuntimeService 会记录模型的原始建议用于排查，但正式 phase 只能来自 EG transition 解析结果。
 
+Runner 首轮只接收不超过 20,000 字符的动态 `RunnerTurnContext`。证据评估节点接收当前步骤、current requirements、latest evidence、accepted 状态摘要、安全约束和 transition；操作指引节点接收即将进入且标记为 `pending` 的 checkpoint、当前步骤从 `source_evidence` 投影出的静态 `guidance`，以及当前步骤的静态 expected evidence contract，不把上一 checkpoint 的 requirements 或 latest evidence 投影为当前状态。`guidance` 中明确列出的当前阶段对象、动作、顺序、数量、检查项和条件必须转化为用户可执行的终端指导，不能只输出阶段标题与目标。完整 Prompt View、checkpoint evidence history 和 runtime contract 继续通过 read tools 按需读取，不在首轮重复注入。`previous_evaluation` 必须携带 `based_on_terminal_seq` 与 `stale_by_events`，仅作历史提示；evidence evaluation 必须在 `evaluated_event_refs` 覆盖最新输入。只有证据评估节点接收图片 attachment，最多包含四张 `role=evidence` 的用户现场图，v2 额外允许一张 `role=reference` 的步骤参考图；构建多模态消息时每张图片前必须插入明确安全标签。
+
+`psop.runner.submit_observation` 是唯一启用 `return_direct` 的 Runner tool。artifact 成功写入后 agent graph 立即结束，Runtime 随后做第二次确定性校验并 merge observation；校验失败时工具返回 failure code 和最小 correction，模型只修正相应字段。
+
 ## 7. Agent Harness 架构
 
 ### 7.1 目标
@@ -549,7 +556,7 @@ Agent Skill 源统一放在仓库根目录 `skills/`。`backend/app/agent_harnes
 
 ### 7.3 AgentDefinition
 
-`psop.builder` 的详细职责、工具、Agent Skills、输入输出、校验和审计约束见 [PSOP Builder Agent 详细设计](psop-builder-agent-design.md)。`psop.compiler` 的详细职责、工具、Agent Skills、formal-v5 校验、输入输出和审计约束见 [PSOP Compiler Agent 详细设计](psop-compiler-agent-design.md)。`psop.runner` 的详细职责、RuntimeService 接入方式、终端协作、证据评估、参考图片输出和 observation 契约见 [PSOP Runner Agent 详细设计](psop-runner-agent-design.md)。
+`psop.builder` 的详细职责、工具、Agent Skills、输入输出、校验和审计约束见 [PSOP Builder Agent 详细设计](psop-builder-agent-design.md)。`psop.compiler` 的详细职责、工具、Agent Skills、formal-v5 校验、输入输出和审计约束见 [PSOP Compiler Agent 详细设计](psop-compiler-agent-design.md)。`psop.runner` 的详细职责、RuntimeService 接入方式、终端协作、证据评估和 observation 契约见 [PSOP Runner Agent 详细设计](psop-runner-agent-design.md)。
 
 ```yaml
 agent_key: psop.builder
@@ -681,6 +688,9 @@ Agent Skill 与 PSOP Skill 是不同对象。
 | Skill Tests | `skill_test_scenario`、`skill_test_asset`、`skill_test_scenario_run`、`skill_test_expectation_evaluation` |
 | Prompts | `agent_prompt_definition`、`agent_prompt_version`、`agent_prompt_binding` |
 
+`artifact_object.size_bytes` 与 `skill_raw_material.size_bytes` 使用 `BIGINT`，以支持最大
+3 GiB 的视频原始素材；对象大小不得使用 PostgreSQL 32 位 `INTEGER` 存储。
+
 ### 9.2 新增 Agent Harness 表
 
 #### agent_run
@@ -760,6 +770,12 @@ Agent Skill 与 PSOP Skill 是不同对象。
 | Inference | `/api/v1/gateway/inference/models` | 模型能力 |
 | Jobs | `/api/v1/runtime/jobs` | runtime_job read model |
 
+Skill 创建与归档遵循以下契约：
+
+- `POST /api/v1/skills` 以 `name` 与 `description` 作为创建输入；`key` 由服务端根据名称和随机后缀生成，请求中携带的同名字段会被忽略。
+- `key` 是全局唯一且稳定的运行时标识，Skill 名称允许重复；服务端生成 key 时会同时避让 active 与 archived 记录。
+- 删除 Skill 的正式语义是归档：数据库历史和 GitLab 项目保留。归档后可使用相同名称创建具有新 ID、key 和 GitLab 项目的独立 Skill。
+
 ### 10.2 新增 Agent API
 
 首版：
@@ -831,9 +847,16 @@ payload.run_id = run_id
 
 - job 不存在或非 `running`：置为 `pending`，`available_at=now`，清空 lease/error，并把本轮 `attempt_no` 重置为 `0`。
 - job 已是 `running`：不抢占，不改 running 状态，只在 `payload.rerun_requested=true` 标记需要再跑一轮。
-- `process_run()` 在提交 wait/success/failure 前检查是否仍有未同步 input terminal events；如有，把同一 job 重新置为 `pending`，防止运行中新增输入丢失。
+- `process_run()` 在提交 wait/success/failure 前，在持有最新 Job 行锁的事务中兑现 `rerun_requested`，并检查是否仍有未同步 input terminal events；任一条件成立都把同一 job 重新置为 `pending`，防止运行中新增输入丢失。该正常重排会清空 owner / lease / error 并把 `attempt_no` 重置为 `0`，因此重试预算只统计自上次成功进展后的连续执行失败。
 
 worker 是 Runtime 推进唯一生产路径。测试可以显式调用 `process_run()`，但 router、terminal event API 和 invocation API 不直接推进 Runtime。
+
+`skill_test_timeline_driver` 的正常定时唤醒不属于失败重试。Driver 成功推进到下一个
+时间点时，必须在当前 lease-fenced 事务中原子将 job 重排为 `pending`，清空
+owner / lease / error 并把 `attempt_no` 重置为 `0`。因此 `attempt_no` 表示自上次成功
+进展后的连续失败次数，而不是时间轴总调度次数。释放 owner 的最终提交完成后，
+handler 不得继续使用同一个被 fence 保护的 Session 开启新事务。真实执行失败和
+lease 过期仍保留 `attempt_no`，并按通用退避与耗尽规则处理。
 
 API 与 worker 为独立进程。worker supervisor 创建三个隔离 pool：
 
@@ -932,6 +955,14 @@ agent.artifact.created
 agent.memory.read
 agent.memory.written
 ```
+
+Agent Harness 的模型中间件同时向应用日志写入结构化的 LLM 输入、输出和失败信息，
+用于按 `agent_run_id`、model 与 model call index 排查上下文和工具调用问题。日志包含
+模型参数、system/user/tool messages、tool schemas、assistant content、tool calls 与 usage；
+API credential 不进入日志，图片、音频、视频等 data URL 只记录 MIME 和 base64 字符数，
+带查询参数的远程媒体 URL 不记录 query，模型隐藏 reasoning 不写入日志。该诊断日志不新增
+AgentEvent，也不进入 Runtime Replay 事实链；使用后台开发脚本时由标准输出统一写入
+`logs/dev-server.log`。
 
 ### 13.3 Replay 扩展
 

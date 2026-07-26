@@ -70,6 +70,16 @@ test("run live page provides a responsive task status panel", () => {
   expect(runtimeJs).toContain('"succeeded", "failed", "aborted", "cancelled", "canceled"');
 });
 
+test("run live page exposes a copyable run id", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
+
+  expect(html).toContain('<span class="field-label">运行 ID</span>');
+  expect(html).toContain(':value="liveRun.id || \'\'" readonly aria-label="运行 ID"');
+  expect(html).toContain('aria-label="复制运行 ID"');
+  expect(html).toContain('copyText(liveRun.id, `run-id-${liveRun.id}`)');
+  expect(html).toContain('copyIcon(`run-id-${liveRun.id}`)');
+});
+
 test("skill detail page does not expose the debug tab", () => {
   const html = fs.readFileSync(path.join(__dirname, "../../../pages/skill-detail.html"), "utf8");
 

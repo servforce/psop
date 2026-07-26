@@ -71,20 +71,19 @@ psop-runner =
 - 当前 PSOP-EG 节点，包括 `node.id`、`kind`、`actor`、`projection`、`interaction`、`policy`、允许的 `merge` 目标和节点输出契约。
 - 当前 Session Token 的 Prompt View，而不是完整数据库状态。
 - `runtime_contract` 中的 execution goal、applicability、workflow steps、evidence requirements、safety constraints、wait checkpoints、completion criteria 和 recovery paths。
-- 当前执行步骤绑定的参考图片索引。图片来自已发布 Skill source 中的 `references/` 资产，经 Compiler 镜像为受控 `ArtifactObject` 并写入 compiled runtime contract；Runner 只看到当前步骤允许选择的引用索引。
 - 当前 wait checkpoint，包括 `checkpoint_id`、`workflow_step_id`、`reason`、`expected_inputs`、`resume_phase` 和已收到 evidence。
 - `terminal_event` 与 `terminal_event_part` 的只读投影，包括文本、附件元数据、artifact refs、seq_no、source_ref 和 idempotency 信息。
 - 当前 invocation 中受控多模态附件的脱敏元数据；图片 bytes 只在 Agent Harness 本次模型调用内存路径中流转。
 - 最近 runtime trace 摘要和上一轮 runner observation 摘要。
 - 平台级输出语言、安全和预算约束。
 
-这些事实由 RuntimeService 组织为明确的 `RunnerTurnContext`：当前 node、mode、Compiler 编译的 `turn_kind`、task identity、stage position、current workflow step、previous evaluation、Prompt View、current checkpoint、evidence progress、latest evidence、最近 terminal event 摘要、相关 runtime contract slice、reference image index、trust labels 和 output contract。`RunnerTurnContext` 会作为首轮上下文提供给模型；各 read tools 只作为上下文不足时的补充路径。Runtime 只读取当前节点的 `interaction.runner_turn_kind`，不得根据 terminal history 自行推断是否需要首次开场。
+这些事实由 RuntimeService 投影为不超过 20,000 字符的 `RunnerTurnContext`：当前 node/mode/turn kind、task identity、stage position、current workflow step、带 `based_on_terminal_seq` / `stale_by_events` 的 previous evaluation 摘要、去除 evidence history 的 checkpoint、evidence progress、latest evidence、最多三条 terminal 摘要、当前步骤 runtime contract slice、trust labels 和 output contract。对于 terminal guidance，current workflow step 额外包含从 `source_evidence` 投影出的静态 `guidance`，并附带 `current_step_expected_evidence`；二者只说明当前步骤应如何执行和应提交什么，不代表任何 evidence 已被验收。完整 Prompt View、完整 checkpoint/history 与完整 runtime contract 只保留在 read tools 中，不在首轮重复注入。当前 guidance、requirements 和 latest evidence 不得因压缩而裁剪。
 
 首个 `instruct_<step_id>` 使用 `first_step_instruction`。Runner 在该既有节点的一条 `terminal_message` 中自然合并任务与协作方式介绍、第一阶段指导、证据要求和必要安全提醒，不新增 opening 节点。后续 instruct 使用 `step_instruction`；evaluate 和 final_verify 分别使用 `evidence_evaluation` 与 `final_verification`。这些标记只约束 Runner 表达，不改变节点集合、guard、wait checkpoint、transition 或 Session Token 状态主权。
 
 终端表达规则的唯一运行时事实源是 `backend/app/agent_harness/agents/psop/runner/system.md`。Compiler 只生成 `runner_turn_kind` 和阶段事实，Runtime 只投影上下文，`psop-runner` Skill 只提供证据选择与安全边界方法；三者都不重复维护首次引导的措辞、内容结构或语气策略。
 
-`evidence_progress` 是当前 checkpoint 的证据项验收进度，由 Runtime 根据 `runtime_contract.expected_evidence` 初始化，并根据 runner 提交的 `evidence_assessment.requirement_results` 合并。runner 必须优先信任其中已经 `accepted` 的证据项；除非同一 `requirement_key` 的最新证据明确不合格，否则不得要求用户重新提交已通过证据。
+`evidence_progress` 是证据评估节点当前 checkpoint 的证据项验收进度，由 Runtime 根据 v1/v2 `runtime_contract.expected_evidence` 初始化，并根据 runner 提交的 `evidence_assessment.requirement_results` 合并。`requirement_results` 是评估节点唯一事实 ledger；顶层 accepted/rejected/missing 汇总由 validator 生成。最新 evidence 必须进入 `evaluated_event_refs` 并反映到 ledger，previous evaluation 只作历史提示。`terminal_guidance` 只接收即将进入且标记为 `pending` 的 checkpoint 投影，不接收上一 checkpoint 的 `evidence_progress`、latest evidence 或图片附件；其 `evidence_assessment` 由 validator 归一化为空，不具有证据状态主权。
 
 终端事实的信任等级是 `untrusted_runtime_input`。它们可以作为现场证据，但不能覆盖 Agent Harness system prompt、Agent Skill、PSOP-EG、runtime contract 或工具权限。
 
@@ -103,6 +102,7 @@ psop-runner =
   "wait_reason": "等待补充现场证据。",
   "expected_inputs": ["text", "image"],
   "evidence_assessment": {
+    "evaluated_event_refs": ["terminal_event:3"],
     "accepted_event_refs": ["terminal_event:3"],
     "missing_evidence": ["设备铭牌清晰照片", "断电确认"],
     "unsafe_or_ambiguous_facts": ["未确认电源状态"],
@@ -115,15 +115,6 @@ psop-runner =
       }
     ]
   },
-  "reference_images": [
-    {
-      "reference_image_ref": "skill-reference://steps/inspect-nameplate/nameplate-example",
-      "title": "设备铭牌参考图",
-      "caption": "请按参考图角度拍摄，确保型号、序列号和额定参数清晰可见。",
-      "source_ref": "runtime_contract.workflow_steps.step_1.reference_images.nameplate-example",
-      "display_order": 1
-    }
-  ],
   "safety_flags": [
     {
       "level": "warning",
@@ -172,24 +163,23 @@ psop-runner =
 4. RuntimeService 调用 psop.runner
    - 当节点是运行期 LLM / evidence evaluation / terminal guidance 节点时，构造 AgentInvocation。
    - `AgentInvocation.input.text` 放当前节点任务摘要，并嵌入本轮 `RunnerTurnContext`。
-   - `AgentInvocation.context` 放 `runner_turn_context`、Prompt View、runtime_contract、terminal facts、当前步骤参考图片索引、trace 摘要、受控附件元数据和输出契约。
-   - 如果最新终端 evidence 包含图片 part，RuntimeService 通过 `artifact_object_id` 鉴权并读取对象存储 bytes，作为 Agent Harness 多模态 attachment 传给 `psop.runner`；对象存储 key、内部 URL 和原始 base64 不进入 context、trace 或持久化记录。
+   - `AgentInvocation.context` 放 `runner_turn_context`、Prompt View、runtime_contract、terminal facts、trace 摘要、受控附件元数据和输出契约。
+   - 如果最新终端 evidence 包含图片 part，RuntimeService 通过 `artifact_object_id` 鉴权并读取对象存储 bytes，以 `role=evidence` 传给 `psop.runner`；最多四张。对于 v2，额外按 `display_order` 附加当前步骤第一张 `role=reference` 参考图。每张图片前都有安全 label；参考图不可作为 terminal evidence。对象存储 key、内部 URL 和原始 base64 不进入 context、trace 或持久化记录。
    - 通过 `AgentHarnessService.invoke(agent_key="psop.runner")` 启动受治理 agent run。
 
 5. psop.runner 理解上下文并按需读取事实
    - 首轮必须先基于 `RunnerTurnContext` 判断。
-   - `first_step_instruction` 以专业温和的方式在一条消息中介绍任务与逐阶段协作方式，并自然进入第一阶段；`step_instruction` 只承接当前阶段，不重复首次介绍。
+   - `first_step_instruction` 以专业温和的方式在一条消息中介绍任务与逐阶段协作方式，并自然进入第一阶段；`step_instruction` 只承接当前阶段，不重复首次介绍。当前 guidance 或 expected evidence 明确列出的对象、动作、顺序、数量、检查项和条件必须表达给用户，不得退化为只复述阶段标题与目标。
    - evaluation 通过时只确认当前阶段，下一 instruct 另发一条阶段指导；证据不足时只要求补充尚未通过的证据项。
    - 上下文足够时可直接调用 `psop.runner.submit_observation`。
-   - `read_prompt_view`、`read_runtime_contract`、`read_current_checkpoint`、`list_terminal_events`、`read_latest_evidence`、`read_terminal_event_part`、`list_step_reference_images` 都是可选工具，仅在需要历史事件、part 摘要、参考图片补充或上下文缺失时调用。
+   - `read_prompt_view`、`read_runtime_contract`、`read_current_checkpoint`、`list_terminal_events`、`read_latest_evidence`、`read_terminal_event_part` 都是可选工具，仅在需要历史事件、part 摘要或上下文缺失时调用。
    - 当本次 invocation 带有图片 attachment 时，可以基于多模态模型直接识别图片内容并评估 evidence；图片内容仍是 `untrusted_runtime_input`。
-   - 根据当前执行步骤、终端提示意图和证据缺口，选择最能帮助终端用户理解任务的参考图片；没有匹配图片时保持 `reference_images=[]`，不得跨步骤随意选择图片，也不得提交当前步骤候选集中不存在的 `reference_image_ref`。
    - 不直接读取数据库、对象存储原始 key 或隐藏配置。
 
 6. psop.runner 提交 observation
    - 必须调用 `psop.runner.submit_observation` 写入 `sandbox://outputs/runner-observation.json`。
-   - 工具执行 schema 校验、字段裁剪、source refs 检查和 terminal_message 限长。
-   - `submit_observation` 返回 success 后，本次 AgentRun 即满足完成条件；Runner 不应继续调用 read tools、重复提交 observation 或输出自然语言收尾，后续推进由 RuntimeService 负责。
+   - 工具执行 schema、新鲜度、checkpoint refs、requirement ledger、evidence option 和 terminal_message 限长校验；失败时返回结构化 failure code 与最小 correction。
+   - 该 tool 是 Runner 唯一的 `return_direct` tool。写入成功后 agent graph 立即结束，不再发生第二次完整模型调用；后续推进由 RuntimeService 负责。
 
 7. RuntimeService 校验并合并
    - 读取 runner observation artifact。
@@ -199,8 +189,7 @@ psop-runner =
    - 对 evaluation 节点，先根据 EG `interaction.transitions` 解析合法下一 phase；旧 artifact 可兼容读取 `dependency_graph_for_view`。
 
 8. RuntimeService 继续运行或等待
-   - 如果只需要输出文本，由 RuntimeService 追加 `terminal.text.output.v1`，并把正式文本写入 `parts[].text`。
-   - 如果 observation 包含参考图片，由 RuntimeService 追加 `terminal.multimodal.output.v1`，其中 text part 放 `terminal_message`，image parts 放经校验的参考图片 artifact。
+   - RuntimeService 只追加 `terminal.text.output.v1`，并把正式文本写入 `parts[].text`。
    - 如果需要等待输入，由 RuntimeService 更新 wait checkpoint 并提交 snapshot。
    - 如果到达 halt condition，由 RuntimeService 关闭 terminal session 并写 final output。
 ```
@@ -276,7 +265,7 @@ agent_key: psop.runner
 version: v1
 runner_kind: langchain_agent
 factory: make_runner_agent
-description: 在 PSOP Skill 运行过程中协助终端用户，生成受治理的终端引导、参考图片选择和现场证据评估 observation。
+description: 在 PSOP Skill 运行过程中协助终端用户，生成受治理的终端引导和现场证据评估 observation。
 model:
   name: default
   thinking_enabled: false
@@ -287,7 +276,6 @@ tools:
   - psop.runner.read_prompt_view
   - psop.runner.read_runtime_contract
   - psop.runner.read_current_checkpoint
-  - psop.runner.list_step_reference_images
   - psop.runner.list_terminal_events
   - psop.runner.read_terminal_event_part
   - psop.runner.read_latest_evidence
@@ -325,7 +313,7 @@ memory_scope: psop.runner
 
 提示词内容应帮助模型理解任务，而不是只罗列格式要求：
 
-- 先解释输入上下文中常见字段的语义，例如当前节点、执行图、等待点、最近用户输入、证据要求、输出要求、参考图片索引和 source refs。
+- 先解释输入上下文中常见字段的语义，例如当前节点、执行图、等待点、最近用户输入、证据要求、输出要求和 source refs。
 - 再说明判断方法，包括如何对照当前节点要求判断证据是否充分，以及各 `decision` 的业务含义。
 - 再解释输出字段为什么存在，例如 `terminal_message` 面向终端用户，`reason` 面向运行时和审计，`source_refs` 用于校验和回放。
 - 最后列出必要格式约束和少量输入/输出示例。示例必须提醒模型使用当前调用真实可见的 ID 和引用，不得照抄示例值。
@@ -355,7 +343,6 @@ memory_scope: psop.runner
     "required_artifact": "sandbox://outputs/runner-observation.json",
     "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
     "language": "zh-CN",
-    "allow_reference_images": true,
     "runtime_controls_transition": true,
     "transition_summary": {
       "continue": "Runtime resolves from EG",
@@ -427,14 +414,12 @@ memory_scope: psop.runner
     "latest_evidence": {},
     "recent_terminal_events": [],
     "runtime_contract_slice": {},
-    "reference_image_index": [],
     "trust_labels": {},
     "output_contract": {
       "schema": "psop.runner.observation.v1",
       "required_artifact": "sandbox://outputs/runner-observation.json",
       "allowed_decisions": ["continue", "need_more_evidence", "retry", "abort", "complete"],
       "language": "zh-CN",
-      "allow_reference_images": true,
       "runtime_controls_transition": true,
       "transition_summary": {
         "continue": "Runtime resolves from EG",
@@ -460,16 +445,6 @@ memory_scope: psop.runner
     "observations": {}
   },
   "runtime_contract": {},
-  "step_reference_images": [
-    {
-      "reference_image_ref": "skill-reference://steps/power-off/breaker-off-example",
-      "title": "断电开关状态参考",
-      "caption": "开关应处于 OFF 位置，且锁定挂牌清晰可见。",
-      "workflow_step_id": "power_off",
-      "artifact_ref": "artifact://reference-image-id",
-      "source_ref": "runtime_contract.workflow_steps.power_off.reference_images.breaker-off-example"
-    }
-  ],
   "current_checkpoint": {
     "checkpoint_id": "power_off:evidence",
     "workflow_step_id": "power_off",
@@ -494,9 +469,9 @@ memory_scope: psop.runner
   ],
   "trace_summary": [],
   "allowed_runtime": {
-    "terminal_event_kinds": ["terminal.text.output.v1", "terminal.multimodal.output.v1"],
+    "terminal_event_kinds": ["terminal.text.output.v1"],
     "input_part_kinds": ["text", "image", "audio", "video"],
-    "output_part_kinds": ["text", "image"],
+    "output_part_kinds": ["text"],
     "max_terminal_message_chars": 2000
   }
 }
@@ -527,6 +502,7 @@ memory_scope: psop.runner
   "wait_reason": "",
   "expected_inputs": [],
   "evidence_assessment": {
+    "evaluated_event_refs": ["terminal_event:5"],
     "accepted_event_refs": ["terminal_event:5"],
     "rejected_event_refs": [],
     "missing_evidence": [],
@@ -540,15 +516,6 @@ memory_scope: psop.runner
       }
     ]
   },
-  "reference_images": [
-    {
-      "reference_image_ref": "skill-reference://steps/power-off/breaker-off-example",
-      "title": "断电开关状态参考",
-      "caption": "现场照片应与参考图一致：开关处于 OFF 位置，锁定挂牌可见。",
-      "source_ref": "runtime_contract.workflow_steps.power_off.reference_images.breaker-off-example",
-      "display_order": 1
-    }
-  ],
   "safety_flags": [],
   "final_response": "",
   "source_refs": [
@@ -569,7 +536,6 @@ memory_scope: psop.runner
 | `terminal_message` | 面向终端用户，默认简体中文，不包含隐藏推理、数据库 ID 或对象存储内部 key。 |
 | `next_phase` | 兼容字段，默认保持空字符串。Runner 不用它选择下一 Runtime phase；Runtime 会按 EG transition 推进。 |
 | `expected_inputs` | 只能使用终端接入正式支持的 `text`、`image`、`audio`、`video`。 |
-| `reference_images` | 可为空；非空时只能提交当前步骤或当前 checkpoint 允许的 `reference_image_ref`。`title`、`caption` 可提交但只作为建议；Runtime 以当前步骤候选图为准补齐 `artifact_object_id`、`mime_type`、`source_ref`，不信任 Runner 自带对象 ID。 |
 | `source_refs` | 必须引用可验证事实，不得引用不存在事实或未知前缀。 |
 | `final_response` | 仅在 `decision=complete` 或 `abort` 时允许非空。 |
 
@@ -587,7 +553,7 @@ memory_scope: psop.runner
 
 `evidence_assessment.accepted_event_refs` 与 `rejected_event_refs` 只能引用可见 `terminal_event:<seq>` 或 `terminal_event:<seq>:<part_id>`；不得混入 runtime_contract、prompt_view、current_checkpoint 或 trace_summary 引用。
 
-如果 `RunnerTurnContext.evidence_progress.requirements` 非空，`evidence_assessment.requirement_results` 必须使用其中存在的 `requirement_key`，并为相关证据项返回 `accepted`、`rejected`、`missing` 或 `ambiguous`。Runtime 会按 `requirement_key` 合并结果：`missing` / `ambiguous` 不清除已通过状态，只有明确 `rejected` 才能把同一证据项从 `accepted` 改为不通过。
+当 `input.node.mode=evidence_evaluation` 且 `RunnerTurnContext.evidence_progress.requirements` 非空时，`evidence_assessment.requirement_results` 必须使用其中存在的 `requirement_key`。状态可为 `accepted`、`rejected`、`missing`、`ambiguous` 或仅供 optional requirement 使用的 `not_applicable`。accepted 必须有 checkpoint 内 event refs；v2 还必须有合法 `satisfied_by` 并匹配 evidence option。`decision=continue` 时全部必选 requirement 必须 accepted。`terminal_guidance` 不执行上述证据校验；即使模型复制旧 ledger，validator 也会在持久化前将整个 `evidence_assessment` 清空。
 
 ### 3. Runtime observation 映射
 
@@ -602,28 +568,11 @@ memory_scope: psop.runner
   "terminal_message": "请补充清晰照片。",
   "wait_reason": "等待补充现场证据。",
   "expected_inputs": ["image"],
-  "reference_images": [
-    {
-      "reference_image_ref": "skill-reference://steps/power-off/breaker-off-example",
-      "title": "断电开关状态参考",
-      "caption": "请对照参考图补拍开关 OFF 状态和挂牌信息。",
-      "source_ref": "runtime_contract.workflow_steps.power_off.reference_images.breaker-off-example",
-      "display_order": 1
-    }
-  ],
   "final_response": "",
   "runner": {
     "agent_run_id": "...",
     "artifact_ref": "sandbox://outputs/runner-observation.json",
     "source_refs": [],
-    "reference_images": [
-      {
-        "reference_image_ref": "skill-reference://steps/power-off/breaker-off-example",
-        "title": "断电开关状态参考",
-        "caption": "请对照参考图补拍开关 OFF 状态和挂牌信息。",
-        "terminal_part_ref": "terminal_event:{seq_no}:image_1"
-      }
-    ],
     "safety_flags": []
   },
   "summary": "Runner 节点执行完成。"
@@ -632,43 +581,7 @@ memory_scope: psop.runner
 
 现有 `_merge_observation()`、`_apply_node_interaction()` 和 `_append_runtime_step()` 继续作为唯一落地路径。
 
-当 `reference_images` 非空时，RuntimeService 负责把图片引用解析为 output terminal parts：
-
-```json
-{
-  "direction": "output",
-  "event_kind": "terminal.multimodal.output.v1",
-  "mime_type": "multipart/mixed",
-  "payload_inline": {
-    "summary": "请补充清晰照片。",
-    "reference_image_count": 1
-  },
-  "parts": [
-    {
-      "kind": "text",
-      "mime_type": "text/markdown",
-      "text": "请补充清晰照片。"
-    },
-    {
-      "kind": "image",
-      "mime_type": "image/jpeg",
-      "artifact_object_id": "reference-image-artifact-object-id",
-      "metadata": {
-        "title": "断电开关状态参考",
-        "caption": "请对照参考图补拍开关 OFF 状态和挂牌信息。",
-        "source_ref": "runtime_contract.workflow_steps.power_off.reference_images.breaker-off-example",
-        "reference_image_ref": "skill-reference://steps/power-off/breaker-off-example"
-      }
-    }
-  ]
-}
-```
-
-终端仍通过 `/terminal/sessions/{run_id}/events/{event_id}/parts/{part_id}/content` 获取图片内容，不接触对象存储 key。
-
-Runner observation 中的图片选择只表达“本轮要引用哪个当前步骤参考图”。RuntimeService 必须用 `AgentInvocation.context.step_reference_images` 或 `runtime_contract.workflow_steps[*].reference_images` 中的候选项重新解析该 `reference_image_ref`，并以候选项中的 `artifact_object_id` 为准生成 image part。Runner 自带的 `artifact_object_id`、`artifact_ref`、`mime_type`、`title` 或 `caption` 不能提升权限，也不能替代 runtime contract。
-
-如果 `reference_images` 非空但缺少有效 `artifact_object_id`，或候选对象不存在，RuntimeService 必须退化为文本输出，并追加 `runtime.runner.reference_image.warning` trace；不得伪造图片 part 或暴露对象存储 key。
+RuntimeService 将 `terminal_message` 固定投影为 `terminal.text.output.v1`。历史 Run 中已经持久化的多模态 output 继续按既有 TerminalEventPart 与内容接口回放，但当前 Runner 不再生成新的图片 output part。
 
 ## 五、工具注册表
 
@@ -679,7 +592,6 @@ Runner 工具全部是 narrow tools，不开放 shell/bash，不连接开放网�
 | `psop.runner.read_prompt_view` | `read_private_data` | none | allow with run scope | 读取当前节点 Prompt View。 |
 | `psop.runner.read_runtime_contract` | `read_only` | none | allow | 读取当前 PSOP-EG runtime contract 摘要。 |
 | `psop.runner.read_current_checkpoint` | `read_private_data` | none | allow with run scope | 读取 wait checkpoint、expected inputs 和 resume phase。 |
-| `psop.runner.list_step_reference_images` | `read_only` | none | allow with run scope | 列出当前执行步骤可返回给终端的参考图片。 |
 | `psop.runner.list_terminal_events` | `read_private_data` | none | allow with run scope | 按 seq 范围列出终端事件摘要。 |
 | `psop.runner.read_terminal_event_part` | `read_private_data` | none | allow with run scope | 读取单个 part 的脱敏元数据、attachment 可用性和 attachment source ref。 |
 | `psop.runner.read_latest_evidence` | `read_private_data` | none | allow with run scope | 读取最新 evidence bundle。 |
@@ -717,7 +629,6 @@ Runner 工具全部是 narrow tools，不开放 shell/bash，不连接开放网�
 - `decision` 属于 output contract。
 - `terminal_message` 长度不超过 `max_terminal_message_chars`。
 - `expected_inputs` 属于终端接入支持类型。
-- `reference_images` 只能选择 `psop.runner.list_step_reference_images` 或 `AgentInvocation.context.step_reference_images` 中存在的图片引用；当前步骤没有候选图时必须保持空数组。
 - `source_refs` 中的 terminal_event seq 存在且不晚于当前 cursor。
 - `final_response` 只在允许 decision 中出现。
 
@@ -879,22 +790,7 @@ Runtime trace 投影建议：
     "decision": "need_more_evidence",
     "artifact_ref": "sandbox://outputs/runner-observation.json",
     "source_refs": ["terminal_event:5"],
-    "reference_images": ["skill-reference://steps/power-off/breaker-off-example"],
     "usage": {}
-  }
-}
-```
-
-参考图片解析失败时，Runtime trace 使用：
-
-```json
-{
-  "event_type": "runtime.runner.reference_image.warning",
-  "payload": {
-    "node_id": "instruct_power_off",
-    "reference_image_ref": "skill-reference://steps/power-off/breaker-off-example",
-    "artifact_object_id": "reference-image-artifact-object-id",
-    "reason": "artifact_object_not_found"
   }
 }
 ```

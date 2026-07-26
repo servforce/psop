@@ -140,6 +140,60 @@ Actor observation 不能拥有执行游标。对于运行期 evidence evaluation
 
 当 belief 不确定、证据不足、权限不够、风险过高或反向测试命中时，PSOP-EG 应优先等待、探测、升级、拒绝或失败，而不是让模型“猜一个合理答案”。
 
+## 1.6 Evidence Contract v2
+
+新编译产物使用 `runtime_contract.evidence_contract_version = "psop-evidence/v2"`。已发布且未声明版本的 artifact 视为 v1，Runtime 继续兼容读取其 list/dict `expected_evidence`，不修改或重编译历史 JSON。
+
+v2 中，一个 requirement 表示一个待证明命题，多个 evidence option 表示替代证明方式：
+
+```json
+{
+  "evidence_contract_version": "psop-evidence/v2",
+  "expected_evidence": {
+    "mount_board": {
+      "requirements": [
+        {
+          "requirement_key": "screw_presence_visual",
+          "description": "图片证明四颗螺丝存在、落座且主板无明显翘起。",
+          "required": true,
+          "evidence_options": [
+            {
+              "option_key": "screw_photo",
+              "kind": "image",
+              "event_kind": "terminal.multimodal.input.v1",
+              "proof_mode": "visual"
+            }
+          ]
+        },
+        {
+          "requirement_key": "snug_fit_attestation",
+          "description": "用户确认手动紧固至 snug fit、无晃动且未使用高扭矩工具。",
+          "required": true,
+          "evidence_options": [
+            {
+              "option_key": "text_confirmation",
+              "kind": "text",
+              "event_kind": "terminal.text.input.v1",
+              "proof_mode": "attestation"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+`proof_mode` 取 `visual`、`attestation` 或 `measurement`。Compiler 必须拆分需要不同证明方式的复合命题；fallback 输入是同一 requirement 的替代 option，不能被展开为额外必选 requirement。
+
+证据评估 Runner observation 的证据账本满足以下不变量；操作指引 observation 不具有证据状态主权，其 `evidence_assessment` 归一化为空：
+
+1. 最新 evidence 必须出现在 `evaluated_event_refs`，并由至少一个相关 requirement result 引用；历史 `previous_evaluation` 不得替代本轮评估。
+2. `requirement_results` 是 accepted/rejected/missing 状态的唯一事实输入；顶层汇总由 validator 归一化。
+3. `accepted` 必须具有 checkpoint 内 event refs；v2 还必须具有合法 `satisfied_by`，且 evidence kind/event kind 与 option 匹配。
+4. `not_applicable` 只适用于 `required=false`；`continue` 要求所有必选 requirement 的有效状态均为 `accepted`。
+5. `role=reference` 的参考图片不是 terminal evidence，不能满足 requirement；它只提供当前步骤的视觉对照。
+
 ---
 
 # 2. 分层对象模型

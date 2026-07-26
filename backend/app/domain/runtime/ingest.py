@@ -305,11 +305,16 @@ class TerminalEventIngestService:
                 )
             counts[kind] = counts.get(kind, 0) + 1
             part_id = f"{kind}_{counts[kind]}"
+            max_file_bytes = (
+                self.settings.terminal_event_max_image_bytes
+                if kind == "image"
+                else self.settings.terminal_event_max_file_bytes
+            )
             size_bytes, checksum = await run_object_store_io(
                 self.object_store,
                 self._inspect_stream,
                 upload.file,
-                self.settings.terminal_event_max_file_bytes,
+                max_file_bytes,
                 self.settings.terminal_event_max_total_file_bytes,
                 total_size,
             )

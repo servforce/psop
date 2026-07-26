@@ -114,6 +114,25 @@ def _insert_builder_generation(client: TestClient, *, status: str = "pending", w
             session.add(
                 AgentEventRecord(
                     agent_run_id=GENERATION_ID,
+                    seq_no=5,
+                    event_type="agent.model.started",
+                    payload={"model": "scripted-builder", "model_call_index": 1},
+                    occurred_at=datetime.now(timezone.utc),
+                )
+            )
+            for seq_no in (3, 4):
+                session.add(
+                    AgentEventRecord(
+                        agent_run_id=GENERATION_ID,
+                        seq_no=seq_no,
+                        event_type="agent.tool.started",
+                        payload={"tool_name": "psop.builder.submit_candidate"},
+                        occurred_at=datetime.now(timezone.utc),
+                    )
+                )
+            session.add(
+                AgentEventRecord(
+                    agent_run_id=GENERATION_ID,
                     seq_no=2,
                     event_type="agent.token.usage",
                     payload={"total": {"input_tokens": 11, "output_tokens": 22, "total_tokens": 33}},
@@ -154,6 +173,9 @@ def test_agent_run_timeline_maps_events_and_hides_raw_tool_payload() -> None:
         assert payload["final"]["reference_files"] == ["references/frame-001.png"]
         assert payload["final"]["committed_commit_sha"] == "commit-0001"
         assert payload["token_usage"]["total_tokens"] == 33
+        assert payload["model_call_count"] == 1
+        assert payload["candidate_submission_attempts"] == 2
+        assert payload["candidate_correction_attempts"] == 1
         assert any(step["title"] == "读取素材解析" for step in payload["steps"])
         serialized = response.text
         assert "SHOULD_NOT_LEAK" not in serialized

@@ -12,13 +12,13 @@
     buildSkillTestScenarioNewPath,
     buildSkillTestScenarioRunReviewPath,
     buildCompilerArtifactPath,
-    generateSkillKey,
     resolveApiBaseUrl,
     resolveWsUrl,
     escapeHtml,
     highlightJson,
     highlightYamlScalar,
     highlightYaml,
+    resolveRepositoryImagePath,
     renderInlineMarkdown,
     renderMarkdown
   } = window.PSOPConsoleHelpers;
@@ -50,13 +50,9 @@
         this.createFormError = "";
 
         try {
-          const payload = {
-            ...this.createForm,
-            key: generateSkillKey(this.createForm.name)
-          };
           const created = await this.apiRequest("/skills", {
             method: "POST",
-            body: JSON.stringify(payload)
+            body: JSON.stringify(this.createForm)
           });
           this.createForm = { name: "", description: "" };
           this.createModalOpen = false;
@@ -94,7 +90,7 @@
             await this.loadSkills();
           }
 
-          this.showCenterToast("success", "Skill 已删除，对应 GitLab 仓库项目已归档。");
+          this.showCenterToast("success", "Skill 已归档；现在可以使用相同名称创建新的 Skill。");
         } catch (error) {
           this.showCenterToast("error", error.message || "删除 Skill 失败。");
         } finally {
@@ -636,13 +632,22 @@
       closeRawMaterialGenerateModal() {
         this.stopBuilderAgentStreaming();
         this.stopBuilderAgentElapsedTimer();
+        if (!this.isBuilderAgentRunning()) {
+          this.builderAgentPanel.intentPreview = null;
+          this.builderAgentPanel.selectedIntentOption = "";
+          this.builderAgentPanel.idempotencyKey = "";
+          this.busy.rawMaterialGenerate = false;
+        }
         this.builderAgentPanel.open = false;
         this.rawMaterialGenerateModalOpen = false;
       },
 
 
-      async generateSkillDraftFromRawMaterials() {
+      async generateSkillDraftFromRawMaterials(confirmedIntent = null) {
         if (!this.currentSkill || !this.canGenerateSkillDraftFromRawMaterials()) {
+          return;
+        }
+        if (this.busy.rawMaterialGenerate) {
           return;
         }
         const userDescription = (
@@ -654,8 +659,33 @@
           this.showCenterToast("error", "请输入生成描述。");
           return;
         }
-
+        if (!this.builderAgentPanel.idempotencyKey) {
+          this.builderAgentPanel.idempotencyKey = this.newBuilderGenerationIdempotencyKey();
+        }
+        const idempotencyKey = this.builderAgentPanel.idempotencyKey;
         this.busy.rawMaterialGenerate = true;
+
+        if (!confirmedIntent) {
+          try {
+            const preview = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/generation-intent-preview`, {
+              method: "POST",
+              body: JSON.stringify({ user_description: userDescription })
+            });
+            if (preview.status === "confirmation_required") {
+              this.builderAgentPanel.intentPreview = preview;
+              this.builderAgentPanel.selectedIntentOption = preview.options?.[0]?.id || "";
+              this.builderAgentPanel.status = "idle";
+              this.busy.rawMaterialGenerate = false;
+              return;
+            }
+          } catch (error) {
+            this.busy.rawMaterialGenerate = false;
+            this.builderAgentPanel.idempotencyKey = "";
+            this.showCenterToast("error", error.message || "生成意图预览失败。");
+            return;
+          }
+        }
+
         let keepRunning = false;
         this.clearNotice();
         try {
@@ -688,7 +718,9 @@
             method: "POST",
             body: JSON.stringify({
               user_description: userDescription,
-              base_commit_sha: this.currentSkill.latest_draft_head_sha
+              base_commit_sha: this.currentSkill.latest_draft_head_sha,
+              generation_intent: confirmedIntent,
+              idempotency_key: idempotencyKey
             })
           });
           this.rawMaterialGenerationResult = result;
@@ -723,6 +755,35 @@
       },
 
 
+      async confirmBuilderGenerationIntent() {
+        const preview = this.builderAgentPanel.intentPreview;
+        const optionId = this.builderAgentPanel.selectedIntentOption;
+        if (!preview?.preview_hash || !optionId) {
+          return;
+        }
+        await this.generateSkillDraftFromRawMaterials({
+          preview_hash: preview.preview_hash,
+          confirmed_option_id: optionId
+        });
+      },
+
+
+      cancelBuilderGenerationIntent() {
+        this.builderAgentPanel.intentPreview = null;
+        this.builderAgentPanel.selectedIntentOption = "";
+        this.builderAgentPanel.idempotencyKey = "";
+        this.busy.rawMaterialGenerate = false;
+      },
+
+
+      newBuilderGenerationIdempotencyKey() {
+        if (globalThis.crypto?.randomUUID) {
+          return globalThis.crypto.randomUUID();
+        }
+        return `builder-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      },
+
+
       defaultBuilderAgentUserInput() {
         return "";
       },
@@ -753,7 +814,10 @@
           sseConnected: false,
           usingPolling: false,
           lastEventAt: "",
-          resultRefreshed: false
+          resultRefreshed: false,
+          intentPreview: null,
+          selectedIntentOption: "",
+          idempotencyKey: ""
         };
       },
 
@@ -956,6 +1020,7 @@
           steps: Array.isArray(timeline.steps) ? timeline.steps : [],
           result: terminal ? timeline.final : this.builderAgentPanel.result,
           errorMessage: timeline.error_message || this.builderAgentPanel.errorMessage,
+          intentPreview: null,
           elapsedMs: timeline.elapsed_ms ?? this.builderAgentPanel.elapsedMs,
           processExpanded: terminal && status === "succeeded" ? false : this.builderAgentPanel.processExpanded,
           lastEventAt: new Date().toISOString()
@@ -1286,11 +1351,11 @@
           return;
         }
 
-        const readmeEntry = this.repositoryEntries.find(
-          (entry) => entry.type === "blob" && entry.name.toLowerCase() === "readme.md"
+        const skillEntry = this.repositoryEntries.find(
+          (entry) => entry.type === "blob" && entry.name.toLowerCase() === "skill.md"
         );
-        if (readmeEntry) {
-          await this.loadRepositoryFile(readmeEntry.path);
+        if (skillEntry) {
+          await this.loadRepositoryFile(skillEntry.path);
         }
       },
 
@@ -2001,7 +2066,9 @@
       repositoryPreviewHtml() {
         const kind = this.repositoryPreviewKind();
         if (kind === "markdown") {
-          return renderMarkdown(this.repositoryFileForm.content);
+          return renderMarkdown(this.repositoryFileForm.content, {
+            resolveImageUrl: (target) => this.repositoryMarkdownImageUrl(target)
+          });
         }
         if (kind === "json") {
           return `<pre class="source-code-preview"><code>${highlightJson(this.repositoryFileForm.content)}</code></pre>`;
@@ -2011,6 +2078,19 @@
         }
 
         return `<pre class="source-code-preview"><code>${escapeHtml(this.repositoryFileForm.content)}</code></pre>`;
+      },
+
+
+      repositoryMarkdownImageUrl(target) {
+        const skillId = this.currentSkill?.id;
+        const ref = this.repositoryFileForm.base_commit_sha;
+        const path = resolveRepositoryImagePath(this.repositoryFileForm.path, target);
+        if (!skillId || !ref || !path) {
+          return "";
+        }
+
+        const params = new URLSearchParams({ path, ref });
+        return `${this.apiBaseUrl}/skills/${encodeURIComponent(skillId)}/repository/raw?${params}`;
       },
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.skills.models import generate_uuid, now_utc
@@ -51,7 +51,7 @@ class ArtifactObject(Base):
     bucket: Mapped[str] = mapped_column(String(255), nullable=False)
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     media_type: Mapped[str] = mapped_column(String(255), default="application/json", nullable=False)
-    size_bytes: Mapped[int] = mapped_column(default=0, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     checksum: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
@@ -106,4 +106,3 @@ class CompileDiagnostic(Base):
     location: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     category: Mapped[str] = mapped_column(String(64), default="compiler", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
-

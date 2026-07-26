@@ -19,7 +19,6 @@ const helperNames = [
   "buildSkillTestScenarioNewPath",
   "buildSkillTestScenarioRunReviewPath",
   "buildCompilerArtifactPath",
-  "generateSkillKey",
   "resolveApiBaseUrl",
   "resolveWsUrl",
   "escapeHtml",
@@ -60,7 +59,6 @@ function loadSkillDetailMethods(overrides = {}) {
 
 test("create skill failure is rendered inside the create modal", async () => {
   const methods = loadSkillDetailMethods({
-    generateSkillKey: jest.fn(() => "test-skill"),
     buildSkillDetailPath: jest.fn((skillId) => `/admin/skills/${skillId}`)
   });
   const app = {
@@ -82,6 +80,31 @@ test("create skill failure is rendered inside the create modal", async () => {
   expect(app.createModalOpen).toBe(true);
   expect(app.busy.create).toBe(false);
   expect(app.showNotice).not.toHaveBeenCalled();
+});
+
+test("create skill sends only name and description", async () => {
+  const methods = loadSkillDetailMethods({
+    buildSkillDetailPath: jest.fn((skillId) => `/admin/skills/${skillId}`)
+  });
+  const app = {
+    busy: { create: false },
+    createForm: { name: "测试 Skill", description: "测试描述" },
+    createFormError: "",
+    createModalOpen: true,
+    clearNotice: jest.fn(),
+    showNotice: jest.fn(),
+    navigate: jest.fn(),
+    apiRequest: jest.fn(async () => ({ id: "skill-id" }))
+  };
+
+  await methods.createSkill.call(app);
+
+  expect(app.apiRequest).toHaveBeenCalledWith("/skills", {
+    method: "POST",
+    body: JSON.stringify({ name: "测试 Skill", description: "测试描述" })
+  });
+  expect(app.navigate).toHaveBeenCalledWith("/admin/skills/skill-id");
+  expect(app.createModalOpen).toBe(false);
 });
 
 test("create modal clears stale form errors when opened or closed", () => {

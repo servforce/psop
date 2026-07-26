@@ -51,19 +51,19 @@ def test_api_service_info() -> None:
     assert response.json()["api_prefix"] == "/api/v1"
 
 
-def test_runs_status_filter_exposes_openapi_enum_and_rejects_unknown_status() -> None:
+def test_runs_status_filter_accepts_multiple_enum_values_and_rejects_unknown_status(monkeypatch) -> None:
     settings = create_test_settings().model_copy(update={"database_auto_create_schema": True})
     app = create_app(settings)
     openapi = app.openapi()
     parameters = openapi["paths"]["/api/v1/runs"]["get"]["parameters"]
     status_parameter = next(parameter for parameter in parameters if parameter["name"] == "status")
-    enum_schema = next(
+    array_schema = next(
         schema
         for schema in status_parameter["schema"].get("anyOf", [status_parameter["schema"]])
-        if "enum" in schema
+        if schema.get("type") == "array"
     )
 
-    assert enum_schema["enum"] == [
+    assert array_schema["items"]["enum"] == [
         "queued",
         "waiting_runtime",
         "running",
@@ -74,12 +74,24 @@ def test_runs_status_filter_exposes_openapi_enum_and_rejects_unknown_status() ->
         "cancelled",
     ]
 
+    captured_statuses = []
+
+    def fake_list_runs(self, session, *, status=None, skill_id=None):
+        captured_statuses.append(status)
+        return []
+
+    monkeypatch.setattr("app.domain.runtime.service.RuntimeService.list_runs", fake_list_runs)
+
     with TestClient(app) as client:
-        valid_response = client.get("/api/v1/runs", params={"status": "waiting_input"})
+        valid_response = client.get(
+            "/api/v1/runs",
+            params=[("status", "waiting_input"), ("status", "failed")],
+        )
         invalid_response = client.get("/api/v1/runs", params={"status": "unknown"})
 
     assert valid_response.status_code == 200
     assert valid_response.json() == []
+    assert captured_statuses == [["waiting_input", "failed"]]
     assert invalid_response.status_code == 422
 
 

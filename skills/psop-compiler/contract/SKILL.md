@@ -26,15 +26,33 @@
   "title": "预检与兼容性确认",
   "goal": "确认 CPU、主板、电源、机箱和防静电准备满足装机要求。",
   "source_evidence": "SKILL.md 阶段 1 描述了硬件清单、电源功率、机箱规格和防静电准备。",
-  "expected_evidence": [
-    {"kind": "text", "event_kind": "terminal.text.input.v1", "description": "配置清单和兼容性自查结果"},
-    {"kind": "image", "event_kind": "terminal.image.input.v1", "description": "电源额定功率标签或硬件照片"}
-  ],
+  "expected_evidence": {
+    "requirements": [
+      {
+        "requirement_key": "compatibility_check",
+        "description": "确认配置清单和兼容性自查结果。",
+        "required": true,
+        "evidence_options": [
+          {"option_key": "text_attestation", "kind": "text", "event_kind": "terminal.text.input.v1", "proof_mode": "attestation"}
+        ]
+      },
+      {
+        "requirement_key": "power_label_visual",
+        "description": "图片清晰显示电源额定功率标签。",
+        "required": true,
+        "evidence_options": [
+          {"option_key": "label_photo", "kind": "image", "event_kind": "terminal.multimodal.input.v1", "proof_mode": "visual"}
+        ]
+      }
+    ]
+  },
   "source_file": "SKILL.md"
 }
 ```
 
 `id` 使用小写英文和下划线，不使用 `start`、`input`、`llm`、`tool`、`terminal`、`final`、`finish` 等模板节点名。
+
+新产物的 `runtime_contract.evidence_contract_version` 固定为 `psop-evidence/v2`。一个 requirement 对应一个待证明事实；同一事实的替代证据放入 `evidence_options`。图片不足时允许文字确认，应表现为同一 requirement 的 image/text 两个 option，而不是两个 required requirement。需要不同证明方式的复合句必须拆分；例如螺丝是否存在是 visual requirement，是否手动达到 `snug fit` 是 attestation requirement。
 
 ## formal-v5 顶层不变量
 

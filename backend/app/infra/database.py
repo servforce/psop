@@ -4,7 +4,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 import time
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import BigInteger, create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import QueuePool, StaticPool
@@ -112,6 +112,18 @@ class DatabaseManager:
                     f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} "
                     f"ON {table_name} (run_id, seq_no)"
                 )
+
+        if self.engine.dialect.name == "postgresql":
+            for table_name in ("artifact_object", "skill_raw_material"):
+                if table_name not in table_names:
+                    continue
+                columns = {column["name"]: column for column in inspector.get_columns(table_name)}
+                size_column = columns.get("size_bytes")
+                if size_column and not isinstance(size_column["type"], BigInteger):
+                    statements.append(
+                        f"ALTER TABLE {table_name} "
+                        "ALTER COLUMN size_bytes TYPE BIGINT"
+                    )
 
         if not statements:
             return

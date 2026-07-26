@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from app.agent_harness.events import AgentEventWriter
 from app.agent_harness.memory.file_store import FileMemoryStore
@@ -8,6 +9,7 @@ from app.agent_harness.sandbox.local import LocalAgentSandboxProvider
 from app.agent_harness.skills.loader import SkillLoader
 from app.agent_harness.skills.spec import AgentSkill
 from app.agent_harness.tools.builtin import register_builtin_tools
+from app.agent_harness.tools.builtin.builder import register_builder_tools
 from app.agent_harness.tools.builtin.workspace import register_workspace_tools
 from app.agent_harness.tools.framework import register_framework_tools
 from app.agent_harness.tools.langchain import to_langchain_tools
@@ -57,6 +59,7 @@ def test_tool_spec_has_governance_metadata_defaults() -> None:
     assert spec.permission_policy == "allow"
     assert spec.retry_policy == {}
     assert spec.error_types == []
+    assert spec.input_schema_mode == "generated_model"
 
 
 def test_langchain_tool_args_schema_rejects_string_for_array(tmp_path) -> None:
@@ -82,6 +85,64 @@ def test_langchain_tool_args_schema_rejects_string_for_array(tmp_path) -> None:
 
     parsed = tool.args_schema.model_validate({"items": [{"value": 1}]})
     assert parsed.items == [{"value": 1}]
+
+
+def test_builder_langchain_tool_exposes_complete_raw_schema(tmp_path) -> None:
+    registry, context, _ = _context(tmp_path)
+    register_builder_tools(registry)
+
+    tool = to_langchain_tools(
+        tool_names=["psop.builder.submit_candidate"],
+        registry=registry,
+        context=context,
+    )[0]
+    schema = tool.tool_call_schema
+
+    assert isinstance(schema, dict)
+    assert schema["additionalProperties"] is False
+    assert all(
+        definition.get("additionalProperties") is False
+        for definition in schema["$defs"].values()
+        if definition.get("type") == "object"
+    )
+    assert schema["properties"]["evidence_map"]["items"] == {"$ref": "#/$defs/EvidenceMapItem"}
+    assert schema["properties"]["workflow_step_candidates"]["items"] == {
+        "$ref": "#/$defs/WorkflowStepCandidate"
+    }
+    assert set(schema["$defs"]["ExpectedEvidenceRequirement"]["required"]) == {
+        "requirement_id",
+        "stage_id",
+        "evidence_type",
+        "completion_criteria",
+    }
+    target_type = schema["$defs"]["EvidenceUsageTarget"]["properties"]["target_type"]
+    assert set(target_type["enum"]) == {
+        "workflow_stage",
+        "safety_constraint",
+        "expected_evidence",
+        "review_notes",
+    }
+    assert "schema_version" in schema["required"]
+
+    provider_schema = convert_to_openai_tool(tool)["function"]["parameters"]
+    evidence_item = provider_schema["properties"]["evidence_map"]["items"]
+    assert evidence_item != {}
+    assert set(evidence_item["required"]) == {"claim", "support_level", "source_refs", "used_in"}
+    provider_target = evidence_item["properties"]["used_in"]["items"]
+    assert set(provider_target["required"]) == {"target_type", "target_id"}
+    assert set(provider_target["properties"]["target_type"]["enum"]) == {
+        "workflow_stage",
+        "safety_constraint",
+        "expected_evidence",
+        "review_notes",
+    }
+    provider_expected_evidence = provider_schema["properties"]["expected_evidence_requirements"]["items"]
+    assert set(provider_expected_evidence["required"]) == {
+        "requirement_id",
+        "stage_id",
+        "evidence_type",
+        "completion_criteria",
+    }
 
 
 def test_tool_registry_raises_handler_error(tmp_path) -> None:

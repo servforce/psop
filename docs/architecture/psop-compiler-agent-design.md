@@ -344,7 +344,7 @@ instruct_<step_id>
 evaluate_<step_id>
 ```
 
-如果某个 workflow step 需要向终端用户展示参考图片，该 step 可以包含 `reference_images[]`。每项由 scaffold 保留到运行时契约，字段为：
+如果 frozen source 为某个 workflow step 声明了参考图片，该 step 可以包含 `reference_images[]`。每项由 scaffold 保留到运行时契约，字段为：
 
 ```json
 {
@@ -358,7 +358,7 @@ evaluate_<step_id>
 }
 ```
 
-`artifact_object_id` 必须来自 `source.reference_assets`，`reference_image_ref` 是 Runner 在运行时选择图片时使用的稳定引用。Compiler 不应把图片 bytes、base64、对象存储 key 或下载 URL 写入 runtime contract。
+`artifact_object_id` 必须来自 `source.reference_assets`，`reference_image_ref` 是编译产物中的稳定资产引用。当前 Runner 不读取专用参考图索引或选择图片；Compiler 仍保留该字段，但不应把图片 bytes、base64、对象存储 key 或下载 URL 写入 runtime contract。
 
 `source_map.target` 只能引用以下目标类型：
 

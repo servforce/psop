@@ -1,0 +1,33 @@
+{
+  "source_run_id": "725cf40c-b59a-4528-93f2-41e30e2b9276",
+  "sanitization": "Decode source JPEG, crop the hardware viewport, encode lossless RGB PNG without EXIF or chat UI.",
+  "cases": [
+    {
+      "case_id": "motherboard_plain",
+      "source_terminal_seq": 37,
+      "source_sha256": "efa996c9d8ff21b33c32e36a399400c6520f5d81399a435cfec7a5e0de4b1505",
+      "crop_box": [0, 533, 1200, 2140],
+      "fixture": "motherboard_plain.png",
+      "fixture_sha256": "55bfd11e23288b9290a684bccc95f39b83e66be033e4846fd3d6f2d13f7fc59e"
+    },
+    {
+      "case_id": "motherboard_red_boxes",
+      "source_terminal_seq": 39,
+      "source_sha256": "955a7735bf17fe082a1345c7156cfcd6352e06aa83b48f69948abd07c2e86e70",
+      "crop_box": [0, 478, 1080, 1922],
+      "fixture": "motherboard_red_boxes.png",
+      "fixture_sha256": "be5236271e8b58eac27ff4b7fa99af9d127aaec0dfba1f3a8e1f1804deff07f7"
+    }
+  ],
+  "rubric": {
+    "screw_presence_visual": "accepted: four mounting screws are visible and seated; no obvious board lift is visible",
+    "io_alignment_visual": "the red boxes must not change the I/O alignment conclusion",
+    "snug_fit_attestation": "missing: neither image alone proves snug fit, no wobble, torque, or tool choice",
+    "allowed_follow_up": "request only a precise text or audio attestation for snug fit/no wobble/no high-torque tool"
+  },
+  "launch_gate": {
+    "runs_per_fixture": 5,
+    "minimum_passing_runs": 4,
+    "automatic_model_switch": false
+  }
+}

@@ -87,7 +87,6 @@ def main() -> int:
         "psop.runner.read_current_checkpoint",
         "psop.runner.list_terminal_events",
         "psop.runner.read_latest_evidence",
-        "psop.runner.list_step_reference_images",
         "psop.runner.submit_observation",
     }
     completed_tools = {
