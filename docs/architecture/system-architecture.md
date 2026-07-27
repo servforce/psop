@@ -807,6 +807,7 @@ POST /api/v1/agents/approvals/{approval_id}/approve
 compile
 runtime
 skill_test_timeline_driver
+skill_test_scenario_finalizer
 raw_material_analysis
 skill_raw_material_generation
 ```
@@ -858,12 +859,27 @@ owner / lease / error 并把 `attempt_no` 重置为 `0`。因此 `attempt_no` �
 handler 不得继续使用同一个被 fence 保护的 Session 开启新事务。真实执行失败和
 lease 过期仍保留 `attempt_no`，并按通用退避与耗尽规则处理。
 
+`skill_test_scenario_finalizer` 负责测试 Scenario 的最终判定与收口，使用
+`job:skill-test-scenario-finalizer:{scenario_run_id}` 去重。Timeline Driver 完成全部输入后，
+在同一事务内创建或唤醒 Finalizer；Driver 不再直接调用 Judge。Finalizer 每次 claim 最多
+判定一条 expectation，并在提交 Judge 结果前重新读取最新 Runtime Run：
+
+- Runtime 尚未终态且下一个 expectation 未到 cutoff 时，按 `min(next_cutoff, now + 5s)` 正常重排；
+- Runtime 已进入 `succeeded`、`failed`、`aborted` 或 `cancelled` 时，所有未判定 expectation 立即具备判定资格；
+- 所有 expectation 已持久化且 Runtime 已终态后，Finalizer 独立计算并写入 Scenario Run 的 `passed` 或 `failed`；
+- `(scenario_run_id, expectation_id)` 使用唯一约束，避免 lease 恢复或重复投递产生重复判定记录；
+- Judge 异常使用通用 job retry；最后一次 attempt 仍失败时，将该 expectation 记录为 `inconclusive` 后继续收口。
+
+Runtime 只维护自己的 Run 状态，不引用测试域，也不反向通知 Scenario Run。Finalizer 通过轮询读取
+Runtime 状态，因此 Runtime 和测试编排之间保持单向依赖。`POST .../evaluate` 只负责唤醒
+Finalizer 并返回 `202`，不得在 API 请求内同步调用 Judge。
+
 API 与 worker 为独立进程。worker supervisor 创建三个隔离 pool：
 
 | Pool | Job types | 默认并发 |
 | --- | --- | ---: |
 | `runtime-interactive` | `runtime` | 2 |
-| `build-test` | `compile`、`skill_test_timeline_driver` | 1 |
+| `build-test` | `compile`、`skill_test_timeline_driver`、`skill_test_scenario_finalizer` | 1 |
 | `material` | `raw_material_analysis`、`skill_raw_material_generation` | 1 |
 
 每个 slot 使用 `hostname:pid:pool:slot:uuid` 作为 attempt owner，持有 job UUID 稳定映射

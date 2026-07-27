@@ -191,13 +191,17 @@ def get_test_scenario_run_review(
     return service.get_review(session, scenario_run_id)
 
 
-@router.post("/skill-test-scenario-runs/{scenario_run_id}/evaluate", response_model=SkillTestScenarioRunResponse)
+@router.post(
+    "/skill-test-scenario-runs/{scenario_run_id}/evaluate",
+    response_model=SkillTestScenarioRunResponse,
+    status_code=202,
+)
 def evaluate_test_scenario_run(
     scenario_run_id: str,
     session: Session = Depends(get_db_session),
     service: SkillTestService = Depends(get_skill_test_service),
 ) -> SkillTestScenarioRunResponse:
-    return service.evaluate_run(session, scenario_run_id)
+    return service.request_evaluation(session, scenario_run_id)
 
 
 @router.post("/skill-test-scenario-runs/{scenario_run_id}/fork-scenario", response_model=SkillTestScenarioResponse, status_code=201)

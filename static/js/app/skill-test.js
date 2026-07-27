@@ -2306,6 +2306,19 @@
       },
 
 
+      skillTestRunStatusLabel(testRun = this.skillTestRun, review = this.skillTestReview) {
+        const status = String(testRun?.status || "").toLowerCase();
+        if (status === "running" && testRun?.driver_status === "completed") {
+          const runtimeStatus = String(review?.replay?.run?.status || this.liveRun?.status || "").toLowerCase();
+          if (["succeeded", "failed", "aborted", "cancelled"].includes(runtimeStatus)) {
+            return "判定中";
+          }
+          return "等待 Run 完成";
+        }
+        return this.formatStatus(status);
+      },
+
+
       assertionStatusTone(value) {
         return this.statusBadgeTone(value);
       },

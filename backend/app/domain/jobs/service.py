@@ -128,6 +128,8 @@ class JobQueryService:
             return self._runtime_progress(session, job)
         if job.job_type == "skill_test_timeline_driver":
             return self._skill_test_progress(session, job)
+        if job.job_type == "skill_test_scenario_finalizer":
+            return self._skill_test_finalizer_progress(session, job)
         if job.job_type == "raw_material_analysis":
             return self._raw_material_analysis_progress(session, job)
         if job.job_type == "skill_raw_material_generation":
@@ -203,6 +205,32 @@ class JobQueryService:
             current_stage=scenario_run.driver_status or scenario_run.status,
             label=self._skill_test_label(scenario_run.driver_status),
             detail=f"{cursor}/{total} input events" if total else "",
+        )
+
+    def _skill_test_finalizer_progress(self, session: Session, job: RuntimeJob) -> RuntimeJobProgressResponse:
+        scenario_run_id = str((job.payload or {}).get("scenario_run_id") or "")
+        scenario_run = session.get(SkillTestScenarioRun, scenario_run_id) if scenario_run_id else None
+        if not scenario_run:
+            return self._fallback_progress(job)
+        summary = scenario_run.result_summary or {}
+        total = max(0, int(summary.get("total") or 0))
+        pending = max(0, int(summary.get("pending") or 0))
+        evaluated = max(0, total - pending)
+        terminal = scenario_run.status in {"passed", "failed", "cancelled"} or job.status in TERMINAL_JOB_STATUSES
+        percent = 100 if terminal else (int(round((evaluated / total) * 100)) if total else 0)
+        wait_reason = str((job.payload or {}).get("wait_reason") or "")
+        label = {
+            "runtime_open": "等待 Run 完成",
+            "expectation_cutoff": "等待判定时间点",
+            "judge": "判定中",
+            "judge_ready": "等待判定",
+            "completed": "判定完成",
+        }.get(wait_reason, "等待判定" if job.status != "running" else "判定中")
+        return RuntimeJobProgressResponse(
+            percent=percent,
+            current_stage=wait_reason or scenario_run.status,
+            label=label,
+            detail=f"{evaluated}/{total} expectations" if total else "",
         )
 
     def _raw_material_analysis_progress(self, session: Session, job: RuntimeJob) -> RuntimeJobProgressResponse:

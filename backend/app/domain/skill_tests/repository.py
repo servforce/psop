@@ -56,6 +56,15 @@ class SkillTestRepository:
             return None
         return session.get(Run, run_id)
 
+    def get_fresh_run(self, session: Session, run_id: str | None) -> Run | None:
+        if not run_id:
+            return None
+        return session.scalar(
+            select(Run)
+            .where(Run.id == run_id)
+            .execution_options(populate_existing=True)
+        )
+
     def list_scenarios(self, session: Session, skill_id: str) -> list[SkillTestScenario]:
         return list(
             session.scalars(
@@ -135,6 +144,19 @@ class SkillTestRepository:
                 .where(SkillTestExpectationEvaluation.scenario_run_id == scenario_run_id)
                 .order_by(SkillTestExpectationEvaluation.created_at.asc())
             ).all()
+        )
+
+    def get_expectation_evaluation(
+        self,
+        session: Session,
+        scenario_run_id: str,
+        expectation_id: str,
+    ) -> SkillTestExpectationEvaluation | None:
+        return session.scalar(
+            select(SkillTestExpectationEvaluation).where(
+                SkillTestExpectationEvaluation.scenario_run_id == scenario_run_id,
+                SkillTestExpectationEvaluation.expectation_id == expectation_id,
+            )
         )
 
     def delete_expectation_evaluations(self, session: Session, scenario_run_id: str) -> None:

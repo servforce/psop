@@ -96,6 +96,10 @@ class DatabaseManager:
         for table_name, index_name in (
             ("session_token_snapshot", "uk_session_token_snapshot_run_seq"),
             ("trace_event", "uk_trace_event_run_seq"),
+            (
+                "skill_test_expectation_evaluation",
+                "uk_skill_test_expectation_eval_run_expectation",
+            ),
         ):
             if table_name not in table_names:
                 continue
@@ -108,9 +112,27 @@ class DatabaseManager:
                 if item.get("name")
             }
             if index_name not in existing_names:
+                if table_name == "skill_test_expectation_evaluation":
+                    statements.append(
+                        "DELETE FROM skill_test_expectation_evaluation "
+                        "WHERE id IN ("
+                        "SELECT id FROM ("
+                        "SELECT id, ROW_NUMBER() OVER ("
+                        "PARTITION BY scenario_run_id, expectation_id "
+                        "ORDER BY created_at DESC, id DESC"
+                        ") AS duplicate_rank "
+                        "FROM skill_test_expectation_evaluation"
+                        ") AS duplicate_rows WHERE duplicate_rank > 1"
+                        ")"
+                    )
+                columns = (
+                    "scenario_run_id, expectation_id"
+                    if table_name == "skill_test_expectation_evaluation"
+                    else "run_id, seq_no"
+                )
                 statements.append(
                     f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} "
-                    f"ON {table_name} (run_id, seq_no)"
+                    f"ON {table_name} ({columns})"
                 )
 
         if self.engine.dialect.name == "postgresql":
