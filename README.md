@@ -210,4 +210,4 @@ cd static && npm run build:css
 
 ## 许可证
 
-当前仓库尚未添加 license 文件。在维护者补充明确许可证前，请按私有/专有项目处理。
+PSOP 由 servforce 团队以 [Apache License 2.0](LICENSE) 开源。
