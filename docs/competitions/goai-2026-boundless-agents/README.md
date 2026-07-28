@@ -2,6 +2,11 @@
 
 本目录用于保存 PSOP 参加 GOAI 2026 世界人工智能开源大赛“无界应用（Boundless Agents）”赛道的相关材料与文档。
 
+## 文档索引
+
+- [比赛简介](competition-overview.md)
+- [PSOP 参赛指引与任务看板](participation-board.md)
+
 建议归档内容包括：
 
 - 官方规则、参赛手册及重要通知。
@@ -13,5 +18,6 @@
 
 官方入口：
 
-- [赛道详情](https://www.goaihz.com/tracks?track=apps)
-- [参赛手册](https://oss.goaihz.com/prod/20260716/eed923c4-570c-4f5e-bb18-4f451fb97ced.pdf)
+- [GOAI 官网](https://www.goaihz.com)
+- [GOAI 参赛指南](https://www.goaihz.com/guide)
+- [GOAI 常见问题](https://www.goaihz.com/faq)
