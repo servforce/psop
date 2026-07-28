@@ -22,6 +22,7 @@ docs/
   guides/        面向接入方、使用方、运维方的操作手册
   engineering/   工程协作、开发流程、代码库约定
   research/      外部调研、技术预研、方案比较
+  competitions/  参赛项目的规则、规划、方案与提交材料
   reference/     稳定参考资料、外部材料、原始资产
   archive/       过期但需要保留历史上下文的文档
 ```
@@ -34,7 +35,7 @@ docs/
 4. `guides/` 下的正式接入手册。
 5. `engineering/` 下的协作与开发规则。
 6. `research/` 下的调研建议。
-7. `reference/` 和 `archive/` 下的背景材料。
+7. `competitions/`、`reference/` 和 `archive/` 下的背景材料。
 
 如果文档之间冲突，先按以上优先级判断；如果文档与当前代码事实冲突，先指出冲突，再按任务目标修正文档或实现。
 
