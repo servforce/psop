@@ -3,6 +3,7 @@
     { value: "compile", label: "Skill 编译" },
     { value: "runtime", label: "Skill 运行" },
     { value: "skill_test_timeline_driver", label: "Skill 测试时间轴执行" },
+    { value: "skill_test_scenario_finalizer", label: "Skill 测试结果判定" },
     { value: "raw_material_analysis", label: "Skill 素材解析" },
     { value: "skill_raw_material_generation", label: "Skill 智能体构建" }
   ];

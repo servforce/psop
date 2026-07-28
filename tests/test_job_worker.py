@@ -32,8 +32,17 @@ from app.domain.jobs.worker import (
 from app.domain.runtime.events import NoopRuntimeEventSink
 from app.domain.runtime.models import Run, SkillInvocation, TerminalEvent, TerminalSession, TraceEvent
 from app.domain.runtime.service import RuntimeService
-from app.domain.skill_tests.models import SkillTestScenarioRun
-from app.domain.skill_tests.service import SkillTestService
+from app.domain.skill_tests.models import (
+    SkillTestExpectationEvaluation,
+    SkillTestScenario,
+    SkillTestScenarioRun,
+)
+from app.domain.skill_tests.service import (
+    SCENARIO_FINALIZER_JOB_TYPE,
+    ExpectationJudgeResult,
+    PreparedExpectationJudge,
+    SkillTestService,
+)
 from app.domain.skills.models import (
     SkillDefinition,
     SkillPublishRecord,
@@ -44,6 +53,7 @@ from app.domain.skills.models import (
     now_utc,
 )
 from app.infra.database import DatabaseManager
+from scripts.ops import backfill_skill_test_scenario_finalizers as backfill_finalizers
 from scripts.ops import cleanup_stuck_skill_test_drivers as cleanup_drivers
 
 
@@ -142,6 +152,177 @@ def _timeline_driver_service(settings: Settings) -> SkillTestService:
         object_store=object(),  # type: ignore[arg-type]
         agent_harness_service=object(),  # type: ignore[arg-type]
     )
+
+
+def _seed_scenario_finalizer_job(
+    session,
+    *,
+    run_status: str = "running",
+    expectation_times_ms: tuple[int, ...] = (60_000,),
+    time_origin=None,
+    max_attempts: int = 3,
+) -> dict[str, str]:
+    origin = time_origin or now_utc()
+    invocation = SkillInvocation(
+        skill_definition_id="skill-scenario-finalizer",
+        skill_version_id="version-scenario-finalizer",
+        compile_artifact_id="artifact-scenario-finalizer",
+        status=run_status,
+    )
+    session.add(invocation)
+    session.flush()
+    run = Run(
+        invocation_id=invocation.id,
+        skill_definition_id=invocation.skill_definition_id,
+        skill_version_id=invocation.skill_version_id,
+        compile_artifact_id=invocation.compile_artifact_id,
+        status=run_status,
+        runtime_phase="completed" if run_status == "succeeded" else "running",
+        final_output="runtime completed" if run_status == "succeeded" else "",
+        started_at=origin,
+        ended_at=origin if run_status == "succeeded" else None,
+    )
+    session.add(run)
+    session.flush()
+    timeline = {
+        "duration_ms": max(expectation_times_ms, default=0) + 1_000,
+        "events": [
+            {
+                "id": f"expectation-{index}",
+                "lane_id": "expected.semantic",
+                "at_ms": at_ms,
+                "expectation": f"expectation {index}",
+            }
+            for index, at_ms in enumerate(expectation_times_ms, start=1)
+        ],
+    }
+    scenario = SkillTestScenario(
+        skill_definition_id=invocation.skill_definition_id,
+        name="Scenario finalizer test",
+        duration_ms=timeline["duration_ms"],
+        timeline=timeline,
+        judge_policy={"route_key": "text"},
+    )
+    session.add(scenario)
+    session.flush()
+    scenario_run = SkillTestScenarioRun(
+        skill_definition_id=invocation.skill_definition_id,
+        scenario_id=scenario.id,
+        invocation_id=invocation.id,
+        run_id=run.id,
+        status="running",
+        driver_status="completed",
+        timeline=timeline,
+        time_origin=origin,
+        started_at=origin,
+        result_summary={
+            "total": len(expectation_times_ms),
+            "passed": 0,
+            "failed": 0,
+            "inconclusive": 0,
+            "pending": len(expectation_times_ms),
+            "status": "running",
+        },
+    )
+    session.add(scenario_run)
+    session.flush()
+    job = RuntimeJob(
+        job_type=SCENARIO_FINALIZER_JOB_TYPE,
+        status="pending",
+        payload={"scenario_run_id": scenario_run.id},
+        run_id=run.id,
+        dedupe_key=f"job:skill-test-scenario-finalizer:{scenario_run.id}",
+        available_at=origin,
+        max_attempts=max_attempts,
+    )
+    session.add(job)
+    session.commit()
+    return {"job_id": job.id, "scenario_run_id": scenario_run.id, "run_id": run.id}
+
+
+def _stub_finalizer_judge(monkeypatch, service: SkillTestService, calls: list[str]) -> None:
+    monkeypatch.setattr(
+        service.runtime_service,
+        "build_replay",
+        lambda _session, _run_id: SimpleNamespace(terminal_events=[]),
+    )
+
+    def prepare(_session, *, scenario, scenario_run, expectation, **_kwargs):
+        return PreparedExpectationJudge(
+            scenario_run_id=scenario_run.id,
+            expectation_id=expectation["id"],
+            route_key="text",
+            system_prompt="judge",
+            user_prompt=expectation["expectation"],
+            prompt_hash=f"hash-{expectation['id']}",
+            request_snapshot={"expectation_id": expectation["id"]},
+        )
+
+    def invoke(prepared: PreparedExpectationJudge) -> ExpectationJudgeResult:
+        calls.append(prepared.expectation_id)
+        return ExpectationJudgeResult(
+            status="passed",
+            confidence=1.0,
+            reason="passed",
+            evidence_refs=[],
+            judge_provider="fake",
+            judge_model="fake-judge",
+            raw_response={"usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3}},
+        )
+
+    monkeypatch.setattr(service, "_prepare_expectation_judge", prepare)
+    monkeypatch.setattr(service, "_invoke_expectation_judge", invoke)
+
+
+def test_backfill_scenario_finalizers_filters_active_and_terminal_runs(monkeypatch) -> None:
+    jobs = {
+        "skill_test_scenario_finalizer": [
+            {
+                "id": "finalizer-active",
+                "status": "pending",
+                "payload": {"scenario_run_id": "scenario-active"},
+            },
+            {
+                "id": "finalizer-failed",
+                "status": "failed",
+                "payload": {"scenario_run_id": "scenario-recover"},
+            },
+        ],
+        "skill_test_timeline_driver": [
+            {"id": "driver-missing", "payload": {"scenario_run_id": "scenario-missing"}},
+            {"id": "driver-active", "payload": {"scenario_run_id": "scenario-active"}},
+            {"id": "driver-recover", "payload": {"scenario_run_id": "scenario-recover"}},
+            {"id": "driver-terminal", "payload": {"scenario_run_id": "scenario-terminal"}},
+        ],
+    }
+    scenario_runs = {
+        "scenario-missing": {
+            "id": "scenario-missing",
+            "status": "running",
+            "driver_status": "completed",
+            "run_id": "run-missing",
+            "result_summary": {"pending": 1},
+        },
+        "scenario-active": {"id": "scenario-active", "status": "running", "driver_status": "completed"},
+        "scenario-recover": {"id": "scenario-recover", "status": "running", "driver_status": "completed"},
+        "scenario-terminal": {"id": "scenario-terminal", "status": "passed", "driver_status": "completed"},
+    }
+
+    def fake_list_jobs(_base_url, *, job_type, **_kwargs):
+        return jobs[job_type]
+
+    monkeypatch.setattr(backfill_finalizers, "list_jobs", fake_list_jobs)
+    monkeypatch.setattr(
+        backfill_finalizers,
+        "request_json",
+        lambda _base_url, path, **_kwargs: scenario_runs[path.rsplit("/", 1)[-1]],
+    )
+
+    candidates = backfill_finalizers.list_backfill_candidates("http://psop.test/api/v1")
+
+    assert [item["scenario_run_id"] for item in candidates] == ["scenario-missing", "scenario-recover"]
+    assert candidates[0]["finalizer_job_id"] is None
+    assert candidates[1]["finalizer_job_status"] == "failed"
 
 
 def test_cleanup_stuck_timeline_drivers_paginates_and_filters_candidates(monkeypatch) -> None:
@@ -579,20 +760,12 @@ def test_timeline_driver_can_wake_more_times_than_max_attempts(job_store, monkey
         sent_event_ids.append(event["id"])
         return SimpleNamespace(event_id=f"terminal-{event['id']}", seq_no=len(sent_event_ids))
 
-    def complete_evaluation(session, scenario_run_id):
-        scenario_run = session.get(SkillTestScenarioRun, scenario_run_id)
-        scenario_run.status = "passed"
-        scenario_run.result_summary = {"status": "passed"}
-        return service._build_run_response(scenario_run)
-
     monkeypatch.setattr(service, "_append_timeline_input_event", append_event)
     monkeypatch.setattr(
         service,
         "_process_runtime_after_timeline_batch",
         lambda session, scenario_run: session.get(Run, scenario_run.run_id),
     )
-    monkeypatch.setattr(service, "evaluate_run", complete_evaluation)
-
     first_started_at = None
     for index, at_ms in enumerate(event_times_ms, start=1):
         clock[0] = origin + timedelta(milliseconds=at_ms)
@@ -634,6 +807,242 @@ def test_timeline_driver_can_wake_more_times_than_max_attempts(job_store, monkey
         assert stored.lease_until is None
         assert stored.finished_at is not None
     assert sent_event_ids == [f"input-{index}" for index in range(1, 5)]
+
+    with manager.session() as session:
+        finalizer_job = JobRepository().get_runtime_job_by_dedupe_key(
+            session,
+            f"job:skill-test-scenario-finalizer:{ids['scenario_run_id']}",
+        )
+        assert finalizer_job is not None
+        assert finalizer_job.status == "pending"
+
+
+def test_scenario_finalizer_polls_runtime_then_finishes_without_runtime_callback(job_store, monkeypatch) -> None:
+    settings, manager = job_store
+    origin = now_utc()
+    monkeypatch.setattr(skill_test_service_module, "now_utc", lambda: origin)
+    with manager.session() as session:
+        ids = _seed_scenario_finalizer_job(
+            session,
+            run_status="running",
+            expectation_times_ms=(60_000,),
+            time_origin=origin,
+        )
+        lease = JobRepository().claim_next_job(
+            session,
+            job_type=SCENARIO_FINALIZER_JOB_TYPE,
+            lease_seconds=60,
+            worker_name="finalizer-owner-wait",
+        )
+        assert lease is not None
+
+    service = _timeline_driver_service(settings)
+    judge_calls: list[str] = []
+    _stub_finalizer_judge(monkeypatch, service, judge_calls)
+    with manager.session() as session:
+        response = service.process_finalizer_job(session, lease.job_id)
+
+    assert response.status == "running"
+    assert response.result_summary["pending"] == 1
+    assert judge_calls == []
+    with manager.session() as session:
+        job = session.get(RuntimeJob, ids["job_id"])
+        assert job.status == "pending"
+        assert job.payload["wait_reason"] == "runtime_open"
+        available_at = job.available_at
+        if available_at.tzinfo is None:
+            available_at = available_at.replace(tzinfo=timezone.utc)
+        assert available_at == origin + timedelta(seconds=5)
+
+        run = session.get(Run, ids["run_id"])
+        run.status = "succeeded"
+        run.runtime_phase = "completed"
+        run.final_output = "runtime completed"
+        run.ended_at = origin + timedelta(seconds=1)
+        job.available_at = origin
+        session.commit()
+        terminal_lease = JobRepository().claim_next_job(
+            session,
+            job_type=SCENARIO_FINALIZER_JOB_TYPE,
+            lease_seconds=60,
+            worker_name="finalizer-owner-terminal",
+        )
+        assert terminal_lease is not None
+
+    with manager.session() as session:
+        response = service.process_finalizer_job(session, terminal_lease.job_id)
+
+    assert response.status == "passed"
+    assert response.result_summary == {
+        "total": 1,
+        "passed": 1,
+        "failed": 0,
+        "inconclusive": 0,
+        "pending": 0,
+        "status": "passed",
+    }
+    assert judge_calls == ["expectation-1"]
+    with manager.session() as session:
+        job = session.get(RuntimeJob, ids["job_id"])
+        assert job.status == "succeeded"
+        assert job.payload["wait_reason"] == "completed"
+        assert job.metrics == {"llm_calls": 1, "input_tokens": 2, "output_tokens": 1, "total_tokens": 3}
+
+
+def test_scenario_finalizer_judges_one_expectation_per_claim(job_store, monkeypatch) -> None:
+    settings, manager = job_store
+    with manager.session() as session:
+        ids = _seed_scenario_finalizer_job(
+            session,
+            run_status="succeeded",
+            expectation_times_ms=(60_000, 120_000),
+        )
+
+    service = _timeline_driver_service(settings)
+    judge_calls: list[str] = []
+    _stub_finalizer_judge(monkeypatch, service, judge_calls)
+    for index in range(2):
+        with manager.session() as session:
+            lease = JobRepository().claim_next_job(
+                session,
+                job_type=SCENARIO_FINALIZER_JOB_TYPE,
+                lease_seconds=60,
+                worker_name=f"finalizer-owner-{index}",
+            )
+            assert lease is not None
+        with manager.session() as session:
+            response = service.process_finalizer_job(session, lease.job_id)
+        assert len(judge_calls) == index + 1
+        assert response.result_summary["pending"] == 1 - index
+
+    assert response.status == "passed"
+    assert judge_calls == ["expectation-1", "expectation-2"]
+    with manager.session() as session:
+        evaluations = session.query(SkillTestExpectationEvaluation).filter_by(
+            scenario_run_id=ids["scenario_run_id"]
+        ).all()
+        assert [item.expectation_id for item in evaluations] == judge_calls
+        assert session.get(RuntimeJob, ids["job_id"]).status == "succeeded"
+
+
+def test_scenario_finalizer_retries_judge_then_records_inconclusive_on_last_attempt(job_store, monkeypatch) -> None:
+    settings, manager = job_store
+    with manager.session() as session:
+        ids = _seed_scenario_finalizer_job(
+            session,
+            run_status="succeeded",
+            expectation_times_ms=(0,),
+            max_attempts=2,
+        )
+
+    service = _timeline_driver_service(settings)
+    monkeypatch.setattr(
+        service.runtime_service,
+        "build_replay",
+        lambda _session, _run_id: SimpleNamespace(terminal_events=[]),
+    )
+    monkeypatch.setattr(
+        service,
+        "_prepare_expectation_judge",
+        lambda _session, *, scenario_run, expectation, **_kwargs: PreparedExpectationJudge(
+            scenario_run_id=scenario_run.id,
+            expectation_id=expectation["id"],
+            route_key="text",
+            system_prompt="judge",
+            user_prompt="judge",
+            prompt_hash="judge-hash",
+            request_snapshot={"expectation_id": expectation["id"]},
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_invoke_expectation_judge",
+        lambda _prepared: (_ for _ in ()).throw(RuntimeError("judge unavailable")),
+    )
+
+    with manager.session() as session:
+        first_lease = JobRepository().claim_next_job(
+            session,
+            job_type=SCENARIO_FINALIZER_JOB_TYPE,
+            lease_seconds=60,
+            worker_name="finalizer-retry-1",
+        )
+        assert first_lease is not None
+    with manager.session() as session:
+        with pytest.raises(RuntimeError, match="judge unavailable"):
+            service.process_finalizer_job(session, first_lease.job_id)
+
+    worker = RuntimeJobWorker(
+        settings=settings,
+        database_manager=manager,
+        gitlab_gateway=object(),  # type: ignore[arg-type]
+        inference_gateway=object(),  # type: ignore[arg-type]
+        asr_gateway=object(),  # type: ignore[arg-type]
+        object_store=object(),  # type: ignore[arg-type]
+        agent_harness_service=object(),  # type: ignore[arg-type]
+        job_types=(SCENARIO_FINALIZER_JOB_TYPE,),
+    )
+    assert worker._record_unhandled_failure(first_lease, "judge unavailable") is True
+
+    with manager.session() as session:
+        job = session.get(RuntimeJob, ids["job_id"])
+        assert job.status == "retryable_failed"
+        job.available_at = now_utc() - timedelta(seconds=1)
+        session.commit()
+        last_lease = JobRepository().claim_next_job(
+            session,
+            job_type=SCENARIO_FINALIZER_JOB_TYPE,
+            lease_seconds=60,
+            worker_name="finalizer-retry-2",
+        )
+        assert last_lease is not None
+        assert last_lease.attempt_no == 2
+
+    with manager.session() as session:
+        response = service.process_finalizer_job(session, last_lease.job_id)
+
+    assert response.status == "failed"
+    assert response.result_summary["inconclusive"] == 1
+    assert response.result_summary["pending"] == 0
+    with manager.session() as session:
+        job = session.get(RuntimeJob, ids["job_id"])
+        evaluation = session.query(SkillTestExpectationEvaluation).filter_by(
+            scenario_run_id=ids["scenario_run_id"]
+        ).one()
+        assert job.status == "succeeded"
+        assert job.attempt_no == 2
+        assert evaluation.status == "inconclusive"
+        assert evaluation.raw_response["error"] == "judge unavailable"
+
+
+def test_reaper_finalizes_exhausted_scenario_finalizer(job_store) -> None:
+    settings, manager = job_store
+    with manager.session() as session:
+        ids = _seed_scenario_finalizer_job(session, max_attempts=1)
+        job = session.get(RuntimeJob, ids["job_id"])
+        job.status = "running"
+        job.attempt_no = 1
+        job.worker_name = "expired-finalizer-owner"
+        job.lease_until = now_utc() - timedelta(seconds=1)
+        session.commit()
+
+    supervisor = RuntimeJobWorkerSupervisor(
+        settings=settings,
+        database_manager=manager,
+        gitlab_gateway=object(),  # type: ignore[arg-type]
+        inference_gateway=object(),  # type: ignore[arg-type]
+        asr_gateway=object(),  # type: ignore[arg-type]
+        object_store=object(),  # type: ignore[arg-type]
+        agent_harness_service=object(),  # type: ignore[arg-type]
+    )
+
+    assert supervisor.recover_expired_jobs_once() == 1
+    with manager.session() as session:
+        job = session.get(RuntimeJob, ids["job_id"])
+        scenario_run = session.get(SkillTestScenarioRun, ids["scenario_run_id"])
+        assert job.status == "failed"
+        assert scenario_run.status == "failed"
+        assert scenario_run.result_summary["reason"] == "scenario_finalizer_attempts_exhausted"
 
 
 def test_timeline_driver_failures_start_fresh_after_successful_wait(job_store) -> None:

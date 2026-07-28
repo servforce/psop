@@ -33,7 +33,7 @@ from app.domain.jobs.progress import ensure_publish_progress_payload, mark_publi
 from app.domain.jobs.repository import JobLease, JobRepository
 from app.domain.runtime.events import NoopRuntimeEventSink, RuntimeEventSink
 from app.domain.runtime.service import RuntimeService, RuntimeStepTimeoutError
-from app.domain.skill_tests.service import SkillTestService
+from app.domain.skill_tests.service import SCENARIO_FINALIZER_JOB_TYPE, SkillTestService
 from app.domain.skills.models import now_utc
 from app.domain.skills.service import SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE, SkillsService
 from app.gateway.asr import AsrGateway
@@ -46,7 +46,7 @@ from app.infra.object_store import ObjectStoreService
 LOGGER = logging.getLogger(__name__)
 
 RUNTIME_JOB_TYPES = ("runtime",)
-BUILD_TEST_JOB_TYPES = ("compile", "skill_test_timeline_driver")
+BUILD_TEST_JOB_TYPES = ("compile", "skill_test_timeline_driver", SCENARIO_FINALIZER_JOB_TYPE)
 MATERIAL_JOB_TYPES = ("raw_material_analysis", SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE)
 ALL_JOB_TYPES = RUNTIME_JOB_TYPES + BUILD_TEST_JOB_TYPES + MATERIAL_JOB_TYPES
 
@@ -460,6 +460,8 @@ class RuntimeJobWorker:
                             )
                         elif lease.job_type == "skill_test_timeline_driver":
                             self._skill_test_service().process_driver_job(session, lease.job_id)
+                        elif lease.job_type == SCENARIO_FINALIZER_JOB_TYPE:
+                            self._skill_test_service().process_finalizer_job(session, lease.job_id)
                         elif lease.job_type == "raw_material_analysis":
                             self._skills_service().process_raw_material_analysis_job(session, lease.job_id)
                         elif lease.job_type == SKILL_RAW_MATERIAL_GENERATION_JOB_TYPE:
@@ -572,6 +574,12 @@ class RuntimeJobWorker:
                     )
                 elif job.job_type == "skill_test_timeline_driver":
                     self._skill_test_service().finalize_exhausted_timeline_driver_job(
+                        session,
+                        job_id=job.id,
+                        error_message=error_message,
+                    )
+                elif job.job_type == SCENARIO_FINALIZER_JOB_TYPE:
+                    self._skill_test_service().finalize_exhausted_scenario_finalizer_job(
                         session,
                         job_id=job.id,
                         error_message=error_message,
@@ -738,6 +746,13 @@ class RuntimeJobWorkerSupervisor:
             return
         if job.job_type == "skill_test_timeline_driver":
             self._skill_test_service().finalize_exhausted_timeline_driver_job(
+                session,
+                job_id=job.id,
+                error_message=job.last_error,
+            )
+            return
+        if job.job_type == SCENARIO_FINALIZER_JOB_TYPE:
+            self._skill_test_service().finalize_exhausted_scenario_finalizer_job(
                 session,
                 job_id=job.id,
                 error_message=job.last_error,

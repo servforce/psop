@@ -12,7 +12,7 @@
 
 ## 2. 愿景
 
-PSOP 是面向物理世界现场作业的任务操作系统。
+`PSOP` 是 `Physical Standard Operating Procedure` 的缩写，表示“现实物理世界的标准操作规程”。
 
 PSOP 将 SOP、专家经验、现场证据、安全约束、企业系统、工具能力与 AI 智能体沉淀为可执行、可验证、可回放、可审计、可持续进化的 Skill。
 
@@ -425,6 +425,7 @@ run replay/test report
 
 ## 12. 术语约定
 
+- `PSOP`：`Physical Standard Operating Procedure` 的缩写，表示现实物理世界的标准操作规程。
 - `PSOP Skill`：现实现场作业契约。
 - `pskill`：PSOP Skill 的源码/草稿表达。
 - `PSOP-EG`：可由 psop-runner 执行的 Execution Graph。

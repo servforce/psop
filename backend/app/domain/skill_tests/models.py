@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.skills.models import generate_uuid, now_utc
@@ -117,6 +117,11 @@ class SkillTestExpectationEvaluation(Base):
     __table_args__ = (
         Index("idx_skill_test_expectation_eval_run_created_at", "scenario_run_id", "created_at"),
         Index("idx_skill_test_expectation_eval_run_expectation", "scenario_run_id", "expectation_id"),
+        UniqueConstraint(
+            "scenario_run_id",
+            "expectation_id",
+            name="uk_skill_test_expectation_eval_run_expectation",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)

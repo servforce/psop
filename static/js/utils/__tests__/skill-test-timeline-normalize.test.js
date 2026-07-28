@@ -659,6 +659,15 @@ test("running skill test review can be cancelled without local state guesswork",
   expect(app.busy.skillTestCancel).toBe(false);
 });
 
+test("completed driver shows finalizer phase instead of generic running status", () => {
+  const app = createTimelineHarness();
+  const testRun = { status: "running", driver_status: "completed" };
+
+  expect(app.skillTestRunStatusLabel(testRun, { replay: { run: { status: "running" } } })).toBe("等待 Run 完成");
+  expect(app.skillTestRunStatusLabel(testRun, { replay: { run: { status: "succeeded" } } })).toBe("判定中");
+  expect(app.skillTestRunStatusLabel({ status: "passed", driver_status: "completed" }, {})).toBe("passed");
+});
+
 test("review stage output drives expanded details and fork cursor", () => {
   const app = createTimelineHarness();
   app.skillTestReview = {

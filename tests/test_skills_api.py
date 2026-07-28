@@ -3506,15 +3506,16 @@ def test_skill_test_scenario_asset_timeline_run_review_and_fork() -> None:
     assert image_inputs[0]["payload_inline"]["description"] == "伞骨近照"
     assert any(event["direction"] == "output" and "测试任务已完成" in str(event["payload_inline"]) for event in terminal_events)
     assert any(job["job_type"] == "skill_test_timeline_driver" and job["status"] == "succeeded" for job in jobs_response.json())
+    assert any(job["job_type"] == "skill_test_scenario_finalizer" and job["status"] == "succeeded" for job in jobs_response.json())
     assert any(
-        job["job_type"] == "skill_test_timeline_driver"
+        job["job_type"] == "skill_test_scenario_finalizer"
         and job["token_usage"]
         and job["token_usage"]["total_tokens"] >= 15
         for job in jobs_response.json()
     )
     assert any(call["route_key"] == "text" and "黑盒时序测试 Judge" in call["system_prompt"] for call in fake_inference.calls)
 
-    assert evaluate_response.status_code == 200
+    assert evaluate_response.status_code == 202
     assert evaluate_response.json()["status"] == "passed"
     assert review_response.status_code == 200
     assert review["scenario"]["id"] == scenario["id"]

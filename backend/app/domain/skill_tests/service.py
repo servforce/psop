@@ -58,9 +58,12 @@ from app.infra.object_store import ObjectStoreService
 
 TIMELINE_SCHEMA_VERSION = "psop-skill-test-timeline/v1"
 TIMELINE_DRIVER_JOB_TYPE = "skill_test_timeline_driver"
+SCENARIO_FINALIZER_JOB_TYPE = "skill_test_scenario_finalizer"
 DEFAULT_TIMELINE_DURATION_MS = 1_800_000
 OPEN_SCENARIO_RUN_STATUSES = {"pending", "queued", "running", "waiting_input"}
-TERMINAL_RUNTIME_STATUSES = {"succeeded", "failed", "cancelled"}
+TERMINAL_RUNTIME_STATUSES = {"succeeded", "failed", "aborted", "cancelled"}
+TERMINAL_SCENARIO_RUN_STATUSES = {"passed", "failed", "cancelled"}
+FINALIZER_RUNTIME_POLL_SECONDS = 5
 DEFAULT_JUDGE_TRANSCRIPT_BUDGET_CHARS = 60_000
 DEFAULT_JUDGE_EVENT_BUDGET_CHARS = 8_000
 DEFAULT_JUDGE_FINAL_OUTPUT_BUDGET_CHARS = 8_000
@@ -71,6 +74,28 @@ class SkillTestAssetContent:
     content: bytes
     mime_type: str
     filename: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedExpectationJudge:
+    scenario_run_id: str
+    expectation_id: str
+    route_key: str
+    system_prompt: str
+    user_prompt: str
+    prompt_hash: str
+    request_snapshot: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ExpectationJudgeResult:
+    status: str
+    confidence: float
+    reason: str
+    evidence_refs: list[dict[str, Any]]
+    judge_provider: str
+    judge_model: str
+    raw_response: dict[str, Any]
 
 
 DEFAULT_TIMELINE_LANES = [
@@ -359,7 +384,19 @@ class SkillTestService:
         driver_job = self._ensure_driver_job_pending(session, scenario_run, available_at=started_at)
         session.commit()
         if not self.settings.runtime_worker_enabled:
-            return self.process_driver_job(session, driver_job.id)
+            response = self.process_driver_job(session, driver_job.id)
+            if response.driver_status != "completed":
+                return response
+            response = self._evaluate_run_inline(session, response.id)
+            finalizer_job = self.job_repository.get_runtime_job_by_dedupe_key_for_update(
+                session,
+                f"job:skill-test-scenario-finalizer:{response.id}",
+            )
+            if finalizer_job:
+                self._sync_judge_job_metrics(session, finalizer_job, response.id)
+                self._finish_finalizer_job(finalizer_job, self._get_scenario_run(session, response.id))
+                session.commit()
+            return response
         return self._build_run_response(scenario_run)
 
     def list_runs(self, session: Session, skill_id: str, scenario_id: str) -> list[SkillTestScenarioRunResponse]:
@@ -383,6 +420,7 @@ class SkillTestService:
             raise SkillValidationError("测试运行已结束，不能终止。", details={"scenario_run_id": scenario_run_id, "status": scenario_run.status})
         if scenario_run.status == "cancelled":
             self._cancel_driver_job(session, scenario_run, reason=reason)
+            self._cancel_finalizer_job(session, scenario_run, reason=reason)
             session.commit()
             return self._build_run_response(scenario_run)
 
@@ -403,6 +441,7 @@ class SkillTestService:
             "reason": reason or "cancelled by user",
         }
         self._cancel_driver_job(session, scenario_run, reason=reason)
+        self._cancel_finalizer_job(session, scenario_run, reason=reason)
         session.commit()
         return self._build_run_response(scenario_run)
 
@@ -415,7 +454,6 @@ class SkillTestService:
             raise SkillValidationError("测试时间轴 Driver Job 缺少 scenario_run_id。", details={"job_id": job_id})
         response = self.process_timeline_driver_for_run(session, str(scenario_run_id))
         scenario_run = self._get_scenario_run(session, str(scenario_run_id))
-        self._sync_driver_job_metrics(session, job, str(scenario_run_id))
         if scenario_run.driver_status in {"completed", "failed", "cancelled"}:
             job.status = "succeeded" if scenario_run.driver_status == "completed" else scenario_run.driver_status
             job.worker_name = ""
@@ -464,6 +502,162 @@ class SkillTestService:
             "status": "failed",
             "reason": "timeline_driver_job_attempts_exhausted",
             "error_message": reason,
+            "job_id": job.id,
+        }
+        return True
+
+    def process_finalizer_job(self, session: Session, job_id: str) -> SkillTestScenarioRunResponse:
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
+        if job is None or job.job_type != SCENARIO_FINALIZER_JOB_TYPE:
+            raise SkillNotFoundError("未找到测试场景 Finalizer Job。", details={"job_id": job_id})
+        scenario_run_id = str((job.payload or {}).get("scenario_run_id") or "")
+        if not scenario_run_id:
+            raise SkillValidationError("测试场景 Finalizer Job 缺少 scenario_run_id。", details={"job_id": job_id})
+        scenario_run = self._get_scenario_run(session, scenario_run_id)
+        if scenario_run.status in TERMINAL_SCENARIO_RUN_STATUSES:
+            self._finish_finalizer_job(job, scenario_run)
+            session.commit()
+            return self._build_run_response(scenario_run)
+        if not scenario_run.run_id:
+            raise SkillValidationError("测试场景运行尚未关联 Runtime Run。", details={"scenario_run_id": scenario_run.id})
+
+        run = self.repository.get_fresh_run(session, scenario_run.run_id)
+        if not run:
+            raise SkillNotFoundError("未找到测试场景关联 Run。", details={"run_id": scenario_run.run_id})
+        if run.status == "cancelled":
+            scenario_run.status = "cancelled"
+            scenario_run.ended_at = now_utc()
+            scenario_run.result_summary = {
+                **self._summarize_expectations(session, scenario_run),
+                "status": "cancelled",
+                "reason": run.exit_reason or "runtime_cancelled",
+            }
+            self._finish_finalizer_job(job, scenario_run)
+            session.commit()
+            return self._build_run_response(scenario_run)
+
+        scenario = self._get_scenario(session, scenario_run.skill_definition_id, scenario_run.scenario_id)
+        expectations = self._timeline_expectation_events(scenario_run.timeline)
+        evaluations = self.repository.list_expectation_evaluations(session, scenario_run.id)
+        evaluated_ids = {item.expectation_id for item in evaluations}
+        now = now_utc()
+        missing = [item for item in expectations if str(item.get("id") or "") not in evaluated_ids]
+        eligible = next(
+            (
+                item
+                for item in missing
+                if run.status in TERMINAL_RUNTIME_STATUSES
+                or self._scenario_time(scenario_run, int(item.get("at_ms") or 0)) <= now
+            ),
+            None,
+        )
+
+        if eligible is None:
+            scenario_run.result_summary = self._summarize_expectations(session, scenario_run, expectations=expectations)
+            if not missing and run.status in TERMINAL_RUNTIME_STATUSES:
+                self._finalize_scenario_run(scenario_run, run)
+                self._finish_finalizer_job(job, scenario_run)
+            else:
+                self._reschedule_finalizer_job(job, scenario_run, run, missing=missing, now=now)
+            session.commit()
+            return self._build_run_response(scenario_run)
+
+        cutoff = self._scenario_time(scenario_run, int(eligible.get("at_ms") or 0))
+        replay = self.runtime_service.build_replay(session, run.id)
+        scoped_outputs = [
+            item
+            for item in replay.terminal_events
+            if item.direction == "output" and self._aware_datetime(item.occurred_at) <= cutoff
+        ]
+        prepared = self._prepare_expectation_judge(
+            session,
+            scenario=scenario,
+            scenario_run=scenario_run,
+            expectation=eligible,
+            scoped_outputs=scoped_outputs,
+            final_output=run.final_output,
+            run_status=run.status,
+            cutoff=cutoff,
+        )
+        job.payload = {
+            "scenario_run_id": scenario_run.id,
+            "current_expectation_id": prepared.expectation_id,
+            "wait_reason": "judge",
+            "next_cutoff_at": cutoff.isoformat(),
+        }
+        session.commit()
+
+        try:
+            result = self._invoke_expectation_judge(prepared)
+        except Exception as exc:
+            if job.attempt_no < job.max_attempts:
+                raise
+            result = self._inconclusive_judge_result(prepared, exc)
+
+        session.expire_all()
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
+        if job is None or job.status != "running":
+            session.rollback()
+            return self._build_run_response(self._get_scenario_run(session, scenario_run_id))
+        scenario_run = self._get_scenario_run(session, scenario_run_id)
+        if scenario_run.status in TERMINAL_SCENARIO_RUN_STATUSES:
+            self._finish_finalizer_job(job, scenario_run)
+            session.commit()
+            return self._build_run_response(scenario_run)
+        existing = self.repository.get_expectation_evaluation(
+            session,
+            scenario_run.id,
+            prepared.expectation_id,
+        )
+        if existing is None:
+            session.add(self._build_expectation_evaluation(prepared, result))
+            session.flush()
+
+        run = self.repository.get_fresh_run(session, scenario_run.run_id)
+        if not run:
+            raise SkillNotFoundError("未找到测试场景关联 Run。", details={"run_id": scenario_run.run_id})
+        expectations = self._timeline_expectation_events(scenario_run.timeline)
+        evaluations = self.repository.list_expectation_evaluations(session, scenario_run.id)
+        evaluated_ids = {item.expectation_id for item in evaluations}
+        missing = [item for item in expectations if str(item.get("id") or "") not in evaluated_ids]
+        scenario_run.result_summary = self._summarize_expectations(
+            session,
+            scenario_run,
+            expectations=expectations,
+            evaluations=evaluations,
+        )
+        self._sync_judge_job_metrics(session, job, scenario_run.id)
+        if not missing and run.status in TERMINAL_RUNTIME_STATUSES:
+            self._finalize_scenario_run(scenario_run, run)
+            self._finish_finalizer_job(job, scenario_run)
+        else:
+            self._reschedule_finalizer_job(job, scenario_run, run, missing=missing, now=now_utc())
+        session.commit()
+        return self._build_run_response(scenario_run)
+
+    def finalize_exhausted_scenario_finalizer_job(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+        error_message: str,
+    ) -> bool:
+        job = self.job_repository.get_runtime_job_for_update(session, job_id)
+        if job is None or job.job_type != SCENARIO_FINALIZER_JOB_TYPE:
+            return False
+        scenario_run_id = str((job.payload or {}).get("scenario_run_id") or "")
+        if not scenario_run_id:
+            return False
+        scenario_run = self.repository.get_scenario_run_for_update(session, scenario_run_id)
+        if scenario_run is None or scenario_run.status in TERMINAL_SCENARIO_RUN_STATUSES:
+            return False
+        scenario_run.status = "failed"
+        scenario_run.ended_at = now_utc()
+        scenario_run.result_summary = {
+            **self._summarize_expectations(session, scenario_run),
+            "status": "failed",
+            "reason": "scenario_finalizer_attempts_exhausted",
+            "error_message": error_message.strip() or "Scenario finalizer job attempts exhausted.",
             "job_id": job.id,
         }
         return True
@@ -547,8 +741,9 @@ class SkillTestService:
         scenario_run.driver_cursor = cursor
         if sent_any:
             self._process_runtime_after_timeline_batch(session, scenario_run)
+        self._ensure_finalizer_job_pending(session, scenario_run)
         session.commit()
-        return self.evaluate_run(session, scenario_run.id)
+        return self._build_run_response(scenario_run)
 
     def get_review(self, session: Session, scenario_run_id: str) -> SkillTestScenarioReviewResponse:
         scenario_run = self._get_scenario_run(session, scenario_run_id)
@@ -574,7 +769,9 @@ class SkillTestService:
             ),
         )
 
-    def evaluate_run(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRunResponse:
+    def _evaluate_run_inline(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRunResponse:
+        """Synchronous compatibility path used only when workers are disabled in tests."""
+
         scenario_run = self._get_scenario_run(session, scenario_run_id)
         if not scenario_run.run_id:
             raise SkillValidationError("测试场景运行尚未关联 Runtime Run。", details={"scenario_run_id": scenario_run_id})
@@ -585,6 +782,7 @@ class SkillTestService:
         self._sync_scenario_run_from_runtime(session, scenario_run, run=run)
         expectations = self._timeline_expectation_events(scenario_run.timeline)
         self.repository.delete_expectation_evaluations(session, scenario_run.id)
+        session.flush()
         replay = self.runtime_service.build_replay(session, run.id)
         output_events = [item for item in replay.terminal_events if item.direction == "output"]
         now = now_utc()
@@ -625,6 +823,18 @@ class SkillTestService:
             scenario_run.ended_at = scenario_run.ended_at or now_utc()
         summary["status"] = scenario_run.status
         scenario_run.result_summary = summary
+        session.commit()
+        return self._build_run_response(scenario_run)
+
+    def request_evaluation(self, session: Session, scenario_run_id: str) -> SkillTestScenarioRunResponse:
+        scenario_run = self._get_scenario_run(session, scenario_run_id)
+        if not scenario_run.run_id:
+            raise SkillValidationError("测试场景运行尚未关联 Runtime Run。", details={"scenario_run_id": scenario_run_id})
+        if (
+            scenario_run.status not in TERMINAL_SCENARIO_RUN_STATUSES
+            and scenario_run.driver_status == "completed"
+        ):
+            self._ensure_finalizer_job_pending(session, scenario_run, available_at=now_utc())
         session.commit()
         return self._build_run_response(scenario_run)
 
@@ -860,6 +1070,36 @@ class SkillTestService:
         run_status: str,
         cutoff: datetime,
     ) -> SkillTestExpectationEvaluation:
+        prepared = self._prepare_expectation_judge(
+            session,
+            scenario=scenario,
+            scenario_run=scenario_run,
+            expectation=expectation,
+            scoped_outputs=scoped_outputs,
+            final_output=final_output,
+            run_status=run_status,
+            cutoff=cutoff,
+        )
+        try:
+            result = self._invoke_expectation_judge(prepared)
+        except Exception as exc:
+            result = self._inconclusive_judge_result(prepared, exc)
+        evaluation = self._build_expectation_evaluation(prepared, result)
+        session.add(evaluation)
+        return evaluation
+
+    def _prepare_expectation_judge(
+        self,
+        session: Session,
+        *,
+        scenario: SkillTestScenario,
+        scenario_run: SkillTestScenarioRun,
+        expectation: dict[str, Any],
+        scoped_outputs: list[Any],
+        final_output: str,
+        run_status: str,
+        cutoff: datetime,
+    ) -> PreparedExpectationJudge:
         policy = scenario.judge_policy or {}
         prompt_pack = self.agent_prompt_service.resolve_prompt_pack(
             session,
@@ -885,54 +1125,78 @@ class SkillTestService:
             "user_prompt": user_prompt,
             "prompt_payload": prompt_payload,
         }
-        status = "inconclusive"
-        confidence = 0.0
-        reason = "Judge 未能给出有效结论。"
-        evidence_refs: list[dict[str, Any]] = []
-        raw_response: dict[str, Any] = {}
-        provider = ""
-        model = ""
-        try:
-            completion = self.inference_gateway.complete(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                route_key=route_key,
-            )
-            provider = completion.provider
-            model = completion.model
-            parsed = json.loads(completion.content)
-            raw_response = {
-                "request": request_snapshot,
+        return PreparedExpectationJudge(
+            scenario_run_id=scenario_run.id,
+            expectation_id=str(expectation["id"]),
+            route_key=route_key,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            prompt_hash=prompt_hash,
+            request_snapshot=request_snapshot,
+        )
+
+    def _invoke_expectation_judge(self, prepared: PreparedExpectationJudge) -> ExpectationJudgeResult:
+        completion = self.inference_gateway.complete(
+            system_prompt=prepared.system_prompt,
+            user_prompt=prepared.user_prompt,
+            route_key=prepared.route_key,
+        )
+        parsed = json.loads(completion.content)
+        parsed_status = str(parsed.get("status") or "").lower()
+        if parsed_status not in {"passed", "failed", "inconclusive"}:
+            raise ValueError("Judge 响应缺少有效 status。")
+        return ExpectationJudgeResult(
+            status=parsed_status,
+            confidence=self._coerce_confidence(parsed.get("confidence")),
+            reason=str(parsed.get("reason") or "Judge 未能给出有效结论。"),
+            evidence_refs=self._normalize_evidence_refs(parsed.get("evidence_refs")),
+            judge_provider=completion.provider,
+            judge_model=completion.model,
+            raw_response={
+                "request": prepared.request_snapshot,
                 "content": completion.content,
                 "parsed": parsed,
                 "usage": completion.usage,
                 "raw": completion.raw_response,
-            }
-            parsed_status = str(parsed.get("status") or "").lower()
-            status = parsed_status if parsed_status in {"passed", "failed", "inconclusive"} else "inconclusive"
-            confidence = self._coerce_confidence(parsed.get("confidence"))
-            reason = str(parsed.get("reason") or reason)
-            raw_refs = parsed.get("evidence_refs")
-            evidence_refs = self._normalize_evidence_refs(raw_refs)
-        except Exception as exc:
-            raw_response = {"request": request_snapshot, "error": str(exc), "error_type": exc.__class__.__name__}
-            reason = f"Judge 调用失败或响应非法：{exc.__class__.__name__}"
-            status = "inconclusive"
-
-        evaluation = SkillTestExpectationEvaluation(
-            scenario_run_id=scenario_run.id,
-            expectation_id=str(expectation["id"]),
-            status=status,
-            confidence=confidence,
-            reason=reason,
-            evidence_refs=evidence_refs,
-            judge_provider=provider,
-            judge_model=model,
-            prompt_hash=prompt_hash,
-            raw_response=raw_response,
+            },
         )
-        session.add(evaluation)
-        return evaluation
+
+    @staticmethod
+    def _inconclusive_judge_result(
+        prepared: PreparedExpectationJudge,
+        exc: Exception,
+    ) -> ExpectationJudgeResult:
+        return ExpectationJudgeResult(
+            status="inconclusive",
+            confidence=0.0,
+            reason=f"Judge 调用失败或响应非法：{exc.__class__.__name__}",
+            evidence_refs=[],
+            judge_provider="",
+            judge_model="",
+            raw_response={
+                "request": prepared.request_snapshot,
+                "error": str(exc),
+                "error_type": exc.__class__.__name__,
+            },
+        )
+
+    @staticmethod
+    def _build_expectation_evaluation(
+        prepared: PreparedExpectationJudge,
+        result: ExpectationJudgeResult,
+    ) -> SkillTestExpectationEvaluation:
+        return SkillTestExpectationEvaluation(
+            scenario_run_id=prepared.scenario_run_id,
+            expectation_id=prepared.expectation_id,
+            status=result.status,
+            confidence=result.confidence,
+            reason=result.reason,
+            evidence_refs=result.evidence_refs,
+            judge_provider=result.judge_provider,
+            judge_model=result.judge_model,
+            prompt_hash=prepared.prompt_hash,
+            raw_response=result.raw_response,
+        )
 
     def _ensure_driver_job_pending(
         self,
@@ -973,6 +1237,169 @@ class SkillTestService:
             job.status = "cancelled"
             job.last_error = reason or "cancelled by user"
 
+    def _ensure_finalizer_job_pending(
+        self,
+        session: Session,
+        scenario_run: SkillTestScenarioRun,
+        *,
+        available_at: datetime | None = None,
+    ) -> RuntimeJob:
+        dedupe_key = f"job:skill-test-scenario-finalizer:{scenario_run.id}"
+        job = self.job_repository.get_runtime_job_by_dedupe_key_for_update(session, dedupe_key)
+        payload = {"scenario_run_id": scenario_run.id}
+        if job:
+            if job.status == "running":
+                job.payload = {**(job.payload or {}), **payload}
+                return job
+            if job.status in {"pending", "retryable_failed"} and job.attempt_no < job.max_attempts:
+                job.run_id = scenario_run.run_id
+                if (
+                    job.status == "pending"
+                    and available_at is not None
+                    and available_at < self._aware_datetime(job.available_at)
+                ):
+                    job.available_at = available_at
+                return job
+            job.job_type = SCENARIO_FINALIZER_JOB_TYPE
+            job.status = "pending"
+            job.payload = payload
+            job.run_id = scenario_run.run_id
+            job.available_at = available_at or now_utc()
+            job.attempt_no = 0
+            job.worker_name = ""
+            job.lease_until = None
+            job.finished_at = None
+            job.last_error = ""
+            return job
+        job = RuntimeJob(
+            job_type=SCENARIO_FINALIZER_JOB_TYPE,
+            status="pending",
+            payload=payload,
+            run_id=scenario_run.run_id,
+            dedupe_key=dedupe_key,
+            available_at=available_at or now_utc(),
+            max_attempts=self.settings.runtime_job_max_attempts,
+        )
+        session.add(job)
+        return job
+
+    def _cancel_finalizer_job(
+        self,
+        session: Session,
+        scenario_run: SkillTestScenarioRun,
+        *,
+        reason: str = "cancelled by user",
+    ) -> None:
+        job = self.job_repository.get_runtime_job_by_dedupe_key(
+            session,
+            f"job:skill-test-scenario-finalizer:{scenario_run.id}",
+        )
+        if job and job.status not in {"succeeded", "failed", "cancelled"}:
+            job.status = "cancelled"
+            job.last_error = reason or "cancelled by user"
+
+    def _reschedule_finalizer_job(
+        self,
+        job: RuntimeJob,
+        scenario_run: SkillTestScenarioRun,
+        run: Run,
+        *,
+        missing: list[dict[str, Any]],
+        now: datetime,
+    ) -> None:
+        next_item = missing[0] if missing else None
+        next_cutoff = (
+            self._scenario_time(scenario_run, int(next_item.get("at_ms") or 0))
+            if next_item is not None
+            else None
+        )
+        poll_at = now + timedelta(seconds=FINALIZER_RUNTIME_POLL_SECONDS)
+        if run.status in TERMINAL_RUNTIME_STATUSES or (next_cutoff is not None and next_cutoff <= now):
+            available_at = now
+            wait_reason = "judge_ready"
+        elif next_cutoff is not None and next_cutoff < poll_at:
+            available_at = next_cutoff
+            wait_reason = "expectation_cutoff"
+        else:
+            available_at = poll_at
+            wait_reason = "runtime_open"
+        job.status = "pending"
+        job.payload = {
+            "scenario_run_id": scenario_run.id,
+            "current_expectation_id": str(next_item.get("id") or "") if next_item else "",
+            "wait_reason": wait_reason,
+            "next_cutoff_at": next_cutoff.isoformat() if next_cutoff else None,
+        }
+        job.available_at = available_at
+        job.attempt_no = 0
+        job.worker_name = ""
+        job.lease_until = None
+        job.last_error = ""
+
+    @staticmethod
+    def _finish_finalizer_job(job: RuntimeJob, scenario_run: SkillTestScenarioRun) -> None:
+        job.status = "cancelled" if scenario_run.status == "cancelled" else "succeeded"
+        job.payload = {
+            **(job.payload or {}),
+            "scenario_run_id": scenario_run.id,
+            "wait_reason": "completed",
+        }
+        job.worker_name = ""
+        job.lease_until = None
+        job.last_error = ""
+        job.finished_at = job.finished_at or now_utc()
+
+    def _summarize_expectations(
+        self,
+        session: Session,
+        scenario_run: SkillTestScenarioRun,
+        *,
+        expectations: list[dict[str, Any]] | None = None,
+        evaluations: list[SkillTestExpectationEvaluation] | None = None,
+    ) -> dict[str, Any]:
+        expectation_items = expectations if expectations is not None else self._timeline_expectation_events(scenario_run.timeline)
+        evaluation_items = (
+            evaluations
+            if evaluations is not None
+            else self.repository.list_expectation_evaluations(session, scenario_run.id)
+        )
+        by_expectation = {item.expectation_id: item for item in evaluation_items}
+        counts = {"passed": 0, "failed": 0, "inconclusive": 0}
+        expectation_ids = {str(item.get("id") or "") for item in expectation_items}
+        for expectation_id, evaluation in by_expectation.items():
+            if expectation_id not in expectation_ids:
+                continue
+            status = evaluation.status if evaluation.status in counts else "inconclusive"
+            counts[status] += 1
+        total = len(expectation_items)
+        evaluated = sum(counts.values())
+        return {
+            "total": total,
+            **counts,
+            "pending": max(0, total - evaluated),
+            "status": scenario_run.status,
+        }
+
+    @staticmethod
+    def _finalize_scenario_run(scenario_run: SkillTestScenarioRun, run: Run) -> None:
+        summary = dict(scenario_run.result_summary or {})
+        passed = (
+            run.status == "succeeded"
+            and int(summary.get("pending") or 0) == 0
+            and int(summary.get("failed") or 0) == 0
+            and int(summary.get("inconclusive") or 0) == 0
+        )
+        scenario_run.status = "passed" if passed else "failed"
+        scenario_run.ended_at = now_utc()
+        summary["status"] = scenario_run.status
+        if not passed:
+            summary["reason"] = (
+                run.exit_reason
+                if run.status != "succeeded" and run.exit_reason
+                else "judge_expectations_not_satisfied"
+            )
+        scenario_run.result_summary = summary
+
     def _sync_scenario_run_from_runtime(
         self,
         session: Session,
@@ -994,17 +1421,9 @@ class SkillTestService:
                 "status": "cancelled",
                 "reason": runtime_run.exit_reason or "runtime_cancelled",
             }
-        elif runtime_run.status == "failed":
-            scenario_run.status = "failed"
-            scenario_run.ended_at = scenario_run.ended_at or runtime_run.ended_at or now_utc()
-            scenario_run.result_summary = {
-                **(scenario_run.result_summary or {}),
-                "status": "failed",
-                "reason": runtime_run.exit_reason or "runtime_failed",
-            }
-        elif runtime_run.status == "succeeded" and scenario_run.driver_status == "completed":
+        elif runtime_run.status in {"succeeded", "failed", "aborted"} and scenario_run.driver_status == "completed":
             scenario_run.status = "running"
-            scenario_run.ended_at = scenario_run.ended_at or runtime_run.ended_at
+            scenario_run.ended_at = None
         else:
             scenario_run.status = runtime_run.status if runtime_run.status in OPEN_SCENARIO_RUN_STATUSES else "running"
 
@@ -1904,7 +2323,7 @@ class SkillTestService:
                 refs.append({"kind": "raw", "ref": ref})
         return refs
 
-    def _sync_driver_job_metrics(self, session: Session, job: RuntimeJob, scenario_run_id: str) -> None:
+    def _sync_judge_job_metrics(self, session: Session, job: RuntimeJob, scenario_run_id: str) -> None:
         evaluations = self.repository.list_expectation_evaluations(session, scenario_run_id)
         totals = {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         for evaluation in evaluations:
