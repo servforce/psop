@@ -1,212 +1,266 @@
+<div align="center">
+
 # PSOP
 
-PSOP 是一个面向现实物理世界现场作业的 Skill 平台。它的核心思想是：把现实世界中的任务、专家经验、现场证据、安全约束和工具能力构建为可被 AI 重复使用的技能，帮助人类在真实环境中完成复杂作业。
+**面向物理世界现场作业的 AI Skill 操作系统**
 
-当前仓库聚焦这条核心链路的 MVP 实现：
+将 SOP、专家经验、现场证据、安全约束与工具能力，转化为可执行、可验证、可回放、可审计的 PSOP Skill。
 
-`Skills -> Publish -> Auto Compile -> Invocation -> Runtime -> Replay / Observability`
+[项目愿景](docs/overview/vision.md) · [系统架构](docs/architecture/system-architecture.md) · [Execution Graph](docs/architecture/execution-graph-formal-v5.md) · [完整文档](docs/README.md)
 
-## 目录
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933.svg?logo=node.js&logoColor=white)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-- [项目简介](#项目简介)
-- [主要功能](#主要功能)
-- [架构概览](#架构概览)
-- [快速开始](#快速开始)
-- [配置说明](#配置说明)
-- [开发命令](#开发命令)
-- [测试](#测试)
-- [文档](#文档)
-- [贡献](#贡献)
-- [许可证](#许可证)
+</div>
 
-## 项目简介
+> [!NOTE]
+> PSOP 当前处于 MVP 阶段。仓库已形成 `Skills -> Publish -> Auto Compile -> Invocation -> Runtime -> Replay / Observability` 主链路，完整的 `Build -> Compile -> Test -> Run -> Audit -> Eval -> Improve` 闭环仍在按里程碑推进。
 
-现实现场作业往往依赖纸面 SOP、老师傅经验、临场判断、企业系统和现场证据。PSOP 要解决的问题，是让这些原本分散、不可复用、难以验证的作业能力，沉淀为可以被 AI 调用、被人类执行、被系统观测和持续改进的 Skill。
+## PSOP 是什么
 
-在 PSOP 中，Skill 不是聊天 prompt，也不是一次输入后自动完成的脚本。Skill 是一个现实世界任务契约：它描述作业目标、适用边界、现场步骤、证据要求、安全约束、异常恢复路径和完成标准。系统将 Skill 编译为正式的 PSOP Execution Graph，并由 Runtime Kernel 引导现场人员逐步完成真实作业。
+`PSOP` 是 `Physical Standard Operating Procedure` 的缩写，表示“现实物理世界的标准操作规程”。
 
-运行时，一次真实 invocation 会创建 Run、Terminal Session、trace events、terminal events 与 Session Token snapshots。用户反馈、图片、音频、视频、文件、设备确认和现场观察都会作为终端事实进入系统。Replay 与可观测性是默认排障闭环，用于复盘任务执行过程，并为后续 Skill 迭代提供依据。
+现实现场作业通常依赖纸面 SOP、老师傅经验、临场判断、企业系统和现场证据。这些能力分散在文档、人员与系统之间，难以复用、验证和持续改进。
 
-平台围绕以下核心约束设计：
+PSOP 将它们沉淀为 `PSOP Skill`：一种描述作业目标、适用边界、现场步骤、证据要求、安全约束、异常恢复路径和完成标准的现实任务契约。Skill 发布后会被编译为正式的 `PSOP-EG`，再由受控 Runtime 引导现场人员逐步完成任务。
 
-- `Session Token` 是唯一正式运行时状态对象。
-- `Runtime Kernel` 是唯一正式状态主权者。
-- `terminal_event` 是终端输入输出的 append-only 事实源。
-- Replay 只基于已持久化的运行时事实重建。
+PSOP 不是聊天助手，也不是一次性自动化脚本。它的设计重点是：
 
-## 主要功能
+- **确定性的执行骨架**：正式运行以 `PSOP-EG` 为输入，由 Runtime Kernel 控制状态推进。
+- **柔性的智能能力**：Agent 参与 Skill 构建、编译、测试和运行时推理，但不能绕过正式运行状态。
+- **可验证的现场事实**：文本、图片、音频、视频、文件与设备确认以 append-only 事件持久化。
+- **可恢复的执行过程**：Session Token snapshot、trace 与 terminal events 支撑恢复、Replay、观测与审计。
 
-- 通过浏览器 Web IDE 构建和管理现实作业 Skill。
-- 将 SOP、专家经验、现场步骤、证据要求和安全约束结构化为可发布的 Skill。
-- 支持 Git-backed Skill 源码编辑、版本冻结与发布。
-- 自动编译生成符合 formal-v5 的 PSOP Execution Graph 产物。
-- 通过受控 Gateway 发起真实 terminal invocation，让 Runtime 引导现场人员执行任务。
-- 持久化 terminal transcript、runtime trace、Session Token snapshot 与 replay 数据。
-- 提供独立 Skill 调试终端，用于模拟真实操作员的现场交互。
-- 提供黑盒时序 Skill 测试，验证 Skill 在多模态输入场景下的行为是否符合语义预期。
-- 支持面向 OpenTelemetry 的运行时诊断和现场问题复盘。
+## 工作方式
+
+```mermaid
+flowchart LR
+    Material["SOP / 视频 / 标准 / 专家经验"] --> Build["构建 Skill"]
+    Build --> Publish["发布并冻结版本"]
+    Publish --> Compile["编译 PSOP-EG"]
+    Compile --> Test["黑盒时序测试"]
+    Compile --> Invoke["创建 Invocation"]
+    Test --> Runtime["Runtime Kernel"]
+    Invoke --> Runtime
+    Runtime --> Facts["Terminal Events<br/>Session Token Snapshots<br/>Trace Events"]
+    Facts --> Replay["Replay / Observability"]
+```
+
+### 核心对象
+
+| 对象 | 作用 |
+| --- | --- |
+| `PSOP Skill` | 面向现实现场作业的任务契约，也是构建、维护和发布的核心业务资产。 |
+| `PSOP-EG` | 由 Skill 编译得到的 formal-v5 Execution Graph，是 Runtime 的正式输入。 |
+| `Session Token` | 一次 Run 的正式运行状态；模型上下文或 Agent thread state 不能替代它。 |
+| `Terminal Event` | 终端输入输出的 append-only 事实源，可包含文本与多模态内容。 |
+| `Run Package` | 一次运行产生的 terminal events、trace events、snapshots、附件与 Replay 事实。 |
+
+## 核心能力
+
+| 环节 | 当前能力 |
+| --- | --- |
+| 构建 | 通过浏览器 Web IDE 管理 Git-backed Skill 源码，并从原始素材与标准材料生成或完善 Skill draft。 |
+| 发布与编译 | 冻结源码版本，自动生成并校验 formal-v5 PSOP-EG、编译诊断与能力摘要。 |
+| 测试 | 使用黑盒时序场景、正反例和多模态输入验证 Skill 的运行行为。 |
+| 运行 | 通过 Gateway 创建 invocation，由隔离 worker pool 异步推进 Runtime。 |
+| 现场交互 | 持久化 terminal transcript、多模态附件、Session Token snapshot 与 runtime trace。 |
+| 回放与观测 | 基于已持久化事实重建 Replay，并通过 OpenTelemetry 输出运行诊断。 |
+| Agent 治理 | 统一管理 Agent Definition、Run、Event、Artifact、tools、skills、memory、workspace 与可选 MCP adapter。 |
 
 ## 架构概览
 
-```text
-backend/      FastAPI 服务端、编译、运行时、任务、Gateway、Repository 与 Agent Harness
-static/       基于 Alpine.js 与 Tailwind CSS 的静态 Web IDE
-docs/         项目愿景、系统架构、Execution Graph 形式定义与协作规则
-tests/        后端、运行时、API、可观测性与对象存储测试
-scripts/dev/  根目录开发脚本
+PSOP 采用“确定性 Runtime + 受治理 Agent Harness”的架构。Runtime 拥有正式运行状态，Agent Harness 为构建、编译、测试和推理提供统一的模型、工具、Skill、workspace 与审计边界。
+
+```mermaid
+flowchart TB
+    Web["Static Web IDE<br/>Alpine.js + Tailwind CSS"] --> API["FastAPI API"]
+    Terminal["Operator Terminal"] --> Gateway["Invocation / Terminal Gateway"]
+    Gateway --> API
+
+    API --> Domain["Skills / Compiler / Runtime<br/>Skill Tests / Jobs / Agent Prompts"]
+    API --> Harness["Agent Harness"]
+    Domain --> Workers["DB-backed Worker Pools"]
+    Workers --> Runtime["Runtime Kernel"]
+    Runtime --> Harness
+
+    Domain --> PostgreSQL[(PostgreSQL)]
+    Runtime --> PostgreSQL
+    Domain --> ObjectStore[(S3-compatible Object Store)]
+    Runtime --> ObjectStore
+    Domain --> GitLab[GitLab]
+    Harness --> Models["OpenAI-compatible Models"]
+    Domain --> OTel[OpenTelemetry]
+    Runtime --> OTel
 ```
 
-主要实现模块：
+完整的模块边界、数据模型和运行语义见[系统架构设计](docs/architecture/system-architecture.md)。
 
-- `backend/app/domain/skills/`：Skill 元数据、源码、发布与 GitLab 集成。
-- `backend/app/domain/compiler/`：formal-v5 编译请求、诊断与 EG 产物。
-- `backend/app/domain/runtime/`：invocation、run、Session Token snapshot、terminal event 与 replay。
-- `backend/app/domain/skill_tests/`：黑盒时序测试场景、资源、运行与 Judge 评估。
-- `backend/app/domain/agent_prompts/`：Agent Prompt Pack、版本与 binding。
-- `backend/app/agent_harness/`：PSOP 多智能体治理框架的目标模块。
-- `static/js/app/`：按页面域拆分的前端交互逻辑。
+### 技术栈
+
+| 层级 | 技术 |
+| --- | --- |
+| 后端 | Python 3.11+、FastAPI、SQLAlchemy、Pydantic |
+| 前端 | Alpine.js、Tailwind CSS v4、CodeMirror、BPMN.js |
+| 数据与任务 | PostgreSQL、DB-backed job queue、独立 worker pools |
+| 对象存储 | S3-compatible object store，例如 MinIO |
+| Agent 与模型 | LangChain、LangGraph、OpenAI-compatible API |
+| 可观测性 | OpenTelemetry、runtime trace、Replay |
 
 ## 快速开始
 
 ### 前置要求
 
+- Git 与 Bash
 - Python 3.11+
-- Node.js 20+
+- Node.js 20+ 与 npm
 - PostgreSQL
 - S3-compatible 对象存储，例如 MinIO
-- 用于 Skill 源码集成的 GitLab token
+- 用于 Skill 源码管理的 GitLab token
 - OpenAI-compatible 大模型接口
 
-### 克隆仓库
+在 WSL 中开发时，请使用 WSL 内的 Linux-native Node.js 与 npm，不要使用挂载在 `/mnt/` 下的 Windows 可执行文件。
+
+### 1. 克隆仓库
 
 ```bash
 git clone https://github.com/servforce/psop.git
 cd psop
 ```
 
-### 准备配置
+### 2. 准备配置
 
 ```bash
 cp .env.example .env
 ```
 
-根据本地环境编辑 `.env`，配置数据库、GitLab、对象存储与大模型接口。
+编辑 `.env`，至少按本地环境配置 PostgreSQL、GitLab、对象存储和大模型接口。示例文件包含占位凭据，请勿将真实密钥提交到仓库。
 
-### 安装后端依赖
+### 3. 安装依赖
 
 ```bash
 cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
-cd ..
-```
-
-### 安装前端依赖
-
-```bash
-cd static
+cd ../static
 npm ci
 npm run build:css
 cd ..
 ```
 
-### 启动本地联调
+### 4. 启动本地环境
 
 ```bash
-scripts/dev/start.sh
+bash scripts/dev/start.sh
 ```
 
-该脚本会分别启动 FastAPI API、数据库任务 worker（`runtime-interactive`、
-`build-test`、`material` 三个隔离 pool）和静态 Web。API 默认不再内嵌 worker；
-需要单独调试后台任务时可运行 `scripts/dev/run-worker.sh`。
+该脚本会启动 FastAPI API、三个隔离的数据库任务 worker pool（`runtime-interactive`、`build-test`、`material`）和静态 Web IDE。API 默认不内嵌 worker。
 
-后台启动并把日志写入项目根目录 `logs/`：
+| 服务 | 默认地址 |
+| --- | --- |
+| Web IDE | <http://127.0.0.1:4173> |
+| API | <http://127.0.0.1:8011> |
+| API Base URL | <http://127.0.0.1:8011/api/v1> |
+
+需要在后台运行并将输出写入项目根目录 `logs/` 时：
 
 ```bash
-scripts/dev/start-background.sh
+bash scripts/dev/start-background.sh
 ```
 
-默认情况下，后端运行在 `http://127.0.0.1:8011`，Web IDE 运行在 `http://127.0.0.1:4173`。
+## 配置
 
-## 配置说明
+根目录 [.env.example](.env.example) 是本地联调配置模板。主要配置分组如下：
 
-根目录 `.env.example` 描述了本地联调所需的主要配置。最重要的配置分组包括：
+| 配置分组 | 用途 |
+| --- | --- |
+| `PSOP_DATABASE_*` / `PSOP_DATABASE_URL` | PostgreSQL 连接与启动检查。 |
+| `PSOP_GITLAB_*` | Skill 源码仓库、分支与 API 访问。 |
+| `PSOP_OBJECT_STORE_*` | Skill 素材、终端附件与运行产物存储。 |
+| `PSOP_LLM_TEXT_*` / `PSOP_LLM_MULTIMODAL_*` | 文本和多模态模型路由。 |
+| `PSOP_ASR_*` / `PSOP_VIDEO_*` / `PSOP_RAW_MATERIAL_*` | 视频与原始素材分析。 |
+| `PSOP_STANDARD_LIGHTRAG_*` | 行业标准检索。 |
+| `PSOP_RUNTIME_WORKER_*` / `PSOP_RUNTIME_JOB_*` | worker 并发、lease、重试与恢复。 |
+| `PSOP_TERMINAL_EVENT_*` | 终端多模态事件与上传限制。 |
+| `PSOP_AGENT_HARNESS_*` | Agent Harness profile、workspace 与 MCP。 |
+| `PSOP_OTEL_*` | traces、logs、metrics 与 OTLP exporter。 |
+| `PSOP_SERVER_*` / `PSOP_WEB_*` | 本地服务监听地址和端口。 |
 
-- `PSOP_DATABASE_*` 或 `PSOP_DATABASE_URL`
-- `PSOP_GITLAB_*`
-- `PSOP_OBJECT_STORE_*`
-- `PSOP_TERMINAL_EVENT_*` 与 `PSOP_TERMINAL_OBJECT_STORE_IO_WORKERS`
-- `PSOP_RAW_MATERIAL_*`
-- `PSOP_VIDEO_*`
-- `PSOP_LLM_*`
-- `PSOP_ASR_*`
-- `PSOP_OTEL_*`
-- `PSOP_SERVER_*`
-- `PSOP_WEB_*`
-- `PSOP_RUNTIME_WORKER_*`、`PSOP_RUNTIME_JOB_*` 与 `PSOP_RUNTIME_EVENT_*`
+开发脚本依次读取根目录 `.env` 与 `backend/.env`，后者中的同名变量会覆盖前者。
 
-开发脚本会读取根目录 `.env` 与 `backend/.env`，并为缺失的 host、port 等本地联调参数补齐默认值。
+## 开发与测试
 
-LLM Inference Gateway 只暴露两类能力路由：`text` 与 `multimodal`。旧的 `PSOP_LLM_DEFAULT_MODEL`、`PSOP_LLM_SKILL_CREATION_*`、`PSOP_LLM_VISION_MODEL` 已废弃；请改用 `PSOP_LLM_TEXT_*` 与 `PSOP_LLM_MULTIMODAL_*`。
+常用命令均从仓库根目录执行：
 
-## 开发命令
+| 命令 | 用途 |
+| --- | --- |
+| `bash scripts/dev/start.sh` | 前台启动 API、worker 和 Web IDE。 |
+| `bash scripts/dev/start-background.sh` | 后台启动完整本地环境。 |
+| `bash scripts/dev/run-server.sh` | 仅启动 FastAPI API。 |
+| `bash scripts/dev/run-worker.sh` | 仅启动数据库任务 worker。 |
+| `bash scripts/dev/run-web.sh` | 仅启动静态 Web IDE。 |
+| `bash scripts/dev/build-web.sh` | 重新生成前端 CSS。 |
+| `bash scripts/dev/test-server.sh` | 运行后端 pytest 测试。 |
+| `bash scripts/dev/test-web.sh` | 运行前端 Jest 测试。 |
 
-常用根目录脚本：
+提交前至少运行：
 
 ```bash
-scripts/dev/run-server.sh
-scripts/dev/run-web.sh
-scripts/dev/build-web.sh
-scripts/dev/test-server.sh
-scripts/dev/test-web.sh
+bash scripts/dev/test-server.sh
+bash scripts/dev/test-web.sh
 ```
 
-也可以直接运行：
+如果修改了前端样式，再运行：
 
 ```bash
-PYTHONPATH=backend backend/.venv/bin/python -m pytest -q
-cd static && npm test -- --runInBand
-cd static && npm run build:css
+bash scripts/dev/build-web.sh
 ```
 
-## 测试
+后端和前端的独立开发说明分别见 [backend/README.md](backend/README.md) 与 [static/README.md](static/README.md)。
 
-运行后端与前端测试：
+## 项目结构
 
-```bash
-scripts/dev/test-server.sh
-scripts/dev/test-web.sh
-```
-
-提交前如果修改了前端样式，请重新生成编译后的 CSS：
-
-```bash
-scripts/dev/build-web.sh
+```text
+backend/      FastAPI API、领域服务、Runtime、worker、Gateway 与 Agent Harness
+static/       基于 Alpine.js 和 Tailwind CSS 的静态 Web IDE
+skills/       PSOP Builder、Compiler 与 Runner 使用的 Agent Skills
+tests/        后端、Runtime、API、任务、可观测性与对象存储测试
+docs/         产品愿景、系统架构、形式定义、接入指南与工程文档
+scripts/dev/  本地启动、构建和测试脚本
 ```
 
 ## 文档
 
-项目主文档按以下顺序阅读：
+建议按以下顺序阅读：
 
-- [项目愿景](docs/overview/vision.md)
-- [系统架构设计](docs/architecture/system-architecture.md)
-- [Execution Graph 形式定义](docs/architecture/execution-graph-formal-v5.md)
-- [Agent 协作规则](docs/engineering/agent-rules.md)
+1. [项目愿景](docs/overview/vision.md)：产品定位、系统公理、阶段目标与术语。
+2. [系统架构设计](docs/architecture/system-architecture.md)：当前实现边界、模块、数据模型与演进路线。
+3. [Execution Graph 形式定义](docs/architecture/execution-graph-formal-v5.md)：PSOP-EG、Session Token 与运行语义。
+4. [终端接入指南](docs/guides/terminal-integration-v1.md)：创建运行、收发事件、订阅、恢复与错误处理。
+5. [工程协作规则](docs/engineering/agent-rules.md)：代码边界、文档事实源与 review 约定。
 
-参考资料位于 [docs/reference](docs/reference/)。
+所有文档的分类、优先级与维护规则见 [docs/README.md](docs/README.md)。`docs/reference/` 仅作为背景资料，不替代当前实现或正式设计基线。
 
-## 贡献
+## 路线图
 
-当前仓库主要通过 feature branch 开发。实现变更需要与 `docs/overview/vision.md`、`docs/architecture/system-architecture.md` 和 `docs/architecture/execution-graph-formal-v5.md` 保持一致；如果行为发生变化，应先更新或同步更新对应设计文档，再推进代码实现。
+- **Milestone 1 — Build / Compile / Test**：从原始素材生成 Skill draft，编译 PSOP-EG，并通过 runner 执行正例、反例和边界测试。
+- **Milestone 2 — Audit / Eval**：基于真实 Run 与测试事实进行质量归因，生成结构化改进提案。
+- **Milestone 3 — Production Governance**：强化工具、MCP、sandbox、审批、长期记忆与发布门禁。
 
-本地验证优先使用：
+详细范围与成功标准见[产品里程碑](docs/overview/vision.md#10-产品里程碑)。
 
-```bash
-PYTHONPATH=backend backend/.venv/bin/python -m pytest -q
-cd static && npm test -- --runInBand
-cd static && npm run build:css
-```
+## 贡献与反馈
+
+欢迎通过 [GitHub Issues](https://github.com/servforce/psop/issues) 报告问题或提出建议。
+
+提交代码前请：
+
+1. 从独立 feature branch 开始开发。
+2. 确认实现与项目愿景、系统架构和 formal-v5 定义一致。
+3. 如果行为或架构发生变化，同步更新对应设计文档。
+4. 运行与变更相关的后端、前端和构建验证。
 
 ## 许可证
 
