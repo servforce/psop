@@ -6,6 +6,7 @@
 
 - [比赛简介](competition-overview.md)
 - [PSOP 参赛指引与任务看板](participation-board.md)
+- [PSOP 初赛作品介绍](project-introduction.md)
 
 建议归档内容包括：
 
