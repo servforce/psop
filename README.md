@@ -14,9 +14,6 @@
 
 </div>
 
-> [!NOTE]
-> PSOP 当前处于 MVP 阶段。仓库已形成 `Skills -> Publish -> Auto Compile -> Invocation -> Runtime -> Replay / Observability` 主链路，完整的 `Build -> Compile -> Test -> Run -> Audit -> Eval -> Improve` 闭环仍在按里程碑推进。
-
 ## PSOP 是什么
 
 `PSOP` 是 `Physical Standard Operating Procedure` 的缩写，表示“现实物理世界的标准操作规程”。
