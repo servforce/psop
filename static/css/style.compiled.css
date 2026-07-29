@@ -2561,16 +2561,6 @@
       }
     }
   }
-  .hover\:border-orange-400\/50 {
-    &:hover {
-      @media (hover: hover) {
-        border-color: color-mix(in srgb, oklch(75% 0.183 55.934) 50%, transparent);
-        @supports (color: color-mix(in lab, red, red)) {
-          border-color: color-mix(in oklab, var(--color-orange-400) 50%, transparent);
-        }
-      }
-    }
-  }
   .hover\:border-orange-500\/40 {
     &:hover {
       @media (hover: hover) {
@@ -2588,20 +2578,17 @@
       }
     }
   }
+  .hover\:border-slate-500 {
+    &:hover {
+      @media (hover: hover) {
+        border-color: var(--color-slate-500);
+      }
+    }
+  }
   .hover\:bg-orange-400 {
     &:hover {
       @media (hover: hover) {
         background-color: var(--color-orange-400);
-      }
-    }
-  }
-  .hover\:bg-orange-500\/15 {
-    &:hover {
-      @media (hover: hover) {
-        background-color: color-mix(in srgb, oklch(70.5% 0.213 47.604) 15%, transparent);
-        @supports (color: color-mix(in lab, red, red)) {
-          background-color: color-mix(in oklab, var(--color-orange-500) 15%, transparent);
-        }
       }
     }
   }

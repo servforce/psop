@@ -10,6 +10,16 @@ const guardedFragments = [
   ["agent-prompt-detail.html", '<template x-if="agentPromptDetail">']
 ];
 
+test("app shell uses the local PSOP brand icon", () => {
+  const indexHtml = fs.readFileSync(path.join(__dirname, "../../../index.html"), "utf8");
+  const iconPath = path.join(__dirname, "../../../img/psop-icon.png");
+
+  expect(indexHtml).toContain('<link rel="icon" type="image/png" href="/img/psop-icon.png" />');
+  expect(indexHtml).toContain('<img src="/img/psop-icon.png" alt="PSOP"');
+  expect(indexHtml).not.toContain('>hub</span>');
+  expect(fs.existsSync(iconPath)).toBe(true);
+});
+
 test("data-dependent page fragments are not instantiated before their data exists", () => {
   for (const [fileName, guard] of guardedFragments) {
     const html = fs.readFileSync(path.join(__dirname, "../../../pages", fileName), "utf8");

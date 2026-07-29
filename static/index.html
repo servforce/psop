@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PSOP Arena</title>
+    <link rel="icon" type="image/png" href="/img/psop-icon.png" />
     <link rel="stylesheet" href="/css/material-symbols.css" />
     <link rel="stylesheet" href="/node_modules/bpmn-js/dist/assets/diagram-js.css" />
     <link rel="stylesheet" href="/node_modules/bpmn-js/dist/assets/bpmn-js.css" />
@@ -35,12 +36,12 @@
               <div class="flex h-full min-w-0 items-center gap-3" :class="sidebarCollapsed ? 'justify-center' : ''">
                 <button
                   type="button"
-                  class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-orange-500/30 bg-orange-500/10 text-orange-200 transition hover:border-orange-400/50 hover:bg-orange-500/15 hover:text-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500/30"
+                  class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-700 bg-black transition hover:border-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/30"
                   :title="sidebarCollapsed ? '展开菜单' : '收起菜单'"
                   :aria-label="sidebarCollapsed ? '展开菜单' : '收起菜单'"
                   @click="toggleSidebar()"
                 >
-                  <span class="material-symbols-outlined text-[20px]">hub</span>
+                  <img src="/img/psop-icon.png" alt="PSOP" width="36" height="36" class="h-full w-full object-cover" draggable="false" />
                 </button>
                 <p class="truncate text-sm font-semibold text-slate-100" x-show="!sidebarCollapsed" x-transition.opacity>
                   PSOP Arena
