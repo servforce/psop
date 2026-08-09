@@ -1,0 +1,42 @@
+# Normalize text files across Windows and Linux checkouts.
+* text=auto eol=lf
+
+# Trailing spaces can be meaningful in Markdown and are common in generated SVGs.
+*.md whitespace=-trailing-space
+*.svg whitespace=-trailing-space
+
+# Windows command scripts require CRLF for reliable cmd.exe execution.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Documents and archives.
+*.pdf binary
+*.ppt binary
+*.pptx binary
+*.doc binary
+*.docx binary
+*.xls binary
+*.xlsx binary
+*.zip binary
+*.gz binary
+*.tar binary
+
+# Images, audio, and video.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.mp3 binary
+*.wav binary
+*.mp4 binary
+*.mov binary
+*.webm binary
+
+# Fonts.
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.eot binary
