@@ -28,11 +28,7 @@
           <input x-model="deleteForm.confirmation_name" class="input-field" :placeholder="deleteTargetSkill.name" required />
         </label>
 
-        <div class="flex justify-end gap-2 pt-1">
-          <button type="button" class="button-secondary" title="取消" aria-label="取消" :disabled="busy.delete" @click="closeDeleteModal()">
-            <span class="material-symbols-outlined text-[18px]">close</span>
-            <span>取消</span>
-          </button>
+        <div class="flex justify-end pt-1">
           <button type="submit" class="button-danger" title="确认删除并归档" aria-label="确认删除并归档" data-confirm-disabled="true" :disabled="busy.delete || !isDeleteConfirmationValid()">
             <span class="material-symbols-outlined text-[18px]">archive</span>
             <span x-text="busy.delete ? '删除中...' : '确认删除并归档'"></span>
