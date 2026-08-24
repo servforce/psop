@@ -133,3 +133,15 @@ test("create modal owns its submit error message markup", () => {
   expect(html).toContain('x-if="createFormError"');
   expect(html).toContain('x-text="createFormError"');
 });
+
+test("create modal marks fields as required and limits the description to 500 characters", () => {
+  const html = fs.readFileSync(createModalPath, "utf8");
+
+  expect(html.match(/aria-label="必填">\*<\/span>/g)).toHaveLength(2);
+  expect(html).toMatch(/<input[^>]*x-model="createForm\.name"[^>]*required/);
+  expect(html).toMatch(/<textarea[^>]*x-model="createForm\.description"[^>]*maxlength="500"[^>]*required/);
+  expect(html).toContain(`@invalid="$el.setCustomValidity('请输入 skill 名称。')"`);
+  expect(html).toContain(`@invalid="$el.setCustomValidity('请输出 skill 描述。')"`);
+  expect(html.match(/@input="\$el\.setCustomValidity\(''\)"/g)).toHaveLength(2);
+  expect(html).toContain(`x-text="(createForm.description || '').length + ' / 500'"`);
+});
