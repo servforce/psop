@@ -66,7 +66,6 @@ class _FakeProject:
     skill_md_content: str
     skill_yaml_content: str
     files: dict[str, str | bytes] = field(default_factory=dict)
-    archived: bool = False
 
 
 class FakeGitLabGateway:
@@ -75,6 +74,7 @@ class FakeGitLabGateway:
         self.project_counter = 0
         self.commit_counter = 0
         self.commit_repository_files_calls: list[dict] = []
+        self.deleted_project_ids: set[str] = set()
         self.fail_get_skill_source = False
 
     def _next_project_id(self) -> str:
@@ -276,8 +276,9 @@ class FakeGitLabGateway:
     def update_project_name(self, project_id: str, name: str) -> None:
         self.projects[project_id].name = name
 
-    def archive_project(self, project_id: str) -> None:
-        self.projects[project_id].archived = True
+    def delete_project(self, project_id: str) -> None:
+        self.deleted_project_ids.add(project_id)
+        del self.projects[project_id]
 
 
 class FakeInferenceGateway:
@@ -1665,6 +1666,68 @@ def test_server_generated_skill_key_respects_length_limit() -> None:
     generated_key = response.json()["key"]
     assert len(generated_key) == 120
     assert re.fullmatch(r"a{107}-[0-9a-f]{12}", generated_key)
+
+
+def test_rename_skill_rejects_duplicate_active_name_before_gitlab_write() -> None:
+    client, fake_gateway, _ = create_test_client()
+
+    with client:
+        existing = client.post(
+            "/api/v1/skills",
+            json={"name": "Equipment Diagnosis", "description": "Existing Skill."},
+        ).json()
+        rename_target = client.post(
+            "/api/v1/skills",
+            json={"name": "Rename Target", "description": "Rename this Skill."},
+        ).json()
+        original_head = fake_gateway.projects[rename_target["gitlab_project_id"]].head_commit_sha
+        response = client.patch(
+            f"/api/v1/skills/{rename_target['id']}",
+            json={"name": "  equipment diagnosis  "},
+        )
+        detail_response = client.get(f"/api/v1/skills/{rename_target['id']}")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "skill_conflict",
+        "message": "Skill 名称“equipment diagnosis”已存在，请使用其他名称。",
+        "details": {
+            "field": "name",
+            "conflicting_skill_id": existing["id"],
+            "conflicting_skill_name": existing["name"],
+        },
+    }
+    assert detail_response.json()["name"] == "Rename Target"
+    assert fake_gateway.projects[rename_target["gitlab_project_id"]].name == "Rename Target"
+    assert fake_gateway.projects[rename_target["gitlab_project_id"]].head_commit_sha == original_head
+
+
+def test_rename_skill_allows_name_used_only_by_archived_skill() -> None:
+    client, fake_gateway, _ = create_test_client()
+
+    with client:
+        archived = client.post(
+            "/api/v1/skills",
+            json={"name": "Reusable Name", "description": "Archive this Skill."},
+        ).json()
+        delete_response = client.request(
+            "DELETE",
+            f"/api/v1/skills/{archived['id']}",
+            json={"confirmation_name": archived["name"]},
+        )
+        rename_target = client.post(
+            "/api/v1/skills",
+            json={"name": "Rename Target", "description": "Rename this Skill."},
+        ).json()
+        response = client.patch(
+            f"/api/v1/skills/{rename_target['id']}",
+            json={"name": "Reusable Name"},
+        )
+
+    assert delete_response.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["name"] == "Reusable Name"
+    assert fake_gateway.projects[rename_target["gitlab_project_id"]].name == "Reusable Name"
 
 
 def test_list_skills_filters_by_published_state() -> None:
@@ -4158,7 +4221,7 @@ def test_skill_test_scenario_rejects_duplicate_open_run() -> None:
     assert duplicate_response.json()["details"]["scenario_run_id"] == start_response.json()["id"]
 
 
-def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -> None:
+def test_delete_skill_requires_name_confirmation_and_deletes_gitlab_project() -> None:
     client, fake_gateway, _ = create_test_client()
 
     with client:
@@ -4190,7 +4253,8 @@ def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -
     assert delete_response.status_code == 200
     delete_payload = delete_response.json()
     assert delete_payload["status"] == "archived"
-    assert fake_gateway.projects[created["gitlab_project_id"]].archived is True
+    assert created["gitlab_project_id"] in fake_gateway.deleted_project_ids
+    assert created["gitlab_project_id"] not in fake_gateway.projects
 
     assert all(skill["id"] != skill_id for skill in list_response.json()["items"])
     assert any(skill["id"] == skill_id for skill in archived_response.json()["items"])
@@ -4237,6 +4301,7 @@ def test_archived_skill_name_can_be_recreated_with_a_new_server_key(monkeypatch)
     assert second["key"] == "skill-bbbbbbbbbbbb"
     assert first["id"] != second["id"]
     assert first["gitlab_project_id"] != second["gitlab_project_id"]
-    assert fake_gateway.projects[first["gitlab_project_id"]].archived is True
+    assert first["gitlab_project_id"] in fake_gateway.deleted_project_ids
+    assert first["gitlab_project_id"] not in fake_gateway.projects
     assert any(skill["id"] == first["id"] for skill in archived_response.json()["items"])
     assert [skill["id"] for skill in active_response.json()["items"]] == [second["id"]]

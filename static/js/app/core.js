@@ -360,12 +360,12 @@
       },
 
 
-      async navigate(pathname) {
+      async navigate(pathname, options = {}) {
         if (pathname !== window.location.pathname) {
           window.history.pushState({}, "", pathname);
         }
         this.syncRoute();
-        await this.loadCurrentRoute();
+        await this.loadCurrentRoute(options);
       },
 
 
@@ -433,7 +433,7 @@
       },
 
 
-      async loadCurrentRoute() {
+      async loadCurrentRoute(options = {}) {
         this.loadingPage = true;
         this.clearNotice();
         if (!["run-live", "skill-run-live", "skill-debug-live"].includes(this.route.name)) {
@@ -474,7 +474,7 @@
           }
 
           if (this.route.name === "skill-detail") {
-            await this.loadSkillDetail(this.route.params.skillId);
+            await this.loadSkillDetail(this.route.params.skillId, { initialDetail: options.skillDetail });
             return;
           }
 

@@ -25,6 +25,7 @@ from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
 from app.domain.skills.exceptions import (
+    SkillConflictError,
     SkillsError,
     SkillsGatewayError,
     SkillNotFoundError,
@@ -282,6 +283,22 @@ class SkillsService:
         if payload.name is None and payload.description is None:
             return self.get_skill_detail(session, skill_id)
 
+        if payload.name is not None:
+            conflicting_definition = self.repository.get_active_skill_definition_by_name(
+                session,
+                name=payload.name,
+                exclude_skill_definition_id=definition.id,
+            )
+            if conflicting_definition is not None:
+                raise SkillConflictError(
+                    f'Skill 名称“{payload.name.strip()}”已存在，请使用其他名称。',
+                    details={
+                        "field": "name",
+                        "conflicting_skill_id": conflicting_definition.id,
+                        "conflicting_skill_name": conflicting_definition.name,
+                    },
+                )
+
         source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, definition.default_branch)
         document = self._document_from_version_snapshot(draft_version, source_bundle.skill_yaml_content)
 
@@ -334,7 +351,7 @@ class SkillsService:
             )
 
         if definition.status != "archived":
-            self.gitlab_gateway.archive_project(definition.gitlab_project_id)
+            self.gitlab_gateway.delete_project(definition.gitlab_project_id)
             definition.status = "archived"
             session.commit()
             session.refresh(definition)

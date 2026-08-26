@@ -95,6 +95,22 @@ class SkillsRepository:
     def get_skill_definition_by_key(self, session: Session, key: str) -> SkillDefinition | None:
         return session.scalar(select(SkillDefinition).where(SkillDefinition.key == key))
 
+    def get_active_skill_definition_by_name(
+        self,
+        session: Session,
+        *,
+        name: str,
+        exclude_skill_definition_id: str,
+    ) -> SkillDefinition | None:
+        normalized_name = name.strip().lower()
+        return session.scalar(
+            select(SkillDefinition).where(
+                SkillDefinition.id != exclude_skill_definition_id,
+                SkillDefinition.status != "archived",
+                func.lower(func.trim(SkillDefinition.name)) == normalized_name,
+            )
+        )
+
     def get_skill_version(self, session: Session, version_id: str | None) -> SkillVersion | None:
         if not version_id:
             return None

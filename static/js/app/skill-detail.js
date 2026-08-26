@@ -104,7 +104,7 @@
           });
           this.createForm = { name: "", description: "" };
           this.createModalOpen = false;
-          await this.navigate(buildSkillDetailPath(created.id));
+          await this.navigate(buildSkillDetailPath(created.id), { skillDetail: created });
           this.showNotice("success", "Skill 已创建，并已在 GitLab 中初始化。");
         } catch (error) {
           this.createFormError = error.message || "创建 Skill 失败。";
@@ -138,7 +138,7 @@
             await this.loadSkills();
           }
 
-          this.showCenterToast("success", "Skill 已归档；现在可以使用相同名称创建新的 Skill。");
+          this.showCenterToast("success", "Skill 已删除；GitLab 项目已进入删除流程。");
         } catch (error) {
           this.showCenterToast("error", error.message || "删除 Skill 失败。");
         } finally {
@@ -150,7 +150,9 @@
       async loadSkillDetail(skillId, options = {}) {
         this.busy.detail = true;
         try {
-          const detail = await this.apiRequest(`/skills/${skillId}`);
+          const detail = options.initialDetail?.id === skillId
+            ? options.initialDetail
+            : await this.apiRequest(`/skills/${skillId}`);
 
           this.currentSkill = detail;
           this.metadataForm = {

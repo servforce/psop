@@ -7,7 +7,7 @@
         </span>
         <div class="min-w-0 flex-1">
           <h2 class="text-base font-semibold text-slate-100">删除 Skill</h2>
-          <p class="mt-1 text-sm leading-6 text-slate-400">该 Skill 会被标记为已归档，对应 GitLab 仓库项目也会同步归档；之后仍可使用相同名称创建新的 Skill。</p>
+          <p class="mt-1 text-sm leading-6 text-slate-400">该 Skill 会被标记为已归档，对应 GitLab 仓库项目会被删除；之后仍可使用相同名称创建新的 Skill。</p>
         </div>
         <button type="button" class="icon-button -mr-2 -mt-1" title="关闭" aria-label="关闭" :disabled="busy.delete" @click="closeDeleteModal()">
           <span class="material-symbols-outlined text-[18px]">close</span>
@@ -29,9 +29,9 @@
         </label>
 
         <div class="flex justify-end pt-1">
-          <button type="submit" class="button-danger" title="确认删除并归档" aria-label="确认删除并归档" data-confirm-disabled="true" :disabled="busy.delete || !isDeleteConfirmationValid()">
-            <span class="material-symbols-outlined text-[18px]">archive</span>
-            <span x-text="busy.delete ? '删除中...' : '确认删除并归档'"></span>
+          <button type="submit" class="button-danger" title="确认删除" aria-label="确认删除" data-confirm-disabled="true" :disabled="busy.delete || !isDeleteConfirmationValid()">
+            <span class="material-symbols-outlined text-[18px]">delete</span>
+            <span x-text="busy.delete ? '删除中...' : '确认删除'"></span>
           </button>
         </div>
       </form>

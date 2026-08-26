@@ -113,6 +113,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         close_object_store = getattr(app.state.object_store, "close", None)
         if callable(close_object_store):
             close_object_store()
+        close_gitlab_gateway = getattr(app.state.gitlab_gateway, "close", None)
+        if callable(close_gitlab_gateway):
+            close_gitlab_gateway()
         db_manager.dispose()
         observability.shutdown()
         LOGGER.info("stopping %s", settings.app_name)
