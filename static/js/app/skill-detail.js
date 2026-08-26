@@ -315,14 +315,14 @@
       },
 
 
-      async openRawMaterialDetail(material) {
+      async openRawMaterialDetail(material, options = {}) {
         if (!this.currentSkill || !material?.id) {
           return;
         }
 
         this.busy.rawMaterialDetail = true;
         try {
-          this.rawMaterialDetailTab = "analysis";
+          this.rawMaterialDetailTab = options.initialTab === "preview" ? "preview" : "analysis";
           this.rawMaterialDetail = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`);
           await this.loadRawMaterialAnalysis(this.rawMaterialDetail.id);
         } finally {
@@ -572,7 +572,7 @@
           }
           const lastCreated = createdMaterials[createdMaterials.length - 1];
           if (lastCreated) {
-            await this.openRawMaterialDetail(lastCreated);
+            await this.openRawMaterialDetail(lastCreated, { initialTab: "preview" });
           }
           const noticeType = createdMaterials.some((material) => material.status === "failed") ? "error" : "success";
           this.showNotice(noticeType, this.rawMaterialUploadSuccessMessage(createdMaterials));

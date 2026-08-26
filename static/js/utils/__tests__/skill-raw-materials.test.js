@@ -1,10 +1,21 @@
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");
 
 const skillDetailPath = path.join(__dirname, "../../../pages/skill-detail.html");
 const appPath = path.join(__dirname, "../../app.js");
 const skillDetailAppPath = path.join(__dirname, "../../app/skill-detail.js");
 const formattersPath = path.join(__dirname, "../../app/formatters.js");
+
+function loadSkillDetailMethods() {
+  const context = {
+    window: {
+      PSOPConsoleHelpers: {}
+    }
+  };
+  vm.runInNewContext(fs.readFileSync(skillDetailAppPath, "utf8"), context);
+  return context.window.PSOPConsoleSkillDetailMethods;
+}
 
 test("skill detail exposes raw materials tab and generation workflow", () => {
   const html = fs.readFileSync(skillDetailPath, "utf8");
@@ -144,6 +155,7 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(skillDetailJs).toContain("closeRawMaterialImagePreview()");
   expect(skillDetailJs).toContain("selectRawMaterialDetailTab(tabName)");
   expect(skillDetailJs).toContain('["analysis", "preview"].includes(tabName)');
+  expect(skillDetailJs).toContain('openRawMaterialDetail(lastCreated, { initialTab: "preview" })');
   expect(skillDetailJs).toContain("rawMaterialDetail = await this.apiRequest");
   expect(skillDetailJs).not.toContain("material_ids:");
   expect(skillDetailJs).toContain("user_description: userDescription");
@@ -165,4 +177,21 @@ test("skill detail exposes raw materials tab and generation workflow", () => {
   expect(skillDetailJs).toContain("this.sourceLoadedSkillId = null");
   expect(skillDetailJs).toContain("this.repositoryLoadedSkillId = null");
   expect(formattersJs).toContain("formatBytes(value)");
+});
+
+test("uploaded materials can open on preview without changing the normal detail default", async () => {
+  const methods = loadSkillDetailMethods();
+  const app = {
+    currentSkill: { id: "skill-id" },
+    busy: { rawMaterialDetail: false },
+    rawMaterialDetailTab: "preview",
+    apiRequest: jest.fn(async () => ({ id: "material-id" })),
+    loadRawMaterialAnalysis: jest.fn()
+  };
+
+  await methods.openRawMaterialDetail.call(app, { id: "material-id" });
+  expect(app.rawMaterialDetailTab).toBe("analysis");
+
+  await methods.openRawMaterialDetail.call(app, { id: "material-id" }, { initialTab: "preview" });
+  expect(app.rawMaterialDetailTab).toBe("preview");
 });
