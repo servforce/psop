@@ -40,7 +40,7 @@ from app.domain.skills import video_analysis
 from app.domain.skills import service as skills_service_module
 from app.domain.skills.models import SkillDefinition, SkillRawMaterial, SkillRawMaterialAnalysis, SkillRawMaterialGeneration
 from app.domain.skill_tests.models import SkillTestExpectationEvaluation
-from app.domain.skill_tests.service import SkillTestService
+from app.domain.skill_tests.service import PreparedExpectationJudge, SkillTestService
 from app.domain.skills.exceptions import (
     PayloadTooLargeError,
     SkillsGatewayError,
@@ -3987,6 +3987,76 @@ def test_skill_test_judge_prompt_compacts_large_outputs() -> None:
     assert len(prompt_json) < 10000
     assert old_payload not in prompt_json
     assert recent_payload not in prompt_json
+
+
+def test_skill_test_judge_retries_invalid_json_response_once() -> None:
+    invalid_content = (
+        '{"status":"passed","confidence":0.93,"reason":"seq_no 19 输出"已确认安装完成"。",'
+        '"evidence_refs":[{"seq_no":19}]}'
+    )
+    valid_content = json.dumps(
+        {
+            "status": "passed",
+            "confidence": 0.93,
+            "reason": 'seq_no 19 输出"已确认安装完成"。',
+            "evidence_refs": [{"seq_no": 19}],
+            "missing_evidence": [],
+        },
+        ensure_ascii=False,
+    )
+
+    class QueuedJudgeGateway:
+        def __init__(self) -> None:
+            self.contents = [invalid_content, valid_content]
+            self.calls: list[dict[str, str]] = []
+
+        def complete(self, *, system_prompt: str, user_prompt: str, route_key: str = "text") -> LlmCompletion:
+            self.calls.append(
+                {"system_prompt": system_prompt, "user_prompt": user_prompt, "route_key": route_key}
+            )
+            content = self.contents.pop(0)
+            return LlmCompletion(
+                content=content,
+                provider="fake-openai-compatible",
+                model="fake-model",
+                raw_response={"id": f"fake-response-{len(self.calls)}"},
+                usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            )
+
+    gateway = QueuedJudgeGateway()
+    service = object.__new__(SkillTestService)
+    service.inference_gateway = gateway
+    prepared = PreparedExpectationJudge(
+        scenario_run_id="scenario-run-1",
+        expectation_id="expectation-1",
+        route_key="text",
+        system_prompt="只输出合法 JSON。",
+        user_prompt='{"expectation":"确认安装完成"}',
+        prompt_hash="hash",
+        request_snapshot={
+            "route_key": "text",
+            "prompt_payload": {"expectation": "确认安装完成"},
+        },
+    )
+
+    result = service._invoke_expectation_judge(prepared)
+
+    assert result.status == "passed"
+    assert result.judge_model == "fake-model"
+    assert len(gateway.calls) == 2
+    assert "JSON 字符串内部的双引号必须转义" in gateway.calls[1]["system_prompt"]
+    retry_payload = json.loads(gateway.calls[1]["user_prompt"])
+    assert retry_payload["previous_invalid_response"] == invalid_content
+    assert retry_payload["validation_error"].startswith("JSONDecodeError:")
+    assert result.raw_response["content"] == valid_content
+    assert result.raw_response["usage"] == {
+        "llm_calls": 2,
+        "input_tokens": 20,
+        "output_tokens": 10,
+        "total_tokens": 30,
+    }
+    assert result.raw_response["attempts"][0]["error_type"] == "JSONDecodeError"
+    assert result.raw_response["attempts"][1]["parsed"]["status"] == "passed"
 
 
 def test_skill_test_evidence_refs_are_normalized_for_review_responses() -> None:

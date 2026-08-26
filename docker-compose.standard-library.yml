@@ -1,0 +1,21 @@
+services:
+  standard-library-postgres:
+    image: postgres:16
+    container_name: octopus-standard-library-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: octopus_standard_library
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - octopus_standard_library_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d octopus_standard_library"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  octopus_standard_library_pgdata:

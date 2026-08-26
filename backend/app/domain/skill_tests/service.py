@@ -52,7 +52,7 @@ from app.domain.skill_tests.schemas import (
 )
 from app.domain.skills.exceptions import SkillConflictError, SkillNotFoundError, SkillValidationError
 from app.domain.skills.models import SkillDefinition, now_utc
-from app.gateway.inference import LlmInferenceGateway, TEXT_ROUTE_KEY
+from app.gateway.inference import LlmCompletion, LlmInferenceGateway, TEXT_ROUTE_KEY
 from app.infra.object_store import ObjectStoreService
 
 
@@ -67,6 +67,12 @@ FINALIZER_RUNTIME_POLL_SECONDS = 5
 DEFAULT_JUDGE_TRANSCRIPT_BUDGET_CHARS = 60_000
 DEFAULT_JUDGE_EVENT_BUDGET_CHARS = 8_000
 DEFAULT_JUDGE_FINAL_OUTPUT_BUDGET_CHARS = 8_000
+JUDGE_RESPONSE_MAX_ATTEMPTS = 2
+JUDGE_RESPONSE_FORMAT_INSTRUCTION = "不要输出 Markdown 代码块；JSON 字符串内部的双引号必须转义。"
+JUDGE_RETRY_SYSTEM_INSTRUCTION = (
+    "上一次响应未通过 JSON 校验。请重新完成判断，只输出一个合法 JSON 对象；"
+    f"{JUDGE_RESPONSE_FORMAT_INSTRUCTION}"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +102,12 @@ class ExpectationJudgeResult:
     judge_provider: str
     judge_model: str
     raw_response: dict[str, Any]
+
+
+class JudgeResponseValidationError(ValueError):
+    def __init__(self, message: str, *, attempts: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.attempts = attempts
 
 
 DEFAULT_TIMELINE_LANES = [
@@ -1116,6 +1128,8 @@ class SkillTestService:
             policy=policy,
         )
         system_prompt = prompt_pack.system_prompt
+        if JUDGE_RESPONSE_FORMAT_INSTRUCTION not in system_prompt:
+            system_prompt = f"{system_prompt}\n\n{JUDGE_RESPONSE_FORMAT_INSTRUCTION}"
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True)
         prompt_hash = hashlib.sha256(f"{system_prompt}\n{user_prompt}".encode("utf-8")).hexdigest()
         request_snapshot = {
@@ -1136,36 +1150,129 @@ class SkillTestService:
         )
 
     def _invoke_expectation_judge(self, prepared: PreparedExpectationJudge) -> ExpectationJudgeResult:
-        completion = self.inference_gateway.complete(
-            system_prompt=prepared.system_prompt,
-            user_prompt=prepared.user_prompt,
-            route_key=prepared.route_key,
-        )
-        parsed = json.loads(completion.content)
-        parsed_status = str(parsed.get("status") or "").lower()
-        if parsed_status not in {"passed", "failed", "inconclusive"}:
-            raise ValueError("Judge 响应缺少有效 status。")
-        return ExpectationJudgeResult(
-            status=parsed_status,
-            confidence=self._coerce_confidence(parsed.get("confidence")),
-            reason=str(parsed.get("reason") or "Judge 未能给出有效结论。"),
-            evidence_refs=self._normalize_evidence_refs(parsed.get("evidence_refs")),
-            judge_provider=completion.provider,
-            judge_model=completion.model,
-            raw_response={
+        system_prompt = prepared.system_prompt
+        user_prompt = prepared.user_prompt
+        attempts: list[dict[str, Any]] = []
+
+        for attempt_no in range(1, JUDGE_RESPONSE_MAX_ATTEMPTS + 1):
+            completion = self.inference_gateway.complete(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                route_key=prepared.route_key,
+            )
+            try:
+                parsed = self._parse_expectation_judge_content(completion.content)
+            except (TypeError, ValueError) as exc:
+                attempts.append(self._build_judge_attempt_snapshot(attempt_no, completion, error=exc))
+                if attempt_no >= JUDGE_RESPONSE_MAX_ATTEMPTS:
+                    raise JudgeResponseValidationError(
+                        f"Judge 连续 {attempt_no} 次返回非法 JSON：{exc}",
+                        attempts=attempts,
+                    ) from exc
+                system_prompt = f"{prepared.system_prompt}\n\n{JUDGE_RETRY_SYSTEM_INSTRUCTION}"
+                user_prompt = self._build_judge_retry_prompt(prepared, completion.content, exc)
+                continue
+
+            attempts.append(self._build_judge_attempt_snapshot(attempt_no, completion, parsed=parsed))
+            parsed_status = str(parsed["status"]).lower()
+            raw_response = {
                 "request": prepared.request_snapshot,
                 "content": completion.content,
                 "parsed": parsed,
-                "usage": completion.usage,
+                "usage": (
+                    completion.usage
+                    if len(attempts) == 1
+                    else self._aggregate_judge_attempt_usage(attempts)
+                ),
                 "raw": completion.raw_response,
+            }
+            if len(attempts) > 1:
+                raw_response["attempts"] = attempts
+            return ExpectationJudgeResult(
+                status=parsed_status,
+                confidence=self._coerce_confidence(parsed.get("confidence")),
+                reason=str(parsed.get("reason") or "Judge 未能给出有效结论。"),
+                evidence_refs=self._normalize_evidence_refs(parsed.get("evidence_refs")),
+                judge_provider=completion.provider,
+                judge_model=completion.model,
+                raw_response=raw_response,
+            )
+
+        raise RuntimeError("Judge 响应重试流程异常结束。")
+
+    @staticmethod
+    def _parse_expectation_judge_content(content: str) -> dict[str, Any]:
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            raise ValueError("Judge 响应必须是 JSON 对象。")
+        parsed_status = str(parsed.get("status") or "").lower()
+        if parsed_status not in {"passed", "failed", "inconclusive"}:
+            raise ValueError("Judge 响应缺少有效 status。")
+        return parsed
+
+    @staticmethod
+    def _build_judge_retry_prompt(
+        prepared: PreparedExpectationJudge,
+        invalid_content: str,
+        exc: Exception,
+    ) -> str:
+        return json.dumps(
+            {
+                "task": "retry_semantic_judge_response",
+                "original_input": prepared.request_snapshot["prompt_payload"],
+                "previous_invalid_response": invalid_content,
+                "validation_error": f"{exc.__class__.__name__}: {exc}",
             },
+            ensure_ascii=False,
+            sort_keys=True,
         )
+
+    @staticmethod
+    def _build_judge_attempt_snapshot(
+        attempt_no: int,
+        completion: LlmCompletion,
+        *,
+        parsed: dict[str, Any] | None = None,
+        error: Exception | None = None,
+    ) -> dict[str, Any]:
+        snapshot = {
+            "attempt_no": attempt_no,
+            "content": completion.content,
+            "usage": completion.usage,
+            "raw": completion.raw_response,
+        }
+        if parsed is not None:
+            snapshot["parsed"] = parsed
+        if error is not None:
+            snapshot["error"] = str(error)
+            snapshot["error_type"] = error.__class__.__name__
+        return snapshot
+
+    @staticmethod
+    def _aggregate_judge_attempt_usage(attempts: list[dict[str, Any]]) -> dict[str, int]:
+        usage = {"llm_calls": len(attempts), "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        for attempt in attempts:
+            attempt_usage = attempt.get("usage")
+            if not isinstance(attempt_usage, dict):
+                continue
+            for key in ("input_tokens", "output_tokens", "total_tokens"):
+                value = attempt_usage.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    usage[key] += value
+        return usage
 
     @staticmethod
     def _inconclusive_judge_result(
         prepared: PreparedExpectationJudge,
         exc: Exception,
     ) -> ExpectationJudgeResult:
+        raw_response = {
+            "request": prepared.request_snapshot,
+            "error": str(exc),
+            "error_type": exc.__class__.__name__,
+        }
+        if isinstance(exc, JudgeResponseValidationError):
+            raw_response["attempts"] = exc.attempts
         return ExpectationJudgeResult(
             status="inconclusive",
             confidence=0.0,
@@ -1173,11 +1280,7 @@ class SkillTestService:
             evidence_refs=[],
             judge_provider="",
             judge_model="",
-            raw_response={
-                "request": prepared.request_snapshot,
-                "error": str(exc),
-                "error_type": exc.__class__.__name__,
-            },
+            raw_response=raw_response,
         )
 
     @staticmethod
@@ -2330,6 +2433,9 @@ class SkillTestService:
             usage = (evaluation.raw_response or {}).get("usage")
             if not isinstance(usage, dict):
                 continue
+            llm_calls = usage.get("llm_calls", 1)
+            if not isinstance(llm_calls, int) or isinstance(llm_calls, bool) or llm_calls < 1:
+                llm_calls = 1
             token_seen = False
             for key in ("input_tokens", "output_tokens", "total_tokens"):
                 value = usage.get(key)
@@ -2337,6 +2443,6 @@ class SkillTestService:
                     totals[key] += value
                     token_seen = True
             if token_seen:
-                totals["llm_calls"] += 1
+                totals["llm_calls"] += llm_calls
         if totals["llm_calls"] > 0:
             job.metrics = {**(job.metrics or {}), **totals}
