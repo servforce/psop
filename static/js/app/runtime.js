@@ -35,17 +35,49 @@
       },
 
 
-      async loadSkillRuns(skillId, status = this.runtimeFilters.status) {
+      async loadSkillRuns(skillId, status = this.runtimeFilters.status, options = {}) {
         this.busy.skillRuns = true;
         try {
           const params = new URLSearchParams({ skill_id: skillId });
           if (status) {
             params.set("status", status);
           }
-          this.skillRuns = await this.apiRequest(`/runs?${params.toString()}`);
+          if (this.runtimeFilters.created_from) {
+            params.set("created_from", new Date(`${this.runtimeFilters.created_from}T00:00:00`).toISOString());
+          }
+          if (this.runtimeFilters.created_to) {
+            params.set("created_to", new Date(`${this.runtimeFilters.created_to}T23:59:59.999`).toISOString());
+          }
+          params.set("page", String(options.page || this.skillRunPagination.page || 1));
+          params.set("page_size", String(this.skillRunPagination.page_size || 20));
+
+          const response = await this.apiRequest(`/runs?${params.toString()}`);
+          this.skillRuns = response.items || [];
+          this.skillRunPagination = {
+            page: response.page,
+            page_size: response.page_size,
+            total: response.total,
+            total_pages: response.total_pages
+          };
         } finally {
           this.busy.skillRuns = false;
         }
+      },
+
+
+      changeSkillRunPage(page) {
+        const targetPage = Number(page);
+        if (
+          this.busy.skillRuns ||
+          !this.currentSkill?.id ||
+          !Number.isInteger(targetPage) ||
+          targetPage < 1 ||
+          targetPage > this.skillRunPagination.total_pages ||
+          targetPage === this.skillRunPagination.page
+        ) {
+          return;
+        }
+        return this.loadSkillRuns(this.currentSkill.id, this.runtimeFilters.status, { page: targetPage });
       },
 
 
@@ -72,7 +104,7 @@
           });
           this.invocationForm.user_input = "";
           if (this.route.name === "skill-detail" && this.currentSkill?.id) {
-            await this.loadSkillRuns(this.currentSkill.id);
+            await this.loadSkillRuns(this.currentSkill.id, this.runtimeFilters.status, { page: 1 });
           } else {
             await this.loadInvocations();
           }

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.domain.compiler.models import ArtifactObject, EgCompileArtifact
@@ -176,13 +177,45 @@ class RuntimeRepository:
         *,
         status: Sequence[str] | None = None,
         skill_id: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> list[Run]:
-        query = select(Run).order_by(Run.created_at.desc())
+        query = select(Run).order_by(Run.created_at.desc(), Run.id.desc())
         if status:
             query = query.where(Run.status.in_(status))
         if skill_id:
             query = query.where(Run.skill_definition_id == skill_id)
+        if created_from:
+            query = query.where(Run.created_at >= created_from)
+        if created_to:
+            query = query.where(Run.created_at <= created_to)
+        if offset:
+            query = query.offset(offset)
+        if limit:
+            query = query.limit(limit)
         return list(session.scalars(query).all())
+
+    def count_runs(
+        self,
+        session: Session,
+        *,
+        status: Sequence[str] | None = None,
+        skill_id: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+    ) -> int:
+        query = select(func.count()).select_from(Run)
+        if status:
+            query = query.where(Run.status.in_(status))
+        if skill_id:
+            query = query.where(Run.skill_definition_id == skill_id)
+        if created_from:
+            query = query.where(Run.created_at >= created_from)
+        if created_to:
+            query = query.where(Run.created_at <= created_to)
+        return int(session.scalar(query) or 0)
 
     def list_snapshots(self, session: Session, run_id: str) -> list[SessionTokenSnapshot]:
         return list(

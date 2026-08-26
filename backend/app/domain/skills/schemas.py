@@ -50,6 +50,14 @@ class SkillSummaryResponse(BaseModel):
     updated_at: datetime
 
 
+class SkillListResponse(BaseModel):
+    items: list[SkillSummaryResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 class SkillDetailResponse(SkillSummaryResponse):
     current_draft_version: SkillVersionSummaryResponse | None = None
     latest_published_version: SkillVersionSummaryResponse | None = None

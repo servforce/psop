@@ -500,6 +500,12 @@
       deleteTargetSkill: null,
       loadingPage: false,
       skills: [],
+      skillPagination: {
+        page: 1,
+        page_size: 20,
+        total: 0,
+        total_pages: 0
+      },
       currentSkill: null,
       activeDetailTab: "overview",
       sourceLoadedSkillId: null,
@@ -695,6 +701,12 @@
       },
       invocations: [],
       skillRuns: [],
+      skillRunPagination: {
+        page: 1,
+        page_size: 20,
+        total: 0,
+        total_pages: 0
+      },
       replayRuns: [],
       liveRun: null,
       liveRunTaskStatus: null,

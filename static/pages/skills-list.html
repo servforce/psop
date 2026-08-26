@@ -16,18 +16,18 @@
             class="input-field h-10 py-0"
             placeholder="按名称模糊搜索"
             aria-label="按名称模糊搜索"
-            @input.debounce.300ms="loadSkills()"
+            @input.debounce.300ms="loadSkills({ page: 1 })"
           />
         </label>
-        <select x-model="filters.published_state" class="select-field h-10 w-36 shrink-0 py-0" aria-label="是否已发布筛选" @change="loadSkills()">
+        <select x-model="filters.published_state" class="select-field h-10 w-36 shrink-0 py-0" aria-label="是否已发布筛选" @change="loadSkills({ page: 1 })">
           <option value="">全部发布状态</option>
           <option value="published">已发布</option>
           <option value="unpublished">未发布</option>
         </select>
         <div class="flex shrink-0 items-center gap-2">
-          <input x-model="filters.created_from" type="date" class="input-field h-10 w-40 py-0" aria-label="创建开始时间" @change="loadSkills()" />
+          <input x-model="filters.created_from" type="date" class="input-field h-10 w-40 py-0" aria-label="创建开始时间" @change="loadSkills({ page: 1 })" />
           <span class="text-xs text-slate-400">至</span>
-          <input x-model="filters.created_to" type="date" class="input-field h-10 w-40 py-0" aria-label="创建结束时间" @change="loadSkills()" />
+          <input x-model="filters.created_to" type="date" class="input-field h-10 w-40 py-0" aria-label="创建结束时间" @change="loadSkills({ page: 1 })" />
         </div>
         <button type="button" class="button-primary h-10 w-10 shrink-0 px-0" title="新建 Skill" aria-label="新建 Skill" data-tooltip="新建 Skill" @click="openCreateModal()">
           <span class="material-symbols-outlined text-[18px]">add</span>
@@ -88,6 +88,27 @@
           </template>
         </div>
       </template>
+    </div>
+
+    <div x-show="skillPagination.total > 0" class="flex shrink-0 items-center justify-between gap-3 border-t border-slate-800 bg-slate-950/45 px-4 py-2">
+      <span class="mono-field" x-text="`共 ${skillPagination.total} 条`"></span>
+      <div class="flex items-center gap-2">
+        <label class="flex items-center gap-2 text-xs text-slate-500">
+          <span>每页</span>
+          <select x-model.number="skillPagination.page_size" class="select-field h-9 w-20 py-0" aria-label="Skill 每页条数" @change="loadSkills({ page: 1 })">
+            <option :value="10">10</option>
+            <option :value="20">20</option>
+            <option :value="50">50</option>
+          </select>
+        </label>
+        <button type="button" class="icon-button" title="上一页" aria-label="上一页" :disabled="busy.list || skillPagination.page <= 1" @click="changeSkillPage(skillPagination.page - 1)">
+          <span class="material-symbols-outlined text-[18px]">chevron_left</span>
+        </button>
+        <span class="min-w-20 text-center font-mono text-xs tabular-nums text-slate-400" x-text="`${skillPagination.page} / ${skillPagination.total_pages}`"></span>
+        <button type="button" class="icon-button" title="下一页" aria-label="下一页" :disabled="busy.list || skillPagination.page >= skillPagination.total_pages" @click="changeSkillPage(skillPagination.page + 1)">
+          <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+        </button>
+      </div>
     </div>
   </section>
 </div>

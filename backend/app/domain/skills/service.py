@@ -7,6 +7,7 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -79,6 +80,7 @@ from app.domain.skills.schemas import (
     SaveSkillRepositoryFileRequest,
     SaveSkillSourceRequest,
     SkillDetailResponse,
+    SkillListResponse,
     SkillPublishRecordResponse,
     SkillRawMaterialAnalysisResponse,
     SkillRawMaterialDerivedAssetResponse,
@@ -155,21 +157,39 @@ class SkillsService:
         self.job_repository = job_repository or JobRepository()
         self.agent_harness_service = agent_harness_service
 
-    def list_skills(
+    def list_skills_page(
         self,
         session: Session,
         *,
+        page: int,
+        page_size: int,
         search: str | None = None,
         status: str | None = None,
         is_published: bool | None = None,
-    ) -> list[SkillSummaryResponse]:
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+    ) -> SkillListResponse:
+        filters = {
+            "search": search,
+            "status": status,
+            "is_published": is_published,
+            "created_from": created_from,
+            "created_to": created_to,
+        }
+        total = self.repository.count_skill_definitions(session, **filters)
         definitions = self.repository.list_skill_definitions(
             session,
-            search=search,
-            status=status,
-            is_published=is_published,
+            **filters,
+            limit=page_size,
+            offset=(page - 1) * page_size,
         )
-        return [self._build_skill_summary(session, definition) for definition in definitions]
+        return SkillListResponse(
+            items=[self._build_skill_summary(session, definition) for definition in definitions],
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=(total + page_size - 1) // page_size,
+        )
 
     def create_skill(self, session: Session, payload: CreateSkillRequest) -> SkillDetailResponse:
         skill_key = self._generate_unique_skill_key(session, payload.name)

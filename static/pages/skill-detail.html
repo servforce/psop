@@ -1169,7 +1169,7 @@
             <div class="grid min-w-[68rem] grid-cols-[9rem_10rem_10rem_minmax(24rem,1fr)_2.5rem] items-end gap-2">
               <label class="field-block gap-1">
                 <span class="field-label">状态</span>
-                <select x-model="runtimeFilters.status" class="select-field h-10 px-3 py-0" aria-label="运行状态" @change="loadSkillRuns(currentSkill.id, $event.target.value)">
+                <select x-model="runtimeFilters.status" class="select-field h-10 px-3 py-0" aria-label="运行状态" @change="loadSkillRuns(currentSkill.id, $event.target.value, { page: 1 })">
                   <option value="">全部状态</option>
                   <option value="queued">排队中</option>
                   <option value="waiting_runtime">等待运行</option>
@@ -1183,11 +1183,11 @@
               </label>
               <label class="field-block gap-1">
                 <span class="field-label">创建开始</span>
-                <input x-model="runtimeFilters.created_from" type="date" class="input-field h-10 px-3 py-0" />
+                <input x-model="runtimeFilters.created_from" type="date" class="input-field h-10 px-3 py-0" @change="loadSkillRuns(currentSkill.id, runtimeFilters.status, { page: 1 })" />
               </label>
               <label class="field-block gap-1">
                 <span class="field-label">创建结束</span>
-                <input x-model="runtimeFilters.created_to" type="date" class="input-field h-10 px-3 py-0" />
+                <input x-model="runtimeFilters.created_to" type="date" class="input-field h-10 px-3 py-0" @change="loadSkillRuns(currentSkill.id, runtimeFilters.status, { page: 1 })" />
               </label>
               <label class="field-block gap-1">
                 <span class="field-label">连接说明（可选）</span>
@@ -1236,7 +1236,7 @@
             </div>
           </template>
 
-          <template x-if="currentSkillFilteredRuns().length > 0">
+          <template x-if="!busy.skillRuns && currentSkillFilteredRuns().length > 0">
             <div class="min-h-0 flex-1 overflow-auto">
               <div class="grid min-w-[64rem] grid-cols-[minmax(18rem,1.4fr)_8rem_10rem_minmax(14rem,1fr)] border-b border-slate-800 bg-slate-950/35 px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                 <span>运行 ID</span>
@@ -1266,6 +1266,27 @@
               </div>
             </div>
           </template>
+
+          <div x-show="!busy.skillRuns && skillRunPagination.total > 0" class="flex shrink-0 items-center justify-between gap-3 border-t border-slate-800 bg-slate-950/45 px-3 py-2">
+            <span class="mono-field" x-text="`共 ${skillRunPagination.total} 条`"></span>
+            <div class="flex items-center gap-2">
+              <label class="flex items-center gap-2 text-xs text-slate-500">
+                <span>每页</span>
+                <select x-model.number="skillRunPagination.page_size" class="select-field h-9 w-20 py-0" aria-label="运行记录每页条数" @change="loadSkillRuns(currentSkill.id, runtimeFilters.status, { page: 1 })">
+                  <option :value="10">10</option>
+                  <option :value="20">20</option>
+                  <option :value="50">50</option>
+                </select>
+              </label>
+              <button type="button" class="icon-button" title="上一页" aria-label="上一页" :disabled="skillRunPagination.page <= 1" @click="changeSkillRunPage(skillRunPagination.page - 1)">
+                <span class="material-symbols-outlined text-[18px]">chevron_left</span>
+              </button>
+              <span class="min-w-20 text-center font-mono text-xs tabular-nums text-slate-400" x-text="`${skillRunPagination.page} / ${skillRunPagination.total_pages}`"></span>
+              <button type="button" class="icon-button" title="下一页" aria-label="下一页" :disabled="skillRunPagination.page >= skillRunPagination.total_pages" @click="changeSkillRunPage(skillRunPagination.page + 1)">
+                <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+              </button>
+            </div>
+          </div>
         </section>
       </div>
     </template>

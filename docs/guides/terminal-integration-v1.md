@@ -287,6 +287,7 @@ GET /api/v1/runs
 GET /api/v1/runs?status=waiting_input
 GET /api/v1/runs?skill_id={skill_id}
 GET /api/v1/runs?status=waiting_input&skill_id={skill_id}
+GET /api/v1/runs?skill_id={skill_id}&page=1&page_size=20
 ```
 
 查询参数：
@@ -295,34 +296,44 @@ GET /api/v1/runs?status=waiting_input&skill_id={skill_id}
 | --- | --- | --- |
 | `status` | 否 | 按 Run 状态精确筛选。可选值：`queued`、`waiting_runtime`、`running`、`waiting_input`、`succeeded`、`failed`、`aborted`、`cancelled`。传入其他值返回 `422`。 |
 | `skill_id` | 否 | 按 Skill Definition ID 精确筛选，不是 `skill_key`。 |
+| `created_from` | 否 | 创建时间下界，ISO 8601 datetime，包含边界。 |
+| `created_to` | 否 | 创建时间上界，ISO 8601 datetime，包含边界。 |
+| `page` | 否 | 页码，从 `1` 开始，默认 `1`。 |
+| `page_size` | 否 | 每页条数，范围 `1`–`100`，默认 `20`。 |
 
-同时传入 `status` 和 `skill_id` 时，两个条件按 AND 关系生效。不传查询参数时，
-接口返回当前调用方有权查看的全部 Run，并按 `created_at` 倒序排列。当前接口不提供
-分页参数，终端不应把它作为高频轮询接口；用户选择某条记录后，应改用单 Run 状态、
-Task Status、TerminalSession、TerminalEvent 和 WebSocket 接口进行恢复和增量更新。
+多个筛选条件按 AND 关系生效，结果按 `created_at` 和 `id` 倒序排列。终端列表应使用
+分页查询；用户选择某条记录后，应改用单 Run 状态、Task Status、TerminalSession、
+TerminalEvent 和 WebSocket 接口进行恢复和增量更新。
 
-响应为 Run 数组，数组元素与 `GET /api/v1/runs/{run_id}` 的响应结构相同：
+响应包含列表和分页元数据；`items` 中的元素与
+`GET /api/v1/runs/{run_id}` 的响应结构相同：
 
 ```json
-[
-  {
-    "id": "run-id",
-    "invocation_id": "invocation-id",
-    "skill_definition_id": "skill-definition-id",
-    "status": "waiting_input",
-    "runtime_phase": "collect_context_evidence",
-    "latest_terminal_seq": 3,
-    "terminal_session_id": "terminal-session-id",
-    "current_step": "collect_context",
-    "wait_reason": "等待用户提交当前真实场景的说明或多模态证据。",
-    "final_output": "",
-    "exit_reason": "",
-    "created_at": "2026-05-25T00:00:00Z",
-    "started_at": "2026-05-25T00:00:02Z",
-    "ended_at": null,
-    "updated_at": "2026-05-25T00:00:04Z"
-  }
-]
+{
+  "items": [
+    {
+      "id": "run-id",
+      "invocation_id": "invocation-id",
+      "skill_definition_id": "skill-definition-id",
+      "status": "waiting_input",
+      "runtime_phase": "collect_context_evidence",
+      "latest_terminal_seq": 3,
+      "terminal_session_id": "terminal-session-id",
+      "current_step": "collect_context",
+      "wait_reason": "等待用户提交当前真实场景的说明或多模态证据。",
+      "final_output": "",
+      "exit_reason": "",
+      "created_at": "2026-05-25T00:00:00Z",
+      "started_at": "2026-05-25T00:00:02Z",
+      "ended_at": null,
+      "updated_at": "2026-05-25T00:00:04Z"
+    }
+  ],
+  "total": 37,
+  "page": 1,
+  "page_size": 20,
+  "total_pages": 2
+}
 ```
 
 终端列表建议至少展示 Skill、Run 状态和创建时间，并保存选中项的 `id` 作为
@@ -332,7 +343,7 @@ Task Status、TerminalSession、TerminalEvent 和 WebSocket 接口进行恢复�
 命令示例：
 
 ```bash
-curl -sS "$PSOP_API_BASE/runs?status=waiting_input&skill_id=$SKILL_ID"
+curl -sS "$PSOP_API_BASE/runs?status=waiting_input&skill_id=$SKILL_ID&page=1&page_size=20"
 ```
 
 ### 读取单个 Run

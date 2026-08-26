@@ -30,17 +30,65 @@
         try {
           const params = new URLSearchParams();
           const useFilters = options.useFilters !== false;
+          const allPages = options.allPages === true;
+          const page = allPages ? 1 : Number(options.page || this.skillPagination.page || 1);
+          const pageSize = allPages ? 100 : Number(this.skillPagination.page_size || 20);
           if (useFilters && this.filters.search.trim()) {
             params.set("search", this.filters.search.trim());
           }
           if (useFilters && this.filters.published_state) {
             params.set("is_published", String(this.filters.published_state === "published"));
           }
-          const suffix = params.toString() ? `?${params}` : "";
-          this.skills = await this.apiRequest(`/skills${suffix}`);
+          if (useFilters && this.filters.created_from) {
+            params.set("created_from", new Date(`${this.filters.created_from}T00:00:00`).toISOString());
+          }
+          if (useFilters && this.filters.created_to) {
+            params.set("created_to", new Date(`${this.filters.created_to}T23:59:59.999`).toISOString());
+          }
+          params.set("page", String(page));
+          params.set("page_size", String(pageSize));
+
+          const response = await this.apiRequest(`/skills?${params.toString()}`);
+          let items = response.items || [];
+          if (allPages) {
+            for (let nextPage = 2; nextPage <= response.total_pages; nextPage += 1) {
+              params.set("page", String(nextPage));
+              const nextResponse = await this.apiRequest(`/skills?${params.toString()}`);
+              items = items.concat(nextResponse.items || []);
+            }
+          }
+          this.skills = items;
+          if (allPages) {
+            return;
+          }
+          this.skillPagination = {
+            page: response.page,
+            page_size: response.page_size,
+            total: response.total,
+            total_pages: response.total_pages
+          };
+
+          if (!allPages && response.total_pages > 0 && response.page > response.total_pages) {
+            await this.loadSkills({ ...options, page: response.total_pages });
+          }
         } finally {
           this.busy.list = false;
         }
+      },
+
+
+      changeSkillPage(page) {
+        const targetPage = Number(page);
+        if (
+          this.busy.list ||
+          !Number.isInteger(targetPage) ||
+          targetPage < 1 ||
+          targetPage > this.skillPagination.total_pages ||
+          targetPage === this.skillPagination.page
+        ) {
+          return;
+        }
+        return this.loadSkills({ page: targetPage });
       },
 
 
@@ -189,6 +237,13 @@
         this.skillTestRuns = [];
         this.skillTestRun = null;
         this.skillTestReview = null;
+        this.skillRuns = [];
+        this.skillRunPagination = {
+          ...this.skillRunPagination,
+          page: 1,
+          total: 0,
+          total_pages: 0
+        };
         this.skillTestReviewCursor = 100;
         this.skillTestReviewAutoFollow = true;
         this.skillTestCaseSearch = "";
@@ -1937,7 +1992,7 @@
           created_from: "",
           created_to: ""
         };
-        this.loadSkills();
+        this.loadSkills({ page: 1 });
       },
 
 

@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -49,6 +49,7 @@ from app.domain.runtime.schemas import (
     ReplayTimelineItem,
     ResolveRunBindingsRequest,
     RunCapabilityBindingResponse,
+    RunListResponse,
     RunResponse,
     RunTaskStatusResponse,
     SessionTokenSnapshotResponse,
@@ -789,11 +790,51 @@ class RuntimeService:
         *,
         status: Sequence[str] | None = None,
         skill_id: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
     ) -> list[RunResponse]:
         return [
             self._build_run_response(session, item)
-            for item in self.repository.list_runs(session, status=status, skill_id=skill_id)
+            for item in self.repository.list_runs(
+                session,
+                status=status,
+                skill_id=skill_id,
+                created_from=created_from,
+                created_to=created_to,
+            )
         ]
+
+    def list_runs_page(
+        self,
+        session: Session,
+        *,
+        page: int,
+        page_size: int,
+        status: Sequence[str] | None = None,
+        skill_id: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+    ) -> RunListResponse:
+        filters = {
+            "status": status,
+            "skill_id": skill_id,
+            "created_from": created_from,
+            "created_to": created_to,
+        }
+        total = self.repository.count_runs(session, **filters)
+        runs = self.repository.list_runs(
+            session,
+            **filters,
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
+        return RunListResponse(
+            items=[self._build_run_response(session, item) for item in runs],
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=(total + page_size - 1) // page_size,
+        )
 
     def get_run(self, session: Session, run_id: str) -> RunResponse:
         run = self.repository.get_run(session, run_id)
