@@ -5,6 +5,10 @@ const vm = require("vm");
 const skillTestAppPath = path.join(__dirname, "../../app/skill-test.js");
 
 function loadSkillTestMethods() {
+  return loadSkillTestContext().window.PSOPConsoleSkillTestMethods;
+}
+
+function loadSkillTestContext() {
   const source = fs.readFileSync(skillTestAppPath, "utf8");
   const helperNames = [
     "normalizePath",
@@ -42,11 +46,13 @@ function loadSkillTestMethods() {
           return items;
         }, [...existing]),
         mergeBySeq: (existing = [], incoming = []) => [...existing, ...incoming].sort((left, right) => Number(left.seq_no || 0) - Number(right.seq_no || 0))
-      }
+      },
+      setInterval: jest.fn(() => "timer-id"),
+      clearInterval: jest.fn()
     }
   };
   vm.runInNewContext(source, context);
-  return context.window.PSOPConsoleSkillTestMethods;
+  return context;
 }
 
 function createTimelineHarness() {
@@ -1102,6 +1108,102 @@ test("running review records open at the current run time", () => {
   expect(app.skillTestReviewPlayheadMsValue()).toBeGreaterThanOrEqual(70000);
   expect(app.skillTestReviewPlayheadMsValue()).toBeLessThan(72000);
   expect(app.skillTestReviewPlaybackRunning).toBe(false);
+});
+
+test("running review polling follows new elapsed time and reveals transcript events", () => {
+  const app = createTimelineHarness();
+  const originMs = Date.now() - 130000;
+  const review = {
+    scenario_timeline: duplicateSemanticTimeline(),
+    scenario_run: {
+      id: "scenario-run-1",
+      status: "running",
+      time_origin: new Date(originMs).toISOString()
+    },
+    cursor_anchors: [{ time_ms: 90000 }],
+    driver_events: [{ at_ms: 95000 }],
+    replay: {
+      terminal_events: [
+        {
+          id: "visible-output",
+          direction: "output",
+          occurred_at: new Date(originMs + 120000).toISOString()
+        }
+      ]
+    }
+  };
+
+  app.skillTestReview = review;
+  app.skillTestRun = review.scenario_run;
+  app.skillTestReviewAutoFollow = true;
+  app.updateSkillTestReviewPlayhead(20000);
+
+  app.applySkillTestReviewPayload(review);
+
+  expect(app.skillTestReviewPlayheadMsValue()).toBeGreaterThanOrEqual(130000);
+  expect(app.skillTestReviewPlayheadMsValue()).toBeLessThan(132000);
+  expect(app.filteredSkillTestReviewTerminalEvents().map((event) => event.id)).toEqual(["visible-output"]);
+});
+
+test("running review polling refreshes every second", () => {
+  const context = loadSkillTestContext();
+  const app = {
+    ...context.window.PSOPConsoleSkillTestMethods,
+    skillTestReviewPollTimer: null,
+    skillTestReviewPollRunId: "",
+    skillTestReview: {
+      scenario_run: {
+        id: "scenario-run-1",
+        status: "running"
+      },
+      scenario_timeline: duplicateSemanticTimeline()
+    },
+    stopSkillTestReviewPolling: jest.fn(function () {
+      this.skillTestReviewPollTimer = null;
+      this.skillTestReviewPollRunId = "";
+    }),
+    refreshSkillTestRunReview: jest.fn()
+  };
+
+  app.startSkillTestReviewPolling("scenario-run-1");
+
+  expect(context.window.setInterval).toHaveBeenCalledWith(expect.any(Function), 1000);
+  expect(app.skillTestReviewPollTimer).toBe("timer-id");
+  expect(app.skillTestReviewPollRunId).toBe("scenario-run-1");
+});
+
+test("manual review cursor is not advanced by polling while auto follow is off", () => {
+  const app = createTimelineHarness();
+  const originMs = Date.now() - 130000;
+  const review = {
+    scenario_timeline: duplicateSemanticTimeline(),
+    scenario_run: {
+      id: "scenario-run-1",
+      status: "running",
+      time_origin: new Date(originMs).toISOString()
+    },
+    cursor_anchors: [{ time_ms: 90000 }],
+    driver_events: [{ at_ms: 95000 }],
+    replay: {
+      terminal_events: [
+        {
+          id: "future-output",
+          direction: "output",
+          occurred_at: new Date(originMs + 120000).toISOString()
+        }
+      ]
+    }
+  };
+
+  app.skillTestReview = review;
+  app.skillTestRun = review.scenario_run;
+  app.skillTestReviewAutoFollow = false;
+  app.updateSkillTestReviewPlayhead(20000);
+
+  app.applySkillTestReviewPayload(review);
+
+  expect(app.skillTestReviewPlayheadMsValue()).toBe(20000);
+  expect(app.filteredSkillTestReviewTerminalEvents()).toEqual([]);
 });
 
 test("terminal transcript keeps all events visible at the end of a historical review", () => {
