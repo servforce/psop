@@ -243,13 +243,13 @@ def reconcile_builder_candidate(
     baseline_generation_id: str,
     baseline_commit_sha: str,
     baseline_candidate_hash: str,
-) -> tuple[dict[str, Any], dict[str, Any], set[tuple[str, str, str, str, str]]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Mechanically inherit provenance for targets unchanged from an exact-commit baseline."""
     try:
         candidate = parse_builder_candidate(payload)
         baseline = parse_builder_candidate(baseline_payload)
     except ValidationError:
-        return payload, {}, set()
+        return payload, {}
 
     candidate_stage_bodies = _workflow_stage_bodies(candidate.files.get("SKILL.md", ""))
     baseline_stage_bodies = _workflow_stage_bodies(baseline.files.get("SKILL.md", ""))
@@ -346,12 +346,6 @@ def reconcile_builder_candidate(
         candidate_payload["evidence_map"].append(inherited_item)
         inherited_evidence_count += len(selected_targets)
 
-    baseline_standard_targets = {
-        (item.standard_ref, item.clause_ref, item.usage, target.target_type, target.target_id)
-        for item in baseline.industry_standard_usage
-        for target in item.used_in
-        if (target.target_type, target.target_id) in inherited_targets
-    }
     current_standard_targets = {
         (target.target_type, target.target_id)
         for item in candidate.industry_standard_usage
@@ -383,7 +377,7 @@ def reconcile_builder_candidate(
         "inherited_evidence_count": inherited_evidence_count,
         "inherited_industry_standard_count": inherited_standard_count,
     }
-    return candidate_payload, revision_provenance, baseline_standard_targets
+    return candidate_payload, revision_provenance
 
 
 def _target_collection_name(target_type: str) -> str:
@@ -426,9 +420,6 @@ def validate_builder_candidate(
     payload: dict[str, Any],
     *,
     candidate_reference_assets: list[dict[str, Any]] | None = None,
-    standard_search_results: list[dict[str, Any]] | None = None,
-    standard_search_status: str | None = None,
-    inherited_industry_standard_targets: set[tuple[str, str, str, str, str]] | None = None,
 ) -> BuilderCandidate:
     try:
         candidate = parse_builder_candidate(payload)
@@ -441,21 +432,6 @@ def validate_builder_candidate(
     diagnostics.extend(file_diagnostics)
     diagnostics.extend(_validate_material_usage(candidate.material_usage))
     diagnostics.extend(_validate_selected_reference_assets(candidate.selected_reference_assets, candidate_reference_assets or []))
-    diagnostics.extend(
-        _validate_industry_standard_usage(
-            candidate.industry_standard_usage,
-            standard_search_results or [],
-            standard_search_status,
-            inherited_industry_standard_targets or set(),
-        )
-    )
-    diagnostics.extend(
-        _validate_standard_search_degradation(
-            candidate,
-            standard_search_status,
-            inherited_industry_standard_targets or set(),
-        )
-    )
     diagnostics.extend(_validate_required_collections(candidate))
     diagnostics.extend(_validate_missing_questions(candidate.missing_questions, candidate.review_notes))
     diagnostics.extend(_validate_identifiers_and_references(candidate))
@@ -549,97 +525,6 @@ def _validate_selected_reference_assets(
                 )
             )
     return diagnostics
-
-
-def _validate_industry_standard_usage(
-    items: list[IndustryStandardUsageItem],
-    search_results: list[dict[str, Any]],
-    search_status: str | None,
-    inherited_targets: set[tuple[str, str, str, str, str]],
-) -> list[dict[str, Any]]:
-    diagnostics: list[dict[str, Any]] = []
-    known_pairs = {
-        (str(item.get("standard_ref") or "").strip(), str(item.get("clause_ref") or "").strip())
-        for item in search_results
-        if str(item.get("citation_status") or "complete") != "incomplete"
-    }
-    for index, item in enumerate(items):
-        if _industry_usage_is_inherited(item, inherited_targets):
-            continue
-        if item.usage == "reference_only" and search_status in {None, "success"}:
-            continue
-        missing = [
-            key
-            for key, value in {
-                "standard_ref": item.standard_ref,
-                "clause_ref": item.clause_ref,
-                "usage": item.usage,
-                "used_in": item.used_in,
-            }.items()
-            if not value
-        ]
-        if missing:
-            diagnostics.append(
-                _diagnostic(
-                    f"industry_standard_usage.{index}",
-                    "missing_fields",
-                    f"industry_standard_usage 缺少字段：{missing}",
-                )
-            )
-        pair = (item.standard_ref.strip(), item.clause_ref.strip())
-        if known_pairs and pair not in known_pairs:
-            diagnostics.append(
-                _diagnostic(
-                    f"industry_standard_usage.{index}",
-                    "unknown_standard_reference",
-                    f"industry_standard_usage 引用了未由 psop.standard.search 返回的标准条款：{pair}",
-                )
-            )
-    return diagnostics
-
-
-def _validate_standard_search_degradation(
-    candidate: BuilderCandidate,
-    search_status: str | None,
-    inherited_targets: set[tuple[str, str, str, str, str]],
-) -> list[dict[str, Any]]:
-    if search_status not in {"timeout", "service_unavailable", "internal_error"}:
-        return []
-    diagnostics: list[dict[str, Any]] = []
-    current_usage = [
-        item
-        for item in candidate.industry_standard_usage
-        if not _industry_usage_is_inherited(item, inherited_targets)
-    ]
-    if current_usage:
-        diagnostics.append(
-            _diagnostic(
-                "industry_standard_usage",
-                "standard_search_unavailable",
-                "标准检索不可用时不得引用 industry_standard。",
-                example=[],
-            )
-        )
-    if not any("标准检索不可用，未引用行业标准" in note for note in candidate.review_notes):
-        diagnostics.append(
-            _diagnostic(
-                "review_notes",
-                "missing_standard_unavailable_note",
-                "标准检索不可用时 review_notes 必须包含固定说明。",
-                example="标准检索不可用，未引用行业标准。",
-            )
-        )
-    return diagnostics
-
-
-def _industry_usage_is_inherited(
-    item: IndustryStandardUsageItem,
-    inherited_targets: set[tuple[str, str, str, str, str]],
-) -> bool:
-    return bool(item.used_in) and all(
-        (item.standard_ref, item.clause_ref, item.usage, target.target_type, target.target_id) in inherited_targets
-        for target in item.used_in
-    )
 
 
 def _validate_required_collections(candidate: BuilderCandidate) -> list[dict[str, Any]]:

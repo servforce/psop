@@ -178,7 +178,6 @@ bash scripts/dev/start-background.sh
 | `PSOP_OBJECT_STORE_*` | Skill 素材、终端附件与运行产物存储。 |
 | `PSOP_LLM_TEXT_*` / `PSOP_LLM_MULTIMODAL_*` | 文本和多模态模型路由。 |
 | `PSOP_ASR_*` / `PSOP_VIDEO_*` / `PSOP_RAW_MATERIAL_*` | 视频与原始素材分析。 |
-| `PSOP_STANDARD_LIGHTRAG_*` | 行业标准检索。 |
 | `PSOP_RUNTIME_WORKER_*` / `PSOP_RUNTIME_JOB_*` | worker 并发、lease、重试与恢复。 |
 | `PSOP_TERMINAL_EVENT_*` | 终端多模态事件与上传限制。 |
 | `PSOP_AGENT_HARNESS_*` | Agent Harness profile、workspace 与 MCP。 |

@@ -296,8 +296,6 @@ class AgentRunQueryService:
             return f"加载 Skill：{payload.get('skill_name') or ''}".rstrip("：")
         if event_type in {"agent.tool.started", "agent.tool.completed", "agent.tool.failed"}:
             return _tool_title(str(payload.get("tool_name") or ""))
-        if event_type == "agent.tool.standard_search":
-            return "检索行业标准"
         if event_type == "agent.artifact.created":
             return _artifact_title(str(payload.get("artifact_type") or ""))
         if event_type == "agent.token.usage":
@@ -318,7 +316,7 @@ class AgentRunQueryService:
             return "failed"
         if event_type == "agent.tool.started":
             return "running"
-        if event_type in {"agent.token.usage", "agent.tool.standard_search"}:
+        if event_type == "agent.token.usage":
             return "info"
         return "succeeded"
 
@@ -337,10 +335,6 @@ class AgentRunQueryService:
             scope = str(payload.get("scope") or "")
             keys = payload.get("keys") if isinstance(payload.get("keys"), list) else []
             return f"{scope}：{len(keys)} 个键" if scope else f"{len(keys)} 个键"
-        if event_type == "agent.tool.standard_search":
-            status = str(payload.get("status") or "")
-            count = payload.get("result_count") or 0
-            return f"{status}，{count} 条结果" if status else f"{count} 条结果"
         if event_type == "agent.artifact.created":
             return str(payload.get("artifact_ref") or "")
         if event_type == "agent.token.usage":
@@ -368,12 +362,6 @@ class AgentRunQueryService:
                 "validation_stage": str(payload.get("validation_stage") or ""),
                 "diagnostic_count": len(diagnostics),
                 "diagnostics": diagnostics,
-            }
-        if event_type == "agent.tool.standard_search":
-            return {
-                "result_count": payload.get("result_count") or 0,
-                "standard_refs": payload.get("standard_refs") if isinstance(payload.get("standard_refs"), list) else [],
-                "error_type": str(payload.get("error_type") or ""),
             }
         if event_type == "agent.artifact.created":
             return {
@@ -434,7 +422,6 @@ class AgentRunQueryService:
             generated_file_paths=sorted(str(path) for path in dict(generation.generated_files or {}).keys()),
             reference_files=[str(item) for item in (metadata.get("reference_files") or [])],
             committed_commit_sha=generation.committed_commit_sha or "",
-            standard_search_summary=metadata.get("standard_search_summary") if isinstance(metadata.get("standard_search_summary"), dict) else {},
         )
 
     @staticmethod
@@ -453,7 +440,6 @@ def _tool_title(tool_name: str) -> str:
         "psop.builder.list_materials": "列出素材",
         "psop.builder.read_material_analysis": "读取素材解析",
         "psop.builder.list_reference_assets": "列出参考资产",
-        "psop.standard.search": "检索行业标准",
         "psop.builder.submit_candidate": "提交 Skill candidate",
         "workspace.write_text": "写入 workspace 中间产物",
         "workspace.read_text": "读取 workspace 中间产物",

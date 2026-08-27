@@ -25,7 +25,6 @@ class AgentRunFinalResponse(BaseModel):
     generated_file_paths: list[str] = Field(default_factory=list)
     reference_files: list[str] = Field(default_factory=list)
     committed_commit_sha: str = ""
-    standard_search_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentRunTimelineResponse(BaseModel):

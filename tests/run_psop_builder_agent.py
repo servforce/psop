@@ -32,11 +32,7 @@ def main() -> int:
         input=dict(payload.get("input") or {}),
         context=dict(payload.get("context") or {}),
     )
-    settings = (
-        Settings(standard_lightrag_base_url="", standard_lightrag_api_key="")
-        if args.scripted
-        else Settings()
-    )
+    settings = Settings()
     service = AgentHarnessService(
         settings=settings,
         chat_model_factory=(lambda _definition: ScriptedBuilderChatModel()) if args.scripted else None,
@@ -56,7 +52,6 @@ def main() -> int:
     validate_builder_candidate(
         candidate,
         candidate_reference_assets=invocation.context.get("candidate_reference_assets") or [],
-        standard_search_results=[],
     )
     files_root = _skill_draft_files_root(result.sandbox_path)
     if files_root is None or not files_root.is_dir():
@@ -106,7 +101,6 @@ def main() -> int:
         "psop.builder.list_materials",
         "psop.builder.read_material_analysis",
         "psop.builder.list_reference_assets",
-        "psop.standard.search",
         "psop.builder.submit_candidate",
     }
     completed_tools = {

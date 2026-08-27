@@ -1372,8 +1372,6 @@ def create_test_settings() -> Settings:
         database_auto_create_schema=True,
         gitlab_skills_group_path="skills",
         runtime_worker_enabled=False,
-        standard_lightrag_base_url="",
-        standard_lightrag_api_key="",
     )
 
 
@@ -2359,7 +2357,6 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert payload["prompt_metadata"]["builder_artifact_path"] == "sandbox://outputs/builder-result.json"
     assert payload["prompt_metadata"]["builder_files_path"] == "sandbox://outputs/skill-draft"
     assert payload["prompt_metadata"]["events_path"].endswith("/events.jsonl")
-    assert payload["prompt_metadata"]["standard_search_summary"]["called"] is True
     assert payload["prompt_metadata"]["reference_files"] == [
         f"references/video-keyframes/{video_material_id}/000000000.jpg",
     ]

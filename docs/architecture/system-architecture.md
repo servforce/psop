@@ -564,7 +564,7 @@ version: v1
 runner_kind: langchain_agent
 factory: make_builder_agent
 profile: dev_open
-purpose: Build PSOP Skill draft candidates from raw materials and standards.
+purpose: Build PSOP Skill draft candidates from raw materials and reference assets.
 model:
   name: default
   thinking_enabled: false
@@ -578,7 +578,6 @@ tools:
   - psop.builder.list_materials
   - psop.builder.read_material_analysis
   - psop.builder.list_reference_assets
-  - psop.standard.search
   - psop.builder.submit_candidate
 mcp:
   enabled: false
@@ -668,7 +667,7 @@ Agent Skill 与 PSOP Skill 是不同对象。
 
 | 智能体 | runner_kind | 输入 | 输出 | 首版工具 |
 | --- | --- | --- | --- | --- |
-| `psop-builder` | `langchain_agent` | raw material、keyframes、transcript、LightRAG standards、user goal | PSOP Skill draft candidate、evidence map、standard usage、missing questions、safety constraints | raw_material read、reference assets read、standard search、builder candidate、workspace |
+| `psop-builder` | `langchain_agent` | raw material、keyframes、transcript、user goal | PSOP Skill draft candidate、evidence map、missing questions、safety constraints | raw_material read、reference assets read、builder candidate |
 | `psop-compiler` | `langchain_agent` | PSOP Skill、manifest、domain pack、allowed runtime | PSOP-EG、compile diagnostics、summary | skill read、formal-v5 validate、artifact write、workspace |
 | `psop-tester` | `langchain_agent` | PSOP Skill、PSOP-EG、world model | test suite、scenario runs、coverage、feedback | test scenario、runtime invocation、terminal event、replay、judge |
 | `psop-runner` | `psop_runtime` | invocation、PSOP-EG、terminal events | Run Package、Replay、final output | RuntimeService 内置 actor/tool |
@@ -1033,7 +1032,7 @@ Eval proposal
 验收链路：
 
 ```text
-raw material summary + standard snippets
+raw material summary + reference assets
   -> PSOP Skill draft
   -> PSOP-EG
   -> generated positive/negative tests

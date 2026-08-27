@@ -1559,7 +1559,6 @@ class SkillsService:
             "agent_run_id": agent_result.agent_run_id,
             "sandbox_path": agent_result.sandbox_path or "",
             "events_path": str(Path(agent_result.sandbox_path) / "events.jsonl") if agent_result.sandbox_path else "",
-            "standard_search_summary": self._agent_standard_search_summary(agent_result),
             "selected_reference_assets": [],
             "builder_artifact_path": "",
             "builder_files_path": self._agent_artifact_path(agent_result, "skill_draft_files"),
@@ -1720,12 +1719,6 @@ class SkillsService:
             context={
                 "material_analysis_results": prompt_payload.get("material_analysis_results") or [],
                 "candidate_reference_assets": prompt_payload.get("candidate_reference_assets") or [],
-                "standard_search_policy": {
-                    "enabled": True,
-                    "required_for_builder": False,
-                    "max_results": self.settings.standard_lightrag_max_results,
-                    "trust_level": "semi_trusted_reference",
-                },
                 BUILDER_REVISION_BASELINE_CONTEXT_KEY: prompt_payload.get("revision_baseline") or {},
             },
         )
@@ -1792,24 +1785,6 @@ class SkillsService:
         if usage_event_count:
             usage["llm_calls"] = usage_event_count
         return usage
-
-    @staticmethod
-    def _agent_standard_search_summary(agent_result: AgentResult) -> dict:
-        summaries = [
-            event.payload
-            for event in agent_result.events
-            if event.event_type == "agent.tool.standard_search" and isinstance(event.payload, dict)
-        ]
-        if not summaries:
-            return {"called": False, "result_count": 0, "standard_refs": []}
-        latest = summaries[-1]
-        return {
-            "called": True,
-            "status": latest.get("status") or "",
-            "error_type": latest.get("error_type") or "",
-            "result_count": latest.get("result_count") or 0,
-            "standard_refs": latest.get("standard_refs") or [],
-        }
 
     @staticmethod
     def _agent_budget_failure_details(agent_result: AgentResult) -> dict:
@@ -2031,15 +2006,14 @@ class SkillsService:
                 "priority": [
                     "confirmed_revision_instruction",
                     "direct_material_evidence",
-                    "traceable_industry_standard",
                     "current_source_as_revision_target",
                     "builder_inference",
                 ],
                 "rules": [
                     "当前 draft 仅是待修订内容，不能单独支撑新的事实性或强制性流程。",
-                    "每个强制工作流、安全约束和完成标准必须由结构化 evidence_map.used_in 目标关联到素材、用户确认或可追溯标准。",
+                    "每个强制工作流、安全约束和完成标准必须由结构化 evidence_map.used_in 目标关联到素材或用户确认。",
                     "builder_inference 与 human_confirmation_required 只能用于可选建议、审阅风险或待确认项。",
-                    "标准检索不可用时不得引用 industry_standard，必须在 review_notes 写入“标准检索不可用，未引用行业标准”。",
+                    "行业标准引用必须有可追溯来源；无法核实的编号或条款必须进入审阅项。",
                     "previous_validation_summary 不为空时，必须在首次提交前逐项避免其中列出的字段错误。",
                 ],
             },

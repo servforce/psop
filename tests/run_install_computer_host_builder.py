@@ -37,7 +37,6 @@ REQUIRED_TOOLS = {
     "psop.builder.list_materials",
     "psop.builder.read_material_analysis",
     "psop.builder.list_reference_assets",
-    "psop.standard.search",
     "psop.builder.submit_candidate",
 }
 
@@ -104,7 +103,6 @@ def _print_preflight(detail: Any, materials: list[Any], settings: Settings) -> N
                         for item in materials
                     ],
                     "database_url": _redact_database_url(settings.sqlalchemy_database_url),
-                    "standard_lightrag_base_url": settings.standard_lightrag_base_url,
                     "agent_harness_sandbox_root": str((settings.repo_root / settings.agent_harness_sandbox_root).resolve())
                     if not Path(settings.agent_harness_sandbox_root).is_absolute()
                     else settings.agent_harness_sandbox_root,
@@ -133,7 +131,6 @@ def _generation_summary(payload: dict[str, Any]) -> dict[str, Any]:
             "builder_artifact_path": metadata.get("builder_artifact_path"),
             "builder_files_path": metadata.get("builder_files_path"),
             "materialized_reference_image_count": metadata.get("materialized_reference_image_count"),
-            "standard_search_summary": metadata.get("standard_search_summary"),
         },
         "selected_reference_assets": metadata.get("selected_reference_assets"),
         "generated_file_paths": sorted(generated_files.keys()),

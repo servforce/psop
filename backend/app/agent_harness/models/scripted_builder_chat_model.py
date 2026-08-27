@@ -69,19 +69,6 @@ def _next_builder_message(messages: list[BaseMessage], tool_names: set[str]) -> 
     if "psop.builder.list_reference_assets" in tool_names and not _has_tool_result(messages, "psop.builder.list_reference_assets"):
         material_id = _first_material_id(messages)
         return _tool_call("call_list_assets", "psop.builder.list_reference_assets", {"material_id": material_id, "max_items": 10})
-    if "psop.standard.search" in tool_names and not _has_tool_result(messages, "psop.standard.search"):
-        return _tool_call(
-            "call_standard_search",
-            "psop.standard.search",
-            {
-                "query": "泵房 阀门 压力表 PPE 安全检查 操作规范",
-                "task_summary": "进入泵房前检查 PPE、确认阀门关闭并记录压力表读数。",
-                "standard_scope": "industry",
-                "hazard_types": ["机械伤害", "压力风险"],
-                "equipment_keywords": ["泵房", "阀门", "压力表"],
-                "max_results": 3,
-            },
-        )
     if "psop.builder.submit_candidate" in tool_names and not _has_tool_result(messages, "psop.builder.submit_candidate"):
         return _tool_call("call_submit_candidate", "psop.builder.submit_candidate", _candidate(messages))
     return AIMessage(
@@ -123,7 +110,7 @@ def _candidate(messages: list[BaseMessage]) -> dict[str, Any]:
             "tests/checklist.md": "# 测试清单\n\n- happy path：阶段 1 和阶段 2 均有证据。\n- 缺失证据：缺少 PPE 时等待。\n- 风险停止：压力读数异常时停止。\n- 人工确认：阀门状态不清时请求复核。\n",
         },
         "generation_reason": "根据用户目标、素材分析和候选参考资产构建了泵房进入前检查 Skill draft。",
-        "review_notes": ["标准检索不可用，未引用行业标准。", "发布前需要人工确认适用标准条款。"],
+        "review_notes": ["发布前需要人工确认适用标准条款。"],
         "material_usage": [{"material_id": material_id, "usage": "用于识别 PPE、阀门关闭和压力表读数三个关键检查点。"}],
         "industry_standard_usage": [],
         "selected_reference_assets": [

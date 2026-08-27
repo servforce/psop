@@ -34,7 +34,7 @@ def main() -> int:
         context=dict(payload.get("context") or {}),
     )
     service = AgentHarnessService(
-        settings=Settings(standard_lightrag_base_url="", standard_lightrag_api_key=""),
+        settings=Settings(),
         chat_model_factory=(lambda _definition: ScriptedCompilerChatModel()) if args.scripted else None,
     )
     result = service.invoke(invocation)

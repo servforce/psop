@@ -321,7 +321,7 @@ allowed-tools:
 根 `SKILL.md` 核心内容：
 
 - 声明 compiler 不是 builder、publisher 或 runtime executor。
-- 声明行业标准检索不是 compiler 职责；标准引用必须已固化在 frozen source、manifest 或 invocation context。
+- 标准引用必须已固化在 frozen source、manifest 或 invocation context。
 - 要求通过 `load_skill_resource` 加载 `core/SKILL.md`、`contract/SKILL.md`、`mapping/SKILL.md` 和 `review/SKILL.md`。
 - 声明 `allowed-tools` 只包含业务工具；`load_skill` / `load_skill_resource` 由 framework 注入。
 

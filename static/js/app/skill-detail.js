@@ -1109,8 +1109,7 @@
           review_notes: result.review_notes || [],
           generated_file_paths: Object.keys(result.generated_files || {}).sort(),
           reference_files: result.prompt_metadata?.reference_files || [],
-          committed_commit_sha: result.committed_commit_sha || "",
-          standard_search_summary: result.prompt_metadata?.standard_search_summary || {}
+          committed_commit_sha: result.committed_commit_sha || ""
         };
         this.builderAgentPanel.errorMessage = result.error_message || "";
         this.builderAgentPanel.processExpanded = status !== "succeeded";
@@ -1225,17 +1224,6 @@
 
       builderAgentReviewNotes() {
         return this.builderAgentPanel.result?.review_notes || [];
-      },
-
-
-      builderAgentStandardSearchSummaryText() {
-        const summary = this.builderAgentPanel.result?.standard_search_summary;
-        if (!summary || typeof summary !== "object" || Object.keys(summary).length === 0) {
-          return "无标准检索摘要";
-        }
-        const count = summary.result_count ?? summary.count ?? "";
-        const status = summary.status || "";
-        return [status, count !== "" ? `${count} 条结果` : ""].filter(Boolean).join("，") || "已记录标准检索摘要";
       },
 
 
