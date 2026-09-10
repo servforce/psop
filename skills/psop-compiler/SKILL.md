@@ -20,7 +20,7 @@ allowed-tools:
 
 `psop-compiler` 是一个单一 Agent Skill 包，用于指导 `psop.compiler` 把冻结的 PSOP Skill source 编译为 formal-v5 PSOP-EG candidate。它只提交 sandbox candidate，不发布 ready artifact，不修改 Skill source，不直接写数据库、GitLab 或对象存储。
 
-行业标准检索是 builder 阶段职责，不是 compiler 阶段职责。Compiler 只能编译 frozen source、manifest 或 invocation context 中已经固化的标准引用；不得主动调用、要求或模拟行业标准检索。
+Compiler 只能编译 frozen source、manifest 或 invocation context 中已经固化的标准引用。
 
 ## 渐进式加载
 

@@ -5,7 +5,6 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
 import pytest
 
 from app.agent_harness.events import AgentEventWriter
@@ -26,7 +25,6 @@ from app.agent_harness.tools.builtin.builder import (
     BUILDER_REVISION_BASELINE_CONTEXT_KEY,
     register_builder_tools,
 )
-from app.agent_harness.tools.builtin.standard import register_standard_tools
 from app.agent_harness.tools.registry import ToolExecutionContext, ToolRegistry
 from app.agent_harness.memory.file_store import FileMemoryStore
 from app.agent_harness.sandbox.local import LocalAgentSandboxProvider
@@ -72,8 +70,6 @@ def test_psop_builder_scripted_run_creates_candidate_artifact(tmp_path) -> None:
     settings = Settings(
         database_url="sqlite+pysqlite:///:memory:",
         agent_harness_sandbox_root=str(tmp_path / "agent-runs"),
-        standard_lightrag_base_url="",
-        standard_lightrag_api_key="",
     )
     service = AgentHarnessService(
         settings=settings,
@@ -124,7 +120,6 @@ def test_psop_builder_scripted_run_creates_candidate_artifact(tmp_path) -> None:
     validate_builder_candidate(
         candidate,
         candidate_reference_assets=payload["context"]["candidate_reference_assets"],
-        standard_search_results=[],
     )
 
 
@@ -481,7 +476,6 @@ def test_builder_candidate_matches_workflow_step_with_normalized_spacing() -> No
                 "reference_path": reference_path,
             }
         ],
-        standard_search_results=[],
     )
 
 
@@ -507,7 +501,7 @@ def test_builder_candidate_accepts_structured_current_source_reference() -> None
 
 def test_builder_candidate_rejects_tool_timeout_as_evidence_source() -> None:
     payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
-    payload["evidence_map"][0]["source_refs"] = [{"source_type": "psop.standard.search/timeout"}]
+    payload["evidence_map"][0]["source_refs"] = [{"source_type": "tool.timeout"}]
 
     with pytest.raises(BuilderCandidateValidationError) as exc_info:
         validate_builder_candidate(payload)
@@ -811,7 +805,7 @@ def test_skills_service_classifies_model_budget_exhaustion_before_first_submissi
             AgentEvent(
                 seq_no=1,
                 event_type="agent.tool.started",
-                payload={"tool_name": "psop.standard.search"},
+                payload={"tool_name": "psop.builder.list_reference_assets"},
                 occurred_at=datetime.now(timezone.utc),
             ),
             AgentEvent(
@@ -828,7 +822,7 @@ def test_skills_service_classifies_model_budget_exhaustion_before_first_submissi
         "model_call_limit": 13,
         "model_call_count": 14,
         "submit_candidate_call_count": 0,
-        "last_tool_name": "psop.standard.search",
+        "last_tool_name": "psop.builder.list_reference_assets",
     }
 
 
@@ -901,72 +895,34 @@ def test_builder_candidate_allows_checklist_assertion_but_rejects_real_todo() ->
         validate_builder_candidate(payload)
 
 
-def test_builder_candidate_rejects_standard_reference_when_search_timed_out() -> None:
+def test_builder_candidate_accepts_traceable_industry_standard_reference() -> None:
     payload = _builder_candidate_payload("references/video-keyframes/material-1/000001.jpg")
     payload["industry_standard_usage"] = [
         {
-            "standard_ref": "GB 1",
-            "clause_ref": "1.1",
-            "usage": "mandatory",
-            "used_in": [{"target_type": "workflow_stage", "target_id": "stage_01_entry"}],
+            "standard_ref": "GB/T 1234",
+            "clause_ref": "5.1",
+            "usage": "reference_only",
+            "used_in": [{"target_type": "review_notes", "target_id": "review_notes"}],
         }
     ]
-
-    with pytest.raises(BuilderCandidateValidationError) as exc_info:
-        validate_builder_candidate(payload, standard_search_status="timeout")
-
-    assert {item["code"] for item in exc_info.value.diagnostics} == {
-        "standard_search_unavailable",
-        "missing_standard_unavailable_note",
-    }
-
-
-def test_standard_search_uses_lightrag_query_endpoint_and_api_key(monkeypatch, tmp_path) -> None:
-    settings = Settings(
-        database_url="sqlite+pysqlite:///:memory:",
-        agent_harness_sandbox_root=str(tmp_path / "agent-runs"),
-        standard_lightrag_base_url="http://lightrag.local",
-        standard_lightrag_api_key="servforce",
-    )
-    sandbox = LocalAgentSandboxProvider(settings).acquire(input_payload={})
-    registry = ToolRegistry()
-    register_standard_tools(registry)
-    calls = {}
-
-    def fake_post(url, *, headers, json, timeout):
-        calls.update({"url": url, "headers": headers, "json": json, "timeout": timeout})
-        return httpx.Response(
-            200,
-            json={
-                "response": "依据 GB/T 1234 5.1 条，应进行进入前检查。",
-                "references": [
-                    {
-                        "reference_id": "1",
-                        "file_path": "/standards/GB_T_1234.md",
-                        "content": ["GB/T 1234 5.1 条 进入前应检查 PPE 和设备状态。"],
-                    }
-                ],
-            },
-        )
-
-    monkeypatch.setattr("app.agent_harness.tools.builtin.standard.httpx.post", fake_post)
-    context = ToolExecutionContext(
-        sandbox=sandbox,
-        memory_store=FileMemoryStore(sandbox.memory_path),
-        memory_scope="psop.builder",
-        event_writer=AgentEventWriter(sandbox.events_path),
-        invocation_context={},
-        settings=settings,
+    payload["evidence_map"].append(
+        {
+            "claim": "发布前应核实 GB/T 1234 第 5.1 条的适用性。",
+            "support_level": "standard_reference",
+            "source_refs": [
+                {
+                    "source_type": "industry_standard",
+                    "standard_ref": "GB/T 1234",
+                    "clause_ref": "5.1",
+                }
+            ],
+            "used_in": [{"target_type": "review_notes", "target_id": "review_notes"}],
+        }
     )
 
-    result = registry.execute("psop.standard.search", {"query": "泵房 PPE 检查", "max_results": 99}, context)
+    candidate = validate_builder_candidate(payload)
 
-    assert result["status"] == "success"
-    assert calls["url"] == "http://lightrag.local/query"
-    assert calls["headers"]["X-API-Key"] == "servforce"
-    assert calls["json"]["mode"] == "mix"
-    assert calls["json"]["top_k"] == settings.standard_lightrag_max_results
-    assert result["items"][0]["citation_status"] == "complete"
+    assert candidate.industry_standard_usage[0].standard_ref == "GB/T 1234"
 
 
 def _builder_candidate_payload(reference_path: str) -> dict:
@@ -1054,7 +1010,7 @@ def _builder_candidate_payload(reference_path: str) -> dict:
     }
 
 
-def test_revision_reconciliation_inherits_unchanged_safety_evidence_during_standard_timeout() -> None:
+def test_revision_reconciliation_inherits_approved_standard_for_unchanged_target() -> None:
     reference_path = "references/video-keyframes/material-1/000001.jpg"
     baseline = _builder_candidate_payload(reference_path)
     baseline["industry_standard_usage"] = [
@@ -1066,14 +1022,13 @@ def test_revision_reconciliation_inherits_unchanged_safety_evidence_during_stand
         }
     ]
     candidate = copy.deepcopy(baseline)
-    candidate["review_notes"].append("标准检索不可用，未引用行业标准。")
     candidate["industry_standard_usage"] = []
     for evidence in candidate["evidence_map"]:
         evidence["used_in"] = [
             target for target in evidence["used_in"] if target["target_type"] != "safety_constraint"
         ]
 
-    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+    reconciled, provenance = reconcile_builder_candidate(
         candidate,
         baseline_payload=baseline,
         baseline_generation_id="generation-baseline",
@@ -1083,8 +1038,6 @@ def test_revision_reconciliation_inherits_unchanged_safety_evidence_during_stand
     validated = validate_builder_candidate(
         reconciled,
         candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
-        standard_search_status="timeout",
-        inherited_industry_standard_targets=inherited_standard_targets,
     )
 
     assert validated.safety_constraints[0].constraint_id == "safety_01_entry"
@@ -1111,7 +1064,7 @@ def test_revision_reconciliation_inherits_baseline_evidence_over_current_source_
         }
     )
 
-    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+    reconciled, provenance = reconcile_builder_candidate(
         candidate,
         baseline_payload=baseline,
         baseline_generation_id="generation-baseline",
@@ -1121,7 +1074,6 @@ def test_revision_reconciliation_inherits_baseline_evidence_over_current_source_
     validated = validate_builder_candidate(
         reconciled,
         candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
-        inherited_industry_standard_targets=inherited_standard_targets,
     )
 
     safety_evidence = [
@@ -1141,14 +1093,13 @@ def test_revision_reconciliation_does_not_inherit_changed_safety_constraint() ->
     reference_path = "references/video-keyframes/material-1/000001.jpg"
     baseline = _builder_candidate_payload(reference_path)
     candidate = copy.deepcopy(baseline)
-    candidate["review_notes"].append("标准检索不可用，未引用行业标准。")
     candidate["safety_constraints"][0]["constraint"] = "PPE 不完整时记录风险后继续。"
     for evidence in candidate["evidence_map"]:
         evidence["used_in"] = [
             target for target in evidence["used_in"] if target["target_type"] != "safety_constraint"
         ]
 
-    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+    reconciled, provenance = reconcile_builder_candidate(
         candidate,
         baseline_payload=baseline,
         baseline_generation_id="generation-baseline",
@@ -1160,7 +1111,6 @@ def test_revision_reconciliation_does_not_inherit_changed_safety_constraint() ->
         validate_builder_candidate(
             reconciled,
             candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
-            inherited_industry_standard_targets=inherited_standard_targets,
         )
     assert provenance["changed_target_ids"]["safety_constraint"] == ["safety_01_entry"]
     assert any(item["path"] == "safety_constraints.0" for item in exc_info.value.diagnostics)
@@ -1185,7 +1135,7 @@ def test_changed_safety_constraint_reports_unsupported_current_source_evidence()
         }
     )
 
-    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+    reconciled, provenance = reconcile_builder_candidate(
         candidate,
         baseline_payload=baseline,
         baseline_generation_id="generation-baseline",
@@ -1197,7 +1147,6 @@ def test_changed_safety_constraint_reports_unsupported_current_source_evidence()
         validate_builder_candidate(
             reconciled,
             candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
-            inherited_industry_standard_targets=inherited_standard_targets,
         )
 
     diagnostic = next(
@@ -1233,7 +1182,7 @@ def test_revision_reconciliation_only_revalidates_changed_workflow_body() -> Non
             if not (target["target_type"] == "workflow_stage" and target["target_id"] == "stage_01_entry")
         ]
 
-    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+    reconciled, provenance = reconcile_builder_candidate(
         candidate,
         baseline_payload=baseline,
         baseline_generation_id="generation-baseline",
@@ -1245,7 +1194,6 @@ def test_revision_reconciliation_only_revalidates_changed_workflow_body() -> Non
         validate_builder_candidate(
             reconciled,
             candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
-            inherited_industry_standard_targets=inherited_standard_targets,
         )
     assert provenance["changed_target_ids"]["workflow_stage"] == ["stage_01_entry"]
     assert provenance["inherited_target_ids"]["workflow_stage"] == ["stage_02_pressure"]
@@ -1289,7 +1237,6 @@ def test_skill_54bcfe2c_revision_keeps_four_safety_constraints_and_updates_wait_
         for item in fixture["safety_constraints"]
     ]
     candidate = copy.deepcopy(baseline)
-    candidate["review_notes"].append("标准检索不可用，未引用行业标准。")
     candidate["expected_evidence_requirements"][0]["completion_criteria"] = (
         "图片清楚显示安装状态即通过，无需二次文字确认或额外特写。"
     )
@@ -1308,7 +1255,7 @@ def test_skill_54bcfe2c_revision_keeps_four_safety_constraints_and_updates_wait_
         }
     )
 
-    reconciled, provenance, inherited_standard_targets = reconcile_builder_candidate(
+    reconciled, provenance = reconcile_builder_candidate(
         candidate,
         baseline_payload=baseline,
         baseline_generation_id="generation-54bcfe2c",
@@ -1318,8 +1265,6 @@ def test_skill_54bcfe2c_revision_keeps_four_safety_constraints_and_updates_wait_
     validated = validate_builder_candidate(
         reconciled,
         candidate_reference_assets=[{"id": "asset-1", "reference_path": reference_path}],
-        standard_search_status="timeout",
-        inherited_industry_standard_targets=inherited_standard_targets,
     )
 
     assert fixture["skill_id"] == "54bcfe2c-3aec-4db4-984f-bbc7084439b9"

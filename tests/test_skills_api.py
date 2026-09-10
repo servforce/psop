@@ -66,7 +66,6 @@ class _FakeProject:
     skill_md_content: str
     skill_yaml_content: str
     files: dict[str, str | bytes] = field(default_factory=dict)
-    archived: bool = False
 
 
 class FakeGitLabGateway:
@@ -75,6 +74,7 @@ class FakeGitLabGateway:
         self.project_counter = 0
         self.commit_counter = 0
         self.commit_repository_files_calls: list[dict] = []
+        self.deleted_project_ids: set[str] = set()
         self.fail_get_skill_source = False
 
     def _next_project_id(self) -> str:
@@ -276,8 +276,9 @@ class FakeGitLabGateway:
     def update_project_name(self, project_id: str, name: str) -> None:
         self.projects[project_id].name = name
 
-    def archive_project(self, project_id: str) -> None:
-        self.projects[project_id].archived = True
+    def delete_project(self, project_id: str) -> None:
+        self.deleted_project_ids.add(project_id)
+        del self.projects[project_id]
 
 
 class FakeInferenceGateway:
@@ -1371,8 +1372,6 @@ def create_test_settings() -> Settings:
         database_auto_create_schema=True,
         gitlab_skills_group_path="skills",
         runtime_worker_enabled=False,
-        standard_lightrag_base_url="",
-        standard_lightrag_api_key="",
     )
 
 
@@ -1648,7 +1647,7 @@ def test_create_skill_ignores_client_provided_key() -> None:
     payload = response.json()
     assert re.fullmatch(r"client-key-ignored-[0-9a-f]{12}", payload["key"])
     assert payload["key"] != "client-defined-key"
-    assert [skill["id"] for skill in list_response.json()] == [payload["id"]]
+    assert [skill["id"] for skill in list_response.json()["items"]] == [payload["id"]]
     assert fake_gateway.projects[payload["gitlab_project_id"]].path == payload["key"]
 
 
@@ -1665,6 +1664,68 @@ def test_server_generated_skill_key_respects_length_limit() -> None:
     generated_key = response.json()["key"]
     assert len(generated_key) == 120
     assert re.fullmatch(r"a{107}-[0-9a-f]{12}", generated_key)
+
+
+def test_rename_skill_rejects_duplicate_active_name_before_gitlab_write() -> None:
+    client, fake_gateway, _ = create_test_client()
+
+    with client:
+        existing = client.post(
+            "/api/v1/skills",
+            json={"name": "Equipment Diagnosis", "description": "Existing Skill."},
+        ).json()
+        rename_target = client.post(
+            "/api/v1/skills",
+            json={"name": "Rename Target", "description": "Rename this Skill."},
+        ).json()
+        original_head = fake_gateway.projects[rename_target["gitlab_project_id"]].head_commit_sha
+        response = client.patch(
+            f"/api/v1/skills/{rename_target['id']}",
+            json={"name": "  equipment diagnosis  "},
+        )
+        detail_response = client.get(f"/api/v1/skills/{rename_target['id']}")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "skill_conflict",
+        "message": "Skill 名称“equipment diagnosis”已存在，请使用其他名称。",
+        "details": {
+            "field": "name",
+            "conflicting_skill_id": existing["id"],
+            "conflicting_skill_name": existing["name"],
+        },
+    }
+    assert detail_response.json()["name"] == "Rename Target"
+    assert fake_gateway.projects[rename_target["gitlab_project_id"]].name == "Rename Target"
+    assert fake_gateway.projects[rename_target["gitlab_project_id"]].head_commit_sha == original_head
+
+
+def test_rename_skill_allows_name_used_only_by_archived_skill() -> None:
+    client, fake_gateway, _ = create_test_client()
+
+    with client:
+        archived = client.post(
+            "/api/v1/skills",
+            json={"name": "Reusable Name", "description": "Archive this Skill."},
+        ).json()
+        delete_response = client.request(
+            "DELETE",
+            f"/api/v1/skills/{archived['id']}",
+            json={"confirmation_name": archived["name"]},
+        )
+        rename_target = client.post(
+            "/api/v1/skills",
+            json={"name": "Rename Target", "description": "Rename this Skill."},
+        ).json()
+        response = client.patch(
+            f"/api/v1/skills/{rename_target['id']}",
+            json={"name": "Reusable Name"},
+        )
+
+    assert delete_response.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["name"] == "Reusable Name"
+    assert fake_gateway.projects[rename_target["gitlab_project_id"]].name == "Reusable Name"
 
 
 def test_list_skills_filters_by_published_state() -> None:
@@ -1697,19 +1758,107 @@ def test_list_skills_filters_by_published_state() -> None:
         unpublished_response = client.get("/api/v1/skills?is_published=false")
 
     assert all_response.status_code == 200
-    all_skills = {skill["id"]: skill for skill in all_response.json()}
+    all_skills = {skill["id"]: skill for skill in all_response.json()["items"]}
     assert all_skills[draft_skill["id"]]["is_published"] is False
     assert all_skills[published_skill["id"]]["is_published"] is True
 
     assert published_response.status_code == 200
-    published_ids = {skill["id"] for skill in published_response.json()}
+    published_ids = {skill["id"] for skill in published_response.json()["items"]}
     assert published_skill["id"] in published_ids
     assert draft_skill["id"] not in published_ids
 
     assert unpublished_response.status_code == 200
-    unpublished_ids = {skill["id"] for skill in unpublished_response.json()}
+    unpublished_ids = {skill["id"] for skill in unpublished_response.json()["items"]}
     assert draft_skill["id"] in unpublished_ids
     assert published_skill["id"] not in unpublished_ids
+
+
+def test_list_skills_supports_pagination_with_total_metadata() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created_ids = [
+            client.post(
+                "/api/v1/skills",
+                json={"name": f"Paginated Skill {index}", "description": "Pagination contract."},
+            ).json()["id"]
+            for index in range(3)
+        ]
+        first_page_response = client.get("/api/v1/skills", params={"page": 1, "page_size": 2})
+        second_page_response = client.get("/api/v1/skills", params={"page": 2, "page_size": 2})
+        default_page_response = client.get("/api/v1/skills")
+        invalid_response = client.get("/api/v1/skills", params={"page": 0, "page_size": 2})
+
+    assert first_page_response.status_code == 200
+    assert second_page_response.status_code == 200
+    assert invalid_response.status_code == 422
+
+    first_page = first_page_response.json()
+    second_page = second_page_response.json()
+    assert {key: first_page[key] for key in ("total", "page", "page_size", "total_pages")} == {
+        "total": 3,
+        "page": 1,
+        "page_size": 2,
+        "total_pages": 2,
+    }
+    assert len(first_page["items"]) == 2
+    assert second_page["page"] == 2
+    assert len(second_page["items"]) == 1
+    assert {item["id"] for item in first_page["items"] + second_page["items"]} == set(created_ids)
+    assert default_page_response.json()["page"] == 1
+    assert default_page_response.json()["page_size"] == 20
+
+
+def test_list_runs_supports_pagination_with_skill_filter() -> None:
+    client, _, _ = create_test_client()
+
+    with client:
+        created = client.post(
+            "/api/v1/skills",
+            json={"name": "Paginated Runs", "description": "Run pagination contract."},
+        ).json()
+        publish_response = client.post(
+            f"/api/v1/skills/{created['id']}/publish",
+            json={"publish_reason": "Prepare paginated runs"},
+        )
+        compile_request_id = publish_response.json()["compile_request"]["id"]
+        client.post(f"/api/v1/compiler/requests/{compile_request_id}/retry")
+
+        run_ids = []
+        for index in range(3):
+            invocation_response = client.post(
+                "/api/v1/gateway/invocations",
+                json={
+                    "skill_key": created["key"],
+                    "gateway_type": "web",
+                    "input_envelope": {"index": index},
+                },
+            )
+            run_ids.append(invocation_response.json()["run_id"])
+
+        first_page_response = client.get(
+            "/api/v1/runs",
+            params={"skill_id": created["id"], "page": 1, "page_size": 2},
+        )
+        second_page_response = client.get(
+            "/api/v1/runs",
+            params={"skill_id": created["id"], "page": 2, "page_size": 2},
+        )
+        default_page_response = client.get("/api/v1/runs", params={"skill_id": created["id"]})
+
+    assert first_page_response.status_code == 200
+    assert second_page_response.status_code == 200
+    first_page = first_page_response.json()
+    second_page = second_page_response.json()
+    assert first_page["total"] == 3
+    assert first_page["page"] == 1
+    assert first_page["page_size"] == 2
+    assert first_page["total_pages"] == 2
+    assert len(first_page["items"]) == 2
+    assert len(second_page["items"]) == 1
+    assert {item["id"] for item in first_page["items"] + second_page["items"]} == set(run_ids)
+    assert default_page_response.json()["page"] == 1
+    assert default_page_response.json()["page_size"] == 20
 
 
 def test_get_and_save_skill_source() -> None:
@@ -2208,7 +2357,6 @@ def test_generate_skill_draft_from_raw_materials_commits_standard_files_without_
     assert payload["prompt_metadata"]["builder_artifact_path"] == "sandbox://outputs/builder-result.json"
     assert payload["prompt_metadata"]["builder_files_path"] == "sandbox://outputs/skill-draft"
     assert payload["prompt_metadata"]["events_path"].endswith("/events.jsonl")
-    assert payload["prompt_metadata"]["standard_search_summary"]["called"] is True
     assert payload["prompt_metadata"]["reference_files"] == [
         f"references/video-keyframes/{video_material_id}/000000000.jpg",
     ]
@@ -4070,7 +4218,7 @@ def test_skill_test_scenario_rejects_duplicate_open_run() -> None:
     assert duplicate_response.json()["details"]["scenario_run_id"] == start_response.json()["id"]
 
 
-def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -> None:
+def test_delete_skill_requires_name_confirmation_and_deletes_gitlab_project() -> None:
     client, fake_gateway, _ = create_test_client()
 
     with client:
@@ -4102,10 +4250,11 @@ def test_delete_skill_requires_name_confirmation_and_archives_gitlab_project() -
     assert delete_response.status_code == 200
     delete_payload = delete_response.json()
     assert delete_payload["status"] == "archived"
-    assert fake_gateway.projects[created["gitlab_project_id"]].archived is True
+    assert created["gitlab_project_id"] in fake_gateway.deleted_project_ids
+    assert created["gitlab_project_id"] not in fake_gateway.projects
 
-    assert all(skill["id"] != skill_id for skill in list_response.json())
-    assert any(skill["id"] == skill_id for skill in archived_response.json())
+    assert all(skill["id"] != skill_id for skill in list_response.json()["items"])
+    assert any(skill["id"] == skill_id for skill in archived_response.json()["items"])
 
 
 def test_archived_skill_name_can_be_recreated_with_a_new_server_key(monkeypatch) -> None:
@@ -4149,6 +4298,7 @@ def test_archived_skill_name_can_be_recreated_with_a_new_server_key(monkeypatch)
     assert second["key"] == "skill-bbbbbbbbbbbb"
     assert first["id"] != second["id"]
     assert first["gitlab_project_id"] != second["gitlab_project_id"]
-    assert fake_gateway.projects[first["gitlab_project_id"]].archived is True
-    assert any(skill["id"] == first["id"] for skill in archived_response.json())
-    assert [skill["id"] for skill in active_response.json()] == [second["id"]]
+    assert first["gitlab_project_id"] in fake_gateway.deleted_project_ids
+    assert first["gitlab_project_id"] not in fake_gateway.projects
+    assert any(skill["id"] == first["id"] for skill in archived_response.json()["items"])
+    assert [skill["id"] for skill in active_response.json()["items"]] == [second["id"]]

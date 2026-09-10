@@ -29,6 +29,29 @@ test("data-dependent page fragments are not instantiated before their data exist
   }
 });
 
+test("page overlays do not repeat the same close-icon action in multiple buttons", () => {
+  const pagesDirectory = path.join(__dirname, "../../../pages");
+  const duplicates = [];
+
+  for (const fileName of fs.readdirSync(pagesDirectory).filter((name) => name.endsWith(".html"))) {
+    const html = fs.readFileSync(path.join(pagesDirectory, fileName), "utf8");
+    const closeActionCounts = new Map();
+
+    for (const button of html.match(/<button\b[\s\S]*?<\/button>/g) || []) {
+      if (!button.includes(">close</span>")) continue;
+      const closeAction = button.match(/@click="(close[A-Za-z0-9_]+\([^"]*\))"/)?.[1];
+      if (!closeAction) continue;
+      closeActionCounts.set(closeAction, (closeActionCounts.get(closeAction) || 0) + 1);
+    }
+
+    for (const [action, count] of closeActionCounts) {
+      if (count > 1) duplicates.push({ fileName, action, count });
+    }
+  }
+
+  expect(duplicates).toEqual([]);
+});
+
 test("run live page is read-only and uses interaction data tabs", () => {
   const html = fs.readFileSync(path.join(__dirname, "../../../pages/run-live.html"), "utf8");
 

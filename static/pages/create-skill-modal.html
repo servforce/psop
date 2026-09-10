@@ -3,9 +3,7 @@
     <section class="flex h-full w-full max-w-xl flex-col overflow-hidden border-l border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.24)]" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="translate-x-full opacity-80" x-transition:enter-end="translate-x-0 opacity-100" x-transition:leave="transition ease-in duration-150" x-transition:leave-start="translate-x-0 opacity-100" x-transition:leave-end="translate-x-full opacity-80">
       <div class="flex items-start justify-between gap-4 border-b border-slate-200 bg-slate-50/80 px-6 py-5">
         <div>
-          <p class="panel-kicker">新建</p>
-          <h2 class="mt-1 text-xl font-semibold text-slate-950">新建 Skill</h2>
-          <p class="mt-2 text-sm leading-6 text-slate-500">创建后会自动初始化 GitLab 仓库，并跳转到 Skill 详情页继续维护源码。</p>
+          <h2 class="text-xl font-semibold text-slate-950">新建 Skill</h2>
         </div>
         <button type="button" class="icon-button" title="关闭" @click="closeCreateModal()">
           <span class="material-symbols-outlined text-[18px]">close</span>
@@ -13,16 +11,18 @@
       </div>
 
       <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="createSkill()">
-        <div class="min-h-0 flex-1 space-y-5 overflow-auto px-6 py-6">
-          <label class="field-block">
-            <span class="field-label">Skill 名称</span>
-            <input x-model="createForm.name" class="input-field" placeholder="例如：设备诊断助手" required />
-            <span class="mt-2 block text-xs leading-5 text-slate-500">系统会在服务端根据名称自动生成唯一的 Skill key。</span>
-          </label>
-          <label class="field-block">
-            <span class="field-label">描述</span>
-            <textarea x-model="createForm.description" class="textarea-field h-36" placeholder="描述这个 Skill 要完成的事情。"></textarea>
-          </label>
+        <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-auto px-6 py-6">
+          <div class="field-block shrink-0">
+            <label class="field-label" for="create-skill-name">名称 <span class="ml-1 text-rose-500" aria-label="必填">*</span></label>
+            <input id="create-skill-name" x-model="createForm.name" class="input-field" placeholder="例如：设备诊断助手" required @invalid="$el.setCustomValidity('请输入 skill 名称。')" @input="$el.setCustomValidity('')" />
+          </div>
+          <div class="field-block min-h-0 flex-1">
+            <label class="field-label" for="create-skill-description">描述 <span class="ml-1 text-rose-500" aria-label="必填">*</span></label>
+            <div class="relative min-h-36 flex-1">
+              <textarea id="create-skill-description" x-model="createForm.description" class="textarea-field h-full min-h-36 resize-none pb-9 pr-16" maxlength="500" aria-describedby="create-skill-description-count" placeholder="描述这个 Skill 要完成的事情。" required @invalid="$el.setCustomValidity('请输出 skill 描述。')" @input="$el.setCustomValidity('')"></textarea>
+              <span id="create-skill-description-count" class="pointer-events-none absolute right-3 bottom-3 text-xs tabular-nums text-slate-500" x-text="(createForm.description || '').length + ' / 500'"></span>
+            </div>
+          </div>
         </div>
         <template x-if="createFormError">
           <div class="shrink-0 border-t border-rose-200 bg-rose-50 px-6 py-3 text-sm leading-6 text-rose-800">
@@ -32,11 +32,7 @@
             </div>
           </div>
         </template>
-        <div class="flex justify-end gap-3 border-t border-slate-200 bg-white px-6 py-4">
-          <button type="button" class="button-secondary" title="取消" aria-label="取消" @click="closeCreateModal()">
-            <span class="material-symbols-outlined text-[18px]">close</span>
-            <span>取消</span>
-          </button>
+        <div class="flex justify-end border-t border-slate-200 bg-white px-6 py-4">
           <button type="submit" class="button-primary" title="创建 Skill" aria-label="创建 Skill" :disabled="busy.create">
             <span class="material-symbols-outlined text-[18px]">add_circle</span>
             <span x-text="busy.create ? '创建中...' : '创建 Skill'"></span>

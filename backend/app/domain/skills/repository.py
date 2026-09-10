@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -24,8 +26,12 @@ class SkillsRepository:
         search: str | None = None,
         status: str | None = None,
         is_published: bool | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> list[SkillDefinition]:
-        query = select(SkillDefinition).order_by(SkillDefinition.updated_at.desc())
+        query = select(SkillDefinition).order_by(SkillDefinition.updated_at.desc(), SkillDefinition.id.desc())
 
         if status:
             query = query.where(SkillDefinition.status == status)
@@ -40,14 +46,70 @@ class SkillsRepository:
             query = query.where(
                 SkillDefinition.key.ilike(pattern) | SkillDefinition.name.ilike(pattern)
             )
+        if created_from:
+            query = query.where(SkillDefinition.created_at >= created_from)
+        if created_to:
+            query = query.where(SkillDefinition.created_at <= created_to)
+        if offset:
+            query = query.offset(offset)
+        if limit:
+            query = query.limit(limit)
 
         return list(session.scalars(query).all())
+
+    def count_skill_definitions(
+        self,
+        session: Session,
+        *,
+        search: str | None = None,
+        status: str | None = None,
+        is_published: bool | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+    ) -> int:
+        query = select(func.count()).select_from(SkillDefinition)
+
+        if status:
+            query = query.where(SkillDefinition.status == status)
+        else:
+            query = query.where(SkillDefinition.status != "archived")
+        if is_published is True:
+            query = query.where(SkillDefinition.latest_published_version_id.is_not(None))
+        elif is_published is False:
+            query = query.where(SkillDefinition.latest_published_version_id.is_(None))
+        if search:
+            pattern = f"%{search.strip()}%"
+            query = query.where(
+                SkillDefinition.key.ilike(pattern) | SkillDefinition.name.ilike(pattern)
+            )
+        if created_from:
+            query = query.where(SkillDefinition.created_at >= created_from)
+        if created_to:
+            query = query.where(SkillDefinition.created_at <= created_to)
+
+        return int(session.scalar(query) or 0)
 
     def get_skill_definition(self, session: Session, skill_id: str) -> SkillDefinition | None:
         return session.get(SkillDefinition, skill_id)
 
     def get_skill_definition_by_key(self, session: Session, key: str) -> SkillDefinition | None:
         return session.scalar(select(SkillDefinition).where(SkillDefinition.key == key))
+
+    def get_active_skill_definition_by_name(
+        self,
+        session: Session,
+        *,
+        name: str,
+        exclude_skill_definition_id: str,
+    ) -> SkillDefinition | None:
+        normalized_name = name.strip().lower()
+        return session.scalar(
+            select(SkillDefinition).where(
+                SkillDefinition.id != exclude_skill_definition_id,
+                SkillDefinition.status != "archived",
+                func.lower(func.trim(SkillDefinition.name)) == normalized_name,
+            )
+        )
 
     def get_skill_version(self, session: Session, version_id: str | None) -> SkillVersion | None:
         if not version_id:

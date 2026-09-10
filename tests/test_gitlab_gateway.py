@@ -83,6 +83,120 @@ def test_http_gitlab_get_retries_transient_server_error(monkeypatch) -> None:
     assert len(calls) == 2
 
 
+def test_http_gitlab_reuses_client_and_closes_it(monkeypatch) -> None:
+    instances = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.closed = False
+            self.calls = []
+            instances.append(self)
+
+        def request(self, method, url, *, params=None, json=None):
+            self.calls.append((method, url))
+            return httpx.Response(200, json={"ok": True})
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr("app.gateway.gitlab.httpx.Client", FakeClient)
+    gateway = HttpGitLabSkillSourceGateway(
+        api_base_url="https://gitlab.example.test/api/v4",
+        token="test-token",
+        timeout_seconds=1,
+    )
+
+    gateway._request("GET", "/projects/1")
+    gateway._request("GET", "/projects/2")
+    gateway.close()
+
+    assert len(instances) == 1
+    assert instances[0].calls == [
+        ("GET", "https://gitlab.example.test/api/v4/projects/1"),
+        ("GET", "https://gitlab.example.test/api/v4/projects/2"),
+    ]
+    assert instances[0].closed is True
+
+
+def test_http_gitlab_delete_project_accepts_empty_success_response(monkeypatch) -> None:
+    gateway = HttpGitLabSkillSourceGateway(
+        api_base_url="https://gitlab.example.test/api/v4",
+        token="test-token",
+        timeout_seconds=1,
+    )
+    calls: list[tuple[str, str]] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, *, params=None, json=None):
+            calls.append((method, url))
+            return httpx.Response(202)
+
+    monkeypatch.setattr("app.gateway.gitlab.httpx.Client", FakeClient)
+
+    gateway.delete_project("42")
+
+    assert calls == [("DELETE", "https://gitlab.example.test/api/v4/projects/42")]
+
+
+def test_http_gitlab_create_project_uses_commit_response_sha_without_branch_lookup() -> None:
+    gateway = HttpGitLabSkillSourceGateway(
+        api_base_url="https://gitlab.example.test/api/v4",
+        token="test-token",
+        timeout_seconds=1,
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        params: dict[str, object] | None = None,
+        json: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        calls.append((method, path))
+        if method == "GET" and path == "/groups/skills":
+            return {"id": 7}
+        if method == "POST" and path == "/projects":
+            return {
+                "id": 42,
+                "name": "Equipment Diagnosis",
+                "path": "equipment-diagnosis",
+                "web_url": "https://gitlab.example.test/skills/equipment-diagnosis",
+                "default_branch": "main",
+            }
+        if method == "POST" and path == "/projects/42/repository/commits":
+            return {"id": "created-commit-sha"}
+        raise AssertionError(f"unexpected GitLab request: {method} {path}")
+
+    gateway._request = fake_request  # type: ignore[method-assign]
+
+    project = gateway.create_skill_project(
+        group_path="skills",
+        project_name="Equipment Diagnosis",
+        project_path="equipment-diagnosis",
+        default_branch="main",
+        initial_readme="# Equipment Diagnosis\n",
+        initial_skill_md="# Skill\n",
+        initial_skill_yaml="skill: {}\n",
+    )
+
+    assert project.head_commit_sha == "created-commit-sha"
+    assert calls == [
+        ("GET", "/groups/skills"),
+        ("POST", "/projects"),
+        ("POST", "/projects/42/repository/commits"),
+    ]
+
+
 def test_http_gitlab_commit_repository_files_skips_unchanged_files() -> None:
     gateway = HttpGitLabSkillSourceGateway(
         api_base_url="https://gitlab.example.test/api/v4",

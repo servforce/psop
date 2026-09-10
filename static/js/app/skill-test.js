@@ -2070,6 +2070,7 @@
           await this.loadSkillTestCaseDetail(skillId, scenarioId);
           this.applySkillTestReviewPayload(review);
           this.applySkillTestReviewInitialPlayhead(review);
+          this.skillTestReviewAutoFollow = this.isOpenSkillTestRun(review.scenario_run);
           this.startSkillTestReviewPolling(scenarioRunId);
         } finally {
           this.busy.skillTestRun = false;
@@ -2109,7 +2110,10 @@
           this.selectedSkillTestReviewLaneId = "";
           this.skillTestReviewDetailTab = "transcript";
         }
-        this.skillTestReviewPlayheadMs = Math.min(this.skillTestReviewDurationMs(), Math.max(0, Number(previousPlayhead || 0)));
+        const targetPlayhead = this.skillTestReviewAutoFollow
+          ? Math.max(Number(previousPlayhead || 0), this.skillTestReviewInitialPlayheadMs(review))
+          : Number(previousPlayhead || 0);
+        this.skillTestReviewPlayheadMs = Math.min(this.skillTestReviewDurationMs(), Math.max(0, targetPlayhead));
         this.skillTestReviewCursor = this.skillTestReviewProgressPercent();
       },
 
@@ -2143,7 +2147,7 @@
           } catch {
             // A later tick or route reload can recover the review snapshot.
           }
-        }, 2000);
+        }, 1000);
       },
 
 

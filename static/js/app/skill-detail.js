@@ -30,17 +30,65 @@
         try {
           const params = new URLSearchParams();
           const useFilters = options.useFilters !== false;
+          const allPages = options.allPages === true;
+          const page = allPages ? 1 : Number(options.page || this.skillPagination.page || 1);
+          const pageSize = allPages ? 100 : Number(this.skillPagination.page_size || 20);
           if (useFilters && this.filters.search.trim()) {
             params.set("search", this.filters.search.trim());
           }
           if (useFilters && this.filters.published_state) {
             params.set("is_published", String(this.filters.published_state === "published"));
           }
-          const suffix = params.toString() ? `?${params}` : "";
-          this.skills = await this.apiRequest(`/skills${suffix}`);
+          if (useFilters && this.filters.created_from) {
+            params.set("created_from", new Date(`${this.filters.created_from}T00:00:00`).toISOString());
+          }
+          if (useFilters && this.filters.created_to) {
+            params.set("created_to", new Date(`${this.filters.created_to}T23:59:59.999`).toISOString());
+          }
+          params.set("page", String(page));
+          params.set("page_size", String(pageSize));
+
+          const response = await this.apiRequest(`/skills?${params.toString()}`);
+          let items = response.items || [];
+          if (allPages) {
+            for (let nextPage = 2; nextPage <= response.total_pages; nextPage += 1) {
+              params.set("page", String(nextPage));
+              const nextResponse = await this.apiRequest(`/skills?${params.toString()}`);
+              items = items.concat(nextResponse.items || []);
+            }
+          }
+          this.skills = items;
+          if (allPages) {
+            return;
+          }
+          this.skillPagination = {
+            page: response.page,
+            page_size: response.page_size,
+            total: response.total,
+            total_pages: response.total_pages
+          };
+
+          if (!allPages && response.total_pages > 0 && response.page > response.total_pages) {
+            await this.loadSkills({ ...options, page: response.total_pages });
+          }
         } finally {
           this.busy.list = false;
         }
+      },
+
+
+      changeSkillPage(page) {
+        const targetPage = Number(page);
+        if (
+          this.busy.list ||
+          !Number.isInteger(targetPage) ||
+          targetPage < 1 ||
+          targetPage > this.skillPagination.total_pages ||
+          targetPage === this.skillPagination.page
+        ) {
+          return;
+        }
+        return this.loadSkills({ page: targetPage });
       },
 
 
@@ -56,7 +104,7 @@
           });
           this.createForm = { name: "", description: "" };
           this.createModalOpen = false;
-          await this.navigate(buildSkillDetailPath(created.id));
+          await this.navigate(buildSkillDetailPath(created.id), { skillDetail: created });
           this.showNotice("success", "Skill 已创建，并已在 GitLab 中初始化。");
         } catch (error) {
           this.createFormError = error.message || "创建 Skill 失败。";
@@ -90,7 +138,7 @@
             await this.loadSkills();
           }
 
-          this.showCenterToast("success", "Skill 已归档；现在可以使用相同名称创建新的 Skill。");
+          this.showCenterToast("success", "Skill 已删除；GitLab 项目已进入删除流程。");
         } catch (error) {
           this.showCenterToast("error", error.message || "删除 Skill 失败。");
         } finally {
@@ -102,7 +150,9 @@
       async loadSkillDetail(skillId, options = {}) {
         this.busy.detail = true;
         try {
-          const detail = await this.apiRequest(`/skills/${skillId}`);
+          const detail = options.initialDetail?.id === skillId
+            ? options.initialDetail
+            : await this.apiRequest(`/skills/${skillId}`);
 
           this.currentSkill = detail;
           this.metadataForm = {
@@ -189,6 +239,13 @@
         this.skillTestRuns = [];
         this.skillTestRun = null;
         this.skillTestReview = null;
+        this.skillRuns = [];
+        this.skillRunPagination = {
+          ...this.skillRunPagination,
+          page: 1,
+          total: 0,
+          total_pages: 0
+        };
         this.skillTestReviewCursor = 100;
         this.skillTestReviewAutoFollow = true;
         this.skillTestCaseSearch = "";
@@ -258,14 +315,14 @@
       },
 
 
-      async openRawMaterialDetail(material) {
+      async openRawMaterialDetail(material, options = {}) {
         if (!this.currentSkill || !material?.id) {
           return;
         }
 
         this.busy.rawMaterialDetail = true;
         try {
-          this.rawMaterialDetailTab = "analysis";
+          this.rawMaterialDetailTab = options.initialTab === "preview" ? "preview" : "analysis";
           this.rawMaterialDetail = await this.apiRequest(`/skills/${this.currentSkill.id}/raw-materials/${material.id}`);
           await this.loadRawMaterialAnalysis(this.rawMaterialDetail.id);
         } finally {
@@ -515,7 +572,7 @@
           }
           const lastCreated = createdMaterials[createdMaterials.length - 1];
           if (lastCreated) {
-            await this.openRawMaterialDetail(lastCreated);
+            await this.openRawMaterialDetail(lastCreated, { initialTab: "preview" });
           }
           const noticeType = createdMaterials.some((material) => material.status === "failed") ? "error" : "success";
           this.showNotice(noticeType, this.rawMaterialUploadSuccessMessage(createdMaterials));
@@ -1052,8 +1109,7 @@
           review_notes: result.review_notes || [],
           generated_file_paths: Object.keys(result.generated_files || {}).sort(),
           reference_files: result.prompt_metadata?.reference_files || [],
-          committed_commit_sha: result.committed_commit_sha || "",
-          standard_search_summary: result.prompt_metadata?.standard_search_summary || {}
+          committed_commit_sha: result.committed_commit_sha || ""
         };
         this.builderAgentPanel.errorMessage = result.error_message || "";
         this.builderAgentPanel.processExpanded = status !== "succeeded";
@@ -1168,17 +1224,6 @@
 
       builderAgentReviewNotes() {
         return this.builderAgentPanel.result?.review_notes || [];
-      },
-
-
-      builderAgentStandardSearchSummaryText() {
-        const summary = this.builderAgentPanel.result?.standard_search_summary;
-        if (!summary || typeof summary !== "object" || Object.keys(summary).length === 0) {
-          return "无标准检索摘要";
-        }
-        const count = summary.result_count ?? summary.count ?? "";
-        const status = summary.status || "";
-        return [status, count !== "" ? `${count} 条结果` : ""].filter(Boolean).join("，") || "已记录标准检索摘要";
       },
 
 
@@ -1937,7 +1982,7 @@
           created_from: "",
           created_to: ""
         };
-        this.loadSkills();
+        this.loadSkills({ page: 1 });
       },
 
 

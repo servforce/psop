@@ -27,12 +27,11 @@
       async loadCompilerRequests(skillId = null) {
         this.busy.compilerRequests = true;
         try {
-          const [compilerRequests, skills] = await Promise.all([
+          const [compilerRequests] = await Promise.all([
             this.apiRequest(`/compiler/requests${skillId ? `?skill_id=${encodeURIComponent(skillId)}` : ""}`),
-            this.apiRequest("/skills")
+            this.loadSkills({ useFilters: false, allPages: true })
           ]);
           this.compilerRequests = compilerRequests;
-          this.skills = skills;
         } finally {
           this.busy.compilerRequests = false;
         }

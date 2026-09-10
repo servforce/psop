@@ -10,13 +10,13 @@
 - `README.md` 说明 Skill 目标、适用范围、输入素材要求、输出和审阅注意事项。
 - `SKILL.md` 包含阶段化 workflow、证据门、等待条件、安全停止和恢复路径。
 - `prompts/system.md` 只包含运行时必要系统提示，不混入 builder 工作日志。
-- `references/README.md` 能说明参考资产和行业标准的用途。
+- `references/README.md` 能说明参考资产的用途。
 - 候选文档中引用参考图片时必须使用可解析的 `reference_path`；哪个流程步骤使用该图片，就必须在该步骤附近用 Markdown 图片语法引用相对路径，例如 `![CPU 安装参考](references/video-keyframes/.../000950504.jpg)`。`submit_candidate` 会把选中的原图文件物化到最终 PSOP Skill draft 的 `references/` 目录，不能使用 base64 data URI，不能要求用户打开外部图片链接，也不能把参考图片集中放在文档底部。
 - `examples/input.md` 与 `examples/expected-output.md` 展示典型调用和期望行为。
-- `tests/checklist.md` 覆盖 happy path、缺失证据、风险停止、标准引用和人工确认。
+- `tests/checklist.md` 覆盖 happy path、缺失证据、风险停止和人工确认。
 - `evidence_map` 中每个关键 claim 都有合法 source refs。
 - `workflow_step_candidates` 和 `expected_evidence_requirements` 通过稳定 ID 对应 `SKILL.md` 的 `### [stage_id] title` 阶段标题。
-- `industry_standard_usage` 中的标准引用可追溯，没有被写成未受支持的强制要求。
+- `industry_standard_usage` 中的标准编号、条款号和使用目标完整且来源可追溯；没有可靠来源时为空。
 
 ## 发布审阅标准
 
@@ -35,7 +35,7 @@
 
 - 把 PSOP Skill 写成操作说明书摘要，没有运行时判断条件。
 - 每一步都写“确认安全”，但不说明确认什么证据。
-- 引用标准但没有标准编号、条款、适用位置。
+- 在没有可追溯来源时新增标准编号或条款。
 - 只选择漂亮关键帧，不选择能支撑运行时判断的关键帧。
 - 把素材中不确定或被遮挡的动作写成确定事实。
 - 产物中出现 `TODO`、`待补充`、`根据实际情况` 等未审阅占位内容。
@@ -53,7 +53,6 @@
 - `files` 中必须有所有必需 Markdown 文件的完整内容。
 - `directory_tree`、`generation_reason`、`review_notes`、`material_usage`、`industry_standard_usage`、`selected_reference_assets`、`evidence_map`、`missing_questions`、`safety_constraints`、`workflow_step_candidates`、`expected_evidence_requirements` 必须同时提交。
 - `selected_reference_assets` 最多 12 项，每项的 `stage_ids` 必须引用已声明阶段，并且每个 `reference_path` 必须在 `SKILL.md` 的使用步骤附近以 Markdown 图片链接形式出现。
-- 如果 LightRAG 检索失败，不要伪造行业标准；在 `review_notes` 中说明失败状态，并保持 `industry_standard_usage` 为空数组或只写可追溯的 `reference_only` 项。
 
 不得创建 workspace 中间文件；证据映射、参考资产选择和全部 Markdown 必须直接进入完整 `submit_candidate` 参数。
 
@@ -66,6 +65,6 @@
 - 每个 `missing_questions` 含 `question`、`reason`、`blocking_level`。
 - 每个安全约束、workflow、expected evidence、参考资产和标准使用项都满足工具 schema 的必填字段、唯一 ID、scope 组合及交叉引用规则。
 - 每个 workflow、安全约束和 expected evidence 都由可验证 `evidence_map.used_in` 目标覆盖。
-- 标准检索不可用是正常降级：不写标准引用，且 `review_notes` 必须含 `标准检索不可用，未引用行业标准。`
+- `industry_standard_usage` 中的每项标准引用都必须有可核实来源；没有可靠来源时传空数组。
 
 若工具返回 `repair_checklist`，视为整份 candidate 的重新审查任务；必须修复清单中的全部字段，不得只修复第一项后重新提交。

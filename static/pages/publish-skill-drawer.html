@@ -107,13 +107,9 @@
           </template>
         </div>
 
-        <div class="flex justify-end gap-3 border-t border-slate-200 bg-white px-6 py-4">
+        <div class="flex justify-end border-t border-slate-200 bg-white px-6 py-4">
           <template x-if="!publishProgress.active">
-            <div class="flex gap-3">
-              <button type="button" class="button-secondary" title="取消" aria-label="取消" @click="closePublishDrawer()">
-                <span class="material-symbols-outlined text-[18px]">close</span>
-                <span>取消</span>
-              </button>
+            <div class="flex">
               <button type="submit" class="button-primary" title="确认发布" aria-label="确认发布" :disabled="busy.publish || !publishForm.publish_reason">
                 <span class="material-symbols-outlined text-[18px]">rocket_launch</span>
                 <span x-text="busy.publish ? '提交中...' : '确认发布'"></span>

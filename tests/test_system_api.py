@@ -74,13 +74,13 @@ def test_runs_status_filter_accepts_multiple_enum_values_and_rejects_unknown_sta
         "cancelled",
     ]
 
-    captured_statuses = []
+    captured_queries = []
 
-    def fake_list_runs(self, session, *, status=None, skill_id=None):
-        captured_statuses.append(status)
-        return []
+    def fake_list_runs_page(self, session, *, page, page_size, status=None, skill_id=None):
+        captured_queries.append((status, page, page_size))
+        return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
 
-    monkeypatch.setattr("app.domain.runtime.service.RuntimeService.list_runs", fake_list_runs)
+    monkeypatch.setattr("app.domain.runtime.service.RuntimeService.list_runs_page", fake_list_runs_page)
 
     with TestClient(app) as client:
         valid_response = client.get(
@@ -90,8 +90,14 @@ def test_runs_status_filter_accepts_multiple_enum_values_and_rejects_unknown_sta
         invalid_response = client.get("/api/v1/runs", params={"status": "unknown"})
 
     assert valid_response.status_code == 200
-    assert valid_response.json() == []
-    assert captured_statuses == [["waiting_input", "failed"]]
+    assert valid_response.json() == {
+        "items": [],
+        "total": 0,
+        "page": 1,
+        "page_size": 20,
+        "total_pages": 0,
+    }
+    assert captured_queries == [(["waiting_input", "failed"], 1, 20)]
     assert invalid_response.status_code == 422
 
 

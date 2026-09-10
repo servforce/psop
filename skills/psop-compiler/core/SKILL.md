@@ -4,7 +4,7 @@
 
 用于把冻结的 PSOP Skill source 编译为 formal-v5 PSOP Execution Graph candidate。Compiler 只提交候选产物，不发布 ready artifact，不修改 Skill source。
 
-行业标准检索是 builder 阶段职责，不是 compiler 阶段职责。Compiler 只能编译 frozen source、manifest 或 invocation context 中已经固化的标准引用；不得主动调用、要求或模拟行业标准检索。
+Compiler 只能编译 frozen source、manifest 或 invocation context 中已经固化的标准引用。
 
 ## 核心流程
 
@@ -27,7 +27,7 @@
 - scaffold 产物较大时必须通过 `artifact_ref` / `candidate_ref` 在工具之间传递，避免模型在 tool arguments 中搬运完整 EG JSON。
 - source 不足以支撑的 target 必须写入 diagnostics，不能编造依据。
 - domain pack 只能辅助理解术语、常见步骤和质量标准，不能改变 formal-v5 或 allowed runtime。
-- 不因为行业标准检索不可用生成 compiler diagnostic；如果 frozen source 中已经包含标准引用，只把它当作 source evidence 编译。
+- 如果 frozen source 中已经包含标准引用，只把它当作 source evidence 编译。
 - compiler inference 必须在 `source_map` 或 diagnostics 中标明，不能伪装成 frozen source 事实。
 
 ## 禁止事项

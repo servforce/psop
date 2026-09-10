@@ -60,12 +60,6 @@
         "reference_path": "references/keyframes/pump-room-pressure.jpg",
         "confidence": 0.82
       }
-    ],
-    "standard_search_policy": {
-      "enabled": true,
-      "required_for_builder": true,
-      "max_results": 3,
-      "trust_level": "semi_trusted_reference"
-    }
+    ]
   }
 }

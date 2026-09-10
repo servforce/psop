@@ -564,7 +564,7 @@ version: v1
 runner_kind: langchain_agent
 factory: make_builder_agent
 profile: dev_open
-purpose: Build PSOP Skill draft candidates from raw materials and standards.
+purpose: Build PSOP Skill draft candidates from raw materials and reference assets.
 model:
   name: default
   thinking_enabled: false
@@ -578,7 +578,6 @@ tools:
   - psop.builder.list_materials
   - psop.builder.read_material_analysis
   - psop.builder.list_reference_assets
-  - psop.standard.search
   - psop.builder.submit_candidate
 mcp:
   enabled: false
@@ -668,7 +667,7 @@ Agent Skill 与 PSOP Skill 是不同对象。
 
 | 智能体 | runner_kind | 输入 | 输出 | 首版工具 |
 | --- | --- | --- | --- | --- |
-| `psop-builder` | `langchain_agent` | raw material、keyframes、transcript、LightRAG standards、user goal | PSOP Skill draft candidate、evidence map、standard usage、missing questions、safety constraints | raw_material read、reference assets read、standard search、builder candidate、workspace |
+| `psop-builder` | `langchain_agent` | raw material、keyframes、transcript、user goal | PSOP Skill draft candidate、evidence map、missing questions、safety constraints | raw_material read、reference assets read、builder candidate |
 | `psop-compiler` | `langchain_agent` | PSOP Skill、manifest、domain pack、allowed runtime | PSOP-EG、compile diagnostics、summary | skill read、formal-v5 validate、artifact write、workspace |
 | `psop-tester` | `langchain_agent` | PSOP Skill、PSOP-EG、world model | test suite、scenario runs、coverage、feedback | test scenario、runtime invocation、terminal event、replay、judge |
 | `psop-runner` | `psop_runtime` | invocation、PSOP-EG、terminal events | Run Package、Replay、final output | RuntimeService 内置 actor/tool |
@@ -770,11 +769,12 @@ Agent Skill 与 PSOP Skill 是不同对象。
 | Inference | `/api/v1/gateway/inference/models` | 模型能力 |
 | Jobs | `/api/v1/runtime/jobs` | runtime_job read model |
 
-Skill 创建与归档遵循以下契约：
+Skill 列表、创建、重命名与删除遵循以下契约：
 
+- `GET /api/v1/skills` 与 `GET /api/v1/runs` 使用 `page`、`page_size` 分页查询，响应统一返回 `items`、`total`、`page`、`page_size`、`total_pages`；省略参数时使用 `page=1&page_size=20`。
 - `POST /api/v1/skills` 以 `name` 与 `description` 作为创建输入；`key` 由服务端根据名称和随机后缀生成，请求中携带的同名字段会被忽略。
-- `key` 是全局唯一且稳定的运行时标识，Skill 名称允许重复；服务端生成 key 时会同时避让 active 与 archived 记录。
-- 删除 Skill 的正式语义是归档：数据库历史和 GitLab 项目保留。归档后可使用相同名称创建具有新 ID、key 和 GitLab 项目的独立 Skill。
+- `key` 是全局唯一且稳定的运行时标识，服务端生成 key 时会同时避让 active 与 archived 记录。重命名时不得与其他未归档 Skill 重名，比较时忽略大小写和首尾空格。
+- 删除 Skill 时，数据库记录标记为 archived 以保留历史，对应 GitLab 项目进入删除流程。删除后可使用相同名称创建具有新 ID、key 和 GitLab 项目的独立 Skill。
 
 ### 10.2 新增 Agent API
 
@@ -1032,7 +1032,7 @@ Eval proposal
 验收链路：
 
 ```text
-raw material summary + standard snippets
+raw material summary + reference assets
   -> PSOP Skill draft
   -> PSOP-EG
   -> generated positive/negative tests

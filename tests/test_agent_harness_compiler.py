@@ -149,7 +149,6 @@ def test_psop_compiler_definition_and_skills_load() -> None:
     assert package.definition.description.startswith("将冻结的 PSOP Skill source")
     assert package.definition.memory_scope == "psop.compiler"
     assert package.definition.factory == "make_compiler_agent"
-    assert "psop.standard.search" not in package.definition.tools
     assert package.definition.skills == ["psop-compiler"]
     for skill_name in package.definition.skills:
         skill = loader.load_metadata(skill_name)

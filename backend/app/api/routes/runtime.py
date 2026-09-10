@@ -49,6 +49,7 @@ from app.domain.runtime.schemas import (
     ReplayDetailResponse,
     ResolveRunBindingsRequest,
     RunCapabilityBindingResponse,
+    RunListResponse,
     RunResponse,
     RunStatus,
     RunTaskStatusResponse,
@@ -132,14 +133,31 @@ def get_invocation(
     return service.get_invocation(session, invocation_id)
 
 
-@runs_router.get("", response_model=list[RunResponse])
+@runs_router.get("", response_model=RunListResponse)
 def list_runs(
     status: list[RunStatus] | None = Query(default=None),
     skill_id: str | None = Query(default=None),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     session: Session = Depends(get_db_session),
     service: RuntimeService = Depends(get_runtime_service),
-) -> list[RunResponse]:
-    return service.list_runs(session, status=status, skill_id=skill_id)
+) -> RunListResponse:
+    filters = {
+        "status": status,
+        "skill_id": skill_id,
+    }
+    if created_from is not None:
+        filters["created_from"] = created_from
+    if created_to is not None:
+        filters["created_to"] = created_to
+    return service.list_runs_page(
+        session,
+        **filters,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @runs_router.get("/{run_id}", response_model=RunResponse)

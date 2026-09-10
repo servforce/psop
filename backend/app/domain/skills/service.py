@@ -7,6 +7,7 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ from app.core.config import Settings
 from app.core.logging import log_context
 from app.core.observability import record_span_exception, start_span
 from app.domain.skills.exceptions import (
+    SkillConflictError,
     SkillsError,
     SkillsGatewayError,
     SkillNotFoundError,
@@ -79,6 +81,7 @@ from app.domain.skills.schemas import (
     SaveSkillRepositoryFileRequest,
     SaveSkillSourceRequest,
     SkillDetailResponse,
+    SkillListResponse,
     SkillPublishRecordResponse,
     SkillRawMaterialAnalysisResponse,
     SkillRawMaterialDerivedAssetResponse,
@@ -155,21 +158,39 @@ class SkillsService:
         self.job_repository = job_repository or JobRepository()
         self.agent_harness_service = agent_harness_service
 
-    def list_skills(
+    def list_skills_page(
         self,
         session: Session,
         *,
+        page: int,
+        page_size: int,
         search: str | None = None,
         status: str | None = None,
         is_published: bool | None = None,
-    ) -> list[SkillSummaryResponse]:
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+    ) -> SkillListResponse:
+        filters = {
+            "search": search,
+            "status": status,
+            "is_published": is_published,
+            "created_from": created_from,
+            "created_to": created_to,
+        }
+        total = self.repository.count_skill_definitions(session, **filters)
         definitions = self.repository.list_skill_definitions(
             session,
-            search=search,
-            status=status,
-            is_published=is_published,
+            **filters,
+            limit=page_size,
+            offset=(page - 1) * page_size,
         )
-        return [self._build_skill_summary(session, definition) for definition in definitions]
+        return SkillListResponse(
+            items=[self._build_skill_summary(session, definition) for definition in definitions],
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=(total + page_size - 1) // page_size,
+        )
 
     def create_skill(self, session: Session, payload: CreateSkillRequest) -> SkillDetailResponse:
         skill_key = self._generate_unique_skill_key(session, payload.name)
@@ -262,6 +283,22 @@ class SkillsService:
         if payload.name is None and payload.description is None:
             return self.get_skill_detail(session, skill_id)
 
+        if payload.name is not None:
+            conflicting_definition = self.repository.get_active_skill_definition_by_name(
+                session,
+                name=payload.name,
+                exclude_skill_definition_id=definition.id,
+            )
+            if conflicting_definition is not None:
+                raise SkillConflictError(
+                    f'Skill 名称“{payload.name.strip()}”已存在，请使用其他名称。',
+                    details={
+                        "field": "name",
+                        "conflicting_skill_id": conflicting_definition.id,
+                        "conflicting_skill_name": conflicting_definition.name,
+                    },
+                )
+
         source_bundle = self.gitlab_gateway.get_skill_source(definition.gitlab_project_id, definition.default_branch)
         document = self._document_from_version_snapshot(draft_version, source_bundle.skill_yaml_content)
 
@@ -314,7 +351,7 @@ class SkillsService:
             )
 
         if definition.status != "archived":
-            self.gitlab_gateway.archive_project(definition.gitlab_project_id)
+            self.gitlab_gateway.delete_project(definition.gitlab_project_id)
             definition.status = "archived"
             session.commit()
             session.refresh(definition)
@@ -1522,7 +1559,6 @@ class SkillsService:
             "agent_run_id": agent_result.agent_run_id,
             "sandbox_path": agent_result.sandbox_path or "",
             "events_path": str(Path(agent_result.sandbox_path) / "events.jsonl") if agent_result.sandbox_path else "",
-            "standard_search_summary": self._agent_standard_search_summary(agent_result),
             "selected_reference_assets": [],
             "builder_artifact_path": "",
             "builder_files_path": self._agent_artifact_path(agent_result, "skill_draft_files"),
@@ -1683,12 +1719,6 @@ class SkillsService:
             context={
                 "material_analysis_results": prompt_payload.get("material_analysis_results") or [],
                 "candidate_reference_assets": prompt_payload.get("candidate_reference_assets") or [],
-                "standard_search_policy": {
-                    "enabled": True,
-                    "required_for_builder": False,
-                    "max_results": self.settings.standard_lightrag_max_results,
-                    "trust_level": "semi_trusted_reference",
-                },
                 BUILDER_REVISION_BASELINE_CONTEXT_KEY: prompt_payload.get("revision_baseline") or {},
             },
         )
@@ -1755,24 +1785,6 @@ class SkillsService:
         if usage_event_count:
             usage["llm_calls"] = usage_event_count
         return usage
-
-    @staticmethod
-    def _agent_standard_search_summary(agent_result: AgentResult) -> dict:
-        summaries = [
-            event.payload
-            for event in agent_result.events
-            if event.event_type == "agent.tool.standard_search" and isinstance(event.payload, dict)
-        ]
-        if not summaries:
-            return {"called": False, "result_count": 0, "standard_refs": []}
-        latest = summaries[-1]
-        return {
-            "called": True,
-            "status": latest.get("status") or "",
-            "error_type": latest.get("error_type") or "",
-            "result_count": latest.get("result_count") or 0,
-            "standard_refs": latest.get("standard_refs") or [],
-        }
 
     @staticmethod
     def _agent_budget_failure_details(agent_result: AgentResult) -> dict:
@@ -1994,15 +2006,14 @@ class SkillsService:
                 "priority": [
                     "confirmed_revision_instruction",
                     "direct_material_evidence",
-                    "traceable_industry_standard",
                     "current_source_as_revision_target",
                     "builder_inference",
                 ],
                 "rules": [
                     "当前 draft 仅是待修订内容，不能单独支撑新的事实性或强制性流程。",
-                    "每个强制工作流、安全约束和完成标准必须由结构化 evidence_map.used_in 目标关联到素材、用户确认或可追溯标准。",
+                    "每个强制工作流、安全约束和完成标准必须由结构化 evidence_map.used_in 目标关联到素材或用户确认。",
                     "builder_inference 与 human_confirmation_required 只能用于可选建议、审阅风险或待确认项。",
-                    "标准检索不可用时不得引用 industry_standard，必须在 review_notes 写入“标准检索不可用，未引用行业标准”。",
+                    "行业标准引用必须有可追溯来源；无法核实的编号或条款必须进入审阅项。",
                     "previous_validation_summary 不为空时，必须在首次提交前逐项避免其中列出的字段错误。",
                 ],
             },

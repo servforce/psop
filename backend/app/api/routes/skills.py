@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, status
@@ -21,6 +22,7 @@ from app.domain.skills.schemas import (
     SaveSkillRepositoryFileRequest,
     SaveSkillSourceRequest,
     SkillDetailResponse,
+    SkillListResponse,
     SkillRawMaterialAnalysisResponse,
     SkillPublishRecordResponse,
     SkillRawMaterialDetailResponse,
@@ -38,15 +40,31 @@ from app.domain.skills.service import SkillsService
 router = APIRouter(prefix="/skills", tags=["skills"])
 
 
-@router.get("", response_model=list[SkillSummaryResponse])
+@router.get("", response_model=SkillListResponse)
 def list_skills(
     search: str | None = Query(default=None),
     status: str | None = Query(default=None),
     is_published: bool | None = Query(default=None),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     session: Session = Depends(get_db_session),
     service: SkillsService = Depends(get_skills_service),
-) -> list[SkillSummaryResponse]:
-    return service.list_skills(session, search=search, status=status, is_published=is_published)
+) -> SkillListResponse:
+    filters = {
+        "search": search,
+        "status": status,
+        "is_published": is_published,
+        "created_from": created_from,
+        "created_to": created_to,
+    }
+    return service.list_skills_page(
+        session,
+        **filters,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("", response_model=SkillDetailResponse, status_code=201)

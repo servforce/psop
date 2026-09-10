@@ -7,6 +7,8 @@
 - [比赛简介](competition-overview.md)
 - [PSOP 参赛指引与任务看板](participation-board.md)
 - [PSOP 初赛作品介绍](project-introduction.md)
+- [PSOP Demo 视频脚本](demo-video-script.md)
+- [PSOP Demo 14 秒 AI 3D 开场提示词](demo-video-ai-opening-prompt.md)
 
 建议归档内容包括：
 

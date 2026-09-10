@@ -24,8 +24,6 @@ BUILDER_DRAFT_FILES_VIRTUAL_ROOT = f"{PSOP_OUTPUTS_VIRTUAL_ROOT}/skill-draft"
 BUILDER_REFERENCE_ASSET_FILES_CONTEXT_KEY = "_psop_builder_reference_asset_files"
 BUILDER_REVISION_BASELINE_CONTEXT_KEY = "_psop_builder_revision_baseline"
 _REFERENCE_ASSETS_CONTEXT_KEY = "_psop_builder_reference_assets"
-_STANDARD_RESULTS_CONTEXT_KEY = "_psop_builder_standard_results"
-_STANDARD_SEARCH_STATUS_CONTEXT_KEY = "_psop_builder_standard_search_status"
 _SUBMIT_CANDIDATE_ERROR_COUNT_CONTEXT_KEY = "_psop_builder_submit_candidate_error_count"
 _SUBMIT_CANDIDATE_REQUIRED_FIELDS = [
     "schema_version",
@@ -308,7 +306,7 @@ def _read_material_analysis(arguments: dict[str, Any], context: ToolExecutionCon
             "artifact_ref": str(analysis.get("artifact_ref") or ""),
             "trust_level": "untrusted_material_analysis",
             "truncated": False,
-            "next_valid_actions": ["psop.builder.list_reference_assets", "psop.standard.search"],
+            "next_valid_actions": ["psop.builder.list_reference_assets", "psop.builder.submit_candidate"],
         }
         if detail_level == "full":
             raw = json.dumps(analysis, ensure_ascii=False, sort_keys=True)
@@ -355,7 +353,7 @@ def _list_reference_assets(arguments: dict[str, Any], context: ToolExecutionCont
         "items": items,
         "next_cursor": None,
         "truncated": len(items) >= max_items,
-        "next_valid_actions": ["workspace.write_text", "psop.standard.search", "psop.builder.submit_candidate"],
+        "next_valid_actions": ["psop.builder.submit_candidate"],
     }
 
 
@@ -376,18 +374,14 @@ def _submit_candidate(arguments: dict[str, Any], context: ToolExecutionContext) 
             ],
         )
     reference_assets = _reference_assets_for_validation(context)
-    standard_results = context.invocation_context.get(_STANDARD_RESULTS_CONTEXT_KEY)
-    if not isinstance(standard_results, list):
-        standard_results = []
     try:
         candidate_payload = arguments
         revision_provenance: dict[str, Any] = {}
-        inherited_standard_targets: set[tuple[str, str, str, str, str]] = set()
         baseline = context.invocation_context.get(BUILDER_REVISION_BASELINE_CONTEXT_KEY)
         if isinstance(baseline, dict) and baseline.get("inheritance_enabled") is True:
             baseline_candidate = baseline.get("candidate")
             if isinstance(baseline_candidate, dict):
-                candidate_payload, revision_provenance, inherited_standard_targets = reconcile_builder_candidate(
+                candidate_payload, revision_provenance = reconcile_builder_candidate(
                     arguments,
                     baseline_payload=baseline_candidate,
                     baseline_generation_id=str(baseline.get("generation_id") or ""),
@@ -397,9 +391,6 @@ def _submit_candidate(arguments: dict[str, Any], context: ToolExecutionContext) 
         candidate = validate_builder_candidate(
             candidate_payload,
             candidate_reference_assets=reference_assets,
-            standard_search_results=standard_results,
-            standard_search_status=str(context.invocation_context.get(_STANDARD_SEARCH_STATUS_CONTEXT_KEY) or "") or None,
-            inherited_industry_standard_targets=inherited_standard_targets,
         )
     except ValueError as exc:
         return _submit_candidate_error_result(

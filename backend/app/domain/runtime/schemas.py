@@ -72,6 +72,14 @@ class RunResponse(BaseModel):
     updated_at: datetime
 
 
+class RunListResponse(BaseModel):
+    items: list[RunResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 class RunTaskIdentityResponse(BaseModel):
     skill_key: str = ""
     skill_name: str = ""

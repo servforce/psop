@@ -22,8 +22,6 @@ def _settings() -> Settings:
         database_check_on_startup=False,
         database_auto_create_schema=True,
         runtime_worker_enabled=False,
-        standard_lightrag_base_url="",
-        standard_lightrag_api_key="",
     )
 
 
@@ -51,7 +49,6 @@ def _insert_builder_generation(client: TestClient, *, status: str = "pending", w
                     "agent_run_id": GENERATION_ID,
                     "job_id": JOB_ID,
                     "reference_files": ["references/frame-001.png"],
-                    "standard_search_summary": {"status": "ok", "result_count": 1},
                 },
                 generated_files={"README.md": "# 安装电脑主机", "SKILL.md": "# 安装电脑主机"},
                 generation_reason="基于素材生成安装电脑主机流程。",

@@ -873,7 +873,6 @@ agent.skill.resource.loaded
 - 建立 frozen source、manifest、allowed runtime、domain pack 和 diagnostics 的事实边界。
 - 抽取 Skill source 中的 execution goal、applicability、workflow steps、expected evidence、safety constraints、wait checkpoints、completion criteria 和 recovery paths。
 - 维护 source traceability，禁止编造 source evidence。
-- 约束 compiler 不调用、不要求、不模拟行业标准检索。
 
 核心流程：
 

@@ -4,6 +4,7 @@ import base64
 from dataclasses import dataclass
 import hashlib
 import logging
+from threading import Lock
 import time
 from typing import Protocol
 from urllib.parse import quote
@@ -128,7 +129,7 @@ class GitLabSkillSourceGateway(Protocol):
     def update_project_name(self, project_id: str, name: str) -> None:
         ...
 
-    def archive_project(self, project_id: str) -> None:
+    def delete_project(self, project_id: str) -> None:
         ...
 
 
@@ -145,6 +146,8 @@ class HttpGitLabSkillSourceGateway:
         self.api_base_url = api_base_url.rstrip("/")
         self.token = token
         self.timeout_seconds = timeout_seconds
+        self._client: httpx.Client | None = None
+        self._client_lock = Lock()
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "HttpGitLabSkillSourceGateway":
@@ -160,6 +163,21 @@ class HttpGitLabSkillSourceGateway:
 
         return {"Private-Token": self.token}
 
+    def _http_client(self) -> httpx.Client:
+        if self._client is not None:
+            return self._client
+        with self._client_lock:
+            if self._client is None:
+                self._client = httpx.Client(timeout=self.timeout_seconds, headers=self._headers())
+            return self._client
+
+    def close(self) -> None:
+        with self._client_lock:
+            client = self._client
+            self._client = None
+        if client is not None:
+            client.close()
+
     def _request(
         self,
         method: str,
@@ -167,6 +185,7 @@ class HttpGitLabSkillSourceGateway:
         *,
         params: dict[str, object] | None = None,
         json: dict[str, object] | None = None,
+        allow_empty_response: bool = False,
     ) -> dict | list:
         url = f"{self.api_base_url}{path}"
         max_attempts = GITLAB_READ_MAX_ATTEMPTS if method.upper() == "GET" else 1
@@ -181,8 +200,7 @@ class HttpGitLabSkillSourceGateway:
                     api_base_url=self.api_base_url,
                     attempt=attempt,
                 ) as span:
-                    with httpx.Client(timeout=self.timeout_seconds, headers=self._headers()) as client:
-                        response = client.request(method, url, params=params, json=json)
+                    response = self._http_client().request(method, url, params=params, json=json)
                     elapsed_ms = int((time.perf_counter() - started_at) * 1000)
                     set_span_attributes(span, {"http.status_code": response.status_code, "duration_ms": elapsed_ms})
                     LOGGER.info(
@@ -256,6 +274,9 @@ class HttpGitLabSkillSourceGateway:
                 },
             )
 
+        if allow_empty_response and not response.content:
+            return {}
+
         payload = response.json()
         if not isinstance(payload, (dict, list)):
             raise SkillsGatewayError("GitLab 返回了不可识别的响应格式。")
@@ -296,7 +317,7 @@ class HttpGitLabSkillSourceGateway:
         project_id = str(payload["id"])
         actual_branch = str(payload.get("default_branch") or default_branch)
 
-        self._request(
+        commit_payload = self._request(
             "POST",
             f"/projects/{quote(project_id, safe='')}/repository/commits",
             json={
@@ -322,7 +343,7 @@ class HttpGitLabSkillSourceGateway:
             },
         )
 
-        head_commit_sha = self.get_branch_head(project_id, actual_branch)
+        head_commit_sha = self._commit_sha(commit_payload)
         repository_url = str(payload.get("web_url") or payload.get("http_url_to_repo") or "")
 
         return GitLabProjectInfo(
@@ -347,6 +368,12 @@ class HttpGitLabSkillSourceGateway:
             raise SkillsGatewayError("GitLab branch 查询缺少 commit 信息。")
 
         return str(commit["id"])
+
+    @staticmethod
+    def _commit_sha(payload: dict | list) -> str:
+        if not isinstance(payload, dict) or not payload.get("id"):
+            raise SkillsGatewayError("GitLab commit 创建响应缺少 commit SHA。")
+        return str(payload["id"])
 
     def _resolve_ref_head(self, project_id: str, ref: str) -> str:
         try:
@@ -460,7 +487,7 @@ class HttpGitLabSkillSourceGateway:
         action: str,
         commit_message: str,
     ) -> str:
-        self._request(
+        payload = self._request(
             "POST",
             f"/projects/{quote(project_id, safe='')}/repository/commits",
             json={
@@ -475,7 +502,7 @@ class HttpGitLabSkillSourceGateway:
                 ],
             },
         )
-        return self.get_branch_head(project_id, branch)
+        return self._commit_sha(payload)
 
     def commit_repository_files(
         self,
@@ -515,7 +542,7 @@ class HttpGitLabSkillSourceGateway:
         if not actions:
             return self.get_branch_head(project_id, branch)
         try:
-            self._request(
+            payload = self._request(
                 "POST",
                 f"/projects/{quote(project_id, safe='')}/repository/commits",
                 json={
@@ -528,7 +555,7 @@ class HttpGitLabSkillSourceGateway:
             if self._repository_files_match(project_id, branch, expected_contents):
                 return self.get_branch_head(project_id, branch)
             raise
-        return self.get_branch_head(project_id, branch)
+        return self._commit_sha(payload)
 
     def _repository_file_exists(self, project_id: str, ref: str, file_path: str) -> bool:
         return self._repository_file_payload_or_none(project_id, ref, file_path) is not None
@@ -574,7 +601,7 @@ class HttpGitLabSkillSourceGateway:
         skill_yaml_content: str,
         commit_message: str,
     ) -> str:
-        self._request(
+        payload = self._request(
             "POST",
             f"/projects/{quote(project_id, safe='')}/repository/commits",
             json={
@@ -587,7 +614,7 @@ class HttpGitLabSkillSourceGateway:
                 ],
             },
         )
-        return self.get_branch_head(project_id, branch)
+        return self._commit_sha(payload)
 
     def update_project_name(self, project_id: str, name: str) -> None:
         self._request(
@@ -596,5 +623,9 @@ class HttpGitLabSkillSourceGateway:
             json={"name": name},
         )
 
-    def archive_project(self, project_id: str) -> None:
-        self._request("POST", f"/projects/{quote(project_id, safe='')}/archive")
+    def delete_project(self, project_id: str) -> None:
+        self._request(
+            "DELETE",
+            f"/projects/{quote(project_id, safe='')}",
+            allow_empty_response=True,
+        )
